@@ -6,6 +6,7 @@ import canvasTexture from "/canvas.png";
 
 function App() {
   const canvasRef = useRef(null);
+  const textureRef = useRef(null);
   const canvasTextures = [
     {
       name: "Linen",
@@ -23,13 +24,21 @@ function App() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    const texture = textureRef.current;
     const context = canvas.getContext("2d");
     const img = new Image();
+    const textureCtx = texture.getContext("2d");
     img.src = selectedTexture;
     img.onload = () => {
-      const pattern = context.createPattern(img, "repeat");
-      context.fillStyle = pattern;
-      context.fillRect(0, 0, canvas.width, canvas.height);
+      // Save the current state of the drawing
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  
+      // Clear the texture canvas and apply the new texture
+      textureCtx.clearRect(0, 0, texture.width, texture.height);
+      textureCtx.drawImage(img, 0, 0, texture.width, texture.height);
+  
+      // Restore the drawing
+      context.putImageData(imageData, 0, 0);
     };
 
     let painting = false;
@@ -107,6 +116,7 @@ canvas.addEventListener('mousemove', draw);
           onChange={handleTextureChange}
           value={selectedTexture}
         >
+          <br/>
           {canvasTextures.map((texture) => (
             <option key={texture.name} value={texture.file}>
               {texture.name}
@@ -114,12 +124,20 @@ canvas.addEventListener('mousemove', draw);
           ))}
         </select>
       </div>
+      <div className="canvas-container">
       <canvas
         ref={canvasRef}
         width={800}
         height={600}
-        style={{ border: "1px solid black" }}
+        style={{ border: "1px solid black", zIndex: 2, position: "absolute"}}
       ></canvas>
+      <canvas
+        ref={textureRef}
+        width={800}
+        height={600}
+        style={{ border: "1px solid black", zIndex: 1, position: "absolute"}}
+      ></canvas>
+      </div>
     </>
   );
 }
