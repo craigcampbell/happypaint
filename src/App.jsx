@@ -1,27 +1,90 @@
 import { useState, useRef, useEffect } from "react";
 import "./App.css";
-
-import linenTexture from "/linen.png";
-import canvasTexture from "/canvas.png";
+import TextureSelector from './components/TextureSelector';
+import ColorSelector from './components/ColorSelector';
 
 function App() {
   const canvasRef = useRef(null);
   const textureRef = useRef(null);
-  const canvasTextures = [
-    {
-      name: "Linen",
-      file: linenTexture, 
-    },
-    {
-      name: "Canvas",
-      file: canvasTexture, 
-    },
-  ];
 
-  const [selectedTexture, setSelectedTexture] = useState(
-    canvasTextures[0].file
-  );
+  const [selectedTexture, setSelectedTexture] = useState("/linen.png");
+  const [selectedColor, setSelectedColor] = useState('black'); 
+  const [currentBrush, setCurrentBrush] = useState('round');
+  const [brushSize, setBrushSize] = useState(8);  // Example brush size
+  const [brushOpacity, setBrushOpacity] = useState(0.9);  // Exa
 
+  const handleColorSelect = (color) => {
+    setSelectedColor(color);
+  };
+  
+  
+  
+  const brushes = {
+    round: {
+      draw: (ctx, x, y, size, opacity) => {
+        ctx.globalAlpha = opacity;
+        ctx.beginPath();
+        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      },
+    },
+    square: {
+      draw: (ctx, x, y, size, opacity) => {
+        ctx.globalAlpha = opacity;
+        ctx.fillRect(x - size / 2, y - size / 2, size, size);
+      },
+    },
+    spray: {
+      draw: (ctx, x, y, size, baseOpacity, selectedColor) => {
+        for (let i = 0; i < size * 10; i++) {
+          // Random angle and distance for the circular spray effect
+          const angle = Math.random() * Math.PI * 2;
+          const radius = Math.random() * size;
+    
+          // Offset x and y coordinates
+          const offsetX = x + radius * Math.cos(angle);
+          const offsetY = y + radius * Math.sin(angle);
+    
+          // Randomize size and opacity for each dot
+          const randomSize = Math.random() * 2; // Size range of 0 to 2
+          const randomOpacity = Math.random() * baseOpacity; // Opacity up to the base opacity
+    
+          // Convert color to RGBA and apply random opacity
+          const colorWithOpacity = `rgba(${selectedColor.r}, ${selectedColor.g}, ${selectedColor.b}, ${randomOpacity})`;
+          
+          ctx.fillStyle = colorWithOpacity;
+          ctx.beginPath();
+          ctx.arc(offsetX, offsetY, randomSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      },
+    },
+    
+    line: {
+      draw: (ctx, x, y, size, opacity) => {
+        ctx.globalAlpha = opacity;
+        if (this.lastX === undefined || this.lastY === undefined) {
+          this.lastX = x;
+          this.lastY = y;
+        }
+        ctx.beginPath();
+        ctx.moveTo(this.lastX, this.lastY);
+        ctx.lineTo(x, y);
+        ctx.lineWidth = size;
+        ctx.stroke();
+        this.lastX = x;
+        this.lastY = y;
+      },
+      reset: () => {
+        this.lastX = undefined;
+        this.lastY = undefined;
+      }
+    },
+    // Add more brushes as needed
+  };
+  
+  let lastX, lastY; 
+  
   useEffect(() => {
     const canvas = canvasRef.current;
     const texture = textureRef.current;
@@ -40,7 +103,7 @@ function App() {
       // Restore the drawing
       context.putImageData(imageData, 0, 0);
     };
-
+    setCurrentBrush('square');
     let painting = false;
     const startPosition = (e) => {
       painting = true;
@@ -50,13 +113,18 @@ function App() {
       painting = false;
       context.beginPath();
     };
-    let lastX;
-let lastY;
-const smoothingRatio = .09; // Adjust this value for more or less smoothing
+let smoothingRatio = 0.0;
+if (brushes[currentBrush] != brushes.line) {
+  smoothingRatio = 1.0;
+}
+smoothingRatio = .09;
+ // Adjust this value for more or less smoothing
 
 const draw = (e) => {
   if (!painting) return;
-
+  context.strokeStyle = selectedColor;
+  const brush = brushes[currentBrush]; // currentBrush is the selected brush type
+  brush.draw(context, lastX, lastY, 50, 0.2); // Use the selected brush
   const rect = canvas.getBoundingClientRect();
   const currentX = e.clientX - rect.left;
   const currentY = e.clientY - rect.top;
@@ -70,7 +138,7 @@ const draw = (e) => {
   const smoothedY = lastY + (currentY - lastY) * smoothingRatio;
 
   context.lineWidth = 5;
-  context.strokeStyle = "red";
+  context.strokeStyle = selectedColor;
   context.lineCap = "round";
   context.lineJoin = "round";
 
@@ -100,7 +168,7 @@ canvas.addEventListener('mousemove', draw);
       canvas.removeEventListener("mouseup", finishedPosition);
       canvas.removeEventListener("mousemove", draw);
     };
-  }, [selectedTexture]);
+  }, [selectedTexture, selectedColor, currentBrush]);
 
   const handleTextureChange = (event) => {
     setSelectedTexture(event.target.value);
@@ -111,18 +179,11 @@ canvas.addEventListener('mousemove', draw);
       <h1>Happy Paint</h1>
       <div>
         <label htmlFor="texture-selector">Choose a texture:</label>
-        <select
-          id="texture-selector"
-          onChange={handleTextureChange}
-          value={selectedTexture}
-        >
-          <br/>
-          {canvasTextures.map((texture) => (
-            <option key={texture.name} value={texture.file}>
-              {texture.name}
-            </option>
-          ))}
-        </select>
+        <TextureSelector
+        selectedTexture={selectedTexture}
+        onTextureChange={handleTextureChange}
+        />
+        <ColorSelector onColorSelect={handleColorSelect} />
       </div>
       <div className="canvas-container">
       <canvas
