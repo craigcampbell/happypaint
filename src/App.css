@@ -40,3 +40,20 @@
 .read-the-docs {
   color: #888;
 }
+
+.brush-settings {
+  margin: 10px 0;
+}
+
+.brush-settings div {
+  margin: 5px 0;
+}
+
+.brush-settings label {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.brush-settings input[type="range"] {
+  width: 200px;
+}
