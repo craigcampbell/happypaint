@@ -42,14 +42,12 @@ function App() {
     const textureCtx = texture.getContext("2d");
     img.src = selectedTexture;
     img.onload = () => {
-      // Save the current state of the drawing
       const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
   
       // Clear the texture canvas and apply the new texture
       textureCtx.clearRect(0, 0, texture.width, texture.height);
       textureCtx.drawImage(img, 0, 0, texture.width, texture.height);
   
-      // Restore the drawing
       context.putImageData(imageData, 0, 0);
     };
     let painting = false;
@@ -65,8 +63,9 @@ let smoothingRatio = 0.0;
 if (brushes[currentBrush] != brushes.line) {
   smoothingRatio = 1.0;
 }
+
+// adding smoothing stuff 
 smoothingRatio = .09;
- // Adjust this value for more or less smoothing
 
 const draw = (e) => {
   if (!painting) return;
