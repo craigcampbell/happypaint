@@ -4,32 +4,44 @@ const BrushSettings = ({
   brushSize, 
   onBrushSizeChange, 
   brushVariation, 
-  onBrushVariationChange 
+  onBrushVariationChange,
+  currentBrush 
 }) => {
+  const handleSizeChange = (e) => {
+    const newSize = parseInt(e.target.value, 10);
+    onBrushSizeChange(newSize);
+  };
+
   return (
     <div className="brush-settings">
       <div>
-        <label htmlFor="brush-size">Brush Size: {brushSize}px</label>
+        <label htmlFor="brush-size">
+          {currentBrush === 'spray' ? 'Spray Radius' : 'Brush Size'}: {brushSize}px
+        </label>
         <input
           type="range"
           id="brush-size"
-          min="1"
-          max="100"
+          min={currentBrush === 'spray' ? '5' : '1'}
+          max={currentBrush === 'spray' ? '50' : '100'}
           value={brushSize}
-          onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+          onChange={handleSizeChange}
         />
       </div>
-      <div>
-        <label htmlFor="brush-variation">Size Variation: {brushVariation}%</label>
-        <input
-          type="range"
-          id="brush-variation"
-          min="0"
-          max="100"
-          value={brushVariation * 100}
-          onChange={(e) => onBrushVariationChange(Number(e.target.value) / 100)}
-        />
-      </div>
+      {currentBrush === 'spray' && (
+        <div>
+          <label htmlFor="brush-variation">
+            Spray Density: {Math.round(brushVariation * 100)}%
+          </label>
+          <input
+            type="range"
+            id="brush-variation"
+            min="0"
+            max="100"
+            value={(brushVariation * 100)*2}
+            onChange={(e) => onBrushVariationChange(Number(e.target.value) / 100)}
+          />
+        </div>
+      )}
     </div>
   );
 };

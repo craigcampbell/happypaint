@@ -1,13 +1,80 @@
-.color-selector {
-    display: flex;
-    padding: 10px;
-  }
-  
-  .color-circle {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    margin-right: 10px;
-    cursor: pointer;
-    border: 1px solid #000;
-  }
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 3px solid transparent;
+  transition: all 0.2s;
+  position: relative;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+  z-index: 1;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+
+.color-swatch.selected {
+  border-color: #333;
+  box-shadow: 0 0 0 4px #FF6B6B;
+}
+
+.custom-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px dashed #ddd;
+  background: linear-gradient(135deg, #ff0000, #ff7700, #ffff00, #00ff00, #0000ff, #8b00ff, #ff0000);
+}
+
+.custom-swatch.active {
+  border-color: #FF6B6B;
+  border-style: solid;
+}
+
+.swatch-plus {
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.color-picker-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.color-input {
+  width: 100%;
+  height: 40px;
+  border: 2px solid #FFD1B3;
+  border-radius: 12px;
+  cursor: pointer;
+  background: none;
+  padding: 2px;
+}
+
+.hex-input {
+  background: #FFF5E4;
+  border: 2px solid #FFD1B3;
+  border-radius: 12px;
+  padding: 8px 12px;
+  color: #333;
+  font-size: 13px;
+  font-family: 'Fredoka', monospace;
+  outline: none;
+}
+
+.hex-input:focus {
+  border-color: #FF6B6B;
+  box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.1);
+}

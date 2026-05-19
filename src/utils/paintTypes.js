@@ -1,0 +1,66 @@
+export const PAINT_TYPES = {
+  NONE: 'none',
+  WATERCOLOR: 'watercolor',
+  ACRYLIC: 'acrylic',
+  OIL: 'oil',
+};
+
+// Properties for each paint type
+export const PAINT_PROPERTIES = {
+  [PAINT_TYPES.NONE]: {
+    label: 'Standard',
+    description: 'Digital paint',
+    wetness: 0,
+    spread: 0,
+    impasto: 0,        // height of paint when applied (0-1)
+    glossiness: 0,
+    edgeDarkening: false,
+    granulation: 0,
+    blendFactor: 0.5,  // how much it mixes with underlying paint
+    dryingTime: 0,
+    opacityRange: [0.1, 1],
+    defaultOpacity: 0.85,
+  },
+  [PAINT_TYPES.WATERCOLOR]: {
+    label: 'Watercolor',
+    description: 'Translucent, flowing, pools at edges',
+    wetness: 0.8,
+    spread: 0.5,
+    impasto: 0.02,
+    glossiness: 0.1,
+    edgeDarkening: true,
+    granulation: 0.3,
+    blendFactor: 0.3,
+    dryingTime: 0,
+    opacityRange: [0.1, 0.7],
+    defaultOpacity: 0.35,
+  },
+  [PAINT_TYPES.ACRYLIC]: {
+    label: 'Acrylic',
+    description: 'Thick, opaque, fast-drying',
+    wetness: 0.15,
+    spread: 0.05,
+    impasto: 0.25,
+    glossiness: 0.3,
+    edgeDarkening: false,
+    granulation: 0,
+    blendFactor: 0.7,
+    dryingTime: 0,
+    opacityRange: [0.3, 1],
+    defaultOpacity: 0.85,
+  },
+  [PAINT_TYPES.OIL]: {
+    label: 'Oil',
+    description: 'Buttery, blendable, glossy strokes',
+    wetness: 0.4,
+    spread: 0.15,
+    impasto: 0.4,
+    glossiness: 0.7,
+    edgeDarkening: false,
+    granulation: 0,
+    blendFactor: 0.85,
+    dryingTime: 0,
+    opacityRange: [0.2, 1],
+    defaultOpacity: 0.75,
+  },
+};
