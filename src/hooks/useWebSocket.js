@@ -69,12 +69,33 @@ export const useWebSocket = (roomId) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'stroke',
+        strokeId: stroke.strokeId,
         stroke: {
           type: stroke.type,
           color: stroke.color,
           size: stroke.size,
           opacity: stroke.opacity,
+          paintType: stroke.paintType,
+          variation: stroke.variation,
           points: stroke.points,
+        },
+      }));
+    }
+  }, []);
+
+  const sendStrokeLive = useCallback((strokeData) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'stroke_live',
+        strokeId: strokeData.strokeId,
+        stroke: {
+          type: strokeData.type,
+          color: strokeData.color,
+          size: strokeData.size,
+          opacity: strokeData.opacity,
+          paintType: strokeData.paintType,
+          variation: strokeData.variation,
+          points: strokeData.points,
         },
       }));
     }
@@ -118,6 +139,7 @@ export const useWebSocket = (roomId) => {
     aiResponses,
     chatHistory,
     sendStroke,
+    sendStrokeLive,
     sendClear,
     sendChat,
     sendAIChat,

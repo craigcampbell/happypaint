@@ -1,5 +1,5 @@
 import express from 'express';
-import { WebSocketServer, WebSocketServer as WSS, createWebSocketServer } from 'ws';
+import { WebSocketServer as WSS } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -118,7 +118,7 @@ wss.on('connection', (ws, req) => {
   if (room.history.length > 0) {
     ws.send(JSON.stringify({
       type: 'history',
-      history: room.history.slice(-100),
+      history: room.history.slice(-50),
     }));
   }
 
@@ -153,29 +153,33 @@ wss.on('connection', (ws, req) => {
           break;
 
         case 'stroke':
-          // Broadcast stroke to all other users in room
+        case 'stroke_live':
+          // Broadcast stroke/live-points to all other users in room
           broadcastToRoom(roomId, {
-            type: 'stroke',
+            type: data.type,
             user: { id: userId, name: userName, color: userColor },
+            strokeId: data.strokeId,
             stroke: data.stroke,
             timestamp: Date.now(),
           }, userId);
 
-          // Store stroke in history
-          room.history.push({
-            type: 'stroke',
-            user: { id: userId, name: userName, color: userColor },
-            stroke: data.stroke,
-            timestamp: Date.now(),
-          });
+          // Only store final strokes in history (not live intermediate points)
+          if (data.type === 'stroke') {
+            room.history.push({
+              type: 'stroke',
+              user: { id: userId, name: userName, color: userColor },
+              stroke: data.stroke,
+              timestamp: Date.now(),
+            });
 
-          if (room.history.length > room.maxHistory) {
-            room.history = room.history.slice(-room.maxHistory);
-          }
+            if (room.history.length > room.maxHistory) {
+              room.history = room.history.slice(-room.maxHistory);
+            }
 
-          // Check if LLM should respond
-          if (openai && shouldTriggerLLM(data.stroke)) {
-            triggerLLMResponse(room, data.stroke, userId);
+            // Check if LLM should respond
+            if (openai && shouldTriggerLLM(data.stroke)) {
+              triggerLLMResponse(room, data.stroke, userId);
+            }
           }
           break;
 

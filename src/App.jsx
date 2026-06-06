@@ -14,12 +14,16 @@ import { PAINT_TYPES, PAINT_PROPERTIES } from './utils/paintTypes';
 const BRUSH_OPTIONS = [
   { value: BRUSH_TYPES.ROUND, label: '🖌️ Brush' },
   { value: BRUSH_TYPES.SQUARE, label: '⬜ Square' },
+  { value: BRUSH_TYPES.WET_BRUSH, label: '💧 Wet Brush' },
   { value: BRUSH_TYPES.SPRAY, label: '💨 Spray' },
   { value: BRUSH_TYPES.AIRBRUSH, label: '☁️ Airbrush' },
   { value: BRUSH_TYPES.PENCIL, label: '✏️ Pencil' },
   { value: BRUSH_TYPES.PEN, label: '🖊️ Pen' },
   { value: BRUSH_TYPES.LINE, label: '📏 Line' },
+  { value: BRUSH_TYPES.SPONGE, label: '🧽 Sponge' },
   { value: BRUSH_TYPES.PALETTE_KNIFE, label: '🔪 Palette Knife' },
+  { value: BRUSH_TYPES.BLUR, label: '🌫️ Blur' },
+  { value: BRUSH_TYPES.SMUDGE, label: '👆 Smudge' },
   { value: BRUSH_TYPES.ERASER, label: '🧹 Eraser' },
   { value: BRUSH_TYPES.CHAT, label: '💬 Chat' },
   { value: BRUSH_TYPES.MEME, label: '🖼️ Meme' },
@@ -73,6 +77,9 @@ function App() {
 
   const pendingImpasto = useRef([]);
   const pendingSmear = useRef([]);
+
+  // Track in-progress remote live strokes (strokeId -> accumulated stroke data)
+  const remoteLiveStrokes = useRef(new Map());
 
   // Track container size for viewport calculations
   useEffect(() => {
@@ -159,11 +166,19 @@ function App() {
     ws,
     connected,
     sendStroke: wsSendStroke,
+    sendStrokeLive: wsSendStrokeLive,
     sendClear: wsSendClear,
     sendChat: wsSendChat,
   } = useWebSocket(roomId);
 
   const isCanvasReady = true;
+
+  // Handle stroke live updates (throttled, sent during drawing)
+  const handleStrokeLive = useCallback((liveData) => {
+    if (wsSendStrokeLive) {
+      wsSendStrokeLive(liveData);
+    }
+  }, [wsSendStrokeLive]);
 
   // Handle drawing end - sends stroke to WebSocket and applies impasto
   const handleDrawEnd = useCallback((stroke) => {
@@ -180,6 +195,18 @@ function App() {
             points: stroke.points,
             size: stroke.size,
             strength: 0.5,
+          });
+        } else if (stroke.type === BRUSH_TYPES.BLUR && smearHeight) {
+          pendingSmear.current.push({
+            points: stroke.points,
+            size: stroke.size,
+            strength: 0.3,
+          });
+        } else if (stroke.type === BRUSH_TYPES.SMUDGE && smearHeight) {
+          pendingSmear.current.push({
+            points: stroke.points,
+            size: stroke.size,
+            strength: 0.4,
           });
         } else if (stroke.type === BRUSH_TYPES.ERASER && scrapeHeight) {
           scrapeHeight(stroke.points, stroke.size);
@@ -301,7 +328,8 @@ function App() {
     (canvasX, canvasY) => {
       memePendingPos.current = { x: canvasX, y: canvasY };
       memeFileRef.current?.click();
-    }
+    },
+    handleStrokeLive
   );
 
   const { isEraser } = drawingState || {};
@@ -350,10 +378,47 @@ function App() {
             }
             break;
 
+          case 'stroke_live':
+            if (paintCanvasRef.current && isCanvasReady && data.stroke && data.strokeId) {
+              const ctx = paintCanvasRef.current.getContext('2d');
+              if (!ctx) break;
+
+              // Accumulate points from live updates
+              let live = remoteLiveStrokes.current.get(data.strokeId);
+              if (!live) {
+                live = {
+                  points: [],
+                  type: data.stroke.type,
+                  color: data.stroke.color,
+                  size: data.stroke.size,
+                  opacity: data.stroke.opacity,
+                  variation: data.stroke.variation,
+                  paintType: data.stroke.paintType,
+                };
+                remoteLiveStrokes.current.set(data.strokeId, live);
+              }
+
+              // Draw only the new points
+              if (data.stroke.points) {
+                for (const p of data.stroke.points) {
+                  live.points.push(p);
+                }
+                drawRemoteLivePoints(ctx, live, data.stroke.points);
+              }
+              markDirty();
+            }
+            break;
+
           case 'stroke':
             if (paintCanvasRef.current && isCanvasReady && data.stroke) {
               const ctx = paintCanvasRef.current.getContext('2d');
               if (!ctx) break;
+
+              // Clean up any in-progress live stroke tracking
+              if (data.strokeId) {
+                remoteLiveStrokes.current.delete(data.strokeId);
+              }
+
               drawRemoteStroke(ctx, data.stroke);
               markDirty();
             }
@@ -367,6 +432,7 @@ function App() {
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
               if (clearHeightMap) clearHeightMap();
+              remoteLiveStrokes.current.clear();
               markDirty();
             }
             break;
@@ -447,10 +513,24 @@ function App() {
         ctx.arc(p.x, p.y, (stroke.size || 10) * 0.4, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else if (stroke.type === BRUSH_TYPES.AIRBRUSH) {
+    } else if (stroke.type === BRUSH_TYPES.AIRBRUSH || stroke.type === BRUSH_TYPES.WET_BRUSH) {
       for (let i = 0; i < stroke.points.length; i++) {
         const p = stroke.points[i];
         drawAirbrushOnCanvas(ctx, p.x, p.y, stroke.size || 30, stroke.opacity || 1, stroke.color, stroke.variation || 0.3);
+      }
+    } else if (stroke.type === BRUSH_TYPES.SPONGE) {
+      for (let i = 0; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        drawSpongeOnCanvas(ctx, p.x, p.y, stroke.size || 22, stroke.opacity || 1, stroke.color, stroke.variation || 0.3);
+      }
+    } else if (stroke.type === BRUSH_TYPES.BLUR || stroke.type === BRUSH_TYPES.SMUDGE) {
+      ctx.fillStyle = stroke.color;
+      for (let i = 0; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        ctx.globalAlpha = (stroke.opacity || 0.5) * 0.4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (stroke.size || 30) * 0.35, 0, Math.PI * 2);
+        ctx.fill();
       }
     } else {
       for (let i = 0; i < stroke.points.length; i++) {
@@ -460,7 +540,7 @@ function App() {
     }
 
     // Apply impasto for remote strokes
-    if (stroke.paintType && stroke.paintType !== PAINT_TYPES.NONE && applyImpasto && stroke.type !== BRUSH_TYPES.ERASER) {
+    if (stroke.paintType && stroke.paintType !== PAINT_TYPES.NONE && applyImpasto && stroke.type !== BRUSH_TYPES.ERASER && stroke.type !== BRUSH_TYPES.BLUR && stroke.type !== BRUSH_TYPES.SMUDGE) {
       pendingImpasto.current.push({
         points: stroke.points,
         size: stroke.size,
@@ -472,7 +552,60 @@ function App() {
     ctx.restore();
   }
 
-  // Draw remote stroke in real-time
+  // Draw incremental live stroke points from another user
+  function drawRemoteLivePoints(ctx, live, newPoints) {
+    if (!newPoints || newPoints.length === 0) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = live.color || '#000000';
+    ctx.fillStyle = live.color || '#000000';
+    ctx.lineWidth = live.size || 8;
+    ctx.globalAlpha = live.opacity || 1;
+
+    if (live.type === BRUSH_TYPES.ERASER) {
+      ctx.globalCompositeOperation = 'destination-out';
+      for (let i = 0; i < newPoints.length; i++) {
+        const p = newPoints[i];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (live.size || 8) / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    } else if (live.type === BRUSH_TYPES.PALETTE_KNIFE) {
+      ctx.globalAlpha = (live.opacity || 1) * 0.5;
+      for (let i = 0; i < newPoints.length; i++) {
+        const p = newPoints[i];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (live.size || 10) * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (live.type === BRUSH_TYPES.BLUR || live.type === BRUSH_TYPES.SMUDGE) {
+      ctx.globalAlpha = (live.opacity || 0.5) * 0.4;
+      for (let i = 0; i < newPoints.length; i++) {
+        const p = newPoints[i];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (live.size || 30) * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // ROUND, PEN, SQUARE, PENCIL, SPRAY, AIRBRUSH, WET_BRUSH, SPONGE
+      // Draw thick connected line AND circles at each point for smooth overlap
+      const allPoints = live.points;
+      const startIdx = Math.max(0, allPoints.length - newPoints.length - 1);
+      ctx.beginPath();
+      if (startIdx < allPoints.length) {
+        ctx.moveTo(allPoints[startIdx].x, allPoints[startIdx].y);
+        for (let i = startIdx + 1; i < allPoints.length; i++) {
+          ctx.lineTo(allPoints[i].x, allPoints[i].y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
   function drawRemoteStroke(ctx, stroke) {
     if (!stroke.points || stroke.points.length === 0) return;
 
@@ -509,10 +642,24 @@ function App() {
         ctx.arc(p.x, p.y, (stroke.size || 10) * 0.4, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else if (stroke.type === BRUSH_TYPES.AIRBRUSH) {
+    } else if (stroke.type === BRUSH_TYPES.AIRBRUSH || stroke.type === BRUSH_TYPES.WET_BRUSH) {
       for (let i = 0; i < stroke.points.length; i++) {
         const p = stroke.points[i];
         drawAirbrushOnCanvas(ctx, p.x, p.y, stroke.size || 30, stroke.opacity || 1, stroke.color, stroke.variation || 0.3);
+      }
+    } else if (stroke.type === BRUSH_TYPES.SPONGE) {
+      for (let i = 0; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        drawSpongeOnCanvas(ctx, p.x, p.y, stroke.size || 22, stroke.opacity || 1, stroke.color, stroke.variation || 0.3);
+      }
+    } else if (stroke.type === BRUSH_TYPES.BLUR || stroke.type === BRUSH_TYPES.SMUDGE) {
+      ctx.fillStyle = stroke.color;
+      for (let i = 0; i < stroke.points.length; i++) {
+        const p = stroke.points[i];
+        ctx.globalAlpha = (stroke.opacity || 0.5) * 0.4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (stroke.size || 30) * 0.35, 0, Math.PI * 2);
+        ctx.fill();
       }
     } else {
       for (let i = 0; i < stroke.points.length; i++) {
@@ -521,7 +668,7 @@ function App() {
       }
     }
 
-    if (stroke.paintType && stroke.paintType !== PAINT_TYPES.NONE && applyImpasto && stroke.type !== BRUSH_TYPES.ERASER) {
+    if (stroke.paintType && stroke.paintType !== PAINT_TYPES.NONE && applyImpasto && stroke.type !== BRUSH_TYPES.ERASER && stroke.type !== BRUSH_TYPES.BLUR && stroke.type !== BRUSH_TYPES.SMUDGE) {
       pendingImpasto.current.push({
         points: stroke.points,
         size: stroke.size,
@@ -551,6 +698,22 @@ function App() {
       const dy = y + r * Math.sin(a);
       ctx.beginPath();
       ctx.arc(dx, dy, Math.max(0.3, Math.random()), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawSpongeOnCanvas(ctx, x, y, size, opacity, color, variation) {
+    const density = Math.floor(size * variation * 2);
+    ctx.globalAlpha = opacity * 0.35;
+
+    for (let i = 0; i < density; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.random() * size * 0.5;
+      const dx = x + radius * Math.cos(angle);
+      const dy = y + radius * Math.sin(angle);
+      const spotSize = Math.max(1, Math.random() * size * 0.18);
+      ctx.beginPath();
+      ctx.arc(dx, dy, spotSize, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -593,13 +756,26 @@ function App() {
         break;
 
       case BRUSH_TYPES.AIRBRUSH:
+      case BRUSH_TYPES.WET_BRUSH:
         drawAirbrushOnCanvas(ctx, x, y, size, opacity, color, variation);
+        break;
+
+      case BRUSH_TYPES.SPONGE:
+        drawSpongeOnCanvas(ctx, x, y, size, opacity, color, variation);
         break;
 
       case BRUSH_TYPES.PALETTE_KNIFE:
         ctx.globalAlpha = opacity * 0.5;
         ctx.beginPath();
         ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case BRUSH_TYPES.BLUR:
+      case BRUSH_TYPES.SMUDGE:
+        ctx.globalAlpha = opacity * 0.4;
+        ctx.beginPath();
+        ctx.arc(x, y, size * 0.35, 0, Math.PI * 2);
         ctx.fill();
         break;
 
@@ -619,6 +795,7 @@ function App() {
       ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
     }
     if (clearHeightMap) clearHeightMap();
+    remoteLiveStrokes.current.clear();
     markDirty();
     wsSendClear();
   }, [wsSendClear, clearHeightMap]);
@@ -811,8 +988,20 @@ function App() {
     } else if (brush === BRUSH_TYPES.AIRBRUSH) {
       setBrushSize(35);
     } else if (brush === BRUSH_TYPES.PALETTE_KNIFE) {
-      setBrushSize(20);
+      setBrushSize(24);
       setBrushOpacity(0.6);
+    } else if (brush === BRUSH_TYPES.BLUR) {
+      setBrushSize(30);
+      setBrushOpacity(0.5);
+    } else if (brush === BRUSH_TYPES.SMUDGE) {
+      setBrushSize(18);
+      setBrushOpacity(0.7);
+    } else if (brush === BRUSH_TYPES.WET_BRUSH) {
+      setBrushSize(14);
+      setBrushOpacity(0.45);
+    } else if (brush === BRUSH_TYPES.SPONGE) {
+      setBrushSize(22);
+      setBrushOpacity(0.5);
     } else {
       setBrushSize(8);
     }
@@ -888,8 +1077,17 @@ function App() {
               <label>📐 Size: {brushSize}px</label>
               <input
                 type="range"
-                min={currentBrush === BRUSH_TYPES.AIRBRUSH ? '10' : currentBrush === BRUSH_TYPES.SPRAY ? '5' : '1'}
-                max={currentBrush === BRUSH_TYPES.AIRBRUSH ? '120' : currentBrush === BRUSH_TYPES.SPRAY ? '300' : '80'}
+                min={
+                  currentBrush === BRUSH_TYPES.BLUR ? '10' :
+                  currentBrush === BRUSH_TYPES.AIRBRUSH ? '10' :
+                  currentBrush === BRUSH_TYPES.SPRAY ? '5' : '1'
+                }
+                max={
+                  currentBrush === BRUSH_TYPES.BLUR ? '150' :
+                  currentBrush === BRUSH_TYPES.SMUDGE ? '120' :
+                  currentBrush === BRUSH_TYPES.AIRBRUSH ? '120' :
+                  currentBrush === BRUSH_TYPES.SPRAY ? '300' : '80'
+                }
                 value={brushSize}
                 onChange={(e) => setBrushSize(Number(e.target.value))}
                 className="size-slider"
@@ -910,7 +1108,7 @@ function App() {
             </div>
 
             {/* Spray/Airbrush density */}
-            {(currentBrush === BRUSH_TYPES.SPRAY || currentBrush === BRUSH_TYPES.AIRBRUSH) && (
+            {(currentBrush === BRUSH_TYPES.SPRAY || currentBrush === BRUSH_TYPES.AIRBRUSH || currentBrush === BRUSH_TYPES.SPONGE || currentBrush === BRUSH_TYPES.WET_BRUSH) && (
               <div className="toolbar-section">
                 <label>✨ Density: {Math.round(brushVariation * 100)}%</label>
                 <input
@@ -994,6 +1192,10 @@ function App() {
               ? 'crosshair'
               : currentBrush === BRUSH_TYPES.PALETTE_KNIFE
               ? 'grabbing'
+              : currentBrush === BRUSH_TYPES.BLUR
+              ? 'cell'
+              : currentBrush === BRUSH_TYPES.SMUDGE
+              ? 'pointer'
               : currentBrush === BRUSH_TYPES.CHAT
               ? 'cell'
               : 'crosshair',

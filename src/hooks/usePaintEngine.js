@@ -100,8 +100,10 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
   const animFrameRef = useRef(null);
   const paintTextureRef = useRef(null);
   const heightTextureRef = useRef(null);
-  const dirtyRef = useRef(false);
+  const paintDirtyRef = useRef(false);
+  const heightDirtyRef = useRef(false);
   const isDrawingRef = useRef(false);
+  const lastRemoteUploadRef = useRef(0);
   isDrawingRef.current = isDrawing;
 
   const [showImpasto, setShowImpasto] = useState(true);
@@ -228,7 +230,8 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
       heightTexture: heightTex,
     });
 
-    dirtyRef.current = true; // ensure first frame uploads canvas content
+    paintDirtyRef.current = true; // ensure first frame uploads canvas content
+    heightDirtyRef.current = true;
 
     return renderer;
   }, [dimensions, paintCanvasRef]);
@@ -255,20 +258,34 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        const shouldUpdate = isDrawingRef.current || dirtyRef.current;
+        const now = performance.now();
+        const isLocal = isDrawingRef.current;
 
-        if (shouldUpdate) {
+        if (isLocal) {
+          // Local drawing: always upload every frame regardless of dirty state
           if (paintTextureRef.current) {
             paintTextureRef.current.needsUpdate = true;
           }
           if (heightTextureRef.current) {
             heightTextureRef.current.needsUpdate = true;
           }
-          if (!isDrawingRef.current) dirtyRef.current = false;
+        } else if (paintDirtyRef.current || heightDirtyRef.current) {
+          // Remote changes: throttle uploads to ~30fps to avoid drowning the GPU
+          if (now - lastRemoteUploadRef.current >= 33) {
+            if (paintTextureRef.current) {
+              paintTextureRef.current.needsUpdate = true;
+            }
+            if (heightTextureRef.current) {
+              heightTextureRef.current.needsUpdate = true;
+            }
+            paintDirtyRef.current = false;
+            heightDirtyRef.current = false;
+            lastRemoteUploadRef.current = now;
+          }
         }
 
         if (materialRef.current) {
-          materialRef.current.uniforms.uTime.value = performance.now() * 0.001;
+          materialRef.current.uniforms.uTime.value = now * 0.001;
           materialRef.current.uniforms.uShowImpasto.value = showImpasto;
         }
 
@@ -304,7 +321,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     cam.updateProjectionMatrix();
 
     rendererRef.current.setSize(width, height, true);
-    dirtyRef.current = true;
+    paintDirtyRef.current = true;
   }, [dimensions, viewport]);
 
   // Apply impasto from a height map stroke
@@ -338,7 +355,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
       ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    dirtyRef.current = true;
+    heightDirtyRef.current = true;
   }, []);
 
   // Smear height map (palette knife)
@@ -373,7 +390,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     }
 
     ctx.putImageData(imageData, minX, minY);
-    dirtyRef.current = true;
+    heightDirtyRef.current = true;
   }, []);
 
   // Erase height (scrape)
@@ -395,7 +412,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
       ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    dirtyRef.current = true;
+    heightDirtyRef.current = true;
   }, []);
 
   // Clear height map
@@ -405,11 +422,11 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     const ctx = hCanvas.getContext('2d');
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, hCanvas.width, hCanvas.height);
-    dirtyRef.current = true;
+    heightDirtyRef.current = true;
   }, []);
 
   const markDirty = useCallback(() => {
-    dirtyRef.current = true;
+    paintDirtyRef.current = true;
   }, []);
 
   return {
