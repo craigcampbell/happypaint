@@ -3,6 +3,27 @@ import { BRUSH_TYPES } from '../utils/constants';
 import { PAINT_TYPES, PAINT_PROPERTIES } from '../utils/paintTypes';
 import { mixPigments, hexToRgb, rgbToHex } from '../utils/colorMixer';
 
+function midpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  };
+}
+
+function quadraticPoint(start, control, end, t) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * start.x + 2 * mt * t * control.x + t * t * end.x,
+    y: mt * mt * start.y + 2 * mt * t * control.y + t * t * end.y,
+  };
+}
+
+function distanceBetween(a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 function sampleUnderlyingColor(ctx, x, y, sampleSize) {
   const r = Math.max(1, Math.floor(sampleSize));
   const sx = Math.max(0, Math.floor(x - r / 2));
@@ -51,6 +72,7 @@ export const useDrawing = (
   const [isEraser, setIsEraser] = useState(false);
   const [lineStart, setLineStart] = useState(null);
   const isPainting = useRef(false);
+  const isMemeStamping = useRef(false);
   const lastPos = useRef(null);
   const currentStroke = useRef(null);
   const lastLiveSend = useRef(0);
@@ -179,24 +201,24 @@ export const useDrawing = (
     drawSpray(ctx, x, y, size * 0.6, opacity, color, variation, true);
   }
 
-  function drawPaletteKnife(ctx, x, y, size, opacity, color) {
+  function drawPaletteKnife(ctx, x, y, size, opacity, color, angleOverride = null) {
     // Sample underlying color for realistic smearing
     const underlying = sampleUnderlyingColor(ctx, x, y, size * 0.5);
 
-    const angle = lastPos.current
+    const angle = angleOverride ?? (lastPos.current
       ? Math.atan2(y - lastPos.current.y, x - lastPos.current.x)
-      : Math.random() * Math.PI * 2;
+      : Math.random() * Math.PI * 2);
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
 
-    const w = size * 0.35;
-    const h = size * 1.6;
+    const w = size * 0.55;
+    const h = size * 1.75;
 
     // Scrape effect: erase a thin line to reveal canvas
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.globalAlpha = opacity * 0.25;
+    ctx.globalAlpha = opacity * 0.12;
     ctx.fillRect(-w * 1.3, -0.5, w * 2.6, 1);
     ctx.fillRect(-w * 1.3, -h / 2 + 1.5, w * 2.6, 0.8);
 
@@ -207,12 +229,12 @@ export const useDrawing = (
       ? mixPigments(underlying, color, opacity * 0.5)
       : color;
 
-    ctx.globalAlpha = opacity * 0.4;
+    ctx.globalAlpha = opacity * 0.62;
     ctx.fillStyle = smearColor;
     ctx.fillRect(-w, -h / 2, w * 2, h);
 
     // Edge highlight (oil paint ridge)
-    ctx.globalAlpha = opacity * 0.55;
+    ctx.globalAlpha = opacity * 0.72;
     ctx.fillStyle = color;
     ctx.fillRect(-w * 1.1, -0.8, w * 2.2, 1.6);
     ctx.fillRect(-w * 1.1, -h / 2 + 0.5, w * 2.2, 0.7);
@@ -400,7 +422,7 @@ export const useDrawing = (
     const dx = x2 - x1;
     const dy = y2 - y1;
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const step = Math.max(1, size / 4);
+    const step = Math.max(0.8, size / 5);
     const numSteps = Math.max(1, Math.floor(distance / step));
 
     for (let i = 0; i <= numSteps; i++) {
@@ -410,6 +432,50 @@ export const useDrawing = (
       drawPoint(ctx, x, y, brush, size, color, opacity, variation);
     }
   }, [drawPoint]);
+
+  const drawVectorLine = useCallback((ctx, start, end, size, color, opacity) => {
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = size;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.restore();
+  }, []);
+
+  const drawSmoothLine = useCallback((ctx, p0, p1, p2, brush, size, color, opacity, variation) => {
+    const start = midpoint(p0, p1);
+    const end = midpoint(p1, p2);
+    const approxLength = distanceBetween(start, p1) + distanceBetween(p1, end);
+    const step = Math.max(0.7, size / 5);
+    const samples = Math.max(3, Math.ceil(approxLength / step));
+
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const p = quadraticPoint(start, p1, end, t);
+      drawPoint(ctx, p.x, p.y, brush, size, color, opacity, variation);
+    }
+  }, [drawPoint]);
+
+  const drawSmoothPaletteKnife = useCallback((ctx, p0, p1, p2, size, opacity, color) => {
+    const start = midpoint(p0, p1);
+    const end = midpoint(p1, p2);
+    const approxLength = distanceBetween(start, p1) + distanceBetween(p1, end);
+    const samples = Math.max(4, Math.ceil(approxLength / Math.max(2, size / 3)));
+
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const p = quadraticPoint(start, p1, end, t);
+      const pNext = quadraticPoint(start, p1, end, Math.min(1, t + 1 / samples));
+      const angle = Math.atan2(pNext.y - p.y, pNext.x - p.x);
+      drawPaletteKnife(ctx, p.x, p.y, size, opacity, color, angle);
+    }
+  }, []);
 
   const startPainting = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
@@ -433,7 +499,12 @@ export const useDrawing = (
     }
 
     if (currentBrush === BRUSH_TYPES.MEME) {
-      if (onMemeClick) onMemeClick(x, y);
+      const handled = onMemeClick?.(x, y, { phase: 'start', clientX, clientY });
+      if (handled) {
+        isMemeStamping.current = true;
+        isPainting.current = true;
+        lastPos.current = { x, y };
+      }
       return;
     }
 
@@ -447,8 +518,18 @@ export const useDrawing = (
       } else {
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          drawLine(ctx, lineStart.x, lineStart.y, x, y, BRUSH_TYPES.ROUND, brushSize, selectedColor, brushOpacity, brushVariation);
+          drawVectorLine(ctx, lineStart, { x, y }, brushSize, selectedColor, brushOpacity);
         }
+        onStrokeComplete?.({
+          type: BRUSH_TYPES.LINE,
+          paintType,
+          color: selectedColor,
+          size: brushSize,
+          opacity: brushOpacity,
+          variation: brushVariation,
+          strokeId: 'stroke_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          points: [lineStart, { x, y }],
+        });
         setLineStart(null);
       }
       return;
@@ -480,7 +561,7 @@ export const useDrawing = (
       drawPoint(ctx, x, y, currentBrush, brushSize, selectedColor, brushOpacity, brushVariation);
       ctx.restore();
     }
-  }, [canvasRef, isReady, currentBrush, lineStart, brushSize, selectedColor, brushOpacity, brushVariation, paintType, drawPoint, drawLine, onChatClick, onMemeClick, viewportRef]);
+  }, [canvasRef, isReady, currentBrush, lineStart, brushSize, selectedColor, brushOpacity, brushVariation, paintType, drawPoint, drawVectorLine, onChatClick, onMemeClick, onStrokeComplete, viewportRef]);
 
   const continuePainting = useCallback((clientX, clientY) => {
     if (!isPainting.current) return;
@@ -502,6 +583,12 @@ export const useDrawing = (
     const x = vp.x + (relX - rect.width / 2) * scale;
     const y = vp.y + (relY - rect.height / 2) * scale;
 
+    if (currentBrush === BRUSH_TYPES.MEME && isMemeStamping.current) {
+      onMemeClick?.(x, y, { phase: 'move', clientX, clientY });
+      lastPos.current = { x, y };
+      return;
+    }
+
     if (!lastPos.current) {
       lastPos.current = { x, y };
       return;
@@ -510,23 +597,32 @@ export const useDrawing = (
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.save();
+      const strokePoints = currentStroke.current?.points || [];
+      const hasCurve = strokePoints.length >= 2;
+      const p0 = hasCurve ? strokePoints[strokePoints.length - 2] : null;
+      const p1 = hasCurve ? strokePoints[strokePoints.length - 1] : lastPos.current;
+      const p2 = { x, y };
 
       if (currentBrush === BRUSH_TYPES.PALETTE_KNIFE) {
         // Palette knife: smear existing paint then deposit new
         ctx.globalCompositeOperation = 'source-over';
-        drawSmearStroke(ctx, lastPos.current.x, lastPos.current.y, x, y, brushSize, brushOpacity);
+        if (hasCurve) {
+          drawSmearStroke(ctx, p0.x, p0.y, p2.x, p2.y, brushSize, brushOpacity);
+          drawSmoothPaletteKnife(ctx, p0, p1, p2, brushSize, brushOpacity, selectedColor);
+        } else {
+          drawSmearStroke(ctx, lastPos.current.x, lastPos.current.y, x, y, brushSize, brushOpacity);
+          drawLine(
+            ctx,
+            lastPos.current.x, lastPos.current.y,
+            x, y,
+            currentBrush,
+            brushSize,
+            selectedColor,
+            brushOpacity,
+            brushVariation
+          );
+        }
 
-        // Draw knife stroke on top
-        drawLine(
-          ctx,
-          lastPos.current.x, lastPos.current.y,
-          x, y,
-          currentBrush,
-          brushSize,
-          selectedColor,
-          brushOpacity * 0.5,
-          brushVariation
-        );
       } else if (currentBrush === BRUSH_TYPES.SMUDGE) {
         // Continuous smudge: drag underlying colors
         drawSmudgeStroke(ctx, lastPos.current.x, lastPos.current.y, x, y, brushSize, brushOpacity);
@@ -544,16 +640,20 @@ export const useDrawing = (
             brushSize, brushOpacity);
         }
       } else {
-        drawLine(
-          ctx,
-          lastPos.current.x, lastPos.current.y,
-          x, y,
-          currentBrush,
-          brushSize,
-          selectedColor,
-          brushOpacity,
-          brushVariation
-        );
+        if (hasCurve) {
+          drawSmoothLine(ctx, p0, p1, p2, currentBrush, brushSize, selectedColor, brushOpacity, brushVariation);
+        } else {
+          drawLine(
+            ctx,
+            lastPos.current.x, lastPos.current.y,
+            x, y,
+            currentBrush,
+            brushSize,
+            selectedColor,
+            brushOpacity,
+            brushVariation
+          );
+        }
       }
       ctx.restore();
     }
@@ -586,7 +686,7 @@ export const useDrawing = (
     }
 
     lastPos.current = { x, y };
-  }, [canvasRef, isReady, currentBrush, brushSize, selectedColor, brushOpacity, brushVariation, drawLine, onStrokeLive]);
+  }, [canvasRef, isReady, currentBrush, brushSize, selectedColor, brushOpacity, brushVariation, drawLine, drawSmoothLine, drawSmoothPaletteKnife, onStrokeLive, onMemeClick]);
 
   function drawSmearStroke(ctx, x1, y1, x2, y2, size, opacity) {
     const dx = x2 - x1;
@@ -689,9 +789,36 @@ export const useDrawing = (
   }
 
   const stopPainting = useCallback(() => {
-    isPainting.current = false;
+    if (isMemeStamping.current) {
+      const endPos = lastPos.current;
+      isPainting.current = false;
+      isMemeStamping.current = false;
+      lastPos.current = null;
+      if (endPos) {
+        onMemeClick?.(endPos.x, endPos.y, { phase: 'end' });
+      }
+      return null;
+    }
 
     const stroke = currentStroke.current;
+    if (stroke?.points?.length >= 2) {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      const prev = stroke.points[stroke.points.length - 2];
+      const last = stroke.points[stroke.points.length - 1];
+      const start = midpoint(prev, last);
+      if (ctx) {
+        ctx.save();
+        if (stroke.type === BRUSH_TYPES.PALETTE_KNIFE) {
+          drawLine(ctx, start.x, start.y, last.x, last.y, stroke.type, stroke.size, stroke.color, stroke.opacity, stroke.variation);
+        } else if (stroke.type !== BRUSH_TYPES.SMUDGE && stroke.type !== BRUSH_TYPES.BLUR) {
+          drawLine(ctx, start.x, start.y, last.x, last.y, stroke.type, stroke.size, stroke.color, stroke.opacity, stroke.variation);
+        }
+        ctx.restore();
+      }
+    }
+
+    isPainting.current = false;
     lastPos.current = null;
     currentStroke.current = null;
 
@@ -712,7 +839,7 @@ export const useDrawing = (
     sentPointCount.current = 0;
 
     return stroke;
-  }, [onStrokeLive]);
+  }, [canvasRef, drawLine, onStrokeLive, onMemeClick]);
 
   // Mouse event handlers
   useEffect(() => {
@@ -732,9 +859,6 @@ export const useDrawing = (
 
     const handleMouseUp = () => {
       const stroke = stopPainting();
-      if (lineStart && currentBrush === BRUSH_TYPES.LINE) {
-        setLineStart(null);
-      }
       if (stroke && onStrokeComplete) {
         onStrokeComplete(stroke);
       }

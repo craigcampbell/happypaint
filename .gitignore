@@ -6,6 +6,9 @@ node_modules/
 # Testing
 /coverage
 
+# Runtime mural storage
+.murals/
+
 # Production
 /dist
 /build

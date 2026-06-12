@@ -3,7 +3,7 @@ import { WebSocketServer as WSS } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import OpenAI from 'openai';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +16,9 @@ const wss = new WSS({ server });
 
 const PORT = process.env.PORT || 3001;
 const VITE_PORT = 5173;
+const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 24);
+const MURAL_STORE_DIR = process.env.MURAL_STORE_DIR || join(__dirname, '.murals');
+const MURAL_STORE_FILE = join(MURAL_STORE_DIR, 'murals.json');
 
 // Initialize OpenAI if API key is set
 let openai = null;
@@ -27,13 +30,73 @@ if (apiKey && apiKey !== 'your-openai-api-key-here') {
 
 // Room management
 const rooms = new Map();
+const persistedMurals = loadMuralStore();
+let persistTimer = null;
+
+function loadMuralStore() {
+  try {
+    if (!existsSync(MURAL_STORE_FILE)) return {};
+    const raw = readFileSync(MURAL_STORE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed.murals && typeof parsed.murals === 'object' ? parsed.murals : {};
+  } catch (err) {
+    console.error('Unable to load mural store:', err.message);
+    return {};
+  }
+}
+
+function snapshotRoom(roomId, room) {
+  return {
+    id: roomId,
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    history: room.history,
+    maxHistory: room.maxHistory,
+  };
+}
+
+function writeMuralStore() {
+  try {
+    rooms.forEach((room, roomId) => {
+      persistedMurals[roomId] = snapshotRoom(roomId, room);
+    });
+
+    mkdirSync(MURAL_STORE_DIR, { recursive: true });
+    const tmpFile = `${MURAL_STORE_FILE}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      murals: persistedMurals,
+    }, null, 2));
+    renameSync(tmpFile, MURAL_STORE_FILE);
+  } catch (err) {
+    console.error('Unable to save mural store:', err.message);
+  }
+}
+
+function schedulePersist(roomId) {
+  const room = rooms.get(roomId);
+  if (room) {
+    persistedMurals[roomId] = snapshotRoom(roomId, room);
+  }
+
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    writeMuralStore();
+  }, 150);
+}
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
+    const saved = persistedMurals[roomId];
+    const now = Date.now();
     rooms.set(roomId, {
       users: new Map(),
-      history: [],
-      maxHistory: 500,
+      history: Array.isArray(saved?.history) ? saved.history : [],
+      maxHistory: saved?.maxHistory || 500,
+      createdAt: saved?.createdAt || now,
+      updatedAt: saved?.updatedAt || null,
     });
   }
   return rooms.get(roomId);
@@ -72,6 +135,16 @@ wss.on('connection', (ws, req) => {
   const roomId = url.searchParams.get('room') || 'main';
   const room = getRoom(roomId);
 
+  if (room.users.size >= MAX_ROOM_USERS) {
+    ws.send(JSON.stringify({
+      type: 'room_full',
+      message: `This mural is full. Try again when one of the ${MAX_ROOM_USERS} artist spots opens.`,
+      maxUsers: MAX_ROOM_USERS,
+    }));
+    ws.close(1008, 'mural full');
+    return;
+  }
+
   const userId = generateUserId();
   const userName = generateUserName();
   const userColor = generateUserColor();
@@ -94,6 +167,9 @@ wss.on('connection', (ws, req) => {
     userName,
     userColor,
     roomId,
+    strokeCount: room.history.length,
+    updatedAt: room.updatedAt,
+    maxUsers: MAX_ROOM_USERS,
   }));
 
   // Send room user list
@@ -118,7 +194,8 @@ wss.on('connection', (ws, req) => {
   if (room.history.length > 0) {
     ws.send(JSON.stringify({
       type: 'history',
-      history: room.history.slice(-50),
+      history: room.history,
+      updatedAt: room.updatedAt,
     }));
   }
 
@@ -165,22 +242,47 @@ wss.on('connection', (ws, req) => {
 
           // Only store final strokes in history (not live intermediate points)
           if (data.type === 'stroke') {
+            room.updatedAt = Date.now();
             room.history.push({
               type: 'stroke',
               user: { id: userId, name: userName, color: userColor },
               stroke: data.stroke,
-              timestamp: Date.now(),
+              timestamp: room.updatedAt,
             });
 
             if (room.history.length > room.maxHistory) {
               room.history = room.history.slice(-room.maxHistory);
             }
+            schedulePersist(roomId);
 
             // Check if LLM should respond
             if (openai && shouldTriggerLLM(data.stroke)) {
-              triggerLLMResponse(room, data.stroke, userId);
+              triggerLLMResponse(roomId, room, data.stroke, userId);
             }
           }
+          break;
+
+        case 'meme':
+          if (!data.meme || !data.meme.url) break;
+          room.updatedAt = Date.now();
+          broadcastToRoom(roomId, {
+            type: 'meme',
+            user: { id: userId, name: userName, color: userColor },
+            meme: data.meme,
+            timestamp: room.updatedAt,
+          }, userId);
+
+          room.history.push({
+            type: 'meme',
+            user: { id: userId, name: userName, color: userColor },
+            meme: data.meme,
+            timestamp: room.updatedAt,
+          });
+
+          if (room.history.length > room.maxHistory) {
+            room.history = room.history.slice(-room.maxHistory);
+          }
+          schedulePersist(roomId);
           break;
 
         case 'clear':
@@ -190,6 +292,8 @@ wss.on('connection', (ws, req) => {
             timestamp: Date.now(),
           }, userId);
           room.history = [];
+          room.updatedAt = Date.now();
+          schedulePersist(roomId);
           break;
 
         case 'ping':
@@ -198,7 +302,7 @@ wss.on('connection', (ws, req) => {
 
         case 'chat_with_ai':
           if (openai) {
-            handleAIChat(room, data.message, userId);
+            handleAIChat(roomId, room, data.message, userId);
           }
           break;
       }
@@ -258,7 +362,7 @@ function shouldTriggerLLM(stroke) {
   return false;
 }
 
-async function triggerLLMResponse(room, stroke, userId) {
+async function triggerLLMResponse(roomId, room, stroke, userId) {
   const points = stroke.points;
   if (!points || points.length < 5) return;
 
@@ -417,7 +521,7 @@ function analyzeStroke(points) {
   return { type: 'unknown' };
 }
 
-async function handleAIChat(room, message, userId) {
+async function handleAIChat(roomId, room, message, userId) {
   if (!openai) return;
 
   try {
@@ -491,6 +595,40 @@ app.get('/api/status', (req, res) => {
     rooms: roomCount,
     users: userCount,
     aiConfigured: !!openai,
+    maxRoomUsers: MAX_ROOM_USERS,
+  });
+});
+
+app.get('/api/murals', (req, res) => {
+  rooms.forEach((room, roomId) => {
+    persistedMurals[roomId] = snapshotRoom(roomId, room);
+  });
+
+  const murals = Object.values(persistedMurals)
+    .map((mural) => ({
+      id: mural.id,
+      createdAt: mural.createdAt || null,
+      updatedAt: mural.updatedAt || null,
+      strokeCount: Array.isArray(mural.history) ? mural.history.length : 0,
+      activeArtists: rooms.get(mural.id)?.users.size || 0,
+      maxArtists: MAX_ROOM_USERS,
+    }))
+    .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+
+  res.json({ murals });
+});
+
+app.get('/api/murals/:roomId', (req, res) => {
+  const roomId = req.params.roomId || 'main';
+  const room = getRoom(roomId);
+
+  res.json({
+    id: roomId,
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    strokeCount: room.history.length,
+    activeArtists: room.users.size,
+    maxArtists: MAX_ROOM_USERS,
   });
 });
 
@@ -506,7 +644,7 @@ if (!isDev) {
 
 // Start server
 server.listen(PORT, () => {
-  console.log(`Happy Paint server running on port ${PORT}`);
+  console.log(`Mural Jam server running on port ${PORT}`);
   if (isDev) {
     console.log(`Frontend dev server: http://localhost:${VITE_PORT}`);
     console.log('Connect to WebSocket: ws://localhost:' + PORT);
@@ -518,12 +656,16 @@ server.listen(PORT, () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('Shutting down...');
+  if (persistTimer) clearTimeout(persistTimer);
+  writeMuralStore();
   wss.close();
   server.close();
 });
 
 process.on('SIGINT', () => {
   console.log('Shutting down...');
+  if (persistTimer) clearTimeout(persistTimer);
+  writeMuralStore();
   wss.close();
   server.close();
 });

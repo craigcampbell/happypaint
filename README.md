@@ -1,14 +1,15 @@
-# Happy Paint
+# Mural Jam
 
-A creative painting application built with React and Vite featuring various brush types, textures, and customization options.
+A collaborative mural studio built with React, Vite, Canvas, WebGL, and WebSockets. Artists can join the same mural room, paint together in real time, leave, and return to the saved mural history.
 
 ## Features
 
-- Multiple brush types (standard, spray, cursive, etch-a-sketch)
-- Customizable brush size, variation, and opacity
-- Texture overlay options
-- Color picker
-- Canvas-based drawing with smooth performance
+- Shared mural rooms with stable invite URLs
+- Disk-backed mural stroke history on the server
+- PNG export for saving a mural snapshot
+- Multiple tactile brushes, including watercolor, oil, sponge, smudge, and palette knife
+- Canvas/WebGL rendering with 3D stroke effects
+- Mobile-friendly bottom tool tray
 
 ## Getting Started
 
@@ -16,3 +17,5 @@ A creative painting application built with React and Vite featuring various brus
 npm install
 npm run dev
 ```
+
+Murals are stored in `.murals/murals.json` while the server runs. Set `MAX_ROOM_USERS` to change the per-mural artist capacity.

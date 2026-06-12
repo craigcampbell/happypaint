@@ -15,7 +15,7 @@ const PaintTypeSelector = ({ currentPaintType, onPaintTypeChange }) => {
       <select
         value={currentPaintType}
         onChange={onPaintTypeChange}
-        className="brush-select"
+        className="brush-select paint-type-select"
       >
         {PAINT_OPTIONS.map((opt) => (
           <option key={opt.value} value={opt.value}>

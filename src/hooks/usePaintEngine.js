@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { PAINT_TYPES, PAINT_PROPERTIES } from '../utils/paintTypes';
-import { VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT } from '../utils/constants';
+import { VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT, MURAL_BACKGROUND_COLOR } from '../utils/constants';
 
 const VERTEX_SHADER = `
   varying vec2 vUv;
@@ -37,6 +37,7 @@ const FRAGMENT_SHADER = `
   void main() {
     // Sample the paint color
     vec4 paintColor = texture2D(uCanvasTexture, vUv);
+    bool isCleanCanvas = paintColor.r > 0.985 && paintColor.g > 0.985 && paintColor.b > 0.985;
 
     // Compute height and normal from height map
     float h = 0.0;
@@ -84,7 +85,7 @@ const FRAGMENT_SHADER = `
     // Subtle shadow in the crevices
     lit *= 1.0 - (1.0 - h) * 0.15 * (1.0 - NdotL);
 
-    gl_FragColor = vec4(lit, paintColor.a);
+    gl_FragColor = isCleanCanvas ? vec4(1.0) : vec4(lit, paintColor.a);
   }
 `;
 
@@ -215,7 +216,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
 
     // Large white background plane behind the canvas
     const bgGeom = new THREE.PlaneGeometry(VIRTUAL_CANVAS_WIDTH * 2, VIRTUAL_CANVAS_HEIGHT * 2);
-    const bgMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const bgMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(MURAL_BACKGROUND_COLOR), side: THREE.DoubleSide });
     const bgPlane = new THREE.Mesh(bgGeom, bgMat);
     bgPlane.position.z = -0.01;
     scene.add(bgPlane);
@@ -423,10 +424,16 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, hCanvas.width, hCanvas.height);
     heightDirtyRef.current = true;
+    if (heightTextureRef.current) {
+      heightTextureRef.current.needsUpdate = true;
+    }
   }, []);
 
   const markDirty = useCallback(() => {
     paintDirtyRef.current = true;
+    if (paintTextureRef.current) {
+      paintTextureRef.current.needsUpdate = true;
+    }
   }, []);
 
   return {

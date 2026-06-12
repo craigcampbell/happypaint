@@ -2,24 +2,24 @@
   position: fixed;
   right: 16px;
   top: 16px;
-  background: rgba(255, 255, 255, 0.97);
-  border: 2px solid #FFD1B3;
-  border-radius: 14px;
+  background: rgba(255, 252, 245, 0.94);
+  border: 2px solid #d9c29f;
+  border-radius: 8px;
   padding: 0;
   z-index: 50;
   min-width: 160px;
   backdrop-filter: blur(10px);
   overflow: hidden;
-  box-shadow: 0 4px 20px rgba(255, 107, 107, 0.1);
+  box-shadow: 0 8px 24px rgba(56, 41, 21, 0.14);
 }
 
 .user-list-header {
   padding: 10px 14px;
-  border-bottom: 2px solid #FFD1B3;
+  border-bottom: 2px solid #d9c29f;
   font-size: 13px;
   font-weight: 700;
-  color: #FF6B6B;
-  background: linear-gradient(135deg, #FFF5E4, #FFE8D6);
+  color: #26312c;
+  background: linear-gradient(135deg, #fff8e8, #f5ead5);
 }
 
 .user-list-items {
@@ -38,13 +38,13 @@
 }
 
 .user-item:hover {
-  background: #FFF5E4;
+  background: #e5f3ed;
 }
 
 .user-avatar {
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -57,7 +57,7 @@
 
 .user-name {
   font-size: 14px;
-  color: #555;
+  color: #4f463d;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

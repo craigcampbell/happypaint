@@ -8,7 +8,7 @@ import ColorSelector from './components/ColorSelector';
 import BrushSelector from './components/BrushSelector';
 import PaintTypeSelector from './components/PaintTypeSelector';
 import UserList from './components/UserList';
-import { BRUSH_TYPES, DEFAULT_PAINT_TYPE, VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT, MIN_ZOOM, MAX_ZOOM, ZOOM_PER_SCROLL, PAINT_MIN_ZOOM } from './utils/constants';
+import { BRUSH_TYPES, DEFAULT_PAINT_TYPE, VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT, MIN_ZOOM, MAX_ZOOM, ZOOM_PER_SCROLL, PAINT_MIN_ZOOM, MURAL_BACKGROUND_COLOR } from './utils/constants';
 import { PAINT_TYPES, PAINT_PROPERTIES } from './utils/paintTypes';
 
 const BRUSH_OPTIONS = [
@@ -29,6 +29,45 @@ const BRUSH_OPTIONS = [
   { value: BRUSH_TYPES.MEME, label: '🖼️ Meme' },
 ];
 
+const MURAL_PROMPTS = [
+  'Add a tiny doorway to somewhere impossible',
+  'Paint a weather mood',
+  'Hide a creature made of only three shapes',
+  'Draw the sound of your favorite song',
+  'Turn someone else\'s line into a landmark',
+  'Add a pattern that repeats across the wall',
+];
+
+const MAX_MURAL_ARTISTS = 24;
+const MIN_MEME_STAMP_SIZE = 64;
+
+function normalizeMuralId(value) {
+  return (value || 'main')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'main';
+}
+
+function getInitialMuralId() {
+  if (typeof window === 'undefined') return 'main';
+  const params = new URLSearchParams(window.location.search);
+  return normalizeMuralId(params.get('mural') || window.location.hash.replace('#', '') || 'main');
+}
+
+function formatSavedAt(timestamp) {
+  if (!timestamp) return 'Waiting for the first mark';
+  return `Saved ${new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+function getMemeCenter(meme) {
+  return {
+    x: meme.centerX ?? meme.x + meme.width / 2,
+    y: meme.centerY ?? meme.y + meme.height / 2,
+  };
+}
+
 function App() {
   const [currentBrush, setCurrentBrush] = useState(BRUSH_TYPES.ROUND);
   const [brushSize, setBrushSize] = useState(8);
@@ -38,12 +77,19 @@ function App() {
   const [showToolbar, setShowToolbar] = useState(true);
   const [showUserList, setShowUserList] = useState(true);
   const [users, setUsers] = useState([]);
-  const [roomId, setRoomId] = useState('main');
+  const [roomId, setRoomId] = useState(getInitialMuralId);
+  const [roomDraft, setRoomDraft] = useState(roomId);
   const [userName, setUserName] = useState('');
   const [userColor, setUserColor] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
   const [brushVariation, setBrushVariation] = useState(0.2);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [muralSavedAt, setMuralSavedAt] = useState(null);
+  const [muralStatus, setMuralStatus] = useState('Mural history loads when artists join.');
+  const [muralError, setMuralError] = useState('');
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const [featuredMurals, setFeaturedMurals] = useState([]);
+  const [activePromptIndex, setActivePromptIndex] = useState(0);
 
   // Chat brush threads: {id, x, y, messages: [{id, user, color, text, timestamp}]}
   const [chatThreads, setChatThreads] = useState([]);
@@ -51,12 +97,15 @@ function App() {
   const [chatBrushInput, setChatBrushInput] = useState('');
   const chatBrushInputRef = useRef(null);
 
-  // Meme brush: {id, x, y, width, height, url}
+  // Meme brush: animated references are overlays, while every chosen image is stamped into the mural canvas.
   const [memes, setMemes] = useState([]);
+  const [memeStampSource, setMemeStampSource] = useState(null);
+  const [memePreview, setMemePreview] = useState(null);
   const [showMemes, setShowMemes] = useState(true);
   const [showChatThreads, setShowChatThreads] = useState(true);
   const memeFileRef = useRef(null);
   const memePendingPos = useRef(null);
+  const memeDragStart = useRef(null);
 
   const canvasContainerRef = useRef(null);
   const paintCanvasRef = useRef(null);
@@ -115,7 +164,7 @@ function App() {
     if (canvas.width !== VIRTUAL_CANVAS_WIDTH || canvas.height !== VIRTUAL_CANVAS_HEIGHT) {
       canvas.width = VIRTUAL_CANVAS_WIDTH;
       canvas.height = VIRTUAL_CANVAS_HEIGHT;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = MURAL_BACKGROUND_COLOR;
       ctx.fillRect(0, 0, VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT);
     }
   }, []);
@@ -173,6 +222,78 @@ function App() {
 
   const isCanvasReady = true;
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('mural', roomId);
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [roomId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`/api/murals/${encodeURIComponent(roomId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setMuralSavedAt(data.updatedAt || null);
+        setMuralStatus(data.strokeCount > 0
+          ? `${data.strokeCount} saved marks on this mural`
+          : 'Blank mural. Make the first mark.');
+      })
+      .catch(() => {
+        if (!cancelled) setMuralStatus('Local drawing works. Server save status is unavailable.');
+      });
+
+    fetch('/api/murals')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.murals) {
+          setFeaturedMurals(data.murals.slice(0, 4));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId]);
+
+  const joinMural = useCallback(() => {
+    const nextRoomId = normalizeMuralId(roomDraft);
+    setRoomDraft(nextRoomId);
+    setRoomId(nextRoomId);
+    setMuralError('');
+    setInviteCopied(false);
+  }, [roomDraft]);
+
+  const handleShareMural = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('mural', roomId);
+    try {
+      await navigator.clipboard?.writeText(url.toString());
+      setInviteCopied(true);
+      setTimeout(() => setInviteCopied(false), 1800);
+    } catch {
+      setInviteCopied(false);
+    }
+  }, [roomId]);
+
+  const handleExportMural = useCallback(() => {
+    const canvas = paintCanvasRef.current;
+    if (!canvas) return;
+
+    const link = document.createElement('a');
+    link.download = `${roomId}-mural.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  }, [roomId]);
+
+  const currentPrompt = MURAL_PROMPTS[activePromptIndex % MURAL_PROMPTS.length];
+  const currentBrushOption = BRUSH_OPTIONS.find((brush) => brush.value === currentBrush) || BRUSH_OPTIONS[0];
+  const currentPaintLabel = PAINT_PROPERTIES[paintType]?.label || 'Standard';
+
   // Handle stroke live updates (throttled, sent during drawing)
   const handleStrokeLive = useCallback((liveData) => {
     if (wsSendStrokeLive) {
@@ -187,6 +308,12 @@ function App() {
     if (stroke && stroke.points && stroke.points.length > 0 && ws && connected) {
       // Send stroke over WebSocket
       wsSendStroke(stroke);
+      const now = Date.now();
+      setMuralSavedAt(now);
+      setMuralStatus('Saving this mark to the mural wall...');
+      setTimeout(() => {
+        setMuralStatus(formatSavedAt(now));
+      }, 700);
 
       // Apply local impasto for paint types
       if (applyImpasto && stroke.paintType && stroke.paintType !== PAINT_TYPES.NONE) {
@@ -277,38 +404,155 @@ function App() {
     setActiveReplyId(null);
   }, [chatBrushInput, activeReplyId, userName, userColor, ws, connected]);
 
+  const drawMemeStamp = useCallback((meme, options = {}) => {
+    const { addAnimatedOverlay = true } = options;
+    const canvas = paintCanvasRef.current;
+    if (!canvas || !meme?.url) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.onload = () => {
+      const center = getMemeCenter(meme);
+      ctx.save();
+      ctx.globalAlpha = meme.opacity ?? 0.92;
+      ctx.translate(center.x, center.y);
+      ctx.rotate(meme.rotation || 0);
+      ctx.drawImage(img, -meme.width / 2, -meme.height / 2, meme.width, meme.height);
+      ctx.restore();
+      markDirty();
+
+      if (meme.animated && addAnimatedOverlay) {
+        setMemes((prev) => {
+          if (prev.some((item) => item.id === meme.id)) return prev;
+          return [...prev, meme];
+        });
+      }
+    };
+    img.src = meme.url;
+  }, [markDirty]);
+
+  const publishMemeStamp = useCallback((meme) => {
+    drawMemeStamp(meme);
+    setMuralSavedAt(Date.now());
+    setMuralStatus(meme.animated
+      ? 'Stamped the first frame. Animation stays as a tracing layer.'
+      : 'Stamped an image onto the mural.');
+
+    if (ws && connected) {
+      ws.send(JSON.stringify({
+        type: 'meme',
+        meme,
+      }));
+    }
+  }, [connected, drawMemeStamp, ws]);
+
+  const buildMemeStampFromDrag = useCallback((start, end, source) => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const width = Math.max(MIN_MEME_STAMP_SIZE, distance > 8 ? distance * 2 : 220);
+    const aspectRatio = source.aspectRatio || 1;
+    const height = Math.max(MIN_MEME_STAMP_SIZE, width / aspectRatio);
+    const rotation = distance > 8 ? Math.atan2(dy, dx) : 0;
+
+    return {
+      id: `meme-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      centerX: start.x,
+      centerY: start.y,
+      x: start.x - width / 2,
+      y: start.y - height / 2,
+      width,
+      height,
+      rotation,
+      url: source.url,
+      animated: source.animated,
+      opacity: 0.92,
+      name: source.name,
+    };
+  }, []);
+
+  const handleMemeGesture = useCallback((canvasX, canvasY, eventInfo = {}) => {
+    const phase = eventInfo.phase || 'start';
+
+    if (!memeStampSource) {
+      if (phase === 'start') {
+        memePendingPos.current = { x: canvasX, y: canvasY };
+        setMuralStatus('Choose an image, then drag on the mural to size and rotate it.');
+        memeFileRef.current?.click();
+      }
+      return false;
+    }
+
+    if (phase === 'start') {
+      const start = { x: canvasX, y: canvasY };
+      memeDragStart.current = start;
+      setMemePreview(buildMemeStampFromDrag(start, start, memeStampSource));
+      return true;
+    }
+
+    if (!memeDragStart.current) return false;
+
+    const stamp = buildMemeStampFromDrag(
+      memeDragStart.current,
+      { x: canvasX, y: canvasY },
+      memeStampSource
+    );
+
+    if (phase === 'move') {
+      setMemePreview(stamp);
+      return true;
+    }
+
+    if (phase === 'end') {
+      publishMemeStamp(stamp);
+      setMemePreview(null);
+      memeDragStart.current = null;
+      return true;
+    }
+
+    return false;
+  }, [buildMemeStampFromDrag, memeStampSource, publishMemeStamp]);
+
   // Handle meme file selection
   const handleMemeFile = useCallback((e) => {
     const file = e.target.files?.[0];
-    if (!file || !memePendingPos.current) return;
+    const targetPos = memePendingPos.current;
+    if (!file || !targetPos) return;
 
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const maxDim = 300;
-      let w = img.naturalWidth;
-      let h = img.naturalHeight;
-      if (w > maxDim || h > maxDim) {
-        const scale = maxDim / Math.max(w, h);
-        w = Math.round(w * scale);
-        h = Math.round(h * scale);
-      }
-      setMemes((prev) => [
-        ...prev,
-        {
-          id: `meme-${Date.now()}`,
-          x: memePendingPos.current.x - w / 2,
-          y: memePendingPos.current.y - h / 2,
-          width: w,
-          height: h,
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 360;
+        let w = img.naturalWidth || maxDim;
+        let h = img.naturalHeight || maxDim;
+        if (w > maxDim || h > maxDim) {
+          const scale = maxDim / Math.max(w, h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+
+        const source = {
           url,
-        },
-      ]);
-      memePendingPos.current = null;
+          animated: /gif|webp/i.test(file.type),
+          name: file.name,
+          aspectRatio: w / h,
+        };
+
+        setMemeStampSource(source);
+        setMemePreview(buildMemeStampFromDrag(targetPos, targetPos, source));
+        setMuralStatus('Image loaded. Press and drag on the mural to size and rotate it, then release.');
+
+        memePendingPos.current = null;
+      };
+      img.src = url;
     };
-    img.src = url;
+    reader.readAsDataURL(file);
     e.target.value = '';
-  }, []);
+  }, [buildMemeStampFromDrag]);
 
   // Drawing hook - wires into the paint canvas
   const drawingState = useDrawing(
@@ -325,10 +569,7 @@ function App() {
     viewportRef,
     PAINT_MIN_ZOOM,
     handleChatThreadCreate,
-    (canvasX, canvasY) => {
-      memePendingPos.current = { x: canvasX, y: canvasY };
-      memeFileRef.current?.click();
-    },
+    handleMemeGesture,
     handleStrokeLive
   );
 
@@ -346,6 +587,14 @@ function App() {
           case 'connected':
             setUserName(data.userName);
             setUserColor(data.userColor);
+            setMuralSavedAt(data.updatedAt || null);
+            setMuralStatus(data.strokeCount > 0
+              ? `${data.strokeCount} saved marks on this mural`
+              : 'Blank mural. Make the first mark.');
+            break;
+
+          case 'room_full':
+            setMuralError(data.message || 'This mural is full right now.');
             break;
 
           case 'userList':
@@ -365,16 +614,20 @@ function App() {
               const ctx = paintCanvasRef.current.getContext('2d');
               if (!ctx) break;
               ctx.clearRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
-              ctx.fillStyle = '#ffffff';
+              ctx.fillStyle = MURAL_BACKGROUND_COLOR;
               ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
               if (clearHeightMap) clearHeightMap();
 
               data.history.forEach((item) => {
                 if (item.type === 'stroke' && item.stroke) {
                   replayStroke(ctx, item.stroke);
+                } else if (item.type === 'meme' && item.meme) {
+                  drawMemeStamp(item.meme);
                 }
               });
               markDirty();
+              setMuralSavedAt(Date.now());
+              setMuralStatus(`Replayed ${data.history.length} saved marks`);
             }
             break;
 
@@ -421,6 +674,16 @@ function App() {
 
               drawRemoteStroke(ctx, data.stroke);
               markDirty();
+              setMuralSavedAt(data.timestamp || Date.now());
+              setMuralStatus(`${data.user?.name || 'Someone'} added to the mural`);
+            }
+            break;
+
+          case 'meme':
+            if (data.meme) {
+              drawMemeStamp(data.meme);
+              setMuralSavedAt(data.timestamp || Date.now());
+              setMuralStatus(`${data.user?.name || 'Someone'} stamped an image onto the mural`);
             }
             break;
 
@@ -429,10 +692,12 @@ function App() {
               const ctx = paintCanvasRef.current.getContext('2d');
               if (!ctx) break;
               ctx.clearRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
-              ctx.fillStyle = '#ffffff';
+              ctx.fillStyle = MURAL_BACKGROUND_COLOR;
               ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
               if (clearHeightMap) clearHeightMap();
               remoteLiveStrokes.current.clear();
+              setMemes([]);
+              setMemePreview(null);
               markDirty();
             }
             break;
@@ -474,7 +739,7 @@ function App() {
       ws.onclose = null;
       ws.onopen = null;
     };
-  }, [ws, paintCanvasRef, isCanvasReady, clearHeightMap]);
+  }, [ws, paintCanvasRef, isCanvasReady, clearHeightMap, drawMemeStamp]);
 
   // Replay stored stroke
   function replayStroke(ctx, stroke) {
@@ -791,11 +1056,13 @@ function App() {
     if (paintCanvasRef.current) {
       const ctx = paintCanvasRef.current.getContext('2d');
       ctx.clearRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = MURAL_BACKGROUND_COLOR;
       ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
     }
     if (clearHeightMap) clearHeightMap();
     remoteLiveStrokes.current.clear();
+    setMemes([]);
+    setMemePreview(null);
     markDirty();
     wsSendClear();
   }, [wsSendClear, clearHeightMap]);
@@ -1017,129 +1284,94 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Left toolbar */}
-      <div className={`toolbar-panel ${showToolbar ? 'open' : 'closed'}`}>
+      {/* Studio side panel: mural/session controls */}
+      <div className={`toolbar-panel studio-panel ${showToolbar ? 'open' : 'closed'}`}>
         <div className="toolbar-header">
-          <h1 className="app-title">🎨 Happy Paint</h1>
+          <div>
+            <div className="app-kicker">Shared mural studio</div>
+            <h1 className="app-title">🎨 Mural Jam</h1>
+          </div>
           <button
             className="toolbar-toggle"
             onClick={() => setShowToolbar(!showToolbar)}
             aria-label="Toggle toolbar"
           >
-            {showToolbar ? '◀' : '🎨'}
+            {showToolbar ? '▶' : '💻'}
           </button>
         </div>
 
         {showToolbar && (
           <div className="toolbar-content">
-            {/* Room selector */}
-            <div className="toolbar-section">
-              <label>🏠 Room</label>
+            <div className="jam-kit-card">
+              <div className="jam-kit-top">
+                <span className="jam-kit-label">Jam kit</span>
+                <span className={`jam-live-dot ${connected ? 'is-live' : ''}`} />
+              </div>
+              <div className="jam-kit-stack">
+                <div className="kit-chip color-chip" style={{ '--chip-color': selectedColor }}>
+                  <span className="chip-swatch" />
+                  <strong>{selectedColor.toUpperCase()}</strong>
+                </div>
+                <div className="kit-chip">
+                  <span>Tool</span>
+                  <strong>{currentBrushOption.label}</strong>
+                </div>
+                <div className="kit-chip">
+                  <span>Paint</span>
+                  <strong>{currentPaintLabel}</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Mural selector */}
+            <div className="toolbar-section mural-room-section tool-card">
+              <label>🏠 Mural</label>
               <input
                 type="text"
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                placeholder="room name"
+                value={roomDraft}
+                onChange={(e) => setRoomDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') joinMural();
+                }}
+                placeholder="mural name"
                 className="room-input"
               />
+              <button className="action-btn join-btn" onClick={joinMural}>
+                Join mural
+              </button>
               <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-                {connected ? '✅ Connected' : '🔌 Disconnected'}
+                {connected ? `✅ Live in ${roomId}` : '🔌 Reconnecting'}
               </div>
+              {muralError && <div className="mural-error">{muralError}</div>}
+              <div className="mural-save-status">{muralStatus}</div>
             </div>
 
-            {/* Paint type */}
-            <div className="toolbar-section">
-              <label>🎨 Paint Type</label>
-              <PaintTypeSelector
-                currentPaintType={paintType}
-                onPaintTypeChange={handlePaintTypeChange}
-              />
+            <div className="mural-actions sticky-actions">
+              <button className="action-btn save-mural-btn" onClick={handleExportMural}>
+                Save PNG
+              </button>
+              <button className="action-btn share-mural-btn" onClick={handleShareMural}>
+                {inviteCopied ? 'Copied' : 'Invite'}
+              </button>
             </div>
 
-            {/* Color selector */}
-            <div className="toolbar-section">
-              <label>🌈 Color</label>
-              <ColorSelector onColorSelect={setSelectedColor} selectedColor={selectedColor} />
+            <div className="mural-prompt-card">
+              <div className="prompt-label">Wall prompt</div>
+              <button
+                type="button"
+                className="prompt-refresh"
+                onClick={() => setActivePromptIndex((idx) => idx + 1)}
+                aria-label="Try another mural prompt"
+              >
+                ↻
+              </button>
+              <p>{currentPrompt}</p>
             </div>
-
-            {/* Brush selector */}
-            <div className="toolbar-section">
-              <label>🖌️ Brush</label>
-              <BrushSelector
-                currentBrush={currentBrush}
-                onBrushChange={handleBrushChange}
-                options={BRUSH_OPTIONS}
-              />
-            </div>
-
-            {/* Brush size */}
-            <div className="toolbar-section">
-              <label>📐 Size: {brushSize}px</label>
-              <input
-                type="range"
-                min={
-                  currentBrush === BRUSH_TYPES.BLUR ? '10' :
-                  currentBrush === BRUSH_TYPES.AIRBRUSH ? '10' :
-                  currentBrush === BRUSH_TYPES.SPRAY ? '5' : '1'
-                }
-                max={
-                  currentBrush === BRUSH_TYPES.BLUR ? '150' :
-                  currentBrush === BRUSH_TYPES.SMUDGE ? '120' :
-                  currentBrush === BRUSH_TYPES.AIRBRUSH ? '120' :
-                  currentBrush === BRUSH_TYPES.SPRAY ? '300' : '80'
-                }
-                value={brushSize}
-                onChange={(e) => setBrushSize(Number(e.target.value))}
-                className="size-slider"
-              />
-            </div>
-
-            {/* Opacity */}
-            <div className="toolbar-section">
-              <label>💧 Opacity: {Math.round(brushOpacity * 100)}%</label>
-              <input
-                type="range"
-                min="5"
-                max="100"
-                value={Math.round(brushOpacity * 100)}
-                onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)}
-                className="size-slider"
-              />
-            </div>
-
-            {/* Spray/Airbrush density */}
-            {(currentBrush === BRUSH_TYPES.SPRAY || currentBrush === BRUSH_TYPES.AIRBRUSH || currentBrush === BRUSH_TYPES.SPONGE || currentBrush === BRUSH_TYPES.WET_BRUSH) && (
-              <div className="toolbar-section">
-                <label>✨ Density: {Math.round(brushVariation * 100)}%</label>
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  value={Math.round(brushVariation * 100)}
-                  onChange={(e) => setBrushVariation(Number(e.target.value) / 100)}
-                  className="size-slider"
-                />
-              </div>
-            )}
-
-            {/* Impasto toggle */}
-            {paintType !== PAINT_TYPES.NONE && (
-              <div className="toolbar-section">
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={showImpasto}
-                    onChange={(e) => setShowImpasto(e.target.checked)}
-                  />
-                  Show 3D Strokes ✨
-                </label>
-              </div>
-            )}
 
             {/* Actions */}
             <div className="toolbar-actions">
               <button className="action-btn clear-btn" onClick={handleClear}>
-                Clear 🧹
+                Clear mural 🧹
               </button>
             </div>
 
@@ -1148,8 +1380,14 @@ function App() {
               className="action-btn user-list-btn"
               onClick={() => setShowUserList(!showUserList)}
             >
-              👥 Friends ({users.length})
+              👥 Artists ({users.length}/{MAX_MURAL_ARTISTS})
             </button>
+
+            {showUserList && (
+              <div className="studio-artists">
+                <UserList users={users} currentUserId={userName ? userName : ''} />
+              </div>
+            )}
 
             {/* Layer visibility toggles */}
             <div className="toolbar-section layer-toggles">
@@ -1170,8 +1408,146 @@ function App() {
                 Show Memes 🖼️
               </label>
             </div>
+
+            {featuredMurals.length > 0 && (
+              <div className="toolbar-section recent-murals">
+                <label>🧭 Recent Murals</label>
+                {featuredMurals.map((mural) => (
+                  <button
+                    key={mural.id}
+                    type="button"
+                    className={`recent-mural-btn ${mural.id === roomId ? 'active' : ''}`}
+                    onClick={() => {
+                      setRoomDraft(mural.id);
+                      setRoomId(mural.id);
+                    }}
+                  >
+                    <span>{mural.id}</span>
+                    <small>{mural.strokeCount} marks</small>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Bottom painter palette: creative controls */}
+      <div className="painter-palette" aria-label="Painter palette">
+        <div className="palette-board">
+          <div className="palette-grip" aria-hidden="true" />
+          <div className="palette-thumb-hole" aria-hidden="true" />
+
+          <div className="palette-status">
+            <span className="palette-status-label">Loaded brush</span>
+            <strong>{currentBrushOption.label}</strong>
+            <span
+              className="palette-status-swatch"
+              style={{ '--chip-color': selectedColor }}
+              aria-hidden="true"
+            />
+          </div>
+
+          <div className="palette-section paint-type-card">
+            <label>Paint</label>
+            <PaintTypeSelector
+              currentPaintType={paintType}
+              onPaintTypeChange={handlePaintTypeChange}
+            />
+          </div>
+
+          <div className="palette-section brush-card">
+            <label>Brush</label>
+            <BrushSelector
+              currentBrush={currentBrush}
+              onBrushChange={handleBrushChange}
+              options={BRUSH_OPTIONS}
+            />
+          </div>
+
+          <div className="palette-section color-card palette-colors">
+            <label>Color puddles</label>
+            <ColorSelector onColorSelect={setSelectedColor} selectedColor={selectedColor} />
+          </div>
+
+          <div className="palette-section range-card palette-sliders">
+            <label>Size {brushSize}px</label>
+            <input
+              type="range"
+              min={
+                currentBrush === BRUSH_TYPES.BLUR ? '10' :
+                currentBrush === BRUSH_TYPES.AIRBRUSH ? '10' :
+                currentBrush === BRUSH_TYPES.SPRAY ? '5' : '1'
+              }
+              max={
+                currentBrush === BRUSH_TYPES.BLUR ? '150' :
+                currentBrush === BRUSH_TYPES.SMUDGE ? '120' :
+                currentBrush === BRUSH_TYPES.AIRBRUSH ? '120' :
+                currentBrush === BRUSH_TYPES.SPRAY ? '300' : '80'
+              }
+              value={brushSize}
+              onChange={(e) => setBrushSize(Number(e.target.value))}
+              className="size-slider"
+            />
+            <label>Opacity {Math.round(brushOpacity * 100)}%</label>
+            <input
+              type="range"
+              min="5"
+              max="100"
+              value={Math.round(brushOpacity * 100)}
+              onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)}
+              className="size-slider"
+            />
+            {(currentBrush === BRUSH_TYPES.SPRAY || currentBrush === BRUSH_TYPES.AIRBRUSH || currentBrush === BRUSH_TYPES.SPONGE || currentBrush === BRUSH_TYPES.WET_BRUSH) && (
+              <>
+                <label>Density {Math.round(brushVariation * 100)}%</label>
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  value={Math.round(brushVariation * 100)}
+                  onChange={(e) => setBrushVariation(Number(e.target.value) / 100)}
+                  className="size-slider"
+                />
+              </>
+            )}
+          </div>
+
+          <div className="palette-section palette-specials">
+            {paintType !== PAINT_TYPES.NONE && (
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showImpasto}
+                  onChange={(e) => setShowImpasto(e.target.checked)}
+                />
+                3D strokes ✨
+              </label>
+            )}
+
+            {currentBrush === BRUSH_TYPES.MEME && (
+              <div className="meme-stamp-tools">
+                <label>Stamp image</label>
+                <div className="meme-stamp-current">
+                  {memeStampSource ? memeStampSource.name || 'Image loaded' : 'No image selected'}
+                </div>
+                <button
+                  type="button"
+                  className="action-btn"
+                  onClick={() => {
+                    memePendingPos.current = {
+                      x: viewportRef.current.x,
+                      y: viewportRef.current.y,
+                    };
+                    memeFileRef.current?.click();
+                  }}
+                >
+                  {memeStampSource ? 'Change image' : 'Choose image'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Main canvas area */}
@@ -1201,6 +1577,24 @@ function App() {
               : 'crosshair',
           }}
         />
+
+        <div className="mural-hud">
+          <div>
+            <span className="mural-hud-label">Mural</span>
+            <strong>{roomId}</strong>
+          </div>
+          <div className="mural-hud-meta">
+            <span>{users.length}/{MAX_MURAL_ARTISTS} artists</span>
+            <span>{formatSavedAt(muralSavedAt)}</span>
+          </div>
+        </div>
+
+        <div className="prompt-strip">
+          <span>Try:</span>
+          <button type="button" onClick={() => setActivePromptIndex((idx) => idx + 1)}>
+            {currentPrompt}
+          </button>
+        </div>
 
         {/* Eraser indicator */}
         {isEraser && (
@@ -1232,6 +1626,14 @@ function App() {
         {viewport.zoom < PAINT_MIN_ZOOM && (
           <div className="zoom-hint">
             Zoom in to paint
+          </div>
+        )}
+
+        {currentBrush === BRUSH_TYPES.MEME && viewport.zoom >= PAINT_MIN_ZOOM && (
+          <div className="meme-brush-hint">
+            {memeStampSource
+              ? 'Press and drag to size and rotate the image. Release to stamp it, then paint over it.'
+              : 'Tap the mural to choose an image. After it loads, drag to size and rotate it.'}
           </div>
         )}
 
@@ -1272,13 +1674,6 @@ function App() {
             >−</button>
           </div>
         </div>
-
-        {/* User list panel */}
-        {showUserList && (
-          <div className="user-list-panel">
-            <UserList users={users} currentUserId={userName ? userName : ''} />
-          </div>
-        )}
 
         {/* Chat brush threads overlay */}
         {showChatThreads && chatThreads.map((thread) => {
@@ -1333,8 +1728,33 @@ function App() {
         })}
 
         {/* Meme/GIF overlays — only render when visible layer is on */}
+        {memePreview && (() => {
+          const center = getMemeCenter(memePreview);
+          const screen = canvasToScreen(center.x, center.y);
+          return (
+            <div
+              className="meme-overlay meme-preview"
+              style={{
+                left: screen.x,
+                top: screen.y,
+                width: memePreview.width * viewport.zoom,
+                height: memePreview.height * viewport.zoom,
+                transform: `translate(-50%, -50%) rotate(${memePreview.rotation || 0}rad)`,
+              }}
+            >
+              <img
+                src={memePreview.url}
+                alt="Meme stamp preview"
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                draggable={false}
+              />
+            </div>
+          );
+        })()}
+
         {showMemes && memes.map((meme) => {
-          const screen = canvasToScreen(meme.x, meme.y);
+          const center = getMemeCenter(meme);
+          const screen = canvasToScreen(center.x, center.y);
           const isVisible = (
             screen.x > -meme.width &&
             screen.x < containerSize.width + meme.width &&
@@ -1342,30 +1762,24 @@ function App() {
             screen.y < containerSize.height + meme.height
           );
           if (!isVisible) return null;
-          const animate = viewport.zoom >= 1.0;
           return (
             <div
               key={meme.id}
-              className="meme-overlay"
+              className="meme-overlay animated-reference"
               style={{
                 left: screen.x,
                 top: screen.y,
                 width: meme.width * viewport.zoom,
                 height: meme.height * viewport.zoom,
+                transform: `translate(-50%, -50%) rotate(${meme.rotation || 0}rad)`,
               }}
             >
-              {animate ? (
-                <img
-                  src={meme.url}
-                  alt="meme"
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  draggable={false}
-                />
-              ) : (
-                <div className="meme-placeholder">
-                  +{(viewport.zoom * 100).toFixed(0)}%
-                </div>
-              )}
+              <img
+                src={meme.url}
+                alt="Animated tracing reference"
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                draggable={false}
+              />
             </div>
           );
         })}

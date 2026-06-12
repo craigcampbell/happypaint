@@ -7,6 +7,7 @@ export const CANVAS_HEIGHT = 600;
 // Virtual canvas (the full painting surface)
 export const VIRTUAL_CANVAS_WIDTH = 6000;
 export const VIRTUAL_CANVAS_HEIGHT = 4000;
+export const MURAL_BACKGROUND_COLOR = '#ffffff';
 
 // Viewport / zoom
 export const MIN_ZOOM = 0.05;

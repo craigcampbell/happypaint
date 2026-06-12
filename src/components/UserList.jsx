@@ -5,7 +5,7 @@ const UserList = ({ users }) => {
     return (
       <div className="user-list">
         <div className="user-list-header">
-          <span>👥 Users</span>
+          <span>👥 Artists</span>
         </div>
         <div className="user-list-empty">No users yet</div>
       </div>
@@ -15,7 +15,7 @@ const UserList = ({ users }) => {
   return (
     <div className="user-list">
       <div className="user-list-header">
-        <span>👥 Users ({users.length})</span>
+        <span>👥 Artists ({users.length})</span>
       </div>
       <div className="user-list-items">
         {users.map((user) => (

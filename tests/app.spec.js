@@ -4,7 +4,8 @@ test.describe('Happy Paint - Core', () => {
   test('loads the app', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.app-title', { timeout: 10000 });
-    await expect(page.locator('.app-title')).toContainText('Happy Paint');
+    await expect(page.locator('.app-title')).toContainText('Mural Jam');
+    await expect(page.locator('.app-kicker')).toContainText('Shared mural studio');
   });
 
   test('shows toolbar', async ({ page }) => {
@@ -56,6 +57,26 @@ test.describe('Happy Paint - Core', () => {
     await page.goto('/');
     await page.waitForSelector('.connection-status', { timeout: 10000 });
     await expect(page.locator('.connection-status')).toBeVisible();
+  });
+
+  test('mural save and invite controls are visible', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.mural-hud', { timeout: 10000 });
+    await expect(page.locator('.mural-hud')).toContainText('Mural');
+    await expect(page.locator('.jam-kit-card')).toBeVisible();
+    await expect(page.locator('.jam-kit-card')).toContainText('Jam kit');
+    await expect(page.locator('.save-mural-btn')).toBeVisible();
+    await expect(page.locator('.share-mural-btn')).toBeVisible();
+    await expect(page.locator('.mural-prompt-card')).toContainText('Wall prompt');
+  });
+
+  test('joining a named mural normalizes the mural URL', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('.room-input', { timeout: 10000 });
+    await page.locator('.room-input').fill('Space Cats!');
+    await page.locator('.join-btn').click();
+    await expect(page.locator('.mural-hud')).toContainText('space-cats');
+    await expect(page).toHaveURL(/mural=space-cats/);
   });
 });
 
@@ -157,6 +178,53 @@ test.describe('Happy Paint - Meme Brush', () => {
     await expect(page.locator('input[type="file"]')).toHaveCount(1);
   });
 
+  test('meme brush stamps the selected image into the mural canvas', async ({ page }) => {
+    await page.goto('/?mural=meme-stamp-test');
+    await page.waitForSelector('.brush-select', { timeout: 10000 });
+    await page.locator('.brush-select').nth(1).selectOption('meme');
+    await expect(page.locator('.meme-brush-hint')).toBeVisible();
+
+    const canvasArea = page.locator('.canvas-area');
+    const box = await canvasArea.boundingBox();
+    const fileChooserPromise = page.waitForEvent('filechooser');
+    await canvasArea.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    const fileChooser = await fileChooserPromise;
+
+    await fileChooser.setFiles({
+      name: 'red-dot.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lY7t7wAAAABJRU5ErkJggg==',
+        'base64'
+      ),
+    });
+
+    await expect(page.locator('.meme-preview')).toBeVisible();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 35);
+    await page.mouse.up();
+
+    await page.waitForTimeout(500);
+    await expect(page.locator('.meme-placeholder')).toHaveCount(0);
+    await expect(page.locator('.meme-preview')).toHaveCount(0);
+
+    const coloredPixels = await page.evaluate(() => {
+      const canvas = document.querySelector('.paint-canvas');
+      const ctx = canvas.getContext('2d');
+      const image = ctx.getImageData(2994, 1994, 12, 12).data;
+      let count = 0;
+      for (let i = 0; i < image.length; i += 4) {
+        if (image[i] > 180 && image[i + 1] < 120 && image[i + 2] < 120 && image[i + 3] > 0) {
+          count++;
+        }
+      }
+      return count;
+    });
+
+    expect(coloredPixels).toBeGreaterThan(0);
+  });
+
   test('Show Memes toggle is visible', async ({ page }) => {
     await page.goto('/');
     await page.waitForSelector('.layer-toggles', { timeout: 10000 });
@@ -186,6 +254,7 @@ test.describe('Happy Paint - Mobile', () => {
     await page.goto('/');
     await page.waitForSelector('.app-title', { timeout: 15000 });
     await expect(page.locator('.app-title')).toBeVisible();
+    await expect(page.locator('.mural-hud')).toBeVisible();
     await expect(page.locator('.webgl-canvas')).toBeVisible();
     await context.close();
   });
