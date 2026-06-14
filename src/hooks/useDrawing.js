@@ -24,6 +24,51 @@ function distanceBetween(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+// In-place separable box blur on RGBA pixel data. Uses a sliding-window running
+// sum so cost is O(w*h) independent of radius. Clamp-to-edge at the borders.
+function separableBoxBlur(data, w, h, radius) {
+  const span = radius * 2 + 1;
+  const tmp = new Float32Array(data.length);
+
+  // Horizontal pass: data -> tmp
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4;
+    for (let c = 0; c < 4; c++) {
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const xx = k < 0 ? 0 : k >= w ? w - 1 : k;
+        sum += data[row + xx * 4 + c];
+      }
+      for (let x = 0; x < w; x++) {
+        tmp[row + x * 4 + c] = sum / span;
+        const xOut = x - radius < 0 ? 0 : x - radius;
+        const xInRaw = x + radius + 1;
+        const xIn = xInRaw >= w ? w - 1 : xInRaw;
+        sum += data[row + xIn * 4 + c] - data[row + xOut * 4 + c];
+      }
+    }
+  }
+
+  // Vertical pass: tmp -> data
+  for (let x = 0; x < w; x++) {
+    const col = x * 4;
+    for (let c = 0; c < 4; c++) {
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const yy = k < 0 ? 0 : k >= h ? h - 1 : k;
+        sum += tmp[yy * w * 4 + col + c];
+      }
+      for (let y = 0; y < h; y++) {
+        data[y * w * 4 + col + c] = Math.round(sum / span);
+        const yOut = y - radius < 0 ? 0 : y - radius;
+        const yInRaw = y + radius + 1;
+        const yIn = yInRaw >= h ? h - 1 : yInRaw;
+        sum += tmp[yIn * w * 4 + col + c] - tmp[yOut * w * 4 + col + c];
+      }
+    }
+  }
+}
+
 function sampleUnderlyingColor(ctx, x, y, sampleSize) {
   const r = Math.max(1, Math.floor(sampleSize));
   const sx = Math.max(0, Math.floor(x - r / 2));
@@ -75,6 +120,10 @@ export const useDrawing = (
   const isMemeStamping = useRef(false);
   const lastPos = useRef(null);
   const currentStroke = useRef(null);
+
+  // Graffiti drips: paint that runs down the wall after spraying.
+  const dripsRef = useRef([]);
+  const dripRafRef = useRef(null);
   const lastLiveSend = useRef(0);
   const sentPointCount = useRef(0);
   const strokeIdRef = useRef('');
@@ -159,33 +208,127 @@ export const useDrawing = (
 
   function drawSpray(ctx, x, y, size, opacity, color, variation, airbrush) {
     const density = Math.floor(size * 2 * variation);
-    ctx.globalAlpha = opacity * (airbrush ? 0.02 : 0.18);
-    for (let i = 0; i < density; i++) {
-      let radius;
-      if (airbrush) {
+
+    if (airbrush) {
+      // Particle alpha fades with radius, so these can't share one fill.
+      ctx.globalAlpha = opacity * 0.02;
+      for (let i = 0; i < density; i++) {
         const u = Math.random() + Math.random() + Math.random();
-        radius = (u / 3) * size;
-      } else {
-        radius = Math.random() * size;
+        const radius = (u / 3) * size;
+        const angle = Math.random() * Math.PI * 2;
+        const dx = x + radius * Math.cos(angle);
+        const dy = y + radius * Math.sin(angle);
+        const particleSize = Math.max(0.3, Math.random() * 1.0);
+        ctx.globalAlpha = opacity * 0.03 * (1 - radius / size);
+        ctx.beginPath();
+        ctx.arc(dx, dy, particleSize, 0, Math.PI * 2);
+        ctx.fill();
       }
+      return;
+    }
+
+    // Constant alpha → batch every speck into a single path and fill once.
+    ctx.globalAlpha = opacity * 0.18;
+    ctx.beginPath();
+    for (let i = 0; i < density; i++) {
+      const radius = Math.random() * size;
       const angle = Math.random() * Math.PI * 2;
       const dx = x + radius * Math.cos(angle);
       const dy = y + radius * Math.sin(angle);
-      const particleSize = airbrush
-        ? Math.max(0.3, Math.random() * 1.0)
-        : Math.max(0.5, Math.random() * 1.5);
-
-      if (airbrush) {
-        ctx.globalAlpha = opacity * 0.03 * (1 - radius / size);
-      }
-
-      ctx.beginPath();
+      const particleSize = Math.max(0.5, Math.random() * 1.5);
+      ctx.moveTo(dx + particleSize, dy);
       ctx.arc(dx, dy, particleSize, 0, Math.PI * 2);
-      ctx.fill();
     }
+    ctx.fill();
   }
 
+  // Advance every active drip one frame, baking the new run segment onto the
+  // canvas. When a drip finishes, it leaves a rounded droplet at its tip.
+  const animateDrips = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) { dripRafRef.current = null; return; }
+    const ctx = canvas.getContext('2d');
+    const drips = dripsRef.current;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'round';
+
+    for (const d of drips) {
+      if (d.done) continue;
+      const prevLen = d.len;
+      d.len = Math.min(d.maxLen, d.len + d.speed);
+      d.speed *= 0.99; // paint slows as it runs out of momentum
+
+      const px = d.x + Math.sin(prevLen * 0.04 + d.phase) * d.wobble + d.drift * (prevLen / d.maxLen);
+      const py = d.y + prevLen;
+      const nx = d.x + Math.sin(d.len * 0.04 + d.phase) * d.wobble + d.drift * (d.len / d.maxLen);
+      const ny = d.y + d.len;
+      const w = Math.max(0.7, d.width * (1 - 0.45 * (d.len / d.maxLen)));
+
+      ctx.strokeStyle = `rgba(${d.r},${d.g},${d.b},${d.opacity})`;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(nx, ny);
+      ctx.stroke();
+
+      d.headX = nx; d.headY = ny; d.headW = w;
+      if (d.len >= d.maxLen || d.speed < 0.15) {
+        d.done = true;
+        // A heavier droplet pools at the bottom of the run.
+        ctx.fillStyle = `rgba(${d.r},${d.g},${d.b},${Math.min(1, d.opacity * 1.25)})`;
+        ctx.beginPath();
+        ctx.arc(d.headX, d.headY, d.headW * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    dripsRef.current = drips.filter((d) => !d.done);
+    dripRafRef.current = dripsRef.current.length > 0
+      ? requestAnimationFrame(animateDrips)
+      : null;
+  };
+
+  // Occasionally start a run of paint dripping down from a sprayed spot.
+  const maybeSpawnDrip = (x, y, size, color, opacity, chanceScale) => {
+    if (dripsRef.current.length > 60) return; // cap for perf
+    const chance = opacity * brushVariation * 0.05 * chanceScale;
+    if (Math.random() > chance) return;
+
+    const rgb = hexToRgb(color) || { r: 0, g: 0, b: 0 };
+    dripsRef.current.push({
+      r: rgb.r, g: rgb.g, b: rgb.b,
+      x: x + (Math.random() - 0.5) * size * 0.5,
+      y: y + size * 0.2,
+      len: 0,
+      maxLen: size * (1.5 + Math.random() * 4.5),
+      width: Math.max(1.4, size * (0.08 + Math.random() * 0.14)),
+      opacity: Math.min(0.9, opacity * (0.55 + Math.random() * 0.4)),
+      speed: 2.2 + Math.random() * 3.5,
+      drift: (Math.random() - 0.5) * size * 0.5,
+      wobble: size * (0.04 + Math.random() * 0.1),
+      phase: Math.random() * Math.PI * 2,
+      done: false,
+      headX: x, headY: y, headW: 1,
+    });
+    if (!dripRafRef.current) {
+      dripRafRef.current = requestAnimationFrame(animateDrips);
+    }
+  };
+
+  // Cancel and clear all drips (used when the mural is cleared/replayed).
+  const clearDrips = useCallback(() => {
+    if (dripRafRef.current) {
+      cancelAnimationFrame(dripRafRef.current);
+      dripRafRef.current = null;
+    }
+    dripsRef.current = [];
+  }, []);
+
   function drawAirbrush(ctx, x, y, size, opacity, color, variation) {
+    maybeSpawnDrip(x, y, size, color, opacity, 1);
     const gradient = ctx.createRadialGradient(x, y, 0, x, y, size);
     gradient.addColorStop(0, color);
     gradient.addColorStop(0.3, color);
@@ -252,39 +395,12 @@ export const useDrawing = (
 
     try {
       const imgData = ctx.getImageData(sx, sy, sw, sh);
-      const data = imgData.data;
-
-      // Box blur: average each pixel with its neighbors
-      const kernel = Math.max(1, Math.floor(r * 0.35));
-      const blurred = new Uint8ClampedArray(data.length);
-
-      for (let py = 0; py < sh; py++) {
-        for (let px = 0; px < sw; px++) {
-          let sr = 0, sg = 0, sb = 0, sa = 0, count = 0;
-          for (let ky = -kernel; ky <= kernel; ky++) {
-            for (let kx = -kernel; kx <= kernel; kx++) {
-              const nx = px + kx;
-              const ny = py + ky;
-              if (nx >= 0 && nx < sw && ny >= 0 && ny < sh) {
-                const idx = (ny * sw + nx) * 4;
-                const weight = 1 - (Math.abs(kx) + Math.abs(ky)) / (kernel * 2 + 1);
-                sr += data[idx] * weight;
-                sg += data[idx + 1] * weight;
-                sb += data[idx + 2] * weight;
-                sa += data[idx + 3] * weight;
-                count += weight;
-              }
-            }
-          }
-          const outIdx = (py * sw + px) * 4;
-          blurred[outIdx] = Math.round(sr / count);
-          blurred[outIdx + 1] = Math.round(sg / count);
-          blurred[outIdx + 2] = Math.round(sb / count);
-          blurred[outIdx + 3] = Math.round(sa / count);
-        }
-      }
-
-      ctx.putImageData(new ImageData(blurred, sw, sh), sx, sy);
+      // Separable box blur — O(w*h) regardless of radius (was O(w*h*r^2),
+      // which froze the tab on large brushes). Two box passes ≈ gaussian.
+      const radius = Math.max(1, Math.floor(r * 0.35));
+      separableBoxBlur(imgData.data, sw, sh, radius);
+      separableBoxBlur(imgData.data, sw, sh, radius);
+      ctx.putImageData(imgData, sx, sy);
     } catch (e) {
       // ignore
     }
@@ -328,6 +444,8 @@ export const useDrawing = (
   }
 
   function drawWetBrush(ctx, x, y, size, opacity, color, variation) {
+    // Wet paint runs readily — a touch more drip-prone than the airbrush.
+    maybeSpawnDrip(x, y, size, color, opacity, 1.4);
     // Wet brush: soft circle with variable opacity that spreads
     const gradient = ctx.createRadialGradient(x, y, 0, x, y, size * 0.55);
     const rgb = hexToRgb(color);
@@ -928,6 +1046,9 @@ export const useDrawing = (
     setIsEraser(currentBrush === BRUSH_TYPES.ERASER);
   }, [currentBrush]);
 
+  // Stop any running drip animation when the hook unmounts.
+  useEffect(() => clearDrips, [clearDrips]);
+
   return {
     isEraser,
     lineStart,
@@ -935,5 +1056,6 @@ export const useDrawing = (
     startPainting,
     continuePainting,
     stopPainting,
+    clearDrips,
   };
 };

@@ -22,7 +22,7 @@ const UserList = ({ users }) => {
           <div key={user.id} className="user-item">
             <div
               className="user-avatar"
-              style={{ backgroundColor: user.color }}
+              style={{ backgroundColor: user.color, '--avatar-glow': user.color }}
             >
               {user.name.charAt(0).toUpperCase()}
             </div>

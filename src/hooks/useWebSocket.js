@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
 
-export const useWebSocket = (roomId) => {
+export const useWebSocket = (roomId, onMessage) => {
   const wsRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [history, setHistory] = useState([]);
@@ -10,38 +10,52 @@ export const useWebSocket = (roomId) => {
   const [chatHistory, setChatHistory] = useState([]);
   const reconnectTimeoutRef = useRef(null);
 
+  // Keep the latest message handler in a ref so we can attach onmessage at
+  // socket-creation time (before the server's initial burst) without
+  // reconnecting whenever the handler identity changes.
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
+  // While true, an unexpected close triggers a reconnect. We flip it off for
+  // intentional teardown (unmount / room switch) so we never leak a duplicate
+  // socket — the bug that made one artist appear twice in the room.
+  const shouldReconnectRef = useRef(true);
+  const retryCountRef = useRef(0);
+
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    const existing = wsRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    shouldReconnectRef.current = true;
 
     const url = `${SERVER_URL ? SERVER_URL.replace('http', 'ws') : 'ws://localhost:3001'}?room=${encodeURIComponent(roomId)}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
+    // Attach the message handler immediately so no early message is dropped.
+    ws.onmessage = (event) => onMessageRef.current?.(event);
+
     ws.onopen = () => {
       setConnected(true);
+      retryCountRef.current = 0;
       // Send ping every 30s to keep connection alive
-      const pingInterval = setInterval(() => {
+      ws._pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, 30000);
-
-      ws._pingInterval = pingInterval;
     };
 
     ws.onclose = () => {
-      setConnected(false);
       if (ws._pingInterval) clearInterval(ws._pingInterval);
+      // Ignore closes for sockets we've already replaced or intentionally closed.
+      if (wsRef.current !== ws || !shouldReconnectRef.current) return;
+      setConnected(false);
 
-      // Reconnect after delay
-      const retryCount = wsRef.current?._retryCount || 0;
-      const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
-      if (wsRef.current) {
-        wsRef.current._retryCount = retryCount + 1;
-      }
-      reconnectTimeoutRef.current = setTimeout(() => {
-        connect();
-      }, delay);
+      const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+      retryCountRef.current += 1;
+      reconnectTimeoutRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = () => {
@@ -49,19 +63,21 @@ export const useWebSocket = (roomId) => {
     };
   }, [roomId]);
 
-  // Connect on mount
+  // Connect on mount / room change
   useEffect(() => {
     connect();
 
     return () => {
+      shouldReconnectRef.current = false;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current?._pingInterval) {
         clearInterval(wsRef.current._pingInterval);
       }
-      wsRef.current?.close();
+      const closing = wsRef.current;
       wsRef.current = null;
+      closing?.close();
     };
   }, [connect]);
 
@@ -107,6 +123,12 @@ export const useWebSocket = (roomId) => {
     }
   }, []);
 
+  const sendCursor = useCallback((x, y, drawing) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'cursor', x, y, drawing }));
+    }
+  }, []);
+
   const sendChat = useCallback((message) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -142,6 +164,7 @@ export const useWebSocket = (roomId) => {
     sendStrokeLive,
     sendClear,
     sendChat,
+    sendCursor,
     sendAIChat,
     reconnect,
   };

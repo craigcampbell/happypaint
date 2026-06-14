@@ -89,7 +89,7 @@ const FRAGMENT_SHADER = `
   }
 `;
 
-export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing = false) {
+export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing = false, impastoActive = true) {
   const containerRef = useRef(null);
   const [engine, setEngine] = useState(null);
   const sceneRef = useRef(null);
@@ -107,7 +107,10 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
   const lastRemoteUploadRef = useRef(0);
   isDrawingRef.current = isDrawing;
 
-  const [showImpasto, setShowImpasto] = useState(true);
+  // When impasto isn't active, the lightweight 2D blit display takes over and
+  // the WebGL pass is paused — no 96MB/frame texture upload.
+  const impastoActiveRef = useRef(impastoActive);
+  impastoActiveRef.current = impastoActive;
 
   // Initialize Three.js
   const initEngine = useCallback((container) => {
@@ -258,6 +261,8 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
 
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
+      // Paused while the fast 2D blit display is showing.
+      if (!impastoActiveRef.current) return;
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         const now = performance.now();
         const isLocal = isDrawingRef.current;
@@ -287,7 +292,7 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
 
         if (materialRef.current) {
           materialRef.current.uniforms.uTime.value = now * 0.001;
-          materialRef.current.uniforms.uShowImpasto.value = showImpasto;
+          materialRef.current.uniforms.uShowImpasto.value = true;
         }
 
         rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -300,7 +305,17 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [engine, showImpasto]);
+  }, [engine]);
+
+  // When impasto re-activates, force a fresh upload so WebGL reflects every
+  // stroke painted while it was paused.
+  useEffect(() => {
+    if (!impastoActive) return;
+    paintDirtyRef.current = true;
+    heightDirtyRef.current = true;
+    if (paintTextureRef.current) paintTextureRef.current.needsUpdate = true;
+    if (heightTextureRef.current) heightTextureRef.current.needsUpdate = true;
+  }, [impastoActive]);
 
   // Update camera/rendered frustum when dimensions or viewport change
   useEffect(() => {
@@ -440,8 +455,6 @@ export function usePaintEngine(dimensions, viewport, paintCanvasRef, isDrawing =
     containerRef,
     initEngine,
     engine,
-    showImpasto,
-    setShowImpasto,
     getHeightCanvas: () => heightCanvasRef.current,
     applyImpasto,
     smearHeight,

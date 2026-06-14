@@ -1,80 +1,79 @@
 .color-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 7px;
 }
 
 .color-swatch {
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 12px;
+  border-radius: 50%;
   cursor: pointer;
-  border: 3px solid transparent;
-  transition: all 0.2s;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  transition: transform 0.16s, box-shadow 0.16s, border-color 0.16s;
   position: relative;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .color-swatch:hover {
-  transform: scale(1.15);
+  transform: translateY(-2px) scale(1.12);
   z-index: 1;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0 12px currentColor;
 }
 
 .color-swatch.selected {
-  border-color: #333;
-  box-shadow: 0 0 0 4px #FF6B6B;
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #fff, 0 0 16px rgba(255, 255, 255, 0.6);
 }
 
 .custom-swatch {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 3px dashed #ddd;
-  background: linear-gradient(135deg, #ff0000, #ff7700, #ffff00, #00ff00, #0000ff, #8b00ff, #ff0000);
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+  background: conic-gradient(from 0deg, #ff2bd6, #ffd23d, #b6ff3d, #1fe0ff, #9b5cff, #ff2bd6);
 }
 
 .custom-swatch.active {
-  border-color: #FF6B6B;
+  border-color: var(--neon-cyan);
   border-style: solid;
 }
 
 .swatch-plus {
   color: #fff;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
 
 .color-picker-container {
   display: flex;
-  flex-direction: column;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .color-input {
-  width: 100%;
+  width: 46px;
   height: 40px;
-  border: 2px solid #FFD1B3;
-  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
   cursor: pointer;
   background: none;
   padding: 2px;
 }
 
 .hex-input {
-  background: #FFF5E4;
-  border: 2px solid #FFD1B3;
-  border-radius: 12px;
+  flex: 1;
+  background: var(--surface, #16161f);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
   padding: 8px 12px;
-  color: #333;
+  color: var(--text, #f3f3fb);
   font-size: 13px;
   font-family: 'Fredoka', monospace;
   outline: none;
 }
 
 .hex-input:focus {
-  border-color: #FF6B6B;
-  box-shadow: 0 0 0 4px rgba(255, 107, 107, 0.1);
+  border-color: var(--neon-cyan, #1fe0ff);
+  box-shadow: 0 0 0 3px rgba(31, 224, 255, 0.16);
 }

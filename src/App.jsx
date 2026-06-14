@@ -1,32 +1,32 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import './App.css';
+import './studio.css';
 import { usePaintEngine } from './hooks/usePaintEngine';
 import { useDrawing } from './hooks/useDrawing';
 import { useWebSocket } from './hooks/useWebSocket';
 
-import ColorSelector from './components/ColorSelector';
 import BrushSelector from './components/BrushSelector';
 import PaintTypeSelector from './components/PaintTypeSelector';
-import UserList from './components/UserList';
 import { BRUSH_TYPES, DEFAULT_PAINT_TYPE, VIRTUAL_CANVAS_WIDTH, VIRTUAL_CANVAS_HEIGHT, MIN_ZOOM, MAX_ZOOM, ZOOM_PER_SCROLL, PAINT_MIN_ZOOM, MURAL_BACKGROUND_COLOR } from './utils/constants';
 import { PAINT_TYPES, PAINT_PROPERTIES } from './utils/paintTypes';
+import { hexToRgb } from './utils/colorMixer';
 
 const BRUSH_OPTIONS = [
-  { value: BRUSH_TYPES.ROUND, label: '🖌️ Brush' },
-  { value: BRUSH_TYPES.SQUARE, label: '⬜ Square' },
-  { value: BRUSH_TYPES.WET_BRUSH, label: '💧 Wet Brush' },
-  { value: BRUSH_TYPES.SPRAY, label: '💨 Spray' },
-  { value: BRUSH_TYPES.AIRBRUSH, label: '☁️ Airbrush' },
-  { value: BRUSH_TYPES.PENCIL, label: '✏️ Pencil' },
-  { value: BRUSH_TYPES.PEN, label: '🖊️ Pen' },
-  { value: BRUSH_TYPES.LINE, label: '📏 Line' },
-  { value: BRUSH_TYPES.SPONGE, label: '🧽 Sponge' },
-  { value: BRUSH_TYPES.PALETTE_KNIFE, label: '🔪 Palette Knife' },
-  { value: BRUSH_TYPES.BLUR, label: '🌫️ Blur' },
-  { value: BRUSH_TYPES.SMUDGE, label: '👆 Smudge' },
-  { value: BRUSH_TYPES.ERASER, label: '🧹 Eraser' },
-  { value: BRUSH_TYPES.CHAT, label: '💬 Chat' },
-  { value: BRUSH_TYPES.MEME, label: '🖼️ Meme' },
+  { value: BRUSH_TYPES.ROUND, icon: '🖌️', name: 'Brush', label: '🖌️ Brush' },
+  { value: BRUSH_TYPES.SQUARE, icon: '⬜', name: 'Square', label: '⬜ Square' },
+  { value: BRUSH_TYPES.WET_BRUSH, icon: '💧', name: 'Wet', label: '💧 Wet Brush' },
+  { value: BRUSH_TYPES.SPRAY, icon: '💨', name: 'Spray', label: '💨 Spray' },
+  { value: BRUSH_TYPES.AIRBRUSH, icon: '☁️', name: 'Airbrush', label: '☁️ Airbrush' },
+  { value: BRUSH_TYPES.PENCIL, icon: '✏️', name: 'Pencil', label: '✏️ Pencil' },
+  { value: BRUSH_TYPES.PEN, icon: '🖊️', name: 'Pen', label: '🖊️ Pen' },
+  { value: BRUSH_TYPES.LINE, icon: '📏', name: 'Line', label: '📏 Line' },
+  { value: BRUSH_TYPES.SPONGE, icon: '🧽', name: 'Sponge', label: '🧽 Sponge' },
+  { value: BRUSH_TYPES.PALETTE_KNIFE, icon: '🔪', name: 'Knife', label: '🔪 Palette Knife' },
+  { value: BRUSH_TYPES.BLUR, icon: '🌫️', name: 'Blur', label: '🌫️ Blur' },
+  { value: BRUSH_TYPES.SMUDGE, icon: '👆', name: 'Smudge', label: '👆 Smudge' },
+  { value: BRUSH_TYPES.ERASER, icon: '🧹', name: 'Eraser', label: '🧹 Eraser' },
+  { value: BRUSH_TYPES.CHAT, icon: '💬', name: 'Chat', label: '💬 Chat' },
+  { value: BRUSH_TYPES.MEME, icon: '🖼️', name: 'Meme', label: '🖼️ Meme' },
 ];
 
 const MURAL_PROMPTS = [
@@ -40,6 +40,21 @@ const MURAL_PROMPTS = [
 
 const MAX_MURAL_ARTISTS = 24;
 const MIN_MEME_STAMP_SIZE = 64;
+
+function hslToHex(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  const toHex = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
 
 function normalizeMuralId(value) {
   return (value || 'main')
@@ -74,14 +89,18 @@ function App() {
   const [brushOpacity, setBrushOpacity] = useState(1);
   const [selectedColor, setSelectedColor] = useState('#1a1a2e');
   const [paintType, setPaintType] = useState(DEFAULT_PAINT_TYPE);
-  const [showToolbar, setShowToolbar] = useState(true);
-  const [showUserList, setShowUserList] = useState(true);
+  // Floating chrome: which tool-rail flyout is open, and the mural sheet.
+  const [activeFlyout, setActiveFlyout] = useState(null); // 'color' | 'size' | 'fx' | 'more'
+  const [showSheet, setShowSheet] = useState(false);
+  const [showMinimap, setShowMinimap] = useState(false);
+  const [huePct, setHuePct] = useState(0.0);
   const [users, setUsers] = useState([]);
   const [roomId, setRoomId] = useState(getInitialMuralId);
   const [roomDraft, setRoomDraft] = useState(roomId);
   const [userName, setUserName] = useState('');
   const [userColor, setUserColor] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
+  const [showImpasto, setShowImpasto] = useState(true);
   const [brushVariation, setBrushVariation] = useState(0.2);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [muralSavedAt, setMuralSavedAt] = useState(null);
@@ -109,6 +128,7 @@ function App() {
 
   const canvasContainerRef = useRef(null);
   const paintCanvasRef = useRef(null);
+  const displayCanvasRef = useRef(null);
   const minimapCanvasRef = useRef(null);
   const [containerSize, setContainerSize] = useState({
     width: Math.max(400, window.innerWidth),
@@ -169,19 +189,21 @@ function App() {
     }
   }, []);
 
-  // Paint engine (WebGL)
+  // Paint engine (WebGL). The 3D impasto pass only runs when a paint type is
+  // selected, impasto is on, AND the artist isn't mid-stroke. While drawing we
+  // always use the fast 2D blit for instant feedback, so the heavy full-canvas
+  // GPU upload happens once when the stroke settles instead of every frame.
+  const impastoActive = showImpasto && paintType !== PAINT_TYPES.NONE && !isDrawing;
   const {
     containerRef: engineContainerRef,
     initEngine,
     engine,
-    showImpasto,
-    setShowImpasto,
     applyImpasto,
     smearHeight,
     scrapeHeight,
     clearHeightMap,
     markDirty,
-  } = usePaintEngine(containerSize, viewport, paintCanvasRef, isDrawing);
+  } = usePaintEngine(containerSize, viewport, paintCanvasRef, isDrawing, impastoActive);
 
   // Initialize three.js engine when container mounts
   useEffect(() => {
@@ -210,7 +232,10 @@ function App() {
     }
   }, [engine, smearHeight]);
 
-  // WebSocket hook
+  // WebSocket hook. The message handler is held in a ref and invoked via a
+  // stable dispatch so the socket can bind onmessage at creation time.
+  const wsMessageRef = useRef(null);
+  const wsMessageDispatch = useCallback((event) => wsMessageRef.current?.(event), []);
   const {
     ws,
     connected,
@@ -218,7 +243,14 @@ function App() {
     sendStrokeLive: wsSendStrokeLive,
     sendClear: wsSendClear,
     sendChat: wsSendChat,
-  } = useWebSocket(roomId);
+    sendCursor: wsSendCursor,
+  } = useWebSocket(roomId, wsMessageDispatch);
+
+  // Live presence: other artists' cursors, keyed by userId
+  const [remoteCursors, setRemoteCursors] = useState({});
+  const isDrawingRef = useRef(false);
+  isDrawingRef.current = isDrawing;
+  const lastCursorSend = useRef(0);
 
   const isCanvasReady = true;
 
@@ -291,8 +323,6 @@ function App() {
   }, [roomId]);
 
   const currentPrompt = MURAL_PROMPTS[activePromptIndex % MURAL_PROMPTS.length];
-  const currentBrushOption = BRUSH_OPTIONS.find((brush) => brush.value === currentBrush) || BRUSH_OPTIONS[0];
-  const currentPaintLabel = PAINT_PROPERTIES[paintType]?.label || 'Standard';
 
   // Handle stroke live updates (throttled, sent during drawing)
   const handleStrokeLive = useCallback((liveData) => {
@@ -349,14 +379,33 @@ function App() {
     }
   }, [ws, connected, wsSendStroke, applyImpasto, smearHeight, scrapeHeight]);
 
-  // Chat brush: canvas → screen position conversion
+  // Canvas → screen position conversion.
+  // Matches the painting transform in useDrawing (zoom is normalized to height),
+  // so overlays and remote cursors land exactly where strokes do.
   const canvasToScreen = useCallback((cx, cy) => {
     const w = containerSize.width;
     const h = containerSize.height;
-    const sx = (cx - viewport.x) * viewport.zoom + w / 2;
-    const sy = (cy - viewport.y) * viewport.zoom + h / 2;
-    return { x: sx, y: sy };
+    const maxDim = Math.max(w, h);
+    const scale = maxDim / (viewport.zoom * h);
+    return {
+      x: (cx - viewport.x) / scale + w / 2,
+      y: (cy - viewport.y) / scale + h / 2,
+    };
   }, [viewport, containerSize]);
+
+  // Screen (clientX/Y) → canvas coords, using the live canvas rect + viewport.
+  const screenToCanvas = useCallback((clientX, clientY) => {
+    const canvas = paintCanvasRef.current;
+    const vp = viewportRef.current;
+    if (!canvas || !vp) return null;
+    const rect = canvas.getBoundingClientRect();
+    const maxDim = Math.max(rect.width, rect.height);
+    const scale = maxDim / (vp.zoom * rect.height);
+    return {
+      x: vp.x + (clientX - rect.left - rect.width / 2) * scale,
+      y: vp.y + (clientY - rect.top - rect.height / 2) * scale,
+    };
+  }, []);
 
   // Chat brush: handle a new chat thread at canvas position
   const handleChatThreadCreate = useCallback((canvasX, canvasY) => {
@@ -573,13 +622,13 @@ function App() {
     handleStrokeLive
   );
 
-  const { isEraser } = drawingState || {};
+  const { isEraser, clearDrips } = drawingState || {};
 
-  // Handle WebSocket events
+  // Handle WebSocket events. We populate a ref (consumed by the hook's
+  // onmessage, bound at socket creation) instead of attaching onmessage here,
+  // which previously raced the server's initial connected/history/userList burst.
   useEffect(() => {
-    if (!ws) return;
-
-    ws.onmessage = (event) => {
+    wsMessageRef.current = (event) => {
       try {
         const data = JSON.parse(event.data);
 
@@ -617,6 +666,7 @@ function App() {
               ctx.fillStyle = MURAL_BACKGROUND_COLOR;
               ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
               if (clearHeightMap) clearHeightMap();
+              if (clearDrips) clearDrips();
 
               data.history.forEach((item) => {
                 if (item.type === 'stroke' && item.stroke) {
@@ -695,6 +745,7 @@ function App() {
               ctx.fillStyle = MURAL_BACKGROUND_COLOR;
               ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
               if (clearHeightMap) clearHeightMap();
+              if (clearDrips) clearDrips();
               remoteLiveStrokes.current.clear();
               setMemes([]);
               setMemePreview(null);
@@ -723,6 +774,33 @@ function App() {
             }
             break;
 
+          case 'cursor':
+            if (data.user?.id) {
+              setRemoteCursors((prev) => ({
+                ...prev,
+                [data.user.id]: {
+                  x: data.x,
+                  y: data.y,
+                  name: data.user.name,
+                  color: data.user.color,
+                  drawing: data.drawing,
+                  ts: Date.now(),
+                },
+              }));
+            }
+            break;
+
+          case 'cursor_leave':
+            if (data.userId) {
+              setRemoteCursors((prev) => {
+                if (!prev[data.userId]) return prev;
+                const next = { ...prev };
+                delete next[data.userId];
+                return next;
+              });
+            }
+            break;
+
           default:
             break;
         }
@@ -731,15 +809,10 @@ function App() {
       }
     };
 
-    ws.onclose = () => {};
-    ws.onopen = () => {};
-
     return () => {
-      ws.onmessage = null;
-      ws.onclose = null;
-      ws.onopen = null;
+      wsMessageRef.current = null;
     };
-  }, [ws, paintCanvasRef, isCanvasReady, clearHeightMap, drawMemeStamp]);
+  }, [paintCanvasRef, isCanvasReady, clearHeightMap, drawMemeStamp]);
 
   // Replay stored stroke
   function replayStroke(ctx, stroke) {
@@ -945,7 +1018,45 @@ function App() {
     ctx.restore();
   }
 
+  // Baked graffiti drip for remote strokes / history replay (no animation).
+  function drawStaticDrip(ctx, x, y, size, color, opacity, variation, chanceScale) {
+    if (Math.random() > opacity * (variation || 0.3) * 0.05 * chanceScale) return;
+    const rgb = hexToRgb(color) || { r: 0, g: 0, b: 0 };
+    const ox = x + (Math.random() - 0.5) * size * 0.5;
+    const oy = y + size * 0.2;
+    const len = size * (1.5 + Math.random() * 4.5);
+    const drift = (Math.random() - 0.5) * size * 0.5;
+    const width = Math.max(1.4, size * (0.08 + Math.random() * 0.14));
+    const dripOpacity = Math.min(0.9, opacity * (0.55 + Math.random() * 0.4));
+    const phase = Math.random() * Math.PI * 2;
+    const wobble = size * (0.04 + Math.random() * 0.1);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${dripOpacity})`;
+    ctx.beginPath();
+    const steps = 10;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const l = len * t;
+      const sx = ox + Math.sin(l * 0.04 + phase) * wobble + drift * t;
+      const sy = oy + l;
+      ctx.lineWidth = Math.max(0.7, width * (1 - 0.45 * t));
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    const endX = ox + Math.sin(len * 0.04 + phase) * wobble + drift;
+    ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.min(1, dripOpacity * 1.25)})`;
+    ctx.beginPath();
+    ctx.arc(endX, oy + len, Math.max(1, width * 0.7), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawAirbrushOnCanvas(ctx, x, y, size, opacity, color, variation) {
+    drawStaticDrip(ctx, x, y, size, color, opacity, variation, 1);
     const gradient = ctx.createRadialGradient(x, y, 0, x, y, size);
     gradient.addColorStop(0, color);
     gradient.addColorStop(1, 'rgba(255,255,255,0)');
@@ -1060,12 +1171,13 @@ function App() {
       ctx.fillRect(0, 0, paintCanvasRef.current.width, paintCanvasRef.current.height);
     }
     if (clearHeightMap) clearHeightMap();
+    if (clearDrips) clearDrips();
     remoteLiveStrokes.current.clear();
     setMemes([]);
     setMemePreview(null);
     markDirty();
     wsSendClear();
-  }, [wsSendClear, clearHeightMap]);
+  }, [wsSendClear, clearHeightMap, clearDrips]);
 
   // Zoom via mouse wheel
   const handleWheel = useCallback((e) => {
@@ -1206,6 +1318,101 @@ function App() {
     return () => container.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
+  // Fast display path: when impasto isn't active, blit just the visible
+  // viewport region from the 6000x4000 paint buffer onto a screen-sized canvas
+  // each frame. This avoids uploading the full 24MP canvas to the GPU and makes
+  // ordinary brushes feel instant — no lag behind the cursor.
+  useEffect(() => {
+    if (impastoActive) return;
+    let raf;
+    const blit = () => {
+      raf = requestAnimationFrame(blit);
+      const disp = displayCanvasRef.current;
+      const src = paintCanvasRef.current;
+      const vp = viewportRef.current;
+      if (!disp || !src || !vp) return;
+      const W = Math.max(1, Math.round(containerSize.width));
+      const H = Math.max(1, Math.round(containerSize.height));
+      if (disp.width !== W) disp.width = W;
+      if (disp.height !== H) disp.height = H;
+      const maxDim = Math.max(W, H);
+      const scale = maxDim / (vp.zoom * H);
+      const srcW = W * scale;
+      const srcH = H * scale;
+      const srcX = vp.x - srcW / 2;
+      const srcY = vp.y - srcH / 2;
+      const ctx = disp.getContext('2d');
+      ctx.clearRect(0, 0, W, H);
+      // Paint the white mural sheet first (the buffer itself is transparent),
+      // so unpainted and erased areas read as white and the dark stage shows
+      // only beyond the mural's edges.
+      ctx.fillStyle = MURAL_BACKGROUND_COLOR;
+      ctx.fillRect(
+        (0 - vp.x) / scale + W / 2,
+        (0 - vp.y) / scale + H / 2,
+        VIRTUAL_CANVAS_WIDTH / scale,
+        VIRTUAL_CANVAS_HEIGHT / scale,
+      );
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'low';
+      try {
+        ctx.drawImage(src, srcX, srcY, srcW, srcH, 0, 0, W, H);
+      } catch {
+        /* source rect fully outside buffer — nothing to draw */
+      }
+    };
+    blit();
+    return () => cancelAnimationFrame(raf);
+  }, [impastoActive, containerSize]);
+
+  // Broadcast my cursor position so others can see where I'm working (throttled).
+  useEffect(() => {
+    const container = canvasContainerRef.current;
+    if (!container || !wsSendCursor) return;
+
+    const emit = (clientX, clientY) => {
+      const now = performance.now();
+      if (now - lastCursorSend.current < 45) return;
+      lastCursorSend.current = now;
+      const c = screenToCanvas(clientX, clientY);
+      if (c) wsSendCursor(c.x, c.y, isDrawingRef.current);
+    };
+    const onMouseMove = (e) => emit(e.clientX, e.clientY);
+    const onTouchMove = (e) => {
+      const t = e.touches[0];
+      if (t) emit(t.clientX, t.clientY);
+    };
+
+    container.addEventListener('mousemove', onMouseMove);
+    container.addEventListener('touchmove', onTouchMove, { passive: true });
+    return () => {
+      container.removeEventListener('mousemove', onMouseMove);
+      container.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [wsSendCursor, screenToCanvas]);
+
+  // Drop stale cursors (artist idle or tab hidden) so ghosts don't linger.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setRemoteCursors((prev) => {
+        const now = Date.now();
+        let changed = false;
+        const next = {};
+        for (const id in prev) {
+          if (now - prev[id].ts < 5000) next[id] = prev[id];
+          else changed = true;
+        }
+        return changed ? next : prev;
+      });
+    }, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Clear everyone's cursors when switching murals.
+  useEffect(() => {
+    setRemoteCursors({});
+  }, [roomId]);
+
   // Update minimap
   useEffect(() => {
     const mini = minimapCanvasRef.current;
@@ -1246,9 +1453,8 @@ function App() {
     mctx.stroke();
   }, [viewport, containerSize]);
 
-  // Handle brush change
-  const handleBrushChange = useCallback((e) => {
-    const brush = e.target.value;
+  // Handle brush change (receives the brush value directly from the brush bar)
+  const handleBrushChange = useCallback((brush) => {
     setCurrentBrush(brush);
     if (brush === BRUSH_TYPES.SPRAY) {
       setBrushSize(25);
@@ -1274,286 +1480,333 @@ function App() {
     }
   }, []);
 
-  // Handle paint type change
-  const handlePaintTypeChange = useCallback((e) => {
-    const pt = e.target.value;
+  // Handle paint type change (receives the paint value directly from the pills)
+  const handlePaintTypeChange = useCallback((pt) => {
     setPaintType(pt);
     const paintProps = PAINT_PROPERTIES[pt] || PAINT_PROPERTIES[PAINT_TYPES.NONE];
     setBrushOpacity(paintProps.defaultOpacity);
   }, []);
 
+  // Pick a hue from the vertical rainbow bar (Snapchat-style color picker).
+  const pickHue = useCallback((e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const point = e.touches ? e.touches[0] : e;
+    const pct = Math.max(0, Math.min(1, (point.clientY - rect.top) / rect.height));
+    setHuePct(pct);
+    setSelectedColor(hslToHex(pct * 360, 0.85, 0.55));
+  }, []);
+
+  const startHueDrag = useCallback((e) => {
+    e.preventDefault();
+    pickHue(e);
+    const move = (ev) => pickHue(ev);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
+  }, [pickHue]);
+
+  const toggleFlyout = useCallback((name) => {
+    setActiveFlyout((cur) => (cur === name ? null : name));
+  }, []);
+
+  const showsDensity = currentBrush === BRUSH_TYPES.SPRAY
+    || currentBrush === BRUSH_TYPES.AIRBRUSH
+    || currentBrush === BRUSH_TYPES.SPONGE
+    || currentBrush === BRUSH_TYPES.WET_BRUSH;
+
+  const sizeMin = currentBrush === BRUSH_TYPES.BLUR ? 10
+    : currentBrush === BRUSH_TYPES.AIRBRUSH ? 10
+    : currentBrush === BRUSH_TYPES.SPRAY ? 5 : 1;
+  const sizeMax = currentBrush === BRUSH_TYPES.BLUR ? 150
+    : currentBrush === BRUSH_TYPES.SMUDGE ? 120
+    : currentBrush === BRUSH_TYPES.AIRBRUSH ? 120
+    : currentBrush === BRUSH_TYPES.SPRAY ? 300 : 80;
+
   return (
     <div className="app-container">
-      {/* Studio side panel: mural/session controls */}
-      <div className={`toolbar-panel studio-panel ${showToolbar ? 'open' : 'closed'}`}>
-        <div className="toolbar-header">
-          <div>
-            <div className="app-kicker">Shared mural studio</div>
-            <h1 className="app-title">🎨 Mural Jam</h1>
+      {/* ===== Top bar: mural + live presence ===== */}
+      <header className="top-bar">
+        <button className="mural-chip" onClick={() => setShowSheet(true)}>
+          <span className={`live-dot ${connected ? 'is-live' : ''}`} />
+          <span className="mural-chip-name">{roomId}</span>
+          <span className="mural-chip-caret">⌄</span>
+        </button>
+
+        <div className="presence">
+          <div className="presence-avatars">
+            {users.slice(0, 4).map((u) => (
+              <span
+                key={u.id}
+                className="presence-avatar"
+                style={{ background: u.color, '--ava': u.color }}
+                title={u.name}
+              >
+                {(u.name || '?').charAt(0).toUpperCase()}
+              </span>
+            ))}
+            {users.length > 4 && (
+              <span className="presence-avatar is-more">+{users.length - 4}</span>
+            )}
           </div>
-          <button
-            className="toolbar-toggle"
-            onClick={() => setShowToolbar(!showToolbar)}
-            aria-label="Toggle toolbar"
-          >
-            {showToolbar ? '▶' : '💻'}
+          <button className="invite-btn" onClick={handleShareMural} title="Invite friends">
+            {inviteCopied ? '✓ Copied' : '+ Invite'}
           </button>
         </div>
+      </header>
 
-        {showToolbar && (
-          <div className="toolbar-content">
-            <div className="jam-kit-card">
-              <div className="jam-kit-top">
-                <span className="jam-kit-label">Jam kit</span>
-                <span className={`jam-live-dot ${connected ? 'is-live' : ''}`} />
-              </div>
-              <div className="jam-kit-stack">
-                <div className="kit-chip color-chip" style={{ '--chip-color': selectedColor }}>
-                  <span className="chip-swatch" />
-                  <strong>{selectedColor.toUpperCase()}</strong>
-                </div>
-                <div className="kit-chip">
-                  <span>Tool</span>
-                  <strong>{currentBrushOption.label}</strong>
-                </div>
-                <div className="kit-chip">
-                  <span>Paint</span>
-                  <strong>{currentPaintLabel}</strong>
-                </div>
-              </div>
-            </div>
+      {/* Wall prompt — tap for a fresh challenge */}
+      <button
+        className="prompt-chip"
+        onClick={() => setActivePromptIndex((i) => i + 1)}
+        title="Tap for a new challenge"
+      >
+        <span className="prompt-chip-spark">✦</span>
+        <span className="prompt-chip-text">{currentPrompt}</span>
+      </button>
 
-            {/* Mural selector */}
-            <div className="toolbar-section mural-room-section tool-card">
-              <label>🏠 Mural</label>
+      {/* ===== Right tool rail ===== */}
+      <nav className="tool-rail" aria-label="Tools">
+        <button
+          className={`rail-btn rail-color ${activeFlyout === 'color' ? 'is-active' : ''}`}
+          style={{ '--swatch': selectedColor }}
+          onClick={() => toggleFlyout('color')}
+          aria-label="Color"
+        >
+          <span className="rail-swatch" />
+        </button>
+        <button
+          className={`rail-btn ${activeFlyout === 'size' ? 'is-active' : ''}`}
+          onClick={() => toggleFlyout('size')}
+          aria-label="Brush size"
+        >
+          <span className="rail-glyph">◍</span>
+          <span className="rail-sub">{brushSize}</span>
+        </button>
+        <button
+          className={`rail-btn ${activeFlyout === 'fx' ? 'is-active' : ''}`}
+          onClick={() => toggleFlyout('fx')}
+          aria-label="Paint effects"
+        >
+          <span className="rail-glyph">✨</span>
+        </button>
+        <button
+          className={`rail-btn ${currentBrush === BRUSH_TYPES.ERASER ? 'is-active' : ''}`}
+          onClick={() => handleBrushChange(BRUSH_TYPES.ERASER)}
+          aria-label="Eraser"
+        >
+          <span className="rail-glyph">🧽</span>
+        </button>
+        <button
+          className={`rail-btn ${activeFlyout === 'more' ? 'is-active' : ''}`}
+          onClick={() => toggleFlyout('more')}
+          aria-label="More"
+        >
+          <span className="rail-glyph rail-dots">•••</span>
+        </button>
+      </nav>
+
+      {/* ===== Tool flyouts ===== */}
+      {activeFlyout === 'color' && (
+        <div className="flyout color-flyout">
+          <div
+            className="hue-bar"
+            onPointerDown={startHueDrag}
+            onTouchStart={startHueDrag}
+            role="slider"
+            aria-label="Hue"
+          >
+            <span className="hue-handle" style={{ top: `${huePct * 100}%` }} />
+          </div>
+          <div className="swatch-row">
+            {['#ffffff', '#000000', '#ff2bd6', '#1fe0ff', '#b6ff3d', '#ffd23d', '#9b5cff', '#ff5a6e'].map((c) => (
+              <button
+                key={c}
+                className={`mini-swatch ${selectedColor.toLowerCase() === c ? 'is-sel' : ''}`}
+                style={{ background: c }}
+                onClick={() => setSelectedColor(c)}
+                aria-label={c}
+              />
+            ))}
+          </div>
+          <label className="custom-color">
+            <input type="color" value={selectedColor} onChange={(e) => setSelectedColor(e.target.value)} />
+            <span>{selectedColor.toUpperCase()}</span>
+          </label>
+        </div>
+      )}
+
+      {activeFlyout === 'size' && (
+        <div className="flyout size-flyout">
+          <div className="size-preview">
+            <span
+              style={{
+                width: Math.min(64, Math.max(8, brushSize)),
+                height: Math.min(64, Math.max(8, brushSize)),
+                background: selectedColor,
+                opacity: brushOpacity,
+              }}
+            />
+          </div>
+          <div className="flyout-row"><span>Size</span><strong>{brushSize}px</strong></div>
+          <input
+            type="range"
+            min={sizeMin}
+            max={sizeMax}
+            value={brushSize}
+            onChange={(e) => setBrushSize(Number(e.target.value))}
+            className="size-slider"
+          />
+          <div className="flyout-row"><span>Opacity</span><strong>{Math.round(brushOpacity * 100)}%</strong></div>
+          <input
+            type="range"
+            min="5"
+            max="100"
+            value={Math.round(brushOpacity * 100)}
+            onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)}
+            className="size-slider"
+          />
+          {showsDensity && (
+            <>
+              <div className="flyout-row"><span>Density</span><strong>{Math.round(brushVariation * 100)}%</strong></div>
               <input
-                type="text"
+                type="range"
+                min="10"
+                max="100"
+                value={Math.round(brushVariation * 100)}
+                onChange={(e) => setBrushVariation(Number(e.target.value) / 100)}
+                className="size-slider"
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {activeFlyout === 'fx' && (
+        <div className="flyout fx-flyout">
+          <div className="flyout-title">Paint feel</div>
+          <PaintTypeSelector currentPaintType={paintType} onPaintTypeChange={handlePaintTypeChange} />
+          {paintType !== PAINT_TYPES.NONE && (
+            <label className="toggle-row">
+              <input type="checkbox" checked={showImpasto} onChange={(e) => setShowImpasto(e.target.checked)} />
+              3D strokes ✨
+            </label>
+          )}
+        </div>
+      )}
+
+      {activeFlyout === 'more' && (
+        <div className="flyout more-flyout">
+          <button className="more-item" onClick={handleExportMural}>💾 Save PNG</button>
+          <button className="more-item" onClick={() => setShowMinimap((m) => !m)}>
+            {showMinimap ? '🗺️ Hide map' : '🗺️ Show map'}
+          </button>
+          <label className="toggle-row">
+            <input type="checkbox" checked={showChatThreads} onChange={(e) => setShowChatThreads(e.target.checked)} />
+            💬 Chat notes
+          </label>
+          <label className="toggle-row">
+            <input type="checkbox" checked={showMemes} onChange={(e) => setShowMemes(e.target.checked)} />
+            🖼️ Stickers
+          </label>
+          {currentBrush === BRUSH_TYPES.MEME && (
+            <button
+              className="more-item"
+              onClick={() => {
+                memePendingPos.current = { x: viewportRef.current.x, y: viewportRef.current.y };
+                memeFileRef.current?.click();
+              }}
+            >
+              {memeStampSource ? '🖼️ Change image' : '🖼️ Pick image'}
+            </button>
+          )}
+          <button className="more-item danger" onClick={handleClear}>🧹 Clear wall</button>
+        </div>
+      )}
+
+      {/* ===== Bottom brush tray ===== */}
+      <div className="brush-tray">
+        <BrushSelector
+          currentBrush={currentBrush}
+          onBrushChange={handleBrushChange}
+          options={BRUSH_OPTIONS}
+        />
+      </div>
+
+      {/* ===== Mural sheet ===== */}
+      {showSheet && (
+        <div className="sheet-backdrop" onClick={() => setShowSheet(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-grip" />
+            <h2 className="sheet-title">🎨 Mural Jam</h2>
+            <div className={`sheet-status ${connected ? 'on' : 'off'}`}>
+              {connected ? `Live in ${roomId}` : 'Reconnecting…'}
+            </div>
+            <div className="sheet-join">
+              <input
+                className="sheet-input"
                 value={roomDraft}
                 onChange={(e) => setRoomDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') joinMural();
-                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { joinMural(); setShowSheet(false); } }}
                 placeholder="mural name"
-                className="room-input"
               />
-              <button className="action-btn join-btn" onClick={joinMural}>
-                Join mural
-              </button>
-              <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-                {connected ? `✅ Live in ${roomId}` : '🔌 Reconnecting'}
-              </div>
-              {muralError && <div className="mural-error">{muralError}</div>}
-              <div className="mural-save-status">{muralStatus}</div>
+              <button className="sheet-btn primary" onClick={() => joinMural()}>Join</button>
             </div>
-
-            <div className="mural-actions sticky-actions">
-              <button className="action-btn save-mural-btn" onClick={handleExportMural}>
-                Save PNG
-              </button>
-              <button className="action-btn share-mural-btn" onClick={handleShareMural}>
-                {inviteCopied ? 'Copied' : 'Invite'}
-              </button>
+            {muralError && <div className="mural-error">{muralError}</div>}
+            <div className="sheet-actions">
+              <button className="sheet-btn" onClick={handleShareMural}>{inviteCopied ? '✓ Copied' : 'Invite'}</button>
+              <button className="sheet-btn" onClick={handleExportMural}>Save PNG</button>
+              <button className="sheet-btn danger" onClick={handleClear}>Clear</button>
             </div>
-
-            <div className="mural-prompt-card">
-              <div className="prompt-label">Wall prompt</div>
-              <button
-                type="button"
-                className="prompt-refresh"
-                onClick={() => setActivePromptIndex((idx) => idx + 1)}
-                aria-label="Try another mural prompt"
-              >
-                ↻
-              </button>
-              <p>{currentPrompt}</p>
-            </div>
-
-            {/* Actions */}
-            <div className="toolbar-actions">
-              <button className="action-btn clear-btn" onClick={handleClear}>
-                Clear mural 🧹
-              </button>
-            </div>
-
-            {/* User list toggle */}
-            <button
-              className="action-btn user-list-btn"
-              onClick={() => setShowUserList(!showUserList)}
-            >
-              👥 Artists ({users.length}/{MAX_MURAL_ARTISTS})
-            </button>
-
-            {showUserList && (
-              <div className="studio-artists">
-                <UserList users={users} currentUserId={userName ? userName : ''} />
-              </div>
-            )}
-
-            {/* Layer visibility toggles */}
-            <div className="toolbar-section layer-toggles">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showChatThreads}
-                  onChange={(e) => setShowChatThreads(e.target.checked)}
-                />
-                Show Chat 💬
-              </label>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showMemes}
-                  onChange={(e) => setShowMemes(e.target.checked)}
-                />
-                Show Memes 🖼️
-              </label>
-            </div>
-
             {featuredMurals.length > 0 && (
-              <div className="toolbar-section recent-murals">
-                <label>🧭 Recent Murals</label>
-                {featuredMurals.map((mural) => (
+              <div className="sheet-recent">
+                <div className="sheet-label">Recent walls</div>
+                {featuredMurals.map((m) => (
                   <button
-                    key={mural.id}
-                    type="button"
-                    className={`recent-mural-btn ${mural.id === roomId ? 'active' : ''}`}
-                    onClick={() => {
-                      setRoomDraft(mural.id);
-                      setRoomId(mural.id);
-                    }}
+                    key={m.id}
+                    className={`recent-row ${m.id === roomId ? 'active' : ''}`}
+                    onClick={() => { setRoomDraft(m.id); setRoomId(m.id); setShowSheet(false); }}
                   >
-                    <span>{mural.id}</span>
-                    <small>{mural.strokeCount} marks</small>
+                    <span>{m.id}</span><small>{m.strokeCount} marks</small>
                   </button>
                 ))}
               </div>
             )}
-          </div>
-        )}
-      </div>
-
-      {/* Bottom painter palette: creative controls */}
-      <div className="painter-palette" aria-label="Painter palette">
-        <div className="palette-board">
-          <div className="palette-grip" aria-hidden="true" />
-          <div className="palette-thumb-hole" aria-hidden="true" />
-
-          <div className="palette-status">
-            <span className="palette-status-label">Loaded brush</span>
-            <strong>{currentBrushOption.label}</strong>
-            <span
-              className="palette-status-swatch"
-              style={{ '--chip-color': selectedColor }}
-              aria-hidden="true"
-            />
-          </div>
-
-          <div className="palette-section paint-type-card">
-            <label>Paint</label>
-            <PaintTypeSelector
-              currentPaintType={paintType}
-              onPaintTypeChange={handlePaintTypeChange}
-            />
-          </div>
-
-          <div className="palette-section brush-card">
-            <label>Brush</label>
-            <BrushSelector
-              currentBrush={currentBrush}
-              onBrushChange={handleBrushChange}
-              options={BRUSH_OPTIONS}
-            />
-          </div>
-
-          <div className="palette-section color-card palette-colors">
-            <label>Color puddles</label>
-            <ColorSelector onColorSelect={setSelectedColor} selectedColor={selectedColor} />
-          </div>
-
-          <div className="palette-section range-card palette-sliders">
-            <label>Size {brushSize}px</label>
-            <input
-              type="range"
-              min={
-                currentBrush === BRUSH_TYPES.BLUR ? '10' :
-                currentBrush === BRUSH_TYPES.AIRBRUSH ? '10' :
-                currentBrush === BRUSH_TYPES.SPRAY ? '5' : '1'
-              }
-              max={
-                currentBrush === BRUSH_TYPES.BLUR ? '150' :
-                currentBrush === BRUSH_TYPES.SMUDGE ? '120' :
-                currentBrush === BRUSH_TYPES.AIRBRUSH ? '120' :
-                currentBrush === BRUSH_TYPES.SPRAY ? '300' : '80'
-              }
-              value={brushSize}
-              onChange={(e) => setBrushSize(Number(e.target.value))}
-              className="size-slider"
-            />
-            <label>Opacity {Math.round(brushOpacity * 100)}%</label>
-            <input
-              type="range"
-              min="5"
-              max="100"
-              value={Math.round(brushOpacity * 100)}
-              onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)}
-              className="size-slider"
-            />
-            {(currentBrush === BRUSH_TYPES.SPRAY || currentBrush === BRUSH_TYPES.AIRBRUSH || currentBrush === BRUSH_TYPES.SPONGE || currentBrush === BRUSH_TYPES.WET_BRUSH) && (
-              <>
-                <label>Density {Math.round(brushVariation * 100)}%</label>
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  value={Math.round(brushVariation * 100)}
-                  onChange={(e) => setBrushVariation(Number(e.target.value) / 100)}
-                  className="size-slider"
-                />
-              </>
-            )}
-          </div>
-
-          <div className="palette-section palette-specials">
-            {paintType !== PAINT_TYPES.NONE && (
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={showImpasto}
-                  onChange={(e) => setShowImpasto(e.target.checked)}
-                />
-                3D strokes ✨
-              </label>
-            )}
-
-            {currentBrush === BRUSH_TYPES.MEME && (
-              <div className="meme-stamp-tools">
-                <label>Stamp image</label>
-                <div className="meme-stamp-current">
-                  {memeStampSource ? memeStampSource.name || 'Image loaded' : 'No image selected'}
-                </div>
-                <button
-                  type="button"
-                  className="action-btn"
-                  onClick={() => {
-                    memePendingPos.current = {
-                      x: viewportRef.current.x,
-                      y: viewportRef.current.y,
-                    };
-                    memeFileRef.current?.click();
-                  }}
-                >
-                  {memeStampSource ? 'Change image' : 'Choose image'}
-                </button>
+            <div className="sheet-artists">
+              <div className="sheet-label">Artists ({users.length}/{MAX_MURAL_ARTISTS})</div>
+              <div className="sheet-artist-list">
+                {users.map((u) => (
+                  <span key={u.id} className="sheet-artist">
+                    <span className="dot" style={{ background: u.color }} />{u.name}
+                  </span>
+                ))}
               </div>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Main canvas area */}
       <div className="canvas-area" ref={canvasContainerRef}>
-        {/* WebGL/Three.js rendering container */}
-        <div ref={engineContainerRef} className="webgl-canvas" />
+        {/* WebGL/Three.js rendering container (impasto / 3D paint only) */}
+        <div
+          ref={engineContainerRef}
+          className="webgl-canvas"
+          style={{ display: impastoActive ? 'block' : 'none' }}
+        />
+
+        {/* Fast 2D display — shows the painted viewport without GPU texture uploads */}
+        <canvas
+          ref={displayCanvasRef}
+          className="display-canvas"
+          style={{ display: impastoActive ? 'none' : 'block' }}
+        />
 
         {/* Hidden 2D paint canvas for stroke rendering */}
         <canvas
@@ -1578,45 +1831,6 @@ function App() {
           }}
         />
 
-        <div className="mural-hud">
-          <div>
-            <span className="mural-hud-label">Mural</span>
-            <strong>{roomId}</strong>
-          </div>
-          <div className="mural-hud-meta">
-            <span>{users.length}/{MAX_MURAL_ARTISTS} artists</span>
-            <span>{formatSavedAt(muralSavedAt)}</span>
-          </div>
-        </div>
-
-        <div className="prompt-strip">
-          <span>Try:</span>
-          <button type="button" onClick={() => setActivePromptIndex((idx) => idx + 1)}>
-            {currentPrompt}
-          </button>
-        </div>
-
-        {/* Eraser indicator */}
-        {isEraser && (
-          <div className="eraser-indicator">
-            Eraser: {brushSize}px 🧹
-          </div>
-        )}
-
-        {/* Drawing indicator */}
-        {isDrawing && (
-          <div className="drawing-indicator">
-            Drawing... 🎨
-          </div>
-        )}
-
-        {/* Paint type indicator */}
-        {paintType !== PAINT_TYPES.NONE && (
-          <div className="paint-type-indicator">
-            {PAINT_PROPERTIES[paintType]?.label} {showImpasto ? '3D' : ''}
-          </div>
-        )}
-
         {/* Zoom indicator */}
         <div className="zoom-indicator">
           {Math.round(viewport.zoom * 100)}%
@@ -1638,6 +1852,7 @@ function App() {
         )}
 
         {/* Minimap with zoom controls */}
+        {showMinimap && (
         <div className="minimap-container">
           <canvas
             ref={minimapCanvasRef}
@@ -1674,6 +1889,29 @@ function App() {
             >−</button>
           </div>
         </div>
+        )}
+
+        {/* Live remote cursors — see other artists move in real time */}
+        {Object.entries(remoteCursors).map(([id, c]) => {
+          const screen = canvasToScreen(c.x, c.y);
+          if (
+            screen.x < -60 || screen.y < -60 ||
+            screen.x > containerSize.width + 60 ||
+            screen.y > containerSize.height + 60
+          ) {
+            return null;
+          }
+          return (
+            <div
+              key={id}
+              className={`remote-cursor ${c.drawing ? 'is-drawing' : ''}`}
+              style={{ left: screen.x, top: screen.y, '--cursor-color': c.color || '#fff' }}
+            >
+              <span className="remote-cursor-dot" />
+              <span className="remote-cursor-label">{c.name || 'Artist'}</span>
+            </div>
+          );
+        })}
 
         {/* Chat brush threads overlay */}
         {showChatThreads && chatThreads.map((thread) => {

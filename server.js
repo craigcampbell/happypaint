@@ -296,6 +296,17 @@ wss.on('connection', (ws, req) => {
           schedulePersist(roomId);
           break;
 
+        case 'cursor':
+          // Lightweight presence relay — never persisted, just echoed to others.
+          broadcastToRoom(roomId, {
+            type: 'cursor',
+            user: { id: userId, name: userName, color: userColor },
+            x: data.x,
+            y: data.y,
+            drawing: !!data.drawing,
+          }, userId);
+          break;
+
         case 'ping':
           ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
           break;
@@ -313,6 +324,8 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     room.users.delete(userId);
+    // Tell everyone to drop this user's live cursor immediately.
+    broadcastToRoom(roomId, { type: 'cursor_leave', userId });
     broadcastToRoom(roomId, {
       type: 'userLeft',
       userId,

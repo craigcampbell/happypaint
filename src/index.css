@@ -1,9 +1,47 @@
 :root {
+  /* ---- Neon Arcade design tokens ---- */
+  /* Surfaces */
+  --bg: #0c0c14;
+  --bg-deep: #08080f;
+  --surface: #16161f;
+  --surface-2: #1e1e2c;
+  --surface-3: #262638;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --text: #f3f3fb;
+  --text-dim: #a0a0c0;
+  --text-faint: #6c6c8a;
+
+  /* Neon accents */
+  --neon-cyan: #1fe0ff;
+  --neon-magenta: #ff2bd6;
+  --neon-lime: #b6ff3d;
+  --neon-yellow: #ffd23d;
+  --neon-purple: #9b5cff;
+  --neon-coral: #ff5a6e;
+
+  /* Brand accent (primary action) */
+  --accent: var(--neon-cyan);
+  --accent-2: var(--neon-magenta);
+  --brand-gradient: linear-gradient(135deg, var(--neon-magenta), var(--neon-purple) 55%, var(--neon-cyan));
+
+  /* Glows */
+  --glow-cyan: 0 0 0 1px rgba(31, 224, 255, 0.5), 0 0 18px rgba(31, 224, 255, 0.45);
+  --glow-magenta: 0 0 0 1px rgba(255, 43, 214, 0.5), 0 0 18px rgba(255, 43, 214, 0.45);
+
+  /* Radii */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+
   font-family: 'Fredoka', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
-  font-weight: 400;
-  color: #333;
-  background-color: #FFF5E4;
+  font-weight: 500;
+  color: var(--text);
+  background-color: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,8 +58,11 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100vw;
   overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -47,4 +88,12 @@ canvas {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Focus visibility for keyboard users */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
 }
