@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "Happy Paint Mobile",
+    "slug": "happypaint-mobile",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "scheme": "happypaint",
+    "assetBundlePatterns": [
+      "assets/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.happypaint.mobile",
+      "associatedDomains": [
+        "applinks:happypaint.app"
+      ],
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Happy Paint lets you import pictures as drawing references.",
+        "NSPhotoLibraryAddUsageDescription": "Happy Paint can save exported artwork to your photo library."
+      }
+    },
+    "android": {
+      "package": "com.happypaint.mobile",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VIDEO"
+      ],
+      "permissions": [
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "happypaint.app",
+              "pathPrefix": "/join"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "plugins": [
+      "expo-document-picker",
+      "expo-image-picker",
+      "expo-media-library"
+    ]
+  }
+}

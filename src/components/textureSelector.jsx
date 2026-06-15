@@ -1,4 +1,3 @@
-import React from 'react';
 import linenTexture from "/linen.png";
 import canvasTexture from "/canvas.png";
 
