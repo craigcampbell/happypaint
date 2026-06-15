@@ -978,3 +978,609 @@ create index event_entries_session_idx on public.event_entries(session_id);
 create unique index gallery_votes_device_idx on public.gallery_votes(post_id, device_hash) where device_hash is not null;
 create index gallery_vote_audit_post_idx on public.gallery_vote_audit_events(post_id, created_at);
 create index stroke_events_session_id_idx on public.stroke_events(session_id, id);
+
+-- =====================================================================
+-- Paint Spaces, Assets, and Remix Lineage (docs/product-research.md §Paint Spaces)
+-- Personal creative locker: profile identity, reusable assets, packs, usage, remix history.
+-- =====================================================================
+
+create type space_visibility as enum ('private', 'friends', 'public', 'featured');
+create type space_age_band as enum ('under_13', 'teen', 'adult');
+create type space_asset_kind as enum ('sticker', 'meme_template', 'loop', 'brush', 'palette', 'stamp', 'paper', 'room_theme');
+create type asset_remix_permission as enum ('none', 'friends', 'public');
+create type asset_pack_status as enum ('draft', 'pending', 'approved', 'rejected');
+create type asset_use_context as enum ('canvas', 'room', 'export', 'remix');
+create type remix_node_kind as enum ('space_asset', 'asset_pack', 'gallery_post', 'paint_session', 'project_snapshot');
+
+create table public.space_profiles (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  display_name text not null check (char_length(display_name) between 2 and 40),
+  -- Self/forward reference to an owned space_asset used as the avatar; nullable.
+  avatar_asset_id uuid,
+  age_band space_age_band not null default 'teen',
+  visibility space_visibility not null default 'private',
+  guardian_profile_id uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- Under-13 spaces cannot be publicly discoverable and require a guardian.
+  check (age_band <> 'under_13' or visibility in ('private', 'friends')),
+  check (age_band <> 'under_13' or guardian_profile_id is not null)
+);
+
+create table public.space_assets (
+  id uuid primary key default gen_random_uuid(),
+  owner_profile_id uuid not null references public.profiles(id) on delete cascade,
+  kind space_asset_kind not null,
+  title text not null check (char_length(title) between 1 and 80),
+  -- Holds brush recipe / palette colors / loop frames metadata / sticker ref, etc.
+  payload jsonb not null default '{}',
+  thumbnail_url text,
+  age_rating space_age_band not null default 'teen',
+  remix_permission asset_remix_permission not null default 'none',
+  visibility space_visibility not null default 'private',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Resolve the deferred avatar self/forward reference now that space_assets exists.
+alter table public.space_profiles
+  add constraint space_profiles_avatar_asset_fk
+  foreign key (avatar_asset_id) references public.space_assets(id) on delete set null;
+
+create table public.asset_packs (
+  id uuid primary key default gen_random_uuid(),
+  owner_profile_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 80),
+  visibility space_visibility not null default 'private',
+  version integer not null default 1 check (version >= 1),
+  status asset_pack_status not null default 'draft',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- Only moderated packs can be public or featured.
+  check (visibility not in ('public', 'featured') or status = 'approved')
+);
+
+create table public.asset_pack_items (
+  pack_id uuid not null references public.asset_packs(id) on delete cascade,
+  asset_id uuid not null references public.space_assets(id) on delete cascade,
+  position integer not null default 0 check (position >= 0),
+  created_at timestamptz not null default now(),
+  primary key (pack_id, asset_id)
+);
+
+create table public.asset_uses (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid not null references public.space_assets(id) on delete cascade,
+  used_by_profile_id uuid not null references public.profiles(id) on delete cascade,
+  context asset_use_context not null,
+  source_id uuid,
+  created_at timestamptz not null default now()
+);
+
+create table public.remix_lineage (
+  id uuid primary key default gen_random_uuid(),
+  parent_kind remix_node_kind not null,
+  parent_id uuid not null,
+  child_kind remix_node_kind not null,
+  child_id uuid not null,
+  created_at timestamptz not null default now(),
+  unique (parent_kind, parent_id, child_kind, child_id),
+  check (parent_kind <> child_kind or parent_id <> child_id)
+);
+
+comment on table public.space_profiles is 'Paint Space identity: display name, avatar asset, age band, visibility, and guardian gating.';
+comment on table public.space_assets is 'Reusable Paint Space assets (stickers, brushes, palettes, loops, templates, room themes) with jsonb payload.';
+comment on table public.asset_packs is 'Grouped, versioned collections of space assets with moderation status for public/featured publishing.';
+comment on table public.asset_pack_items is 'Junction of asset packs to their member assets with ordering.';
+comment on table public.asset_uses is 'Records where a space asset was used (canvas, room, export, remix) and by whom.';
+comment on table public.remix_lineage is 'Parent/child remix graph across assets, packs, posts, sessions, and snapshots.';
+
+-- =====================================================================
+-- Entitlements (docs/product-research.md §90-day roadmap entitlement schema draft)
+-- =====================================================================
+
+create type entitlement_plan as enum ('free', 'studio', 'family', 'classroom');
+
+create table public.entitlements (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  plan entitlement_plan not null default 'free',
+  flags jsonb not null default '{}',
+  source text not null default 'system',
+  expires_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+comment on table public.entitlements is 'Per-profile plan entitlements (free/studio/family/classroom) with feature flags and optional expiry.';
+
+-- =====================================================================
+-- Layer + frame persistence (docs/product-research.md §per-layer autosave format)
+-- Extend paint_sessions for Layer Lite + tiny-loop data, and add project snapshots.
+-- =====================================================================
+
+alter table public.paint_sessions
+  add column layers jsonb not null default '[]',
+  add column frames jsonb not null default '[]',
+  add column frame_count integer not null default 1 check (frame_count >= 1),
+  add column frame_durations jsonb not null default '[]';
+
+create table public.project_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  session_id uuid references public.paint_sessions(id) on delete set null,
+  title text not null default 'Untitled' check (char_length(title) between 1 and 120),
+  layers jsonb not null default '[]',
+  frames jsonb not null default '[]',
+  frame_count integer not null default 1 check (frame_count >= 1),
+  created_at timestamptz not null default now()
+);
+
+comment on table public.project_snapshots is 'Autosaved per-layer/per-frame project state (Layer Lite + tiny loops) for solo and session work.';
+
+-- =====================================================================
+-- Economy: wallets, ledger, products, receipts, tips, payouts (docs/paint-economy.md §Backend Model)
+-- Balances are cached projections of the append-only ledger. No user-to-user currency transfer.
+-- =====================================================================
+
+create type currency_type as enum ('drops', 'kudos', 'creator');
+create type ledger_direction as enum ('credit', 'debit');
+create type drop_platform as enum ('apple', 'google', 'web');
+create type purchase_status as enum ('pending', 'verified', 'failed', 'refunded', 'revoked');
+create type payout_status as enum ('pending', 'approved', 'processing', 'paid', 'held', 'rejected', 'reversed');
+create type tip_status as enum ('pending', 'approved', 'held', 'reversed', 'blocked');
+create type payout_account_status as enum ('none', 'pending', 'approved', 'rejected', 'suspended');
+
+create table public.wallets (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  -- Cached balances; authoritative values derive from wallet_ledger_entries.
+  drops_balance bigint not null default 0 check (drops_balance >= 0),
+  kudos_balance bigint not null default 0 check (kudos_balance >= 0),
+  creator_balance bigint not null default 0 check (creator_balance >= 0),
+  locked_balance bigint not null default 0 check (locked_balance >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.wallet_ledger_entries (
+  id bigint generated always as identity primary key,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  amount bigint not null check (amount > 0),
+  currency_type currency_type not null,
+  direction ledger_direction not null,
+  source text not null,
+  source_id uuid,
+  platform drop_platform,
+  idempotency_key text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create table public.drop_products (
+  id uuid primary key default gen_random_uuid(),
+  sku text not null unique,
+  platform drop_platform not null,
+  drop_amount integer not null check (drop_amount > 0),
+  price_cents integer not null check (price_cents >= 0),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.purchase_receipts (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  platform drop_platform not null,
+  receipt_id text not null,
+  sku text not null,
+  amount integer not null check (amount >= 0),
+  status purchase_status not null default 'pending',
+  raw_payload jsonb not null default '{}',
+  idempotency_key text not null unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (platform, receipt_id)
+);
+
+create table public.asset_products (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid not null references public.space_assets(id) on delete cascade,
+  price_drops integer not null check (price_drops >= 0),
+  creator_profile_id uuid not null references public.profiles(id) on delete cascade,
+  platform_fee_bps integer not null default 0 check (platform_fee_bps between 0 and 10000),
+  status asset_pack_status not null default 'draft',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.tips (
+  id uuid primary key default gen_random_uuid(),
+  sender_profile_id uuid not null references public.profiles(id) on delete cascade,
+  receiver_profile_id uuid not null references public.profiles(id) on delete cascade,
+  source_type text not null check (source_type in ('gallery_post', 'asset_pack', 'space_asset', 'timed_event', 'paint_session')),
+  source_id uuid,
+  amount_drops integer not null check (amount_drops > 0),
+  status tip_status not null default 'pending',
+  created_at timestamptz not null default now(),
+  -- No user-to-user currency transfer disguised as a self-tip.
+  check (sender_profile_id <> receiver_profile_id)
+);
+
+create table public.creator_payout_accounts (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  guardian_profile_id uuid references public.profiles(id) on delete set null,
+  status payout_account_status not null default 'none',
+  provider_account_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.creator_payouts (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  amount_cents integer not null check (amount_cents > 0),
+  status payout_status not null default 'pending',
+  provider_transfer_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.economy_admin_actions (
+  id uuid primary key default gen_random_uuid(),
+  actor_profile_id uuid references public.profiles(id) on delete set null,
+  action_type text not null check (action_type in ('credit_adjustment', 'debit_adjustment', 'hold_tip', 'reverse_tip', 'refund_purchase', 'revoke_purchase', 'approve_payout', 'hold_payout', 'reject_payout', 'reverse_payout', 'recalc_kudos', 'approve_payout_account', 'reject_payout_account', 'suspend_payout_account', 'activate_product', 'deactivate_product')),
+  target_table text not null check (target_table in ('wallets', 'wallet_ledger_entries', 'drop_products', 'purchase_receipts', 'asset_products', 'tips', 'creator_payout_accounts', 'creator_payouts')),
+  target_id uuid not null,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+comment on table public.wallets is 'Cached per-profile balances (drops/kudos/creator/locked) derived from the append-only wallet ledger.';
+comment on table public.wallet_ledger_entries is 'Append-only currency ledger: every earn, purchase, spend, tip, reversal, refund, hold, and admin adjustment. Idempotent.';
+comment on table public.drop_products is 'Platform SKUs mapping a purchase to a Drop grant and price.';
+comment on table public.purchase_receipts is 'App Store / Google Play / web receipt verification records, idempotent per platform receipt.';
+comment on table public.asset_products is 'Priced Paint Space assets with creator and platform fee settings.';
+comment on table public.tips is 'Drops tips with sender, receiver, source content, and moderation status. No self-tips.';
+comment on table public.creator_payout_accounts is 'Creator payout enrollment, guardian-gated for minors; cash-out only after eligibility.';
+comment on table public.creator_payouts is 'Cash payout records to verified/guardian-approved creators with provider transfer tracking.';
+comment on table public.economy_admin_actions is 'Immutable audit log of admin economy actions (adjustments, holds, refunds, payouts).';
+
+-- Enforce ledger append-only: block UPDATE and DELETE on wallet_ledger_entries.
+create function public.block_ledger_mutation()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'wallet_ledger_entries is append-only; % is not permitted', tg_op;
+end;
+$$;
+
+create trigger wallet_ledger_no_update
+  before update on public.wallet_ledger_entries
+  for each row execute function public.block_ledger_mutation();
+
+create trigger wallet_ledger_no_delete
+  before delete on public.wallet_ledger_entries
+  for each row execute function public.block_ledger_mutation();
+
+-- =====================================================================
+-- Row Level Security: enable for all new tables.
+-- =====================================================================
+
+alter table public.space_profiles enable row level security;
+alter table public.space_assets enable row level security;
+alter table public.asset_packs enable row level security;
+alter table public.asset_pack_items enable row level security;
+alter table public.asset_uses enable row level security;
+alter table public.remix_lineage enable row level security;
+alter table public.entitlements enable row level security;
+alter table public.project_snapshots enable row level security;
+alter table public.wallets enable row level security;
+alter table public.wallet_ledger_entries enable row level security;
+alter table public.drop_products enable row level security;
+alter table public.purchase_receipts enable row level security;
+alter table public.asset_products enable row level security;
+alter table public.tips enable row level security;
+alter table public.creator_payout_accounts enable row level security;
+alter table public.creator_payouts enable row level security;
+alter table public.economy_admin_actions enable row level security;
+
+-- Paint Spaces policies: owners manage their own; guardians and admins can read;
+-- public/featured/friends visibility surfaces are read-only (no public people search of private spaces).
+
+create policy "space profiles owner or guardian or admin read"
+  on public.space_profiles for select
+  using (
+    profile_id = auth.uid()
+    or guardian_profile_id = auth.uid()
+    or public.is_admin()
+    or visibility in ('public', 'featured')
+  );
+
+create policy "space profiles owner manage"
+  on public.space_profiles for all
+  using (profile_id = auth.uid() or public.is_admin())
+  with check (profile_id = auth.uid() or public.is_admin());
+
+create policy "space assets owner or shared read"
+  on public.space_assets for select
+  using (
+    owner_profile_id = auth.uid()
+    or public.is_admin()
+    or visibility in ('public', 'featured')
+  );
+
+create policy "space assets owner manage"
+  on public.space_assets for all
+  using (owner_profile_id = auth.uid() or public.is_admin())
+  with check (owner_profile_id = auth.uid() or public.is_admin());
+
+create policy "asset packs owner or shared read"
+  on public.asset_packs for select
+  using (
+    owner_profile_id = auth.uid()
+    or public.is_admin()
+    or (visibility in ('public', 'featured') and status = 'approved')
+  );
+
+create policy "asset packs owner manage"
+  on public.asset_packs for all
+  using (owner_profile_id = auth.uid() or public.is_admin())
+  with check (owner_profile_id = auth.uid() or public.is_admin());
+
+create policy "asset pack items owner or shared read"
+  on public.asset_pack_items for select
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.asset_packs ap
+      where ap.id = asset_pack_items.pack_id
+        and (
+          ap.owner_profile_id = auth.uid()
+          or (ap.visibility in ('public', 'featured') and ap.status = 'approved')
+        )
+    )
+  );
+
+create policy "asset pack items owner manage"
+  on public.asset_pack_items for all
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.asset_packs ap
+      where ap.id = asset_pack_items.pack_id and ap.owner_profile_id = auth.uid()
+    )
+  )
+  with check (
+    public.is_admin()
+    or exists (
+      select 1 from public.asset_packs ap
+      where ap.id = asset_pack_items.pack_id and ap.owner_profile_id = auth.uid()
+    )
+  );
+
+create policy "asset uses self or owner or admin read"
+  on public.asset_uses for select
+  using (
+    used_by_profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.space_assets sa
+      where sa.id = asset_uses.asset_id and sa.owner_profile_id = auth.uid()
+    )
+  );
+
+create policy "asset uses create self"
+  on public.asset_uses for insert
+  with check (auth.uid() = used_by_profile_id);
+
+create policy "remix lineage related read"
+  on public.remix_lineage for select
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.space_assets sa
+      where (sa.id = remix_lineage.parent_id or sa.id = remix_lineage.child_id)
+        and sa.owner_profile_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.asset_packs ap
+      where (ap.id = remix_lineage.parent_id or ap.id = remix_lineage.child_id)
+        and ap.owner_profile_id = auth.uid()
+    )
+  );
+
+create policy "remix lineage create related"
+  on public.remix_lineage for insert
+  with check (
+    public.is_admin()
+    or exists (
+      select 1 from public.space_assets sa
+      where sa.id = remix_lineage.child_id and sa.owner_profile_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.asset_packs ap
+      where ap.id = remix_lineage.child_id and ap.owner_profile_id = auth.uid()
+    )
+  );
+
+-- Entitlements: profile owner and admin can read; only admins write (entitlements are server/admin-issued).
+
+create policy "entitlements self or admin read"
+  on public.entitlements for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "entitlements admin manage"
+  on public.entitlements for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- Project snapshots: strictly owner-managed; admins may read for moderation.
+
+create policy "project snapshots owner or admin read"
+  on public.project_snapshots for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "project snapshots owner manage"
+  on public.project_snapshots for all
+  using (profile_id = auth.uid())
+  with check (profile_id = auth.uid());
+
+-- Economy policies: balances and ledgers are read-only to the owner; only the server
+-- (admin/service role) writes balances and ledger entries. No user-to-user transfer.
+
+create policy "wallets self or admin read"
+  on public.wallets for select
+  using (
+    profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = wallets.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "wallets admin manage"
+  on public.wallets for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "ledger self or admin read"
+  on public.wallet_ledger_entries for select
+  using (
+    profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = wallet_ledger_entries.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "ledger admin insert"
+  on public.wallet_ledger_entries for insert
+  with check (public.is_admin());
+
+create policy "drop products public read"
+  on public.drop_products for select
+  using (active = true or public.is_admin());
+
+create policy "drop products admin manage"
+  on public.drop_products for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "purchase receipts self or admin read"
+  on public.purchase_receipts for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "purchase receipts admin manage"
+  on public.purchase_receipts for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "asset products public or owner read"
+  on public.asset_products for select
+  using (
+    public.is_admin()
+    or creator_profile_id = auth.uid()
+    or status = 'approved'
+  );
+
+create policy "asset products creator create"
+  on public.asset_products for insert
+  with check (
+    auth.uid() = creator_profile_id
+    and exists (
+      select 1 from public.space_assets sa
+      where sa.id = asset_products.asset_id and sa.owner_profile_id = auth.uid()
+    )
+  );
+
+create policy "asset products admin manage"
+  on public.asset_products for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "tips participants or admin read"
+  on public.tips for select
+  using (
+    sender_profile_id = auth.uid()
+    or receiver_profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where (p.id = tips.sender_profile_id or p.id = tips.receiver_profile_id)
+        and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "tips sender create"
+  on public.tips for insert
+  with check (
+    auth.uid() = sender_profile_id
+    and sender_profile_id <> receiver_profile_id
+    and not exists (
+      select 1 from public.profile_bans pb
+      where pb.profile_id = auth.uid()
+        and pb.revoked_at is null
+        and (pb.expires_at is null or pb.expires_at > now())
+        and pb.scope in ('all_access', 'social')
+    )
+  );
+
+create policy "tips admin manage"
+  on public.tips for update
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "payout accounts self or guardian or admin read"
+  on public.creator_payout_accounts for select
+  using (
+    profile_id = auth.uid()
+    or guardian_profile_id = auth.uid()
+    or public.is_admin()
+  );
+
+create policy "payout accounts admin manage"
+  on public.creator_payout_accounts for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "creator payouts self or admin read"
+  on public.creator_payouts for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "creator payouts admin manage"
+  on public.creator_payouts for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+create policy "economy admin actions admin only"
+  on public.economy_admin_actions for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- =====================================================================
+-- Indexes for new tables.
+-- =====================================================================
+
+create index space_assets_owner_idx on public.space_assets(owner_profile_id, kind);
+create index space_assets_visibility_idx on public.space_assets(visibility) where visibility in ('public', 'featured');
+create index asset_packs_owner_idx on public.asset_packs(owner_profile_id, status);
+create index asset_pack_items_asset_idx on public.asset_pack_items(asset_id);
+create index asset_uses_asset_idx on public.asset_uses(asset_id, created_at);
+create index asset_uses_profile_idx on public.asset_uses(used_by_profile_id, created_at);
+create index remix_lineage_parent_idx on public.remix_lineage(parent_kind, parent_id);
+create index remix_lineage_child_idx on public.remix_lineage(child_kind, child_id);
+create index entitlements_profile_idx on public.entitlements(profile_id, plan);
+create index project_snapshots_profile_idx on public.project_snapshots(profile_id, created_at);
+create index project_snapshots_session_idx on public.project_snapshots(session_id) where session_id is not null;
+create index wallet_ledger_profile_idx on public.wallet_ledger_entries(profile_id, created_at);
+create index wallet_ledger_source_idx on public.wallet_ledger_entries(source, source_id);
+create index drop_products_active_idx on public.drop_products(platform, active);
+create index purchase_receipts_profile_idx on public.purchase_receipts(profile_id, created_at);
+create index purchase_receipts_status_idx on public.purchase_receipts(status, created_at);
+create index asset_products_creator_idx on public.asset_products(creator_profile_id, status);
+create index tips_receiver_idx on public.tips(receiver_profile_id, created_at);
+create index tips_sender_idx on public.tips(sender_profile_id, created_at);
+create index tips_status_idx on public.tips(status, created_at);
+create index creator_payouts_profile_idx on public.creator_payouts(profile_id, status);
+create index economy_admin_actions_target_idx on public.economy_admin_actions(target_table, target_id, created_at);

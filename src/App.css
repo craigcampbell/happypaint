@@ -127,6 +127,117 @@ button:disabled {
   cursor: crosshair;
 }
 
+/* The display canvas shows the composited layer stack; the overlay sits on top
+   to capture pointer input and preview shapes/lines while dragging. */
+.display-canvas {
+  pointer-events: none;
+}
+
+.overlay-canvas {
+  background: transparent;
+}
+
+.layer-panel .layer-list {
+  display: grid;
+  gap: 8px;
+}
+
+.layer-row {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #c3cdd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.layer-row.is-active {
+  border-color: #174c4d;
+  box-shadow: inset 0 0 0 2px #174c4d;
+}
+
+.layer-row.is-locked {
+  background: #f4f6f8;
+}
+
+.layer-row-main {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 6px;
+}
+
+.layer-visibility,
+.layer-lock {
+  min-height: 38px;
+  padding: 0;
+}
+
+.layer-visibility.is-on,
+.layer-lock.is-on {
+  border-color: #174c4d;
+}
+
+.layer-name {
+  min-height: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.layer-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-name small {
+  color: #7a4a0d;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.layer-row-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.layer-opacity {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  color: #35424d;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.layer-opacity input[type="range"] {
+  accent-color: #174c4d;
+}
+
+.layer-opacity output {
+  text-align: right;
+  color: #5d6871;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.layer-actions button {
+  min-height: 34px;
+  padding: 0 6px;
+  font-size: 0.8rem;
+}
+
 .gallery-strip {
   min-height: 120px;
   display: grid;
@@ -369,6 +480,206 @@ button:disabled {
 
 .full-width {
   width: 100%;
+}
+
+/* ---- Tiny Animation Loops (FrameStrip) ---- */
+
+.frame-strip-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.frame-strip-controls button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+}
+
+.onion-toggle.is-on {
+  border-color: #174c4d;
+  box-shadow: inset 0 0 0 2px #174c4d;
+}
+
+.frame-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.frame-cell {
+  flex: 0 0 auto;
+}
+
+.frame-thumb {
+  position: relative;
+  width: 72px;
+  height: 54px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.frame-cell.is-active .frame-thumb {
+  border-color: #174c4d;
+  box-shadow: inset 0 0 0 2px #174c4d;
+}
+
+.frame-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #f6f1e7;
+}
+
+.frame-thumb .frame-empty,
+.gallery-item .frame-empty,
+.ps-asset .frame-empty {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  background: repeating-linear-gradient(45deg, #eef2f1, #eef2f1 6px, #e2e8e7 6px, #e2e8e7 12px);
+}
+
+.frame-thumb small {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(23, 33, 43, 0.66);
+  color: #ffffff;
+  font-size: 0.66rem;
+  font-weight: 900;
+}
+
+.frame-add {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 54px;
+  font-size: 1.3rem;
+}
+
+.frame-detail {
+  display: grid;
+  gap: 8px;
+}
+
+.frame-duration {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  color: #35424d;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.frame-duration input[type="range"] {
+  accent-color: #174c4d;
+}
+
+.frame-duration output {
+  text-align: right;
+  color: #5d6871;
+  font-variant-numeric: tabular-nums;
+}
+
+.frame-actions,
+.frame-export,
+.ps-save-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.frame-export {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.frame-actions button,
+.frame-export button {
+  min-height: 36px;
+  padding: 0 6px;
+  font-size: 0.8rem;
+}
+
+.ps-save-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ps-save-grid button {
+  min-height: 38px;
+  font-size: 0.82rem;
+}
+
+/* ---- Paint Space locker modal ---- */
+
+.paint-space-modal {
+  width: min(720px, 100%);
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.ps-subtitle {
+  margin: -4px 0 0;
+  color: #5f6b75;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.ps-empty {
+  min-height: 120px;
+}
+
+.ps-group h3 {
+  margin: 0 0 8px;
+  color: #24313c;
+  font-size: 0.95rem;
+}
+
+.ps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.ps-asset {
+  width: auto;
+  height: auto;
+  grid-template-rows: 96px auto auto;
+}
+
+.ps-asset img {
+  height: 96px;
+}
+
+.ps-palette-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  height: 96px;
+  padding: 6px;
+  border-radius: 6px;
+  background: #f6f1e7;
+}
+
+.ps-palette-swatches span {
+  border-radius: 4px;
+  border: 1px solid rgba(23, 33, 43, 0.18);
+}
+
+.ps-asset-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.ps-asset-actions button {
+  min-height: 32px;
+  padding: 0 4px;
+  font-size: 0.76rem;
 }
 
 .marketing-site {

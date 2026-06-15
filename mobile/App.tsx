@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 
-import { DEFAULT_SETTINGS } from "./src/constants";
+import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
 import { DiscoverScreen } from "./src/components/DiscoverScreen";
 import { GalleryScreen } from "./src/components/GalleryScreen";
+import { PaintSpaceScreen } from "./src/components/PaintSpaceScreen";
 import { SettingsScreen } from "./src/components/SettingsScreen";
 import { StudioScreen } from "./src/components/StudioScreen";
 import { TogetherScreen } from "./src/components/TogetherScreen";
@@ -15,7 +16,16 @@ import {
   saveProjects,
   saveStoredSettings,
 } from "./src/storage";
-import type { BrushSettings, DrawingProject, ToolMode } from "./src/types";
+import type {
+  BrushSettings,
+  DrawingProject,
+  Frame,
+  LoopPayload,
+  PalettePayload,
+  StickerPayload,
+  TemplatePayload,
+  ToolMode
+} from "./src/types";
 
 type AppSettings = BrushSettings & {
   calmMode: boolean;
@@ -30,13 +40,56 @@ const INITIAL_SETTINGS: AppSettings = {
 
 function makeProject(): DrawingProject {
   const now = Date.now();
+  const frames = createDefaultFrames();
   return {
     id: `project-${now}-${Math.random().toString(36).slice(2)}`,
     title: `Painting ${new Date(now).toLocaleDateString()}`,
     createdAt: now,
     updatedAt: now,
     texture: "linen",
-    strokes: []
+    frames,
+    activeFrameId: frames[0].id
+  };
+}
+
+function makeId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// Deep-copy a saved frame stack (fresh ids) so an applied template/loop is an
+// independent project rather than sharing item identities with the asset.
+function cloneFrames(frames: Frame[]): Frame[] {
+  return frames.map((frame) => {
+    const layers = frame.layers.map((layer) => {
+      const newLayerId = makeId("layer");
+      return {
+        ...layer,
+        id: newLayerId,
+        items: layer.items.map((item) => ({ ...item, id: makeId(item.kind) }))
+      };
+    });
+    const activeIndex = frame.layers.findIndex((l) => l.id === frame.activeLayerId);
+    return {
+      ...frame,
+      id: makeId("frame"),
+      durationMs: frame.durationMs || DEFAULT_FRAME_DURATION_MS,
+      layers,
+      activeLayerId: layers[activeIndex >= 0 ? activeIndex : 0]?.id ?? layers[0].id
+    };
+  });
+}
+
+function projectFromFrames(title: string, texture: DrawingProject["texture"], frames: Frame[]): DrawingProject {
+  const now = Date.now();
+  const cloned = frames.length > 0 ? cloneFrames(frames) : createDefaultFrames();
+  return {
+    id: `project-${now}-${Math.random().toString(36).slice(2)}`,
+    title,
+    createdAt: now,
+    updatedAt: now,
+    texture,
+    frames: cloned,
+    activeFrameId: cloned[0].id
   };
 }
 
@@ -47,6 +100,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [pendingJoinCode, setPendingJoinCode] = useState("");
+  const [pendingSticker, setPendingSticker] = useState<StickerPayload | null>(null);
   const projectsRef = useRef<DrawingProject[]>([]);
 
   useEffect(() => {
@@ -143,6 +197,59 @@ export default function App() {
     ]);
   }, [currentProject?.id]);
 
+  // --- Paint Space apply flows ----------------------------------------------
+  const applySticker = useCallback(
+    (payload: StickerPayload) => {
+      // Queue the sticker for the studio to drop on the active layer. If there
+      // is no open project, start one first.
+      setPendingSticker(payload);
+      if (!currentProject) {
+        void createProject();
+      } else {
+        setMode("studio");
+      }
+    },
+    [createProject, currentProject]
+  );
+
+  const applyPalette = useCallback(
+    async (payload: PalettePayload) => {
+      const first = payload.colors[0];
+      if (first) {
+        const nextSettings = { ...settings, color: first };
+        setSettings(nextSettings);
+        await saveStoredSettings(nextSettings);
+      }
+      Alert.alert("Palette loaded", "The first color is now selected. Tap swatches in the studio to use the rest.");
+      setMode(currentProject ? "studio" : "gallery");
+    },
+    [currentProject, settings]
+  );
+
+  const applyTemplate = useCallback(
+    async (_assetId: string, payload: TemplatePayload) => {
+      const project = projectFromFrames("From template", payload.texture, payload.frames);
+      const nextSettings = { ...settings, texture: payload.texture };
+      setSettings(nextSettings);
+      await saveStoredSettings(nextSettings);
+      await persistProject(project);
+      setMode("studio");
+    },
+    [persistProject, settings]
+  );
+
+  const applyLoop = useCallback(
+    async (_assetId: string, payload: LoopPayload) => {
+      const project = projectFromFrames("From loop", payload.texture, payload.frames);
+      const nextSettings = { ...settings, texture: payload.texture };
+      setSettings(nextSettings);
+      await saveStoredSettings(nextSettings);
+      await persistProject(project);
+      setMode("studio");
+    },
+    [persistProject, settings]
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -176,13 +283,28 @@ export default function App() {
           <StudioScreen
             calmMode={settings.calmMode}
             onBack={() => setMode("gallery")}
+            onOpenPaintSpace={() => setMode("paintspace")}
             onOpenSettings={() => setMode("settings")}
             onProjectChange={persistProject}
             onSettingsChange={(next) => void updateSettings({ ...settings, ...next })}
+            onStickerConsumed={() => setPendingSticker(null)}
+            pendingSticker={pendingSticker}
             premiumPreview={settings.premiumPreview}
             project={currentProject}
             settings={settings}
           />
+        ) : null}
+
+        {mode === "paintspace" ? (
+          <ScrollView contentContainerStyle={styles.scrollBody}>
+            <PaintSpaceScreen
+              onApplyLoop={(_asset, payload) => void applyLoop(_asset.id, payload)}
+              onApplyPalette={(payload) => void applyPalette(payload)}
+              onApplySticker={applySticker}
+              onApplyTemplate={(_asset, payload) => void applyTemplate(_asset.id, payload)}
+              onBack={() => setMode(currentProject ? "studio" : "gallery")}
+            />
+          </ScrollView>
         ) : null}
 
         {mode === "settings" ? (
