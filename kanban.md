@@ -97,7 +97,38 @@ Replaces today's "Demo Drops" placeholder toggle with real model.
 3. 🟨 Mobile Studio: Layer Lite + fill + shapes/line + text + transparent PNG export
 
 **Wave 2 (builds on Wave 1 layers):**
-4. 🟥 Web: Tiny Animation Loops + Paint Space locker UI
-5. 🟥 Mobile: Tiny Animation Loops + Paint Space locker UI
+4. 🟩 Web: Tiny Animation Loops + Paint Space locker UI
+5. 🟩 Mobile: Tiny Animation Loops + Paint Space locker UI
 
 Biggest-first rationale: Layer Lite + drawing tools are the foundation everything else (loops, paint-space assets, replay) builds on, so they ship first alongside the data schema.
+
+---
+
+## Performance & Bugs (from `performance_audit.md`, 2026-06-15)
+
+Audit of the drawing hot path across all platforms. Severity is the auditor's estimate. Fix order: data-loss → draw hot path → memory → export freeze → visible correctness → rest. See `performance_audit.md` for evidence, locations, and fixes.
+
+### 🟥 Critical
+- **W3 — Web autosave silently loses artwork.** PNG→localStorage overflows ~5MB quota; `QuotaExceededError` swallowed, "Autosaved" shown anyway. *(verified)*
+- **M1 — Mobile re-serializes whole project to AsyncStorage on every stroke.** No debounce; O(n²) writes; main-thread stalls. *(verified)*
+- **M5 — Mobile gallery silently wiped on Android.** Oversized payload exceeds ~2MB SQLite CursorWindow; `loadProjects` catch returns `[]`.
+- **W1 — Web full multi-layer recomposite per pointer move** (~9.6M px/move at 4 layers) — stroke lag.
+- **W2 — Web onion skin allocates + composites neighbor frame stacks every move** — multiplies W1.
+- **M2 — Mobile: every committed stroke is a permanent Skia node** (paint brush mounts up to 24 circles/stroke); unbounded repaint cost.
+
+### 🟥 High
+- **W4 — Web undo history clones full layer stack/stroke** (~30MB/entry, up to ~550MB) — OOM risk.
+- **W6 — Web canvas blurry on all HiDPI/tablets** (no devicePixelRatio handling).
+- **W7 — Web GIF encode synchronous on main thread** — multi-second tab freeze.
+- **W5 — Web display update not rAF-coalesced** (compounds W1).
+- **M3 — Mobile live stroke repaints entire committed scene each rAF.**
+- **M4 — Mobile unbounded spray-dot growth + full path rebuild per frame** (O(n²)).
+- **M6 — Mobile export flag race + UI-thread GIF freeze** (wrong/blank exports on overlap).
+
+### 🟥 Medium
+- **W12** pointerleave ends stroke mid-drag · **W13** opacity slider recomposites per tick (non-undoable) · **W9** all frame thumbnails regenerated on any frame change · **W10** flood fill copies full ImageData + 1.92MB visited array · **W11** shape preview clears full overlay each move · **W8** GIF ByteBuffer is boxed number[].
+- **M9** eraser paints opaque paper → broken transparent/sticker/GIF export · **M7** stale `latestProject` can drop rapid commits · **M8** `makeId` collision risk in clone loops · **M10** PanResponder drops fast points, no palm rejection · **M11** Skia surfaces/images not disposed on export · **M12** hardcoded `readPixels` colorType/alphaType · **M13** `useImage`/`matchFont` per item, no cache · **M14** whole studio re-renders per live-stroke.
+
+### 🟥 Low
+- **W14** no palm/pen prioritization · **W15** object URL revoked before download · **W16** unguarded `crypto.randomUUID` (HTTP) · **W17** playback setTimeout drift.
+- **M15** sticker-apply fires before layout · **M16** GIF disposal/flicker + delay clamp mismatch · **M17** preview-failure redundant save.
