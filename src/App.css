@@ -2090,3 +2090,224 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- Studio features: Replay, AI Assist, Brush Studio (W: studio v2) ---- */
+
+.studio-features .ps-save-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Tall feature modals scroll inside the viewport. */
+.replay-modal,
+.ai-assist-modal,
+.brush-studio-modal {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+}
+
+/* Replay player */
+.replay-stage {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border: 1px solid #c3cdd7;
+  border-radius: 8px;
+  background: #eef3f4;
+}
+
+.replay-canvas {
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(16, 24, 32, 0.14);
+}
+
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay-scrubber {
+  flex: 1;
+}
+
+.replay-counter {
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #43515d;
+}
+
+.replay-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.replay-speed > span {
+  color: #43515d;
+  font-size: 0.9rem;
+}
+
+.replay-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.replay-actions button {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* AI Assist */
+.ai-assist-body,
+.ai-consent {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-consent-row {
+  align-items: center;
+}
+
+.ai-consent-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ai-section {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #c3cdd7;
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.ai-section h3 {
+  margin: 0;
+}
+
+.ai-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-input-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-palette {
+  min-height: 28px;
+}
+
+.ai-palette span,
+.ps-palette-swatches span {
+  display: inline-block;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 24, 32, 0.12);
+}
+
+.ai-prompt-card {
+  padding: 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px dashed #9fb0bb;
+}
+
+.ai-prompt-card small {
+  color: #6b7a86;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 800;
+  font-size: 0.72rem;
+}
+
+.ai-prompt-card p {
+  margin: 6px 0 0;
+  font-weight: 700;
+  color: #1d2a33;
+}
+
+.ai-recipe-summary {
+  margin: 0;
+}
+
+/* Brush Studio */
+.brush-studio-preview-stage {
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  border: 1px solid #c3cdd7;
+  border-radius: 8px;
+  background: #1d2a33;
+}
+
+.brush-preview {
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.brush-studio-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brush-studio-save {
+  display: grid;
+  gap: 10px;
+}
+
+.brush-studio-save-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.brush-studio-save-actions button {
+  flex: 1;
+}
+
+.brush-studio-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.brush-studio-card {
+  gap: 8px;
+}
+
+.brush-card-preview {
+  width: 100%;
+  height: auto;
+  background: #1d2a33;
+}
+
+.brush-card-tags {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #6b7a86;
+  font-weight: 600;
+}
+
+@media (max-width: 560px) {
+  .brush-studio-controls {
+    grid-template-columns: 1fr;
+  }
+  .studio-features .ps-save-grid {
+    grid-template-columns: 1fr;
+  }
+}

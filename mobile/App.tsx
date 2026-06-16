@@ -4,10 +4,13 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
 import { makeId } from "./src/ids";
+import { AiAssistScreen } from "./src/components/AiAssistScreen";
+import { BrushStudioScreen } from "./src/components/BrushStudioScreen";
 import { CreatorDashboardScreen } from "./src/components/CreatorDashboardScreen";
 import { DiscoverScreen } from "./src/components/DiscoverScreen";
 import { GalleryScreen } from "./src/components/GalleryScreen";
 import { PaintSpaceScreen } from "./src/components/PaintSpaceScreen";
+import { ReplayScreen } from "./src/components/ReplayScreen";
 import { SettingsScreen } from "./src/components/SettingsScreen";
 import { StoreScreen } from "./src/components/StoreScreen";
 import { StudioScreen } from "./src/components/StudioScreen";
@@ -27,7 +30,10 @@ import {
   type StoreItem
 } from "./src/economy";
 import { loadSpaceAssets } from "./src/paintSpace";
+import { recipeToBrushSettings } from "./src/brushStudio";
+import { clearReplaySnapshots } from "./src/replay";
 import {
+  copyImportAsync,
   deleteProject,
   ensureStorageReady,
   loadProjects,
@@ -36,6 +42,7 @@ import {
   saveStoredSettings,
 } from "./src/storage";
 import type {
+  BrushRecipe,
   BrushSettings,
   DrawingProject,
   Frame,
@@ -339,6 +346,8 @@ export default function App() {
         style: "destructive",
         onPress: async () => {
           await deleteProject(project.id);
+          // Also drop the artwork's replay snapshot series (index + files).
+          await clearReplaySnapshots(project.id);
           const nextProjects = await loadProjects();
           projectsRef.current = nextProjects;
           setProjects(nextProjects);
@@ -405,6 +414,63 @@ export default function App() {
     [flushPendingSave, persistProject, settings]
   );
 
+  // --- Replay: remix a snapshot into a new artwork ---------------------------
+  // The snapshot is a flattened composite PNG. Start a fresh project and place
+  // the snapshot as the imported tracing reference (reuses the import path),
+  // copying it into the new project's own import file so it survives.
+  const remixFromSnapshot = useCallback(
+    async (uri: string, sourceTitle: string) => {
+      const project = makeProject();
+      project.title = `Remix of ${sourceTitle}`;
+      try {
+        project.importedImageUri = await copyImportAsync(uri, project.id);
+      } catch {
+        project.importedImageUri = uri;
+      }
+      persistProject(project);
+      await flushPendingSave();
+      setMode("studio");
+    },
+    [flushPendingSave, persistProject]
+  );
+
+  // --- AI Assist apply flows -------------------------------------------------
+  // Apply a generated palette: first color becomes the active brush color.
+  const applyAiPalette = useCallback(
+    async (colors: string[]) => {
+      const first = colors[0];
+      if (first) {
+        const nextSettings = { ...settings, color: first };
+        setSettings(nextSettings);
+        await saveStoredSettings(nextSettings);
+      }
+      Alert.alert("Palette ready", "The first color is selected. Pick the rest from the studio swatches.");
+      setMode(currentProject ? "studio" : "gallery");
+    },
+    [currentProject, settings]
+  );
+
+  // Apply a brush recipe (from AI Assist) to the live BrushSettings.
+  const applyBrushRecipe = useCallback(
+    async (recipe: BrushRecipe) => {
+      const patch = recipeToBrushSettings(recipe);
+      const nextSettings = { ...settings, ...patch };
+      setSettings(nextSettings);
+      await saveStoredSettings(nextSettings);
+    },
+    [settings]
+  );
+
+  // Apply a brush settings patch (from Brush Studio) to the live BrushSettings.
+  const applyBrushPatch = useCallback(
+    async (patch: Partial<BrushSettings>) => {
+      const nextSettings = { ...settings, ...patch };
+      setSettings(nextSettings);
+      await saveStoredSettings(nextSettings);
+    },
+    [settings]
+  );
+
   if (loading) {
     return (
       <GestureHandlerRootView style={styles.root}>
@@ -453,9 +519,36 @@ export default function App() {
             onProjectChange={persistProject}
             onSettingsChange={(next) => void updateSettings({ ...settings, ...next })}
             onStickerConsumed={() => setPendingSticker(null)}
+            onOpenReplay={() => setMode("replay")}
+            onOpenAiAssist={() => setMode("aiassist")}
+            onOpenBrushStudio={() => setMode("brushstudio")}
             pendingSticker={pendingSticker}
             project={currentProject}
             settings={settings}
+          />
+        ) : null}
+
+        {mode === "replay" && currentProject ? (
+          <ReplayScreen
+            onBack={() => setMode("studio")}
+            onRemixFromSnapshot={(uri, sourceTitle) => void remixFromSnapshot(uri, sourceTitle)}
+            project={currentProject}
+          />
+        ) : null}
+
+        {mode === "aiassist" ? (
+          <AiAssistScreen
+            onApplyPalette={(colors) => void applyAiPalette(colors)}
+            onApplyRecipe={(recipe) => void applyBrushRecipe(recipe)}
+            onBack={() => setMode(currentProject ? "studio" : "gallery")}
+          />
+        ) : null}
+
+        {mode === "brushstudio" ? (
+          <BrushStudioScreen
+            color={settings.color}
+            onApplyRecipe={(patch) => void applyBrushPatch(patch)}
+            onBack={() => setMode(currentProject ? "studio" : "gallery")}
           />
         ) : null}
 

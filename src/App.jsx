@@ -49,9 +49,25 @@ import {
   sendTip,
   spendDrops,
 } from "./utils/economy";
+import {
+  SNAPSHOT_WIDTH,
+  SNAPSHOT_HEIGHT,
+  createReplayRecorder,
+  loadReplaySnapshots,
+} from "./utils/replay";
+import {
+  isAiConsented,
+  loadAiConsent,
+  revokeAiConsent,
+  saveAiConsent,
+} from "./utils/aiAssist";
+import { buildBrushAssetFields, recipeToBrushSettings } from "./utils/brushStudio";
 import LayerPanel from "./components/LayerPanel";
 import FrameStrip from "./components/FrameStrip";
 import PaintSpacePanel from "./components/PaintSpacePanel";
+import ReplayPlayer from "./components/ReplayPlayer";
+import AiAssistPanel from "./components/AiAssistPanel";
+import BrushStudio from "./components/BrushStudio";
 import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
@@ -259,6 +275,12 @@ function StudioApp({ initialJoinCode = "" }) {
   const galleryRef = useRef([]);
   const paintSpaceAssetsRef = useRef([]);
 
+  // Snapshot-based replay recorder (W: Room Replay & Timelapse). Captures
+  // downscaled composited snapshots over time (NOT a stroke stream); see
+  // utils/replay.js. A debounced flush persists the series to IndexedDB.
+  const replayRecorderRef = useRef(null);
+  const replayFlushTimerRef = useRef(0);
+
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
 
@@ -293,6 +315,21 @@ function StudioApp({ initialJoinCode = "" }) {
   const [showWallet, setShowWallet] = useState(false);
   const [showStore, setShowStore] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
+
+  // Studio feature panels: replay/timelapse, AI assist, brush studio.
+  const [showReplay, setShowReplay] = useState(false);
+  const [replaySnapshots, setReplaySnapshots] = useState([]);
+  const [replayCount, setReplayCount] = useState(0);
+  const [isExportingTimelapse, setIsExportingTimelapse] = useState(false);
+  const [showAiAssist, setShowAiAssist] = useState(false);
+  const [aiConsent, setAiConsent] = useState(null);
+  const [showBrushStudio, setShowBrushStudio] = useState(false);
+
+  // Saved brush recipes are the kind === "brush" Paint Space assets.
+  const savedBrushAssets = useMemo(
+    () => paintSpaceAssets.filter((asset) => asset.kind === "brush"),
+    [paintSpaceAssets],
+  );
 
   const studioUnlocked = hasEntitlement(economy, "studio");
 
@@ -701,6 +738,53 @@ function StudioApp({ initialJoinCode = "" }) {
       return canvas;
     },
     [renderPaper, selectedTexture],
+  );
+
+  // ---- Replay snapshot recorder (snapshot-based, NOT per-stroke) ----
+
+  // Synchronously paint the current composite (a flat paper-tint background plus
+  // the live layer stack) into a snapshot-sized context. Synchronous so the
+  // recorder can call it off the draw hot path without awaiting an async paper
+  // image load (the tinted fill keeps GIFs/replay readable without alpha).
+  const paintReplayComposite = useCallback(
+    (context, width, height) => {
+      const texture = getTexture(settingsRef.current?.texture || selectedTexture);
+      context.fillStyle = texture.background || "#ffffff";
+      context.fillRect(0, 0, width, height);
+      compositeLayers(context, layersRef.current, { width, height });
+    },
+    [selectedTexture],
+  );
+
+  // Debounced persist of the snapshot series to IndexedDB (idle, off hot path).
+  const scheduleReplayFlush = useCallback(() => {
+    if (replayFlushTimerRef.current) {
+      return;
+    }
+    replayFlushTimerRef.current = window.setTimeout(() => {
+      replayFlushTimerRef.current = 0;
+      replayRecorderRef.current?.flush();
+    }, 5000);
+  }, []);
+
+  // Note that the canvas changed so the recorder may take a (debounced, idle)
+  // keyframe; capture on a meaningful event when `event` is true (stroke-batch
+  // end / layer or frame change). Never blocks the draw hot path — the recorder
+  // itself debounces and renders the downscaled snapshot asynchronously.
+  const recordReplay = useCallback(
+    (event = false) => {
+      const recorder = replayRecorderRef.current;
+      if (!recorder) {
+        return;
+      }
+      if (event) {
+        recorder.captureEvent();
+      } else {
+        recorder.markDirty();
+      }
+      scheduleReplayFlush();
+    },
+    [scheduleReplayFlush],
   );
 
   // Honest, async draft autosave (W3). Layers are encoded to PNG Blobs and
@@ -1202,6 +1286,7 @@ function StudioApp({ initialJoinCode = "" }) {
         if (filled) {
           renderDisplay();
           refreshActiveThumbnail();
+          recordReplay(true);
           markChanged("Filled");
         } else {
           historyRef.current.pop();
@@ -1238,6 +1323,7 @@ function StudioApp({ initialJoinCode = "" }) {
           });
           renderDisplay();
           refreshActiveThumbnail();
+          recordReplay(true);
           markChanged("Text added");
         }
         return;
@@ -1260,7 +1346,7 @@ function StudioApp({ initialJoinCode = "" }) {
       drawBrushFromEvent(event);
       markChanged("Drawing");
     },
-    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -1353,8 +1439,10 @@ function StudioApp({ initialJoinCode = "" }) {
       invalidateCompositeCache();
       updateHistoryCounts();
       refreshActiveThumbnail();
+      // Stroke-batch end: mark the recorder dirty so a timed keyframe is taken.
+      recordReplay(false);
     },
-    [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
@@ -1374,8 +1462,9 @@ function StudioApp({ initialJoinCode = "" }) {
     activeLayerIdRef.current = layer.id;
     renderDisplay();
     syncLayerState();
+    recordReplay(true);
     markChanged("Layer added");
-  }, [markChanged, pushHistory, renderDisplay, syncLayerState]);
+  }, [markChanged, pushHistory, recordReplay, renderDisplay, syncLayerState]);
 
   const handleDeleteLayer = useCallback(
     (id) => {
@@ -1391,9 +1480,10 @@ function StudioApp({ initialJoinCode = "" }) {
       }
       renderDisplay();
       syncLayerState();
+      recordReplay(true);
       markChanged("Layer deleted");
     },
-    [markChanged, pushHistory, renderDisplay, syncLayerState],
+    [markChanged, pushHistory, recordReplay, renderDisplay, syncLayerState],
   );
 
   const handleDuplicateLayer = useCallback(
@@ -1654,8 +1744,9 @@ function StudioApp({ initialJoinCode = "" }) {
       renderDisplay();
       syncLayerState();
       setActiveFrameIndex(clamped);
+      recordReplay(true);
     },
-    [renderDisplay, syncLayerState, updateHistoryCounts],
+    [recordReplay, renderDisplay, syncLayerState, updateHistoryCounts],
   );
 
   const handleSelectFrame = useCallback(
@@ -1869,6 +1960,116 @@ function StudioApp({ initialJoinCode = "" }) {
     }
   }, [commitLayersToFrame, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
 
+  // ---- Replay & Timelapse ----
+
+  // Open the replay player: snapshot the latest frame now (so the player shows
+  // current work) then load the recorder's series into state.
+  const openReplay = useCallback(async () => {
+    const recorder = replayRecorderRef.current;
+    if (recorder) {
+      await recorder.captureManual();
+    }
+    setReplaySnapshots(recorder ? recorder.getSnapshots().slice() : []);
+    setShowReplay(true);
+  }, []);
+
+  // Encode the captured snapshots into a GIF timelapse using the SAME
+  // worker-based GIF encoder as the loop export. Returns the GIF bytes (or null).
+  const encodeTimelapseBytes = useCallback(async () => {
+    const recorder = replayRecorderRef.current;
+    const snaps = recorder ? recorder.getSnapshots() : [];
+    if (snaps.length === 0) {
+      return null;
+    }
+    // Decode each snapshot Blob to ImageData at snapshot size on the main thread;
+    // the heavy quantize + LZW happens off-thread (worker) like the loop export.
+    const imageFrames = [];
+    for (const snap of snaps) {
+      const image = await createImageFromBlob(snap.blob).catch(() => null);
+      if (!image) {
+        continue;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = SNAPSHOT_WIDTH;
+      canvas.height = SNAPSHOT_HEIGHT;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0, SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT);
+      const imageData = context.getImageData(0, 0, SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT);
+      // ~10 fps timelapse; the last frame lingers a moment.
+      imageFrames.push({ data: imageData, delayMs: 110 });
+    }
+    if (imageFrames.length > 0) {
+      imageFrames[imageFrames.length - 1].delayMs = 900;
+    }
+    if (imageFrames.length === 0) {
+      return null;
+    }
+
+    const worker = getGifWorker();
+    if (worker) {
+      const jobId = (gifJobSeedRef.current += 1);
+      return new Promise((resolve, reject) => {
+        const handleMessage = (event) => {
+          const message = event.data || {};
+          if (message.id !== jobId) {
+            return;
+          }
+          worker.removeEventListener("message", handleMessage);
+          worker.removeEventListener("error", handleError);
+          if (message.ok) {
+            resolve(message.bytes);
+          } else {
+            reject(new Error(message.error || "GIF worker failed"));
+          }
+        };
+        const handleError = (error) => {
+          worker.removeEventListener("message", handleMessage);
+          worker.removeEventListener("error", handleError);
+          reject(error);
+        };
+        worker.addEventListener("message", handleMessage);
+        worker.addEventListener("error", handleError);
+        const payloadFrames = imageFrames.map((frame) => ({
+          buffer: frame.data.data.buffer,
+          width: frame.data.width,
+          height: frame.data.height,
+          delayMs: frame.delayMs,
+        }));
+        worker.postMessage(
+          { id: jobId, width: SNAPSHOT_WIDTH, height: SNAPSHOT_HEIGHT, frames: payloadFrames },
+          payloadFrames.map((frame) => frame.buffer),
+        );
+      });
+    }
+    // Fallback: synchronous encode on the main thread.
+    return encodeGif(
+      imageFrames.map((frame) => ({ source: frame.data, delayMs: frame.delayMs })),
+      { width: SNAPSHOT_WIDTH, height: SNAPSHOT_HEIGHT },
+    );
+  }, [getGifWorker]);
+
+  const exportTimelapse = useCallback(async () => {
+    if (isExportingTimelapse) {
+      return;
+    }
+    setIsExportingTimelapse(true);
+    setStatus("Encoding timelapse…");
+    try {
+      const bytes = await encodeTimelapseBytes();
+      if (!bytes) {
+        setStatus("No snapshots to export yet");
+        return;
+      }
+      const blob = new Blob([bytes], { type: "image/gif" });
+      downloadBlob(blob, `happy-paint-timelapse-${Date.now()}.gif`);
+      setStatus("Timelapse exported");
+    } catch {
+      setStatus("Timelapse export failed");
+    } finally {
+      setIsExportingTimelapse(false);
+    }
+  }, [encodeTimelapseBytes, isExportingTimelapse]);
+
   // ---- Paint Space locker ----
 
   // Apply an updater to the locker, persist it (IndexedDB, else localStorage),
@@ -1957,6 +2158,190 @@ function StudioApp({ initialJoinCode = "" }) {
     }
   }, [commitLayersToFrame, persistPaintSpace]);
 
+  // Save the timelapse GIF as a `loop`-kind Paint Space asset (timelapse asset).
+  // Mirrors timelapse_assets: frame_count, format gif, safety_status pending.
+  const saveTimelapseToSpace = useCallback(async () => {
+    const recorder = replayRecorderRef.current;
+    const snaps = recorder ? recorder.getSnapshots() : [];
+    if (snaps.length === 0) {
+      setStatus("No snapshots to save yet");
+      return;
+    }
+    setIsExportingTimelapse(true);
+    setStatus("Saving timelapse…");
+    try {
+      const bytes = await encodeTimelapseBytes();
+      if (!bytes) {
+        setStatus("No snapshots to save yet");
+        return;
+      }
+      const blob = new Blob([bytes], { type: "image/gif" });
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => resolve("");
+        reader.readAsDataURL(blob);
+      });
+      // Thumbnail = the most recent snapshot.
+      const thumb = await createImageFromBlob(snaps[snaps.length - 1].blob).catch(() => null);
+      let thumbUrl = "";
+      if (thumb) {
+        const tCanvas = document.createElement("canvas");
+        tCanvas.width = 200;
+        tCanvas.height = 150;
+        tCanvas.getContext("2d").drawImage(thumb, 0, 0, 200, 150);
+        thumbUrl = tCanvas.toDataURL("image/png");
+      }
+      const asset = createAsset({
+        kind: "loop",
+        title: `Timelapse ${todayName()}`,
+        payload: {
+          gif: dataUrl,
+          isTimelapse: true,
+          format: "gif",
+          frame_count: snaps.length,
+          safety_status: "pending",
+        },
+        thumbnail: thumbUrl,
+      });
+      if (await persistPaintSpace((current) => addAsset(current, asset))) {
+        setStatus(`Saved timelapse (${snaps.length} frames) to Paint Space`);
+      }
+    } catch {
+      setStatus("Couldn't save timelapse");
+    } finally {
+      setIsExportingTimelapse(false);
+    }
+  }, [encodeTimelapseBytes, persistPaintSpace]);
+
+  // Remix from a replay snapshot: restore that downscaled frame as a fresh
+  // single-layer artwork (reuses the gallery/template restore path).
+  const remixFromSnapshot = useCallback(
+    async (snapshot) => {
+      if (!snapshot?.blob) {
+        return;
+      }
+      pushHistory("full");
+      const layer = createLayer({ name: "Remix" });
+      const image = await createImageFromBlob(snapshot.blob).catch(() => null);
+      if (image) {
+        // Snapshot is downscaled; draw it scaled up to the full art canvas.
+        layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+      const frame = createFrame({ layers: [layer] });
+      framesRef.current = [frame];
+      activeFrameIndexRef.current = 0;
+      layersRef.current = frame.layers;
+      activeLayerIdRef.current = frame.activeLayerId;
+      renderDisplay();
+      syncLayerState();
+      syncFrameState();
+      setShowReplay(false);
+      markChanged("Remixed from replay");
+    },
+    [markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+  );
+
+  // ---- AI Assist handlers (local helpers; consent-gated) ----
+
+  const handleAiConsent = useCallback(async ({ profileKind, guardianApproved }) => {
+    const saved = await saveAiConsent({ profileKind, guardianApproved });
+    setAiConsent(saved);
+    setStatus("AI Assist turned on");
+  }, []);
+
+  const handleAiRevoke = useCallback(async () => {
+    const revoked = await revokeAiConsent();
+    setAiConsent(revoked);
+    setStatus("AI Assist turned off");
+  }, []);
+
+  // Apply an AI palette generation to the studio swatches.
+  const handleApplyAiPalette = useCallback((generation) => {
+    const colors = generation?.output?.colors || [];
+    if (colors.length === 0) {
+      return;
+    }
+    setRecentColors(colors.slice(0, MAX_PALETTE_COLORS));
+    setSelectedColor(colors[colors.length - 1]); // a saturated mid-tone, not the light anchor
+    setStatus(`Applied AI palette (${generation.input?.rule || "harmony"})`);
+  }, []);
+
+  // Apply an AI brush-recipe generation to the current brush settings.
+  const handleApplyAiBrushRecipe = useCallback(
+    (generation) => {
+      const recipe = generation?.output?.brush_recipe;
+      if (!recipe) {
+        return;
+      }
+      const settings = recipeToBrushSettings(recipe, { color: selectedColor });
+      const brush = brushCatalog.find((item) => item.id === settings.brush);
+      if (brush?.tier === "studio" && !studioUnlocked) {
+        setShowStore(true);
+        setStatus("That recipe uses a studio brush — unlock with the Creator Brushes pack");
+        return;
+      }
+      setSelectedBrush(settings.brush);
+      setSelectedTool("brush");
+      setBrushSize(settings.size);
+      setBrushOpacity(settings.opacity);
+      setBrushVariation(settings.variation);
+      setStatus("Applied AI brush recipe");
+    },
+    [selectedColor, studioUnlocked],
+  );
+
+  const handleUseAiPrompt = useCallback((generation) => {
+    const prompt = generation?.output?.prompt;
+    if (prompt) {
+      setStatus(`Prompt: ${prompt}`);
+    }
+  }, []);
+
+  // ---- Brush Studio handlers ----
+
+  // Apply a brush recipe (from the studio or a saved card) to the current brush.
+  const handleApplyBrushRecipe = useCallback(
+    (recipe) => {
+      if (!recipe) {
+        return;
+      }
+      const settings = recipeToBrushSettings(recipe, { color: selectedColor });
+      const brush = brushCatalog.find((item) => item.id === settings.brush);
+      if (brush?.tier === "studio" && !studioUnlocked) {
+        setShowStore(true);
+        setStatus("That brush uses a studio base — unlock with the Creator Brushes pack");
+        return;
+      }
+      setSelectedBrush(settings.brush);
+      setSelectedTool("brush");
+      setBrushSize(settings.size);
+      setBrushOpacity(settings.opacity);
+      setBrushVariation(settings.variation);
+      setStatus("Brush applied");
+    },
+    [selectedColor, studioUnlocked],
+  );
+
+  // Save a brush recipe to the Paint Space locker as a kind: "brush" asset.
+  const handleSaveBrushRecipe = useCallback(
+    async (recipe, { name, tags }) => {
+      const fields = buildBrushAssetFields(recipe, { tags });
+      const asset = createAsset({
+        kind: "brush",
+        title: name || "My Brush",
+        payload: fields.payload,
+        brush_recipe: fields.brush_recipe,
+        visibility: fields.visibility,
+        moderation_status: fields.moderation_status,
+      });
+      if (await persistPaintSpace((current) => addAsset(current, asset))) {
+        setStatus("Saved brush to Paint Space");
+      }
+    },
+    [persistPaintSpace],
+  );
+
   const handleRenameAsset = useCallback(
     async (asset) => {
       const title = window.prompt("Rename asset:", asset.title);
@@ -2033,7 +2418,21 @@ function StudioApp({ initialJoinCode = "" }) {
         return;
       }
 
+      if (asset.kind === "brush") {
+        const recipe = asset.brush_recipe || asset.payload?.brush_recipe;
+        handleApplyBrushRecipe(recipe);
+        setShowPaintSpace(false);
+        return;
+      }
+
       if (asset.kind === "loop") {
+        // Timelapse loops store a baked GIF (payload.gif), not editable frames,
+        // so they can't be loaded back into the frame editor.
+        if (asset.payload?.isTimelapse) {
+          setStatus("Timelapse clips are for viewing/sharing, not editing");
+          setShowPaintSpace(false);
+          return;
+        }
         const savedFrames = asset.payload?.frames || [];
         if (savedFrames.length === 0) {
           return;
@@ -2059,7 +2458,7 @@ function StudioApp({ initialJoinCode = "" }) {
         setShowPaintSpace(false);
       }
     },
-    [getActiveLayer, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [getActiveLayer, handleApplyBrushRecipe, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // ---- Initialization ----
@@ -2091,6 +2490,20 @@ function StudioApp({ initialJoinCode = "" }) {
     historyRef.current = [];
     redoRef.current = [];
     updateHistoryCounts();
+
+    // Snapshot-based replay recorder. It paints downscaled composited snapshots
+    // (via paintReplayComposite) on a debounced cadence while dirty + on events.
+    const recorder = createReplayRecorder({ paintComposite: paintReplayComposite });
+    recorder.setOnChange((count) => setReplayCount(count));
+    replayRecorderRef.current = recorder;
+    loadReplaySnapshots().then((snaps) => {
+      if (snaps.length > 0 && replayRecorderRef.current) {
+        replayRecorderRef.current.setSnapshots(snaps);
+      }
+    });
+
+    // AI Assist consent (local; mirrors ai_consent). Gate stays closed until set.
+    loadAiConsent().then((consent) => setAiConsent(consent));
 
     // Economy loads async from IndexedDB. A legacy `studio-pass` boolean (the old
     // Demo Drops toggle) is migrated forward into a mock entitlement: owning the
@@ -2217,6 +2630,16 @@ function StudioApp({ initialJoinCode = "" }) {
       if (gifWorkerRef.current) {
         gifWorkerRef.current.terminate();
         gifWorkerRef.current = null;
+      }
+      if (replayFlushTimerRef.current) {
+        window.clearTimeout(replayFlushTimerRef.current);
+        replayFlushTimerRef.current = 0;
+      }
+      if (replayRecorderRef.current) {
+        // Persist the final series before tearing the recorder down.
+        replayRecorderRef.current.flush();
+        replayRecorderRef.current.destroy();
+        replayRecorderRef.current = null;
       }
     };
   }, []);
@@ -2466,6 +2889,25 @@ function StudioApp({ initialJoinCode = "" }) {
           </div>
         </section>
 
+        <section className="tool-section studio-features">
+          <h2>Studio</h2>
+          <div className="ps-save-grid">
+            <button type="button" onClick={openReplay} title="Replay your process and export a timelapse">
+              Replay ({replayCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAiAssist(true)}
+              title="AI Assist (local, consent-gated)"
+            >
+              AI Assist{isAiConsented(aiConsent) ? " ·" : ""}
+            </button>
+            <button type="button" onClick={() => setShowBrushStudio(true)} title="Create a custom brush recipe">
+              Brush Studio
+            </button>
+          </div>
+        </section>
+
         <section className="tool-section">
           <h2>Brushes</h2>
           <div className="brush-grid">
@@ -2670,6 +3112,54 @@ function StudioApp({ initialJoinCode = "" }) {
             setShowCreator(false);
             setShowWallet(true);
           }}
+        />
+      ) : null}
+
+      {showReplay ? (
+        <ReplayPlayer
+          snapshots={replaySnapshots}
+          isExporting={isExportingTimelapse}
+          onClose={() => setShowReplay(false)}
+          onRemixFromHere={remixFromSnapshot}
+          onExportTimelapse={exportTimelapse}
+          onSaveTimelapse={saveTimelapseToSpace}
+        />
+      ) : null}
+
+      {showAiAssist ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowAiAssist(false)}>
+          <section
+            className="studio-modal ai-assist-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-assist-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-title-row">
+              <h2 id="ai-assist-title">AI Assist</h2>
+              <button type="button" onClick={() => setShowAiAssist(false)}>
+                Close
+              </button>
+            </div>
+            <AiAssistPanel
+              consent={aiConsent}
+              onConsent={handleAiConsent}
+              onRevoke={handleAiRevoke}
+              onApplyPalette={handleApplyAiPalette}
+              onApplyBrushRecipe={handleApplyAiBrushRecipe}
+              onUsePrompt={handleUseAiPrompt}
+            />
+          </section>
+        </div>
+      ) : null}
+
+      {showBrushStudio ? (
+        <BrushStudio
+          color={selectedColor}
+          savedBrushes={savedBrushAssets}
+          onClose={() => setShowBrushStudio(false)}
+          onSaveRecipe={handleSaveBrushRecipe}
+          onApplyRecipe={handleApplyBrushRecipe}
         />
       ) : null}
     </main>

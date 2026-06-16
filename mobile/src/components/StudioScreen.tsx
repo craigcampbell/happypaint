@@ -20,13 +20,15 @@ import {
   Pencil,
   Play,
   Plus,
+  Repeat,
   RotateCcw,
   Save,
   Share2,
   SlidersHorizontal,
   Sparkles,
   Trash2,
-  Unlock
+  Unlock,
+  Wand
 } from "lucide-react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -93,6 +95,14 @@ import {
   writeText
 } from "../storage";
 import { makeSpaceAssetId, upsertSpaceAsset } from "../paintSpace";
+import {
+  createReplayRecorder,
+  loadReplaySnapshots,
+  SNAPSHOT_HEIGHT,
+  SNAPSHOT_WIDTH,
+  type CapturedSnapshot,
+  type ReplayRecorder
+} from "../replay";
 import type {
   BrushId,
   BrushSettings,
@@ -132,6 +142,10 @@ type Props = {
   // Apply flow: a sticker selected from the Paint Space to drop on the canvas.
   pendingSticker?: { uri: string; width: number; height: number } | null;
   onStickerConsumed?: () => void;
+  // New studio screens (snapshot replay/timelapse, AI Assist, Brush Studio).
+  onOpenReplay: () => void;
+  onOpenAiAssist: () => void;
+  onOpenBrushStudio: () => void;
 };
 
 type CanvasSize = {
@@ -702,7 +716,10 @@ export function StudioScreen({
   onProjectChange,
   onSettingsChange,
   pendingSticker,
-  onStickerConsumed
+  onStickerConsumed,
+  onOpenReplay,
+  onOpenAiAssist,
+  onOpenBrushStudio
 }: Props) {
   const canvasRef = useCanvasRef();
   const linenImage = useImage(require("../../assets/linen.png"));
@@ -734,6 +751,11 @@ export function StudioScreen({
   // hold this so two captures can't run at once and grab the wrong scene. Also
   // used to stop the debounced preview snapshot from racing an export.
   const exportInFlightRef = useRef(false);
+  // Snapshot-based replay recorder (see replay.ts). Created per-project in an
+  // effect; commitProject + meaningful events drive it through this ref so the
+  // recorder never forces the chrome to re-render.
+  const replayRecorderRef = useRef<ReplayRecorder | null>(null);
+  const [replayCount, setReplayCount] = useState(0);
 
   const textureImage = settings.texture === "linen" ? linenImage : settings.texture === "canvas" ? canvasImage : null;
   const textureMeta = TEXTURES.find((texture) => texture.id === settings.texture) ?? TEXTURES[0];
@@ -918,6 +940,9 @@ export function StudioScreen({
       latestProjectRef.current = nextProject;
       onProjectChange(nextProject);
       schedulePreviewSave(nextProject);
+      // Snapshot-based replay: mark the canvas dirty so the timed cadence arms.
+      // The actual capture is debounced + export-lock-aware in the recorder.
+      replayRecorderRef.current?.markDirty();
     },
     [onProjectChange, schedulePreviewSave]
   );
@@ -1314,6 +1339,7 @@ export function StudioScreen({
     const nextLayers = [...layers];
     nextLayers.splice(activeIndex + 1, 0, layer);
     updateLayers(nextLayers, layer.id);
+    replayRecorderRef.current?.captureEvent();
   }, [activeLayerId, layers, updateLayers]);
 
   const patchLayer = useCallback(
@@ -1352,6 +1378,7 @@ export function StudioScreen({
       }
       const nextLayers = layers.filter((layer) => layer.id !== id);
       updateLayers(nextLayers, nextLayers[0]?.id);
+      replayRecorderRef.current?.captureEvent();
     },
     [layers, updateLayers]
   );
@@ -1413,6 +1440,8 @@ export function StudioScreen({
       const next = { ...base, activeFrameId: id };
       latestProjectRef.current = next;
       onProjectChange(next);
+      // Frame change is a meaningful replay event.
+      replayRecorderRef.current?.captureEvent();
     },
     [onProjectChange]
   );
@@ -1701,6 +1730,88 @@ export function StudioScreen({
     }
   }, []);
 
+  // --- Replay snapshot capture (export-lock-aware) ---------------------------
+  // Capture a downscaled (SNAPSHOT_WIDTH x SNAPSHOT_HEIGHT) base64 PNG of the
+  // CURRENT composite (paper + layers, as drawn). Returns null when an export /
+  // another capture already owns the canvas, so snapshotting NEVER races a real
+  // export or deadlocks: it acquires the SAME single in-flight lock, and if the
+  // lock is taken it simply declines (the recorder leaves the canvas dirty and
+  // retries on the next cadence tick). The full snapshot is downscaled onto an
+  // offscreen Skia surface so stored frames stay small/bounded.
+  const captureReplaySnapshot = useCallback(async (): Promise<CapturedSnapshot | null> => {
+    if (exportInFlightRef.current) {
+      return null; // an export owns the canvas — decline, don't block
+    }
+    exportInFlightRef.current = true;
+    try {
+      const full = canvasRef.current?.makeImageSnapshot();
+      if (!full) {
+        return null;
+      }
+      try {
+        const surface = Skia.Surface.MakeOffscreen(SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT);
+        if (!surface) {
+          return null;
+        }
+        try {
+          const canvas = surface.getCanvas();
+          const paint = Skia.Paint();
+          paint.setAntiAlias(true);
+          canvas.drawImageRect(
+            full,
+            Skia.XYWHRect(0, 0, full.width(), full.height()),
+            Skia.XYWHRect(0, 0, SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT),
+            paint
+          );
+          surface.flush();
+          const scaled = surface.makeImageSnapshot();
+          try {
+            const base64 = scaled.encodeToBase64();
+            return base64 ? { base64, width: SNAPSHOT_WIDTH, height: SNAPSHOT_HEIGHT } : null;
+          } finally {
+            scaled.dispose();
+          }
+        } finally {
+          surface.dispose();
+        }
+      } finally {
+        full.dispose();
+      }
+    } catch {
+      return null;
+    } finally {
+      exportInFlightRef.current = false;
+    }
+  }, [canvasRef]);
+
+  // Create / tear down the replay recorder per project. markDirty/captureEvent
+  // are fired from commitProject and the meaningful-event handlers above.
+  useEffect(() => {
+    let active = true;
+    let recorder: ReplayRecorder | null = null;
+    void (async () => {
+      const initial = await loadReplaySnapshots(project.id);
+      if (!active) {
+        return;
+      }
+      recorder = createReplayRecorder({
+        replayId: project.id,
+        capture: captureReplaySnapshot,
+        initialSnapshots: initial
+      });
+      recorder.setOnChange((count) => setReplayCount(count));
+      replayRecorderRef.current = recorder;
+      setReplayCount(initial.length);
+    })();
+    return () => {
+      active = false;
+      recorder?.destroy();
+      if (replayRecorderRef.current === recorder) {
+        replayRecorderRef.current = null;
+      }
+    };
+  }, [captureReplaySnapshot, project.id]);
+
   // Snapshot a single frame transparently. Assumes the export lock is already
   // held by the caller (it is invoked inside a withExportLock sequence).
   const snapshotFrameImage = useCallback(
@@ -1982,6 +2093,12 @@ export function StudioScreen({
         </View>
         <IconButton icon={Package} label="Space" onPress={onOpenPaintSpace} />
         <IconButton icon={SlidersHorizontal} label="Settings" onPress={onOpenSettings} />
+      </View>
+
+      <View style={styles.toolbar}>
+        <IconButton icon={Repeat} label={`Replay (${replayCount})`} onPress={onOpenReplay} />
+        <IconButton icon={Wand} label="AI Assist" onPress={onOpenAiAssist} />
+        <IconButton icon={Sparkles} label="Brush Studio" onPress={onOpenBrushStudio} />
       </View>
 
       <View

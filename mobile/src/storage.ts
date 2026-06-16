@@ -45,6 +45,40 @@ export function spaceAssetPath(assetId: string, suffix = "png") {
   return `${DOCUMENT_ROOT}/space-${assetId}.${suffix}`;
 }
 
+// --- Replay snapshot storage ------------------------------------------------
+// Per-artwork snapshot PNGs live in their own directory (like project bodies);
+// the lightweight index lives in AsyncStorage. Mirrors replay_snapshots shape.
+const REPLAY_DIR = `${DOCUMENT_ROOT}/replay`;
+
+export async function ensureReplayDirReady() {
+  await ensureStorageReady();
+  const info = await FileSystem.getInfoAsync(REPLAY_DIR);
+  if (!info.exists) {
+    await FileSystem.makeDirectoryAsync(REPLAY_DIR, { intermediates: true });
+  }
+}
+
+// One PNG file per snapshot, namespaced by replay (artwork) id + seq.
+export function replaySnapshotPath(replayId: string, seq: number) {
+  return `${REPLAY_DIR}/replay-${replayId}-${seq}.png`;
+}
+
+// Timelapse GIF/sprite export path (cache dir — shareable, regenerable).
+export function timelapseExportPath(replayId: string, extension: "gif" | "png") {
+  return `${FileSystem.cacheDirectory ?? DOCUMENT_ROOT}/happy-paint-timelapse-${replayId}.${extension}`;
+}
+
+export async function deleteReplaySnapshotFile(uri: string) {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (info.exists) {
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+    }
+  } catch {
+    // non-fatal — a missing file is fine
+  }
+}
+
 function projectBodyPath(projectId: string) {
   return `${PROJECTS_DIR}/project-${projectId}.json`;
 }

@@ -11,7 +11,10 @@ export type ToolMode =
   | "paintspace"
   | "wallet"
   | "store"
-  | "creator";
+  | "creator"
+  | "replay"
+  | "aiassist"
+  | "brushstudio";
 
 // The active studio tool. "brush" / "eraser" draw freehand strokes (the brush
 // itself is chosen via BrushSettings.brush). The others place layer items.
@@ -154,7 +157,7 @@ export type ProjectIndexEntry = {
 // Mirrors backend public.space_assets (id, kind, title, payload, thumbnail,
 // createdAt) so the local locker is sync-ready. `kind` is a youth-facing subset
 // of the backend enum.
-export type PaintSpaceKind = "sticker" | "palette" | "template" | "loop";
+export type PaintSpaceKind = "sticker" | "palette" | "template" | "loop" | "brush" | "timelapse";
 
 export type StickerPayload = {
   uri: string;
@@ -186,11 +189,47 @@ export type LoopPayload = {
   texture: TextureId;
 };
 
+// --- Brush Studio Lite ------------------------------------------------------
+// A brush recipe is a small adjustable parameter set built on a base brush.
+// Mirrors the backend `space_assets.brush_recipe` typed column.
+export type BrushRecipe = {
+  baseBrush: BrushId;
+  size: number;
+  opacity: number;
+  variation: number;
+  // glow adds a soft halo (selects the glow base brush on apply); spray adds
+  // a scatter feel (selects the spray base brush on apply).
+  glow: boolean;
+  spray: boolean;
+};
+
+export type BrushPayload = {
+  brush_recipe: BrushRecipe;
+  tags?: string[];
+};
+
+// --- Timelapse asset (saved replay export) ----------------------------------
+// Mirrors backend `timelapse_assets` (format, frame_count, duration_ms,
+// safety_status). The exported GIF lives at `uri`.
+export type TimelapsePayload = {
+  uri: string;
+  format: "gif" | "sprite";
+  frameCount: number;
+  durationMs: number;
+};
+
 export type SpaceAssetPayload =
   | StickerPayload
   | TemplatePayload
   | PalettePayload
-  | LoopPayload;
+  | LoopPayload
+  | BrushPayload
+  | TimelapsePayload;
+
+// Asset visibility + moderation status mirror the backend `space_visibility`
+// and the moderation pipeline. Used so a later publish agent can build on these.
+export type SpaceVisibility = "private" | "friends" | "public" | "featured";
+export type AssetModerationStatus = "pending" | "approved" | "rejected" | "needs_changes";
 
 export type SpaceAsset = {
   id: string;
@@ -201,6 +240,25 @@ export type SpaceAsset = {
   previewUri?: string;
   createdAt: number;
   updatedAt: number;
+  // Typed brush-recipe slot (mirrors space_assets.brush_recipe). Set on brushes.
+  brush_recipe?: BrushRecipe;
+  // Sync-ready publish fields. Default to private/pending for new local assets.
+  visibility?: SpaceVisibility;
+  moderation_status?: AssetModerationStatus;
+};
+
+// --- Room Replay snapshot (mirrors backend replay_snapshots) ----------------
+export type ReplaySnapshotKind = "keyframe" | "event" | "manual";
+
+// Persisted index record. The PNG itself lives in a file (uri); the rest mirrors
+// replay_snapshots (seq, capturedAt, kind, width, height) so it is sync-ready.
+export type ReplaySnapshot = {
+  seq: number;
+  uri: string;
+  kind: ReplaySnapshotKind;
+  width: number;
+  height: number;
+  capturedAt: number;
 };
 
 export type BrushSettings = {

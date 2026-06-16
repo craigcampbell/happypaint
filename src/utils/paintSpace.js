@@ -10,6 +10,10 @@
 //   - template  : payload { image, textureId } -> load as artwork base
 //   - palette   : payload { colors: string[] } -> load swatch colors
 //   - loop      : payload { frames: [{ image, durationMs }] } -> load frames
+//   - brush     : payload { brush_recipe, tags } -> apply as the current brush
+//                 (mirrors space_assets.brush_recipe; carries visibility +
+//                  moderation_status so the separate publish pipeline can build
+//                  on it)
 
 import { idbGetKV, idbSetKV, isIdbAvailable } from "./idb";
 
@@ -24,6 +28,7 @@ export const ASSET_KINDS = [
   { id: "template", label: "Templates" },
   { id: "palette", label: "Palettes" },
   { id: "loop", label: "Loops" },
+  { id: "brush", label: "Brushes" },
 ];
 
 let idSeed = 0;
@@ -120,7 +125,11 @@ export async function savePaintSpace(assets) {
 }
 
 // Build a sync-ready asset record. payload/thumbnail shape mirrors space_assets.
-export function createAsset({ kind, title, payload, thumbnail = "" }) {
+// `extra` carries any additional sync-ready columns the asset kind needs, e.g.
+// brushes pass { brush_recipe, visibility, moderation_status } to mirror the
+// typed space_assets.brush_recipe slot and the moderation/visibility gate the
+// (separate) publish pipeline will use.
+export function createAsset({ kind, title, payload, thumbnail = "", ...extra }) {
   return {
     id: nextAssetId(),
     kind,
@@ -128,11 +137,12 @@ export function createAsset({ kind, title, payload, thumbnail = "" }) {
     payload: payload || {},
     thumbnail,
     createdAt: new Date().toISOString(),
+    ...extra,
   };
 }
 
 function defaultTitleFor(kind) {
-  const map = { sticker: "Sticker", template: "Template", palette: "Palette", loop: "Loop" };
+  const map = { sticker: "Sticker", template: "Template", palette: "Palette", loop: "Loop", brush: "Brush" };
   return map[kind] || "Asset";
 }
 

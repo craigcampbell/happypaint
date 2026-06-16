@@ -32,12 +32,14 @@ type Props = {
   onApplyLoop: (asset: SpaceAsset, payload: LoopPayload) => void;
 };
 
-const KIND_ORDER: PaintSpaceKind[] = ["sticker", "template", "loop", "palette"];
+const KIND_ORDER: PaintSpaceKind[] = ["sticker", "template", "loop", "palette", "brush", "timelapse"];
 const KIND_LABEL: Record<PaintSpaceKind, string> = {
   sticker: "Stickers",
   template: "Templates",
   loop: "Loops",
-  palette: "Palettes"
+  palette: "Palettes",
+  brush: "Brushes",
+  timelapse: "Timelapses"
 };
 
 export function PaintSpaceScreen({ onBack, onApplySticker, onApplyPalette, onApplyTemplate, onApplyLoop }: Props) {
@@ -73,8 +75,15 @@ export function PaintSpaceScreen({ onBack, onApplySticker, onApplyPalette, onApp
         onApplyPalette(asset.payload as PalettePayload);
       } else if (asset.kind === "template") {
         onApplyTemplate(asset, asset.payload as TemplatePayload);
-      } else {
+      } else if (asset.kind === "loop") {
         onApplyLoop(asset, asset.payload as LoopPayload);
+      } else if (asset.kind === "brush") {
+        // Brushes are applied from Brush Studio (live preview + recipe). Point
+        // the user there rather than applying blindly from the locker.
+        Alert.alert("Brush in your locker", "Open Brush Studio from the studio to preview and apply this brush.");
+      } else {
+        // Timelapse exports are saved clips; there is no in-studio "apply".
+        Alert.alert("Timelapse saved", "Share it from the Replay screen any time.");
       }
     },
     [onApplyLoop, onApplyPalette, onApplySticker, onApplyTemplate]
