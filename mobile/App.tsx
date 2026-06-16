@@ -4,12 +4,29 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
 import { makeId } from "./src/ids";
+import { CreatorDashboardScreen } from "./src/components/CreatorDashboardScreen";
 import { DiscoverScreen } from "./src/components/DiscoverScreen";
 import { GalleryScreen } from "./src/components/GalleryScreen";
 import { PaintSpaceScreen } from "./src/components/PaintSpaceScreen";
 import { SettingsScreen } from "./src/components/SettingsScreen";
+import { StoreScreen } from "./src/components/StoreScreen";
 import { StudioScreen } from "./src/components/StudioScreen";
 import { TogetherScreen } from "./src/components/TogetherScreen";
+import { WalletScreen } from "./src/components/WalletScreen";
+import {
+  creditDrops,
+  emptyState,
+  hasEntitlement,
+  loadEconomy,
+  migrateLegacyStudioPass,
+  saveEconomy,
+  sendTip,
+  spendDrops,
+  type DropProduct,
+  type EconomyState,
+  type StoreItem
+} from "./src/economy";
+import { loadSpaceAssets } from "./src/paintSpace";
 import {
   deleteProject,
   ensureStorageReady,
@@ -24,6 +41,7 @@ import type {
   Frame,
   LoopPayload,
   PalettePayload,
+  SpaceAsset,
   StickerPayload,
   TemplatePayload,
   ToolMode
@@ -96,6 +114,8 @@ export default function App() {
   const [projects, setProjects] = useState<DrawingProject[]>([]);
   const [currentProject, setCurrentProject] = useState<DrawingProject | null>(null);
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
+  const [economy, setEconomy] = useState<EconomyState>(emptyState);
+  const [spaceAssets, setSpaceAssets] = useState<SpaceAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingJoinCode, setPendingJoinCode] = useState("");
   const [pendingSticker, setPendingSticker] = useState<StickerPayload | null>(null);
@@ -112,18 +132,35 @@ export default function App() {
 
     async function boot() {
       await ensureStorageReady();
-      const [storedProjects, storedSettings] = await Promise.all([
+      const [storedProjects, storedSettings, storedEconomy, storedAssets] = await Promise.all([
         loadProjects(),
-        loadStoredSettings<AppSettings>(INITIAL_SETTINGS)
+        loadStoredSettings<AppSettings>(INITIAL_SETTINGS),
+        loadEconomy(),
+        loadSpaceAssets()
       ]);
 
       if (!mounted) {
         return;
       }
 
+      // Migrate the legacy `premiumPreview` flag (the old "Drops preview"
+      // placeholder) into a real mock entitlement: owning the Creator Brushes
+      // pack + the "studio" entitlement, recorded honestly in the ledger. Then
+      // clear the flag so the migration runs once.
+      const migration = migrateLegacyStudioPass(storedEconomy, storedSettings.premiumPreview);
+      let nextEconomy = migration.state;
+      let nextSettings = storedSettings;
+      if (migration.changed) {
+        await saveEconomy(nextEconomy);
+        nextSettings = { ...storedSettings, premiumPreview: false };
+        await saveStoredSettings(nextSettings);
+      }
+
       setProjects(storedProjects);
       projectsRef.current = storedProjects;
-      setSettings(storedSettings);
+      setSettings(nextSettings);
+      setEconomy(nextEconomy);
+      setSpaceAssets(storedAssets);
       setLoading(false);
     }
 
@@ -206,6 +243,73 @@ export default function App() {
     setSettings(nextSettings);
     await saveStoredSettings(nextSettings);
   }, []);
+
+  // Refresh the Paint Space locker when opening the Creator dashboard so "My
+  // packs" reflects assets saved since boot.
+  useEffect(() => {
+    if (mode !== "creator") {
+      return;
+    }
+    let active = true;
+    void loadSpaceAssets().then((assets) => {
+      if (active) {
+        setSpaceAssets(assets);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [mode]);
+
+  // --- Economy actions (mock; no real payments / network) --------------------
+  const persistEconomy = useCallback(async (next: EconomyState) => {
+    setEconomy(next);
+    await saveEconomy(next);
+  }, []);
+
+  // Mock "purchase" of a Drop product: credits Drops to the wallet ledger. A
+  // real build would verify an App Store / Google Play receipt first.
+  const buyDrops = useCallback(
+    (product: DropProduct) => {
+      const next = creditDrops(economy, product);
+      void persistEconomy(next);
+      Alert.alert("Drops added (preview)", `Credited ${product.drop_amount} Drops. No real charge was made.`);
+    },
+    [economy, persistEconomy]
+  );
+
+  // Spend Drops on a store item; blocked when the balance is insufficient,
+  // idempotent once owned. Owning an item grants its entitlement.
+  const buyItem = useCallback(
+    (item: StoreItem) => {
+      const result = spendDrops(economy, item);
+      if (!result.ok) {
+        if (result.reason === "insufficient") {
+          Alert.alert("Not enough Drops", `${item.title} costs ${item.price_drops} Drops. Get more Drops to unlock it.`);
+        }
+        return;
+      }
+      void persistEconomy(result.state);
+      Alert.alert("Unlocked", `${item.title} is now yours.`);
+    },
+    [economy, persistEconomy]
+  );
+
+  // Send a Drops tip; spend lands in the locked creator balance (Phase 1).
+  const tipCreator = useCallback(
+    (amount: number) => {
+      const result = sendTip(economy, { amount, sourceType: "gallery_post", receiverName: "Creator" });
+      if (!result.ok) {
+        Alert.alert("Not enough Drops", `A ${amount} Drops tip needs more Drops in your wallet.`);
+        return;
+      }
+      void persistEconomy(result.state);
+      Alert.alert("Tip sent (preview)", `${amount} Drops moved into the locked creator balance.`);
+    },
+    [economy, persistEconomy]
+  );
+
+  const hasStudioTier = hasEntitlement(economy, "studio");
 
   const createProject = useCallback(async () => {
     const project = makeProject();
@@ -342,13 +446,14 @@ export default function App() {
               void flushPendingSave();
               setMode("gallery");
             }}
+            hasStudioTier={hasStudioTier}
             onOpenPaintSpace={() => setMode("paintspace")}
             onOpenSettings={() => setMode("settings")}
+            onOpenStore={() => setMode("store")}
             onProjectChange={persistProject}
             onSettingsChange={(next) => void updateSettings({ ...settings, ...next })}
             onStickerConsumed={() => setPendingSticker(null)}
             pendingSticker={pendingSticker}
-            premiumPreview={settings.premiumPreview}
             project={currentProject}
             settings={settings}
           />
@@ -369,10 +474,35 @@ export default function App() {
         {mode === "settings" ? (
           <SettingsScreen
             calmMode={settings.calmMode}
+            dropsBalance={economy.wallet.drops_balance}
             onBack={() => setMode(currentProject ? "studio" : "gallery")}
+            onOpenCreator={() => setMode("creator")}
+            onOpenStore={() => setMode("store")}
+            onOpenWallet={() => setMode("wallet")}
             onToggleCalm={(calmMode) => void updateSettings({ ...settings, calmMode })}
-            onTogglePremiumPreview={(premiumPreview) => void updateSettings({ ...settings, premiumPreview })}
-            premiumPreview={settings.premiumPreview}
+          />
+        ) : null}
+
+        {mode === "wallet" ? (
+          <WalletScreen economy={economy} onBack={() => setMode("settings")} onOpenStore={() => setMode("store")} />
+        ) : null}
+
+        {mode === "store" ? (
+          <StoreScreen
+            economy={economy}
+            onBack={() => setMode(currentProject ? "studio" : "settings")}
+            onBuyDrops={buyDrops}
+            onBuyItem={buyItem}
+            onSendTip={tipCreator}
+          />
+        ) : null}
+
+        {mode === "creator" ? (
+          <CreatorDashboardScreen
+            economy={economy}
+            paintSpaceAssets={spaceAssets}
+            onBack={() => setMode("settings")}
+            onOpenWallet={() => setMode("wallet")}
           />
         ) : null}
 

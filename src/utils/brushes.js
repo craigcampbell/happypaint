@@ -84,21 +84,6 @@ export const paletteCatalog = [
   },
 ];
 
-export const studioPacks = [
-  {
-    id: "creator-brushes",
-    title: "Creator Brushes",
-    price: "150 Drops",
-    perks: ["Glow brush", "Night paper", "Poster palette"],
-  },
-  {
-    id: "export-plus",
-    title: "Export Plus",
-    price: "250 Drops",
-    perks: ["Transparent PNG", "Wallpaper presets", "Large print export"],
-  },
-];
-
 export function getBrush(id) {
   return brushCatalog.find((brush) => brush.id === id) || brushCatalog[0];
 }

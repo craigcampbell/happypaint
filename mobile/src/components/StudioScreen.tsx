@@ -118,11 +118,14 @@ import { IconButton } from "./IconButton";
 
 type Props = {
   calmMode: boolean;
-  premiumPreview: boolean;
+  // Studio-tier brushes/papers (Glow, Night) unlock via owning the Creator
+  // Brushes pack (the "studio" entitlement). A locked tap routes to the Store.
+  hasStudioTier: boolean;
   project: DrawingProject;
   settings: BrushSettings;
   onBack: () => void;
   onOpenSettings: () => void;
+  onOpenStore: () => void;
   onOpenPaintSpace: () => void;
   onProjectChange: (project: DrawingProject) => void;
   onSettingsChange: (settings: BrushSettings) => void;
@@ -689,11 +692,12 @@ const LiveStrokeLayer = forwardRef<LiveStrokeHandle, LiveStrokeLayerProps>(funct
 
 export function StudioScreen({
   calmMode,
-  premiumPreview,
+  hasStudioTier,
   project,
   settings,
   onBack,
   onOpenSettings,
+  onOpenStore,
   onOpenPaintSpace,
   onProjectChange,
   onSettingsChange,
@@ -2194,8 +2198,15 @@ export function StudioScreen({
               accessibilityState={{ selected: settings.brush === brush.id }}
               key={brush.id}
               onPress={() => {
-                if (brush.tier === "studio" && !premiumPreview) {
-                  Alert.alert("Drops preview", "Turn on Drops preview in Settings to try this pack placeholder.");
+                if (brush.tier === "studio" && !hasStudioTier) {
+                  Alert.alert(
+                    "Studio pack",
+                    "Unlock the Glow brush and studio tools with the Creator Brushes pack in the Store.",
+                    [
+                      { text: "Not now", style: "cancel" },
+                      { text: "Open Store", onPress: onOpenStore }
+                    ]
+                  );
                   return;
                 }
                 updateSettings({ brush: brush.id as BrushId, tool: "brush" });
@@ -2204,7 +2215,7 @@ export function StudioScreen({
             >
               <RNText style={[styles.segmentText, settings.brush === brush.id && settings.tool === "brush" && styles.segmentTextActive]}>
                 {brush.label}
-                {brush.tier === "studio" && !premiumPreview ? " +" : ""}
+                {brush.tier === "studio" && !hasStudioTier ? " +" : ""}
               </RNText>
             </Pressable>
           ))}
@@ -2321,8 +2332,15 @@ export function StudioScreen({
               accessibilityState={{ selected: settings.texture === texture.id }}
               key={texture.id}
               onPress={() => {
-                if (texture.tier === "studio" && !premiumPreview) {
-                  Alert.alert("Drops preview", "Turn on Drops preview in Settings to try this paper placeholder.");
+                if (texture.tier === "studio" && !hasStudioTier) {
+                  Alert.alert(
+                    "Studio pack",
+                    "Unlock the Night paper and studio papers with the Creator Brushes pack in the Store.",
+                    [
+                      { text: "Not now", style: "cancel" },
+                      { text: "Open Store", onPress: onOpenStore }
+                    ]
+                  );
                   return;
                 }
                 updateSettings({ texture: texture.id as TextureId });
@@ -2331,7 +2349,7 @@ export function StudioScreen({
             >
               <RNText style={[styles.segmentText, settings.texture === texture.id && styles.segmentTextActive]}>
                 {texture.label}
-                {texture.tier === "studio" && !premiumPreview ? " +" : ""}
+                {texture.tier === "studio" && !hasStudioTier ? " +" : ""}
               </RNText>
             </Pressable>
           ))}

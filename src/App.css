@@ -629,6 +629,171 @@ button:disabled {
   font-weight: 700;
 }
 
+/* ---- Economy (Wallet / Store / Creator) ---- */
+
+.economy-balance-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #174c4d;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.economy-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.economy-tip-row {
+  display: grid;
+  gap: 6px;
+}
+
+.economy-tip-row > span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #43515d;
+}
+
+.economy-tip-presets {
+  display: flex;
+  gap: 6px;
+}
+
+.tip-chip {
+  flex: 1;
+  min-height: 34px;
+  font-weight: 900;
+}
+
+.economy-note {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #5f6b75;
+}
+
+.economy-rail-note {
+  font-size: 0.76rem;
+}
+
+.wallet-modal,
+.store-modal,
+.creator-modal {
+  width: min(720px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.wallet-balances,
+.creator-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wallet-balance,
+.creator-stat {
+  display: grid;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid #c3cdd7;
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.wallet-balance strong,
+.creator-stat strong {
+  font-size: 1.4rem;
+  color: #174c4d;
+}
+
+.wallet-balance-label,
+.creator-stat > span {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #5f6b75;
+}
+
+.wallet-balance small,
+.creator-stat small {
+  font-size: 0.74rem;
+  color: #7a868f;
+}
+
+.wallet-section h3,
+.store-section h3,
+.creator-section h3 {
+  margin: 0 0 8px;
+}
+
+.wallet-activity,
+.creator-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.wallet-activity-row,
+.creator-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid #e1e7ec;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.wallet-activity-row small,
+.creator-list-row small {
+  display: block;
+  font-size: 0.72rem;
+  color: #7a868f;
+}
+
+.wallet-amount {
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.wallet-amount.is-credit {
+  color: #15803d;
+}
+
+.wallet-amount.is-debit {
+  color: #b91c1c;
+}
+
+.store-section {
+  display: grid;
+  gap: 10px;
+}
+
+.store-item-card .store-item-desc {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #43515d;
+}
+
+.store-money {
+  font-weight: 700;
+  color: #7a868f;
+}
+
+.payout-locked button:disabled,
+.store-item-card button:disabled,
+.creator-section button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .ps-empty {
   min-height: 120px;
 }

@@ -71,10 +71,12 @@ Timelapse export, room replay of stroke stream, "remix from timestamp," before/a
 ### Bet #7 — AI Assist (safety-gated)  🟥
 Palette-from-theme, kid-safe prompt cards, sketch→line cleanup, brush-recipe from text. Needs AI policy + consent + generated-asset moderation queue first.
 
-### Economy foundation — Drops & Kudos  🟥 (schema-first)
-Replaces today's "Demo Drops" placeholder toggle with real model.
-- **Backend**: `wallets`, `wallet_ledger_entries` (append-only), `drop_products`, `purchase_receipts`, `asset_products`, `tips`, `creator_payout_accounts`, `creator_payouts`, `economy_admin_actions` + entitlement flags.
-- **Web/Mobile**: wallet UI, store, creator dashboard (mock until purchases wired).
+### Economy foundation — Drops & Kudos  🟩 (schema + mock UI done; real IAP deferred)
+Replaced the "Demo Drops" / "premiumPreview" placeholders with a real model.
+- 🟩 **Backend**: `wallets`, `wallet_ledger_entries` (append-only), `drop_products`, `purchase_receipts`, `asset_products`, `tips`, `creator_payout_accounts`, `creator_payouts`, `economy_admin_actions` + entitlement flags.
+- 🟩 **Web**: `utils/economy.js` (ledger-derived balances, IndexedDB), WalletPanel/StorePanel/CreatorDashboard; studio-tier unlock via entitlement; legacy `studio-pass` migrated; compliance copy.
+- 🟩 **Mobile**: `economy.ts` (AsyncStorage), Wallet/Store/CreatorDashboard screens; locked tools route to Store; legacy `premiumPreview` migrated; App Store/Play IAP + parental-gate + no-loot-box copy.
+- 🟥 **Deferred**: real IAP (App Store/Play Billing) + receipt verification + payout flows; admin economy ledger surface; non-`studio` entitlement grants (themes/tokens) not yet consumed by features.
 
 ### Bet #8 — Discord Activity Pilot  ⬛ (external surface, late-stage)
 

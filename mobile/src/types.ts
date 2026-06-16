@@ -2,7 +2,16 @@ export type BrushId = "marker" | "pencil" | "paint" | "spray" | "eraser" | "glow
 
 export type TextureId = "linen" | "canvas" | "smooth" | "night";
 
-export type ToolMode = "gallery" | "studio" | "settings" | "together" | "discover" | "paintspace";
+export type ToolMode =
+  | "gallery"
+  | "studio"
+  | "settings"
+  | "together"
+  | "discover"
+  | "paintspace"
+  | "wallet"
+  | "store"
+  | "creator";
 
 // The active studio tool. "brush" / "eraser" draw freehand strokes (the brush
 // itself is chosen via BrushSettings.brush). The others place layer items.

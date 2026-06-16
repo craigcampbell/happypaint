@@ -5,7 +5,6 @@ import {
   getTexture,
   paletteCatalog,
   paperTextures,
-  studioPacks,
 } from "./utils/brushes";
 import {
   CANVAS_WIDTH,
@@ -40,9 +39,22 @@ import {
   renameAsset as renamePaintSpaceAsset,
   savePaintSpace,
 } from "./utils/paintSpace";
+import {
+  TIP_PRESETS,
+  creditDrops,
+  hasEntitlement,
+  loadEconomy,
+  migrateLegacyStudioPass,
+  saveEconomy,
+  sendTip,
+  spendDrops,
+} from "./utils/economy";
 import LayerPanel from "./components/LayerPanel";
 import FrameStrip from "./components/FrameStrip";
 import PaintSpacePanel from "./components/PaintSpacePanel";
+import WalletPanel from "./components/WalletPanel";
+import StorePanel from "./components/StorePanel";
+import CreatorDashboard from "./components/CreatorDashboard";
 import MarketingSite from "./components/MarketingSite";
 import TogetherPanel from "./components/TogetherPanel";
 import AdminConsole from "./components/AdminConsole";
@@ -94,14 +106,6 @@ function readJson(key, fallback) {
     return value ? JSON.parse(value) : fallback;
   } catch {
     return fallback;
-  }
-}
-
-function writeJson(key, value) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Local storage can fill up with image data. The app keeps running even if a save is skipped.
   }
 }
 
@@ -282,8 +286,15 @@ function StudioApp({ initialJoinCode = "" }) {
   const [status, setStatus] = useState("Ready");
   const [historyCount, setHistoryCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
-  const [studioUnlocked, setStudioUnlocked] = useState(false);
-  const [showStudio, setShowStudio] = useState(false);
+  // Economy state (mock wallet, ledger, store ownership, entitlements). Loaded
+  // async from IndexedDB. The studio brush/paper tier now unlocks via the
+  // "studio" entitlement (owning the Creator Brushes pack) instead of a boolean.
+  const [economy, setEconomy] = useState(null);
+  const [showWallet, setShowWallet] = useState(false);
+  const [showStore, setShowStore] = useState(false);
+  const [showCreator, setShowCreator] = useState(false);
+
+  const studioUnlocked = hasEntitlement(economy, "studio");
 
   const selectedTextureMeta = useMemo(() => getTexture(selectedTexture), [selectedTexture]);
   const activePalette = paletteCatalog[studioUnlocked ? 2 : 0];
@@ -1020,8 +1031,8 @@ function StudioApp({ initialJoinCode = "" }) {
       const brush = brushCatalog.find((item) => item.id === brushId);
 
       if (brush?.tier === "studio" && !studioUnlocked) {
-        setShowStudio(true);
-        setStatus("Studio brush locked");
+        setShowStore(true);
+        setStatus("Studio brush — unlock with the Creator Brushes pack");
         return;
       }
 
@@ -1036,8 +1047,8 @@ function StudioApp({ initialJoinCode = "" }) {
       const texture = paperTextures.find((item) => item.id === textureId);
 
       if (texture?.tier === "studio" && !studioUnlocked) {
-        setShowStudio(true);
-        setStatus("Studio paper locked");
+        setShowStore(true);
+        setStatus("Studio paper — unlock with the Creator Brushes pack");
         return;
       }
 
@@ -2081,8 +2092,25 @@ function StudioApp({ initialJoinCode = "" }) {
     redoRef.current = [];
     updateHistoryCounts();
 
-    const savedStudio = readJson(STORAGE_KEYS.studio, false);
-    setStudioUnlocked(Boolean(savedStudio));
+    // Economy loads async from IndexedDB. A legacy `studio-pass` boolean (the old
+    // Demo Drops toggle) is migrated forward into a mock entitlement: owning the
+    // Creator Brushes pack grants the "studio" tier, so studio brushes/paper keep
+    // unlocking. The legacy localStorage key is then cleared.
+    loadEconomy().then((loaded) => {
+      const legacyStudio = readJson(STORAGE_KEYS.studio, false);
+      const { state: migrated, changed } = migrateLegacyStudioPass(loaded, Boolean(legacyStudio));
+      setEconomy(migrated);
+      if (changed) {
+        saveEconomy(migrated).catch(() => {});
+      }
+      if (legacyStudio) {
+        try {
+          window.localStorage.removeItem(STORAGE_KEYS.studio);
+        } catch {
+          // Non-fatal.
+        }
+      }
+    });
 
     // Gallery + Paint Space now load async from IndexedDB (with one-time legacy
     // localStorage migration). The UI briefly shows empty until these resolve.
@@ -2220,9 +2248,56 @@ function StudioApp({ initialJoinCode = "" }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [redo, saveToGallery, undo]);
 
-  useEffect(() => {
-    writeJson(STORAGE_KEYS.studio, studioUnlocked);
-  }, [studioUnlocked]);
+  // Economy action handlers. Each applies a pure helper to the current economy
+  // state, persists to IndexedDB, and surfaces an honest status. All flows are
+  // mock: no real payment or network.
+  const persistEconomy = useCallback((next) => {
+    setEconomy(next);
+    saveEconomy(next).catch(() => setStatus("Couldn't save wallet"));
+  }, []);
+
+  const handleBuyDrops = useCallback(
+    (product) => {
+      if (!economy) {
+        return;
+      }
+      persistEconomy(creditDrops(economy, product));
+      setStatus(`Added ${product.drop_amount} Drops (mock)`);
+    },
+    [economy, persistEconomy],
+  );
+
+  const handleBuyItem = useCallback(
+    (item) => {
+      if (!economy) {
+        return;
+      }
+      const result = spendDrops(economy, item);
+      if (!result.ok) {
+        setStatus(result.reason === "owned" ? "Already owned" : "Not enough Drops");
+        return;
+      }
+      persistEconomy(result.state);
+      setStatus(`Bought ${item.title}`);
+    },
+    [economy, persistEconomy],
+  );
+
+  const handleSendTip = useCallback(
+    (amount, meta = {}) => {
+      if (!economy) {
+        return;
+      }
+      const result = sendTip(economy, { amount, ...meta });
+      if (!result.ok) {
+        setStatus("Not enough Drops to tip");
+        return;
+      }
+      persistEconomy(result.state);
+      setStatus(`Tipped ${amount} Drops`);
+    },
+    [economy, persistEconomy],
+  );
 
   const paperStyle = {
     "--paper-bg": selectedTextureMeta.background,
@@ -2514,16 +2589,43 @@ function StudioApp({ initialJoinCode = "" }) {
           ) : null}
         </section>
 
-        <section className="tool-section studio-pass">
+        <section className="tool-section economy-rail">
           <div className="section-title-row">
-            <h2>Drops Preview</h2>
-            <button type="button" onClick={() => setShowStudio(true)}>
-              View
+            <h2>Economy</h2>
+            <span className="economy-balance-chip">{economy ? economy.wallet.drops_balance : 0} Drops</span>
+          </div>
+          <div className="economy-actions">
+            <button type="button" onClick={() => setShowWallet(true)}>
+              Wallet
+            </button>
+            <button type="button" onClick={() => setShowStore(true)}>
+              Store
+            </button>
+            <button type="button" onClick={() => setShowCreator(true)}>
+              Creator
             </button>
           </div>
-          <button type="button" className="pass-toggle" onClick={() => setStudioUnlocked((value) => !value)}>
-            {studioUnlocked ? "Demo Drops On" : "Demo Drops Off"}
-          </button>
+          <div className="economy-tip-row">
+            <span>Tip this artwork</span>
+            <div className="economy-tip-presets">
+              {TIP_PRESETS.map((amount) => (
+                <button
+                  type="button"
+                  key={amount}
+                  className="tip-chip"
+                  onClick={() => handleSendTip(amount, { sourceType: "gallery_post", receiverName: "Featured artist" })}
+                  title={`Tip ${amount} Drops`}
+                >
+                  {amount}
+                </button>
+              ))}
+            </div>
+          </div>
+          {!studioUnlocked ? (
+            <p className="economy-note economy-rail-note">
+              Studio brushes &amp; paper unlock with the Creator Brushes pack in the Store.
+            </p>
+          ) : null}
         </section>
 
         <TogetherPanel initialJoinCode={initialJoinCode} onStatus={setStatus} />
@@ -2539,43 +2641,36 @@ function StudioApp({ initialJoinCode = "" }) {
         />
       ) : null}
 
-      {showStudio ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setShowStudio(false)}>
-          <section className="studio-modal" role="dialog" aria-modal="true" aria-labelledby="studio-pass-title" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-title-row">
-              <h2 id="studio-pass-title">Drops Pack Preview</h2>
-              <button type="button" onClick={() => setShowStudio(false)}>
-                Close
-              </button>
-            </div>
-            <div className="pack-grid">
-              {studioPacks.map((pack) => (
-                <article className="pack-card" key={pack.id}>
-                  <div>
-                    <h3>{pack.title}</h3>
-                    <p>{pack.price}</p>
-                  </div>
-                  <ul>
-                    {pack.perks.map((perk) => (
-                      <li key={perk}>{perk}</li>
-                    ))}
-                  </ul>
-                </article>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="primary-action full-width"
-              onClick={() => {
-                setStudioUnlocked(true);
-                setShowStudio(false);
-                setStatus("Demo Drops packs enabled");
-              }}
-            >
-              Enable Demo Packs
-            </button>
-          </section>
-        </div>
+      {showWallet && economy ? (
+        <WalletPanel
+          economy={economy}
+          onClose={() => setShowWallet(false)}
+          onOpenStore={() => {
+            setShowWallet(false);
+            setShowStore(true);
+          }}
+        />
+      ) : null}
+
+      {showStore && economy ? (
+        <StorePanel
+          economy={economy}
+          onClose={() => setShowStore(false)}
+          onBuyDrops={handleBuyDrops}
+          onBuyItem={handleBuyItem}
+        />
+      ) : null}
+
+      {showCreator && economy ? (
+        <CreatorDashboard
+          economy={economy}
+          paintSpaceAssets={paintSpaceAssets}
+          onClose={() => setShowCreator(false)}
+          onOpenWallet={() => {
+            setShowCreator(false);
+            setShowWallet(true);
+          }}
+        />
       ) : null}
     </main>
   );

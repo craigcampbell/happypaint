@@ -74,21 +74,6 @@ export const TEXTURES: Array<{ id: TextureId; label: string; background: string;
   { id: "night", label: "Night", background: "#171a22", tier: "studio" }
 ];
 
-export const STUDIO_PACKS = [
-  {
-    id: "creator-brushes",
-    title: "Creator Brushes",
-    price: "150 Drops",
-    perks: ["Glow brush", "Night paper", "Poster palette"]
-  },
-  {
-    id: "export-plus",
-    title: "Export Plus",
-    price: "250 Drops",
-    perks: ["Transparent PNG", "Wallpaper presets", "Large print export"]
-  }
-];
-
 export const DEFAULT_SETTINGS: BrushSettings = {
   brush: "marker",
   color: "#111827",

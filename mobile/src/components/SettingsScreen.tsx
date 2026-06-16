@@ -1,23 +1,26 @@
 import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
-import { ArrowLeft, Crown, Download, ShieldCheck } from "lucide-react-native";
+import { ArrowLeft, ChevronRight, Palette, ShieldCheck, Sparkles, Store, Wallet } from "lucide-react-native";
 
-import { STUDIO_PACKS } from "../constants";
 import { IconButton } from "./IconButton";
 
 type Props = {
   calmMode: boolean;
-  premiumPreview: boolean;
+  dropsBalance: number;
   onBack: () => void;
   onToggleCalm: (value: boolean) => void;
-  onTogglePremiumPreview: (value: boolean) => void;
+  onOpenWallet: () => void;
+  onOpenStore: () => void;
+  onOpenCreator: () => void;
 };
 
 export function SettingsScreen({
   calmMode,
-  premiumPreview,
+  dropsBalance,
   onBack,
   onToggleCalm,
-  onTogglePremiumPreview
+  onOpenWallet,
+  onOpenStore,
+  onOpenCreator
 }: Props) {
   return (
     <View style={styles.screen}>
@@ -37,63 +40,95 @@ export function SettingsScreen({
           </View>
           <Switch value={calmMode} onValueChange={onToggleCalm} />
         </View>
-
-        <View style={styles.row}>
-          <View style={styles.rowIcon}>
-            <Crown size={24} color="#92400e" />
-          </View>
-          <View style={styles.rowText}>
-            <Text style={styles.rowTitle}>Drops preview</Text>
-            <Text style={styles.rowBody}>Try locked brushes and papers while the future Drops wallet stays out of the way.</Text>
-          </View>
-          <Switch value={premiumPreview} onValueChange={onTogglePremiumPreview} />
-        </View>
       </View>
 
-      <Pressable style={styles.premiumPanel} accessibilityRole="button">
-        <View style={styles.premiumHeader}>
-          <Crown size={22} color="#92400e" />
-          <Text style={styles.premiumTitle}>Drops Packs</Text>
+      <Text style={styles.groupLabel}>Drops economy</Text>
+      <View style={styles.section}>
+        <Pressable accessibilityRole="button" style={styles.navRow} onPress={onOpenWallet}>
+          <View style={[styles.rowIcon, styles.dropsIcon]}>
+            <Wallet size={22} color="#0369a1" />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowTitle}>Wallet</Text>
+            <Text style={styles.rowBody}>{dropsBalance} Drops - balances, activity, and guardian controls.</Text>
+          </View>
+          <ChevronRight size={22} color="#94a3b8" />
+        </Pressable>
+
+        <Pressable accessibilityRole="button" style={styles.navRow} onPress={onOpenStore}>
+          <View style={[styles.rowIcon, styles.storeIcon]}>
+            <Store size={22} color="#92400e" />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowTitle}>Store</Text>
+            <Text style={styles.rowBody}>Get Drops, buy packs, room themes, tokens, and send tips.</Text>
+          </View>
+          <ChevronRight size={22} color="#94a3b8" />
+        </Pressable>
+
+        <Pressable accessibilityRole="button" style={[styles.navRow, styles.navRowLast]} onPress={onOpenCreator}>
+          <View style={[styles.rowIcon, styles.creatorIcon]}>
+            <Sparkles size={22} color="#5b21b6" />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.rowTitle}>Creator dashboard</Text>
+            <Text style={styles.rowBody}>Your packs, tips, Kudos, moderation, and payout status.</Text>
+          </View>
+          <ChevronRight size={22} color="#94a3b8" />
+        </Pressable>
+      </View>
+
+      <View style={styles.economyPanel}>
+        <View style={styles.economyHeader}>
+          <Palette size={20} color="#0f766e" />
+          <Text style={styles.economyTitle}>About Drops</Text>
         </View>
-        <Text style={styles.premiumText}>
-          Built for future Drops purchases, creator tips, community packs, room themes, and export upgrades.
+        <Text style={styles.economyText}>
+          Drops are a preview currency in this build - no real charges happen. When live, Drops are bought through the
+          App Store or Google Play and never expire. On kid accounts, purchasing is behind a parental gate. Kudos are
+          earned reputation and can't be cashed out.
         </Text>
-        <View style={styles.packGrid}>
-          {STUDIO_PACKS.map((pack) => (
-            <View key={pack.id} style={styles.packCard}>
-              <Text style={styles.packTitle}>{pack.title}</Text>
-              <Text style={styles.packPrice}>{pack.price}</Text>
-              <Text style={styles.packPerks}>{pack.perks.join(" • ")}</Text>
-            </View>
-          ))}
-        </View>
-        <View style={styles.disabledButton}>
-          <Download size={17} color="#6b7280" />
-          <Text style={styles.disabledButtonText}>Wallet flow placeholder</Text>
-        </View>
-      </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  disabledButton: {
+  creatorIcon: {
+    backgroundColor: "#f5f3ff"
+  },
+  dropsIcon: {
+    backgroundColor: "#f0f9ff"
+  },
+  economyHeader: {
     alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#f3f4f6",
-    borderColor: "#d1d5db",
+    flexDirection: "row",
+    gap: 8
+  },
+  economyPanel: {
+    backgroundColor: "#ecfdf5",
+    borderColor: "#a7f3d0",
     borderRadius: 8,
     borderWidth: 1,
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 14,
-    minHeight: 40,
-    paddingHorizontal: 12
+    padding: 16
   },
-  disabledButtonText: {
-    color: "#6b7280",
+  economyText: {
+    color: "#065f46",
     fontSize: 14,
-    fontWeight: "800"
+    lineHeight: 21,
+    marginTop: 8
+  },
+  economyTitle: {
+    color: "#065f46",
+    fontSize: 18,
+    fontWeight: "900"
+  },
+  groupLabel: {
+    color: "#64748b",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 8,
+    textTransform: "uppercase"
   },
   header: {
     alignItems: "center",
@@ -101,64 +136,19 @@ const styles = StyleSheet.create({
     gap: 14,
     marginBottom: 20
   },
-  premiumHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8
-  },
-  premiumPanel: {
-    backgroundColor: "#fffbeb",
-    borderColor: "#f59e0b",
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 16
-  },
-  premiumText: {
-    color: "#78350f",
-    fontSize: 15,
-    lineHeight: 22,
-    marginTop: 8
-  },
-  premiumTitle: {
-    color: "#78350f",
-    fontSize: 18,
-    fontWeight: "900"
-  },
-  packCard: {
-    backgroundColor: "#ffffff",
-    borderColor: "#fcd34d",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexBasis: "48%",
-    flexGrow: 1,
-    gap: 4,
-    padding: 10
-  },
-  packGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 14
-  },
-  packPerks: {
-    color: "#78350f",
-    fontSize: 12,
-    lineHeight: 17
-  },
-  packPrice: {
-    color: "#92400e",
-    fontSize: 14,
-    fontWeight: "900"
-  },
-  packTitle: {
-    color: "#78350f",
-    fontSize: 15,
-    fontWeight: "900"
-  },
-  row: {
+  navRow: {
     alignItems: "center",
     borderBottomColor: "#e5e7eb",
     borderBottomWidth: 1,
+    flexDirection: "row",
+    gap: 12,
+    paddingVertical: 14
+  },
+  navRowLast: {
+    borderBottomWidth: 0
+  },
+  row: {
+    alignItems: "center",
     flexDirection: "row",
     gap: 12,
     paddingVertical: 14
@@ -196,6 +186,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 16,
     paddingHorizontal: 14
+  },
+  storeIcon: {
+    backgroundColor: "#fffbeb"
   },
   title: {
     color: "#0f172a",
