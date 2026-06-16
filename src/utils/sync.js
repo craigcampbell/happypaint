@@ -235,7 +235,7 @@ let activeProfileId = null;
 
 // Upsert all local gallery + paint-space records to the server. Best-effort.
 async function pushNow() {
-  const client = getSupabaseClient();
+  const client = await getSupabaseClient();
   if (!client || !activeProfileId) {
     return;
   }
@@ -296,7 +296,7 @@ export function schedulePush() {
 // Returns true when local stores were (potentially) updated so callers can
 // refresh their in-memory state.
 export async function pull() {
-  const client = getSupabaseClient();
+  const client = await getSupabaseClient();
   if (!client || !activeProfileId) {
     return false;
   }

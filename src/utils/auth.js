@@ -15,10 +15,11 @@
 //     "Cloud sync not configured — your work is saved on this device." status and
 //     NO network calls are ever made. The Supabase client is never instantiated.
 //
-// Importing the SDK at module load is safe even when unconfigured — `createClient`
-// is only ever called from the configured path, so missing env can't crash.
-
-import { createClient } from "@supabase/supabase-js";
+// The @supabase/supabase-js SDK is loaded LAZILY via dynamic import() so it is
+// code-split into its own chunk instead of the main bundle. In local-only mode
+// the chunk is never requested at all; in configured mode it loads right after
+// the app shell (on the first getSession/onAuthStateChange), keeping first paint
+// off the ~145KB-gzip SDK.
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -37,37 +38,51 @@ export const OAUTH_PROVIDERS = [
   { id: "google", label: "Continue with Google" },
 ];
 
-// ---- Lazily-created Supabase client (configured mode only) ----
-// Created on first use so a static import of this module never touches the
-// network and never instantiates a client in local-only mode.
-let cachedClient = null;
+// ---- Lazily-loaded + lazily-created Supabase client (configured mode only) ----
+// The dynamic import() is what splits the SDK into its own chunk. Both the
+// module load and the client creation happen on first use, so local-only mode
+// never fetches the chunk or touches the network.
+let sdkPromise = null;
+function loadCreateClient() {
+  if (!sdkPromise) {
+    sdkPromise = import("@supabase/supabase-js").then((m) => m.createClient);
+  }
+  return sdkPromise;
+}
 
-// Returns the active Supabase client, or null when unconfigured. Never throws.
-export function getSupabaseClient() {
+let clientPromise = null;
+
+// Returns a Promise of the active Supabase client, or null when unconfigured /
+// on load failure. Never throws. Cached after the first successful load.
+export async function getSupabaseClient() {
   if (!isCloudConfigured) {
     return null;
   }
-  if (!cachedClient) {
-    try {
-      cachedClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true,
-        },
-      });
-    } catch {
-      cachedClient = null;
-    }
+  if (!clientPromise) {
+    clientPromise = (async () => {
+      try {
+        const createClient = await loadCreateClient();
+        return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+          },
+        });
+      } catch {
+        clientPromise = null; // allow a later call to retry the load
+        return null;
+      }
+    })();
   }
-  return cachedClient;
+  return clientPromise;
 }
 
 // The profile id used to key sync rows server-side is the authenticated user's
 // uid (profiles.id === auth.users.id via the handle_new_user trigger). Returns
 // null when signed out / unconfigured. Never throws.
 export async function getProfileId() {
-  const client = getSupabaseClient();
+  const client = await getSupabaseClient();
   if (!client) {
     return null;
   }
@@ -103,7 +118,7 @@ const LocalProvider = {
 // ---- SupabaseProvider — real auth, active when configured ----
 const SupabaseProvider = {
   async getSession() {
-    const client = getSupabaseClient();
+    const client = await getSupabaseClient();
     if (!client) {
       return null;
     }
@@ -111,28 +126,38 @@ const SupabaseProvider = {
     return data?.session ?? null;
   },
 
-  // Subscribe to Supabase auth state. Returns an unsubscribe function.
+  // Subscribe to Supabase auth state. Returns an unsubscribe function. The client
+  // loads asynchronously (dynamic import), so we attach once it's ready and the
+  // returned unsubscribe cancels whether or not the load has resolved yet.
   onAuthStateChange(handler) {
-    const client = getSupabaseClient();
-    if (!client) {
-      return () => {};
-    }
-    const { data } = client.auth.onAuthStateChange((_event, session) => {
-      handler(session ?? null);
-    });
-    return () => {
-      try {
-        data?.subscription?.unsubscribe?.();
-      } catch {
-        // ignore
+    let unsubscribe = () => {};
+    let cancelled = false;
+    (async () => {
+      const client = await getSupabaseClient();
+      if (!client || cancelled) {
+        return;
       }
+      const { data } = client.auth.onAuthStateChange((_event, session) => {
+        handler(session ?? null);
+      });
+      unsubscribe = () => {
+        try {
+          data?.subscription?.unsubscribe?.();
+        } catch {
+          // ignore
+        }
+      };
+    })();
+    return () => {
+      cancelled = true;
+      unsubscribe();
     };
   },
 
   // Email magic link (passwordless). The link returns the user to this origin,
   // where detectSessionInUrl completes the sign-in.
   async signInWithEmail(email) {
-    const client = getSupabaseClient();
+    const client = await getSupabaseClient();
     if (!client) {
       return { ok: false, message: LOCAL_ONLY_MESSAGE };
     }
@@ -150,7 +175,7 @@ const SupabaseProvider = {
   // detectSessionInUrl completes the sign-in. The provider must be enabled in
   // the Supabase dashboard.
   async signInWithProvider(provider) {
-    const client = getSupabaseClient();
+    const client = await getSupabaseClient();
     if (!client) {
       return { ok: false, message: LOCAL_ONLY_MESSAGE };
     }
@@ -166,7 +191,7 @@ const SupabaseProvider = {
   },
 
   async signOut() {
-    const client = getSupabaseClient();
+    const client = await getSupabaseClient();
     if (!client) {
       return { ok: true, message: "Signed out (local)." };
     }

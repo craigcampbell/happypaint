@@ -108,7 +108,7 @@ async function fileServerDeletion(request) {
     if (!session) {
       return { filed: false, reason: "signed-out" };
     }
-    const client = getSupabaseClient();
+    const client = await getSupabaseClient();
     if (!client) {
       return { filed: false, reason: "no-client" };
     }
