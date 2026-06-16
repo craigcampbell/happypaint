@@ -76,6 +76,7 @@ import CreatorDashboard from "./components/CreatorDashboard";
 import MarketingSite from "./components/MarketingSite";
 import TogetherPanel from "./components/TogetherPanel";
 import AdminConsole from "./components/AdminConsole";
+import AccountPanel from "./components/AccountPanel";
 import "./App.css";
 
 const MAX_HISTORY = 18;
@@ -327,6 +328,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [aiConsent, setAiConsent] = useState(null);
   const [showBrushStudio, setShowBrushStudio] = useState(false);
   const [showPublishPack, setShowPublishPack] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
   const savedBrushAssets = useMemo(
@@ -3069,6 +3071,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={() => setShowCreator(true)}>
               Creator
             </button>
+            <button type="button" onClick={() => setShowAccount(true)}>
+              Account
+            </button>
           </div>
           <div className="economy-tip-row">
             <span>Tip this artwork</span>
@@ -3112,6 +3117,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           assets={paintSpaceAssets}
           onClose={() => setShowPublishPack(false)}
           onPublish={handlePublishPack}
+        />
+      ) : null}
+
+      {showAccount ? (
+        <AccountPanel
+          onClose={() => setShowAccount(false)}
+          onDeleted={() => {
+            // All local stores were wiped — reload so every in-memory locker
+            // (draft, gallery, paint space, economy, AI) starts from empty.
+            window.setTimeout(() => window.location.reload(), 2500);
+          }}
         />
       ) : null}
 

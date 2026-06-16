@@ -488,6 +488,28 @@ export default function App() {
     [settings]
   );
 
+  // After in-app account deletion wiped all local data, reset every in-memory
+  // store back to a fresh first-launch state and return to an empty gallery.
+  // (The deletion helper already cleared AsyncStorage + the on-disk files.)
+  const handleDataWiped = useCallback(() => {
+    // Cancel any pending debounced save so it can't re-create a project file
+    // after the wipe.
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
+    projectsRef.current = [];
+    setProjects([]);
+    setCurrentProject(null);
+    setSettings(INITIAL_SETTINGS);
+    setEconomy(emptyState());
+    setSpaceAssets([]);
+    setPendingSticker(null);
+    setPendingJoinCode("");
+    setMode("gallery");
+  }, []);
+
   if (loading) {
     return (
       <GestureHandlerRootView style={styles.root}>
@@ -585,7 +607,9 @@ export default function App() {
           <SettingsScreen
             calmMode={settings.calmMode}
             dropsBalance={economy.wallet.drops_balance}
+            isChildAccount={economy.profile_kind === "child"}
             onBack={() => setMode(currentProject ? "studio" : "gallery")}
+            onDataWiped={handleDataWiped}
             onOpenCreator={() => setMode("creator")}
             onOpenStore={() => setMode("store")}
             onOpenWallet={() => setMode("wallet")}

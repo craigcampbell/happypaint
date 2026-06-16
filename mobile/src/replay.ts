@@ -137,6 +137,22 @@ export async function clearReplaySnapshots(replayId: string): Promise<void> {
   }
 }
 
+// Account-deletion helper: remove EVERY artwork's replay index key from
+// AsyncStorage (the prefix is shared, one key per artwork). The snapshot PNG
+// files live under the replay dir, which storage.wipeStorageFiles() removes;
+// this clears the lightweight indexes. Best-effort, never throws.
+export async function clearAllReplayIndexes(): Promise<void> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const replayKeys = keys.filter((key) => key.startsWith(REPLAY_INDEX_PREFIX));
+    if (replayKeys.length > 0) {
+      await AsyncStorage.multiRemove(replayKeys);
+    }
+  } catch {
+    // non-fatal — a failed clear must not abort the wider deletion
+  }
+}
+
 // A lightweight live recorder. The studio creates one per artwork. It does NOT
 // own a canvas — the caller hands it an async `capture()` that returns a
 // downscaled base64 PNG (export-lock-aware). The recorder writes each snapshot

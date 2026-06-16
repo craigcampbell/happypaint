@@ -348,6 +348,61 @@ export async function copyImportAsync(uri: string, projectId: string) {
   return destination;
 }
 
+// --- Account deletion: total local wipe (App Review requirement) -----------
+// AsyncStorage keys owned by this module (settings + project index + the
+// legacy/migration keys). Other stores own their own keys and export them.
+export const STORAGE_KEYS = [
+  SETTINGS_KEY,
+  PROJECTS_INDEX_KEY,
+  MIGRATION_FLAG_KEY,
+  LEGACY_PROJECTS_KEY
+];
+
+// Delete the entire on-disk Happy Paint document tree (project bodies, previews,
+// imports, paint-space asset bitmaps, and the replay snapshot dir) plus any
+// cache-dir exports we wrote (PNG/GIF/loop/timelapse). Best-effort and never
+// throws so the wipe can never half-abort — App Review requires deletion to be
+// reliable. Returns a list of the paths it attempted to remove (for an audit
+// summary in the confirmation UI).
+export async function wipeStorageFiles(): Promise<string[]> {
+  const removed: string[] = [];
+
+  // 1) The whole document tree (recursive delete removes projects/, replay/,
+  //    previews, imports, and space-asset bitmaps in one shot).
+  try {
+    const info = await FileSystem.getInfoAsync(DOCUMENT_ROOT);
+    if (info.exists) {
+      await FileSystem.deleteAsync(DOCUMENT_ROOT, { idempotent: true });
+    }
+    removed.push(DOCUMENT_ROOT);
+  } catch {
+    // keep going — a missing/locked dir must not abort the rest of the wipe
+  }
+
+  // 2) Cache-dir exports (shareable, regenerable PNG/GIF files we wrote). We
+  //    only delete our own namespaced files, not the whole cache dir.
+  const cacheDir = FileSystem.cacheDirectory;
+  if (cacheDir) {
+    try {
+      const entries = await FileSystem.readDirectoryAsync(cacheDir);
+      for (const name of entries) {
+        if (name.startsWith("happy-paint-")) {
+          try {
+            await FileSystem.deleteAsync(`${cacheDir}${name}`, { idempotent: true });
+            removed.push(`${cacheDir}${name}`);
+          } catch {
+            // keep going
+          }
+        }
+      }
+    } catch {
+      // keep going
+    }
+  }
+
+  return removed;
+}
+
 export async function loadStoredSettings<T>(fallback: T): Promise<T> {
   const raw = await AsyncStorage.getItem(SETTINGS_KEY);
   if (!raw) {

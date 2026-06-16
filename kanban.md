@@ -60,16 +60,29 @@ Brush Studio Lite + brush cards (name, thumbnail, tags, age rating, remix permis
 - **Backend**: extend asset model with brush-recipe `space_assets` of kind `brush`; moderation queue.
 - **Web/Mobile**: Brush Studio Lite editor; save/share brush recipe; apply community brush.
 
-### Bet #5 — Event Engine  🟥 (partially present)
-Daily prompt, weekend challenge, voting window, gallery winner. Lifecycle `draft→upcoming→live→voting→ended` exists in schema; needs UI loop + prompt packs.
+### Bet #4 — Community Brush Packs  🟩 (create/publish/browse/moderate done)
+- 🟩 Brush Studio Lite (create + live preview + save to locker) — web + mobile.
+- 🟩 Publish: group locker assets into `asset_pack`, submit-for-review (pending + moderation queue) — web + mobile.
+- 🟩 Browse approved public packs (brush cards, remix permission) + "Get" copies into locker (`asset_uses`) — web + mobile.
+- 🟩 Admin review queue (approve/reject/needs-changes + audit) in web AdminConsole; approval propagates to public browse.
+- 🟥 Deferred: creator marketplace/payouts (phased, guardian-gated).
 
-### Bet #6 — Room Replay & Timelapse  🟥
-Timelapse export, room replay of stroke stream, "remix from timestamp," before/after, process cards.
-- **Backend**: `stroke_events` exists — add replay snapshot/timelapse asset records.
-- **Web/Mobile**: record stroke stream, replay player, timelapse video/GIF export.
+### Bet #5 — Event Engine  🟩
+- 🟩 Lifecycle-aware events (upcoming/live/voting/ended) with countdown + per-phase CTA, daily prompt + weekend challenge cards, one-vote-per-profile, winner — web + mobile. Audience-gated (no adult events surfaced).
+- 🟥 Deferred: real-time event scheduling/backend wiring, anti-brigading server enforcement.
 
-### Bet #7 — AI Assist (safety-gated)  🟥
-Palette-from-theme, kid-safe prompt cards, sketch→line cleanup, brush-recipe from text. Needs AI policy + consent + generated-asset moderation queue first.
+### Bet #6 — Room Replay & Timelapse  🟩 (SNAPSHOT-BASED)
+Implemented as **periodic + event keyframe snapshots with temporal decimation** (NOT per-stroke) — bounded, correct for complex/long/multi-painter sessions, reuses the GIF encoder.
+- 🟩 **Backend**: `replay_snapshots` + `timelapse_assets` records (snapshot model documented).
+- 🟩 **Web**: snapshot recorder (IndexedDB Blobs), replay player (play/scrub/speed/remix-from-here), timelapse GIF via worker.
+- 🟩 **Mobile**: snapshot recorder (files, export-lock-aware), replay screen, timelapse GIF via encoder.
+- 🟥 Deferred: live multi-client room replay sync (needs backend realtime).
+
+### Bet #7 — AI Assist (safety-gated)  🟩 (local v1)
+- 🟩 **Policy**: `docs/ai-policy.md` (consent, allowed/avoided uses, moderation, gating, credits).
+- 🟩 **Backend**: `ai_consent`, `ai_generations` (moderation), `ai_credits` with under-13 guardian-gated consent RLS.
+- 🟩 **Web + mobile v1 (local, deterministic, no external API)**: palette-from-theme, kid-safe prompt cards, brush-recipe-from-text; consent-gated; outputs flagged pending moderation. Admin AI review queue (web).
+- 🟥 Deferred: server-side sketch cleanup / background gen behind credits + the moderation queue (per policy phases v2/v3).
 
 ### Economy foundation — Drops & Kudos  🟩 (schema + mock UI done; real IAP deferred)
 Replaced the "Demo Drops" / "premiumPreview" placeholders with a real model.
@@ -82,12 +95,12 @@ Replaced the "Demo Drops" / "premiumPreview" placeholders with a real model.
 
 ---
 
-## Cross-cutting / Compliance  🟥
-- Real cloud account/sync implementation (Supabase auth wiring)
-- Entitlements/subscriptions/purchase schema
-- AI safety policy + consent model
-- Creator payout / UGC licensing model (phased, guardian-gated)
-- In-app account deletion (App Review requirement)
+## Cross-cutting / Compliance
+- 🟨 **Cloud account/sync**: env-gated auth/sync provider abstraction (web `auth.js` + mobile `auth.ts`) with local-only fallback and a documented Supabase provider stub. Login is OPTIONAL (app fully works offline). 🟥 Real wiring needs a live Supabase instance + env vars (`@supabase/supabase-js` deferred: web Vite/Rolldown couldn't resolve a transitive dep; RN needs polyfills — provider interface is drop-in ready).
+- 🟩 **Entitlements/purchase schema** (in backend; mock economy UI on top).
+- 🟩 **AI safety policy + consent model** (`docs/ai-policy.md` + `ai_consent` + in-app consent gate w/ revoke + guardian gating for minors).
+- 🟥 **Creator payout / UGC licensing** (phased, guardian-gated) — deferred.
+- 🟩 **In-app account deletion** (App Review requirement): free, always-available flow that records an `account_deletion_requests` record and wipes ALL local stores (drafts/gallery/paint-space/economy/AI-consent/replay + project & replay files) — web + mobile.
 
 ## Reliability & Infra hardening (this session)  🟩
 - 🟩 **Mobile input → react-native-gesture-handler (v2.31.2).** Replaced PanResponder with `Gesture.Pan()` (UI-thread point fidelity) + `Gesture.Tap()` for fill/text; `maxPointers(1)` palm/multitouch rejection; root wrapped in `GestureHandlerRootView`. *(Future: UI-thread worklet rendering needs react-native-reanimated.)*

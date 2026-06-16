@@ -19,9 +19,12 @@
 
 import { createAsset, makeId } from "./paintSpace";
 
-const PACKS_STORAGE_KEY = "happypaint:brush-packs:v1";
-const QUEUE_STORAGE_KEY = "happypaint:asset-moderation-queue:v1";
-const USES_STORAGE_KEY = "happypaint:asset-uses:v1";
+export const PACKS_STORAGE_KEY = "happypaint:brush-packs:v1";
+export const QUEUE_STORAGE_KEY = "happypaint:asset-moderation-queue:v1";
+export const USES_STORAGE_KEY = "happypaint:asset-uses:v1";
+// Append-only staff audit log of pack/asset review decisions (mirrors
+// moderation_actions: actor, action_type, target_table, target_id, note, created_at).
+export const MOD_ACTIONS_STORAGE_KEY = "happypaint:asset-moderation-actions:v1";
 
 // Visibility options offered when publishing (mirrors space_visibility minus
 // 'featured', which is admin-assigned). Public requires review before it goes live.
@@ -181,6 +184,161 @@ export function readModerationQueue() {
 // asset_uses log (where a browsed asset was added/used).
 export function readAssetUses() {
   return readStore(USES_STORAGE_KEY);
+}
+
+// ---- Admin moderation (review side) ----------------------------------------
+// These mirror the staff Admin Console flow: a reviewer works the
+// asset_moderation_queue, approving / rejecting / requesting changes on each
+// submission. Decisions update the queue entry (status, reviewer, reason,
+// reviewed_at) AND the underlying pack (status + visibility) so an approved
+// public pack actually shows up in getBrowsablePacks(), and write an immutable
+// moderation_actions-shaped audit row. Local-only; sync-ready shapes.
+
+// A seed pending pack so the admin review queue is demonstrable even before any
+// local user has published one. Stored on first read so a real decision on it
+// persists. Shaped exactly like a published pack (asset_packs + items).
+const SEED_PENDING_PACK = {
+  id: "pack-pending-pixel-pop",
+  owner_profile_id: "seed-creator-juno",
+  authorSpace: "Juno's Space",
+  title: "Pixel Pop Brushes",
+  description: "Crunchy pixel and dot brushes for retro pixel art.",
+  tags: ["Pixel", "Retro", "Bold"],
+  visibility: "public",
+  version: 1,
+  status: "pending",
+  remix_permission: "public",
+  accent: "#ec4899",
+  items: [
+    seedBrush({
+      id: "seed-brush-pixel-dot",
+      title: "Pixel Dot",
+      tags: ["Pixel", "Retro"],
+      recipe: { baseBrush: "marker", size: 8, opacity: 1, variation: 0, glow: false, textured: false },
+    }),
+  ],
+  created_at: "2026-06-14T18:00:00.000Z",
+  updated_at: "2026-06-14T18:00:00.000Z",
+};
+
+// Ensure the seed pending pack + its queue entry exist once, so the admin queue
+// is never empty on a fresh device. Idempotent (keyed by the seed ids).
+function ensureSeededReviewQueue() {
+  const packs = readPublishedPacks();
+  const queue = readModerationQueue();
+  const hasPack = packs.some((pack) => pack.id === SEED_PENDING_PACK.id);
+  const hasEntry = queue.some((entry) => entry.target_id === SEED_PENDING_PACK.id);
+  if (hasPack && hasEntry) {
+    return;
+  }
+  if (!hasPack) {
+    writeStore(PACKS_STORAGE_KEY, [SEED_PENDING_PACK, ...packs]);
+  }
+  if (!hasEntry) {
+    const entry = {
+      id: makeId("modq"),
+      target_kind: "pack",
+      target_id: SEED_PENDING_PACK.id,
+      submitted_by: SEED_PENDING_PACK.owner_profile_id,
+      status: "pending",
+      reviewer_profile_id: null,
+      reason: null,
+      submitted_at: SEED_PENDING_PACK.created_at,
+      reviewed_at: null,
+    };
+    writeStore(QUEUE_STORAGE_KEY, [entry, ...queue]);
+  }
+}
+
+// The pending review queue, enriched with the pack each entry targets so the
+// console can show submitter + name + preview + tags. Seeds a demo item once so
+// the queue is observable end-to-end. Returns newest-first.
+export function getPendingPackReviews() {
+  ensureSeededReviewQueue();
+  const queue = readModerationQueue().filter((entry) => entry.status === "pending");
+  const packs = readPublishedPacks();
+  return queue.map((entry) => ({
+    ...entry,
+    pack: packs.find((pack) => pack.id === entry.target_id) || null,
+  }));
+}
+
+export function readModerationActions() {
+  return readStore(MOD_ACTIONS_STORAGE_KEY);
+}
+
+function appendModerationAction({ action_type, target_id, target_kind, note }) {
+  const action = {
+    id: makeId("modact"),
+    // moderation_actions has no asset-target enum yet, so we record the kind in
+    // a sync-ready shape: target_table names the asset table by kind.
+    actor_profile_id: "staff-local",
+    action_type,
+    target_table: target_kind === "pack" ? "asset_packs" : "space_assets",
+    target_id,
+    note: note || null,
+    created_at: new Date().toISOString(),
+  };
+  writeStore(MOD_ACTIONS_STORAGE_KEY, [action, ...readModerationActions()]);
+  return action;
+}
+
+// Review a submission. `decision` is 'approved' | 'rejected' | 'needs_changes'.
+// Updates the queue entry + the targeted pack, and writes a moderation_actions
+// audit row. Approval of a public pack sets visibility public + status approved
+// so getBrowsablePacks() surfaces it; reject/needs_changes pull it from browse.
+// Returns the updated queue entry (or null if not found).
+export function reviewPackSubmission(queueEntryId, decision, reason = "") {
+  const queue = readModerationQueue();
+  const entry = queue.find((item) => item.id === queueEntryId);
+  if (!entry) {
+    return null;
+  }
+  const reviewedAt = new Date().toISOString();
+  const nextEntry = {
+    ...entry,
+    status: decision,
+    reviewer_profile_id: "staff-local",
+    reason: reason || null,
+    reviewed_at: reviewedAt,
+  };
+  writeStore(
+    QUEUE_STORAGE_KEY,
+    queue.map((item) => (item.id === queueEntryId ? nextEntry : item)),
+  );
+
+  // Reflect the decision on the underlying pack so browse updates.
+  const packs = readPublishedPacks();
+  const nextPacks = packs.map((pack) => {
+    if (pack.id !== entry.target_id) {
+      return pack;
+    }
+    if (decision === "approved") {
+      // schema check: public/featured visibility requires status approved — now it is.
+      return { ...pack, status: "approved", updated_at: reviewedAt };
+    }
+    if (decision === "rejected") {
+      return { ...pack, status: "rejected", visibility: "private", updated_at: reviewedAt };
+    }
+    // needs_changes: bounce back to draft so it leaves browse + the owner can resubmit.
+    return { ...pack, status: "needs_changes", visibility: "private", updated_at: reviewedAt };
+  });
+  writeStore(PACKS_STORAGE_KEY, nextPacks);
+
+  const actionType =
+    decision === "approved"
+      ? "approve_asset"
+      : decision === "rejected"
+        ? "reject_asset"
+        : "request_asset_changes";
+  appendModerationAction({
+    action_type: actionType,
+    target_id: entry.target_id,
+    target_kind: entry.target_kind,
+    note: reason,
+  });
+
+  return nextEntry;
 }
 
 // Publish a pack from a set of locker assets. Builds an asset_packs row + its

@@ -14,6 +14,23 @@ import {
   roomReviewItems,
   verificationItems,
 } from "../utils/adminData";
+import { getPendingPackReviews, reviewPackSubmission } from "../utils/brushPacks";
+import { getPendingAiGenerations, reviewAiGeneration } from "../utils/aiGenerations";
+
+// Short, readable summary of an AI generation's output for the review row.
+function summarizeAiOutput(generation) {
+  if (generation.kind === "palette") {
+    return (generation.output?.colors || []).join(" ");
+  }
+  if (generation.kind === "brush_recipe") {
+    const recipe = generation.output?.brush_recipe || {};
+    return `${recipe.baseBrush || "brush"} · size ${recipe.size} · opacity ${recipe.opacity}`;
+  }
+  if (generation.kind === "prompt_card") {
+    return generation.output?.prompt || "";
+  }
+  return JSON.stringify(generation.output || {});
+}
 
 const filters = ["All", "Kid-safe", "Friends", "18+"];
 
@@ -27,6 +44,12 @@ export default function AdminConsole({ onNavigate }) {
   const [selectedMonitorRoom, setSelectedMonitorRoom] = useState(liveMonitorRooms[0]);
   const [observingRoom, setObservingRoom] = useState(null);
   const [adminLog, setAdminLog] = useState(["Admin console ready"]);
+
+  // Pending asset/pack review queue (asset_moderation_queue) + pending AI
+  // generations (ai_generations). Loaded from the local stores; decisions write
+  // through and we refresh the list so resolved items drop out.
+  const [packReviews, setPackReviews] = useState(() => getPendingPackReviews());
+  const [aiReviews, setAiReviews] = useState(() => getPendingAiGenerations());
 
   const filteredRooms = useMemo(() => {
     if (activeFilter === "All") {
@@ -50,6 +73,38 @@ export default function AdminConsole({ onNavigate }) {
   const endObservation = () => {
     logAction(`${observingRoom}: unseen observe ended`);
     setObservingRoom(null);
+  };
+
+  // Review a community pack submission. `decision` is approved | rejected |
+  // needs_changes. Approval propagates to the shared brushPacks store so the
+  // pack appears in public browse; all decisions write a moderation_actions
+  // audit row. We optionally collect a reason for reject / needs_changes.
+  const handlePackReview = (entry, decision) => {
+    let reason = "";
+    if (decision !== "approved") {
+      reason =
+        window.prompt(
+          decision === "rejected" ? "Reason for rejecting (optional):" : "What changes are needed?",
+        ) || "";
+    }
+    reviewPackSubmission(entry.id, decision, reason);
+    setPackReviews(getPendingPackReviews());
+    const name = entry.pack?.title || entry.target_id;
+    const verb =
+      decision === "approved" ? "approved — now public in browse" : decision === "rejected" ? "rejected" : "changes requested";
+    logAction(`${name}: pack ${verb}`);
+  };
+
+  // Review a pending AI generation. `decision` is approved | blocked. Writes the
+  // ai_generations moderation_status + a moderation_actions audit row.
+  const handleAiReview = (generation, decision) => {
+    let note = "";
+    if (decision === "blocked") {
+      note = window.prompt("Reason for blocking (optional):") || "";
+    }
+    reviewAiGeneration(generation.id, decision, note);
+    setAiReviews(getPendingAiGenerations());
+    logAction(`${generation.kind} ${generation.id.slice(0, 12)}: AI generation ${decision}`);
   };
 
   return (
@@ -158,6 +213,115 @@ export default function AdminConsole({ onNavigate }) {
               </article>
             ))}
           </div>
+        </div>
+
+        <div className="admin-panel pack-review-panel">
+          <div className="admin-panel-title">
+            <h2>Brush &amp; Pack Review</h2>
+            <span>{packReviews.length} pending</span>
+          </div>
+          <div className="admin-table-list">
+            {packReviews.length === 0 ? (
+              <p className="admin-note">No community packs waiting for review.</p>
+            ) : (
+              packReviews.map((entry) => (
+                <article key={entry.id} className="pack-review-row">
+                  <div className="pack-review-info">
+                    <span
+                      className="pack-review-preview"
+                      style={{ background: entry.pack?.accent || "#6366f1" }}
+                      aria-hidden="true"
+                    >
+                      {(entry.pack?.title || "?").slice(0, 1)}
+                    </span>
+                    <div>
+                      <strong>{entry.pack?.title || entry.target_id}</strong>
+                      <small>
+                        {entry.target_kind} · by {entry.pack?.authorSpace || entry.submitted_by} ·{" "}
+                        {(entry.pack?.items || []).length} asset(s)
+                      </small>
+                      <small className="pack-review-tags">
+                        {(entry.pack?.tags || []).join(", ") || "no tags"} · submitted{" "}
+                        {new Date(entry.submitted_at).toLocaleDateString()}
+                      </small>
+                    </div>
+                  </div>
+                  <div className="admin-action-row pack-review-actions">
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => handlePackReview(entry, "approved")}
+                    >
+                      Approve
+                    </button>
+                    <button type="button" onClick={() => handlePackReview(entry, "needs_changes")}>
+                      Request changes
+                    </button>
+                    <button type="button" onClick={() => handlePackReview(entry, "rejected")}>
+                      Reject
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+          <p className="admin-note">
+            Approving a public pack sets its visibility public + status approved, so it appears in the
+            community browse. Every decision writes an immutable moderation action.
+          </p>
+        </div>
+
+        <div className="admin-panel ai-review-panel">
+          <div className="admin-panel-title">
+            <h2>AI Generation Review</h2>
+            <span>{aiReviews.length} pending</span>
+          </div>
+          <div className="admin-table-list">
+            {aiReviews.length === 0 ? (
+              <p className="admin-note">No AI generations waiting for review.</p>
+            ) : (
+              aiReviews.map((generation) => (
+                <article key={generation.id} className="ai-review-row">
+                  <div>
+                    <strong>{generation.kind}</strong>
+                    <small>
+                      {generation.model ? generation.model : "local/deterministic"} · consent{" "}
+                      {generation.consent_version}
+                    </small>
+                    {generation.kind === "palette" ? (
+                      <span className="ai-review-swatches">
+                        {(generation.output?.colors || []).map((color, index) => (
+                          <span
+                            key={`${generation.id}-${index}`}
+                            className="ai-review-swatch"
+                            style={{ background: color }}
+                          />
+                        ))}
+                      </span>
+                    ) : (
+                      <small className="ai-review-output">{summarizeAiOutput(generation)}</small>
+                    )}
+                  </div>
+                  <div className="admin-action-row">
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => handleAiReview(generation, "approved")}
+                    >
+                      Approve
+                    </button>
+                    <button type="button" onClick={() => handleAiReview(generation, "blocked")}>
+                      Block
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+          <p className="admin-note">
+            Generated assets stay private to their creator while pending. Approve to allow sharing/saving;
+            blocked items are retained for audit but can&apos;t be reused. Clients can&apos;t self-approve.
+          </p>
         </div>
 
         <div className="admin-panel">
