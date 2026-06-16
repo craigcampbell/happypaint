@@ -1,25 +1,27 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { ArrowLeft, Eye, Heart, Search, Sparkles, Users } from "lucide-react-native";
+import { ArrowLeft, Eye, Heart, Search, Users } from "lucide-react-native";
 
 import {
   DISCOVER_TAGS,
   DISCOVERABLE_ROOMS,
   PUBLIC_GALLERY_PIECES,
-  TIMED_EVENTS,
-  type GalleryPiece,
-  type TimedEvent
+  type GalleryPiece
 } from "../discovery";
 import { roomPolicyFor } from "../social";
+import { BrushPackBrowse } from "./BrushPackBrowse";
+import { EventsPanel } from "./EventsPanel";
 import { IconButton } from "./IconButton";
 
 type Props = {
   onBack: () => void;
   onTogether: () => void;
+  // Open the studio for an event/prompt (optionally seeded later).
+  onEnterStudio: (prompt: string) => void;
 };
 
 type SearchableItem = {
-  title: string;
+  title?: string;
   tags?: string[];
   topic?: string;
   theme?: string;
@@ -58,24 +60,7 @@ function GalleryArt({ piece }: { piece: GalleryPiece }) {
   );
 }
 
-function EventRow({ event }: { event: TimedEvent }) {
-  return (
-    <View style={styles.eventCard}>
-      <View style={styles.eventTopline}>
-        <Text style={styles.statusPill}>{event.status}</Text>
-        <Text style={styles.eventTitle} numberOfLines={1}>
-          {event.title}
-        </Text>
-      </View>
-      <Text style={styles.eventTheme}>{event.theme}</Text>
-      <Text style={styles.meta}>
-        {event.window} · {event.roomCount} rooms · {event.galleryCount} posts
-      </Text>
-    </View>
-  );
-}
-
-export function DiscoverScreen({ onBack, onTogether }: Props) {
+export function DiscoverScreen({ onBack, onTogether, onEnterStudio }: Props) {
   const [query, setQuery] = useState("");
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [notice, setNotice] = useState("Browse and preview. Joining needs an invite or host approval.");
@@ -88,12 +73,15 @@ export function DiscoverScreen({ onBack, onTogether }: Props) {
     () => DISCOVERABLE_ROOMS.filter((room) => matchesSearch(room, query, activeTags)),
     [activeTags, query]
   );
-  const events = useMemo(
-    () => TIMED_EVENTS.filter((event) => matchesSearch(event, query, activeTags)),
-    [activeTags, query]
-  );
   const gallery = useMemo(
     () => PUBLIC_GALLERY_PIECES.filter((piece) => matchesSearch(piece, query, activeTags)),
+    [activeTags, query]
+  );
+
+  // Shared matcher for the panels (events + brush packs) so they honor the same
+  // search box + tag chips as the rest of discovery.
+  const matchesSearchItem = useCallback(
+    (item: SearchableItem) => matchesSearch(item, query, activeTags),
     [activeTags, query]
   );
 
@@ -197,16 +185,9 @@ export function DiscoverScreen({ onBack, onTogether }: Props) {
         })}
       </View>
 
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Sparkles size={20} color="#0f172a" strokeWidth={2.4} />
-          <Text style={styles.sectionTitle}>Timed Events</Text>
-          <Text style={styles.count}>{events.length}</Text>
-        </View>
-        {events.map((event) => (
-          <EventRow event={event} key={event.id} />
-        ))}
-      </View>
+      <EventsPanel matches={matchesSearchItem} onEnterStudio={onEnterStudio} />
+
+      <BrushPackBrowse matches={matchesSearchItem} />
 
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
@@ -260,30 +241,6 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     paddingHorizontal: 8,
     paddingVertical: 3
-  },
-  eventCard: {
-    backgroundColor: "#fbfdfd",
-    borderColor: "#dbe3ef",
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 7,
-    padding: 12
-  },
-  eventTheme: {
-    color: "#475569",
-    fontSize: 14,
-    lineHeight: 20
-  },
-  eventTitle: {
-    color: "#0f172a",
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "900"
-  },
-  eventTopline: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8
   },
   galleryArt: {
     backgroundColor: "#f8fafc",

@@ -41,8 +41,11 @@ function AssetCard({ asset, onUse, onRename, onDelete }) {
   );
 }
 
-export default function PaintSpacePanel({ assets, onClose, onUse, onRename, onDelete }) {
+export default function PaintSpacePanel({ assets, onClose, onUse, onRename, onDelete, onPublishPack }) {
   const groups = groupByKind(assets);
+  const hasPackable = assets.some((asset) =>
+    ["brush", "sticker", "palette", "template"].includes(asset.kind),
+  );
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -55,9 +58,16 @@ export default function PaintSpacePanel({ assets, onClose, onUse, onRename, onDe
       >
         <div className="modal-title-row">
           <h2 id="paint-space-title">Paint Space</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
+          <div className="modal-title-actions">
+            {hasPackable && onPublishPack ? (
+              <button type="button" onClick={onPublishPack} title="Group brushes into a community pack">
+                Publish a pack
+              </button>
+            ) : null}
+            <button type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
         </div>
         <p className="ps-subtitle">Your private locker of reusable stickers, templates, palettes, and loops.</p>
 

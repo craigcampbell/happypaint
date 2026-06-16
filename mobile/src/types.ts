@@ -231,6 +231,10 @@ export type SpaceAssetPayload =
 export type SpaceVisibility = "private" | "friends" | "public" | "featured";
 export type AssetModerationStatus = "pending" | "approved" | "rejected" | "needs_changes";
 
+// Remix permission for a published asset/pack (mirrors the backend
+// asset_remix_permission concept). Shown on community brush packs.
+export type RemixPermission = "none" | "friends" | "public";
+
 export type SpaceAsset = {
   id: string;
   kind: PaintSpaceKind;
@@ -245,6 +249,10 @@ export type SpaceAsset = {
   // Sync-ready publish fields. Default to private/pending for new local assets.
   visibility?: SpaceVisibility;
   moderation_status?: AssetModerationStatus;
+  // Set on community brushes (and copies pulled from a pack). Sync-ready.
+  remix_permission?: RemixPermission;
+  // When this asset was copied into the locker from a community pack.
+  from_pack_id?: string;
 };
 
 // --- Room Replay snapshot (mirrors backend replay_snapshots) ----------------

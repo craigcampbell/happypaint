@@ -62,12 +62,14 @@ import {
   saveAiConsent,
 } from "./utils/aiAssist";
 import { buildBrushAssetFields, recipeToBrushSettings } from "./utils/brushStudio";
+import { publishPack } from "./utils/brushPacks";
 import LayerPanel from "./components/LayerPanel";
 import FrameStrip from "./components/FrameStrip";
 import PaintSpacePanel from "./components/PaintSpacePanel";
 import ReplayPlayer from "./components/ReplayPlayer";
 import AiAssistPanel from "./components/AiAssistPanel";
 import BrushStudio from "./components/BrushStudio";
+import PublishPackModal from "./components/PublishPackModal";
 import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
@@ -197,7 +199,7 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function StudioApp({ initialJoinCode = "" }) {
+function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -324,6 +326,7 @@ function StudioApp({ initialJoinCode = "" }) {
   const [showAiAssist, setShowAiAssist] = useState(false);
   const [aiConsent, setAiConsent] = useState(null);
   const [showBrushStudio, setShowBrushStudio] = useState(false);
+  const [showPublishPack, setShowPublishPack] = useState(false);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
   const savedBrushAssets = useMemo(
@@ -2342,6 +2345,20 @@ function StudioApp({ initialJoinCode = "" }) {
     [persistPaintSpace],
   );
 
+  // Publish a community brush pack from selected locker assets. Submit-for-review
+  // sets the pack status pending + adds an asset_moderation_queue entry (mirrors
+  // the schema). Admin approval is a SEPARATE later agent, so the pack will not
+  // appear in browse until approved. Local/mock only.
+  const handlePublishPack = useCallback((request) => {
+    const { pack, queued } = publishPack(request);
+    setShowPublishPack(false);
+    if (queued) {
+      setStatus(`"${pack.title}" submitted for review (pending moderation)`);
+    } else {
+      setStatus(`"${pack.title}" saved as a private pack`);
+    }
+  }, []);
+
   const handleRenameAsset = useCallback(
     async (asset) => {
       const title = window.prompt("Rename asset:", asset.title);
@@ -2490,6 +2507,12 @@ function StudioApp({ initialJoinCode = "" }) {
     historyRef.current = [];
     redoRef.current = [];
     updateHistoryCounts();
+
+    // An event CTA can arrive with a prompt (/studio?prompt=…). Surface it so the
+    // artist sees what they came to draw.
+    if (initialPrompt) {
+      setStatus(`Prompt: ${initialPrompt}`);
+    }
 
     // Snapshot-based replay recorder. It paints downscaled composited snapshots
     // (via paintReplayComposite) on a debounced cadence while dirty + on events.
@@ -3080,6 +3103,15 @@ function StudioApp({ initialJoinCode = "" }) {
           onUse={handleUseAsset}
           onRename={handleRenameAsset}
           onDelete={handleDeleteAsset}
+          onPublishPack={() => setShowPublishPack(true)}
+        />
+      ) : null}
+
+      {showPublishPack ? (
+        <PublishPackModal
+          assets={paintSpaceAssets}
+          onClose={() => setShowPublishPack(false)}
+          onPublish={handlePublishPack}
         />
       ) : null}
 
@@ -3182,7 +3214,7 @@ export default function App() {
   }, []);
 
   if (path.startsWith("/studio")) {
-    return <StudioApp />;
+    return <StudioApp initialPrompt={readPromptParam()} />;
   }
 
   if (path.startsWith("/join")) {
@@ -3200,4 +3232,14 @@ export default function App() {
 function normalizePathCode(path) {
   const [, , code = ""] = path.split("/");
   return code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+}
+
+// Read an event prompt passed via /studio?prompt=… (the Event Engine "live" CTA).
+function readPromptParam() {
+  try {
+    const value = new URLSearchParams(window.location.search).get("prompt") || "";
+    return value.slice(0, 180);
+  } catch {
+    return "";
+  }
 }

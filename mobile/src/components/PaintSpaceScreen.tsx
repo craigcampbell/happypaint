@@ -1,4 +1,4 @@
-import { ArrowLeft, Package, Pencil, Trash2 } from "lucide-react-native";
+import { ArrowLeft, Package, Pencil, Send, Trash2 } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
@@ -13,6 +13,8 @@ import {
 } from "react-native";
 
 import { IconButton } from "./IconButton";
+import { PublishPackModal } from "./PublishPackModal";
+import { publishPack } from "../brushPacks";
 import { deleteSpaceAsset, loadSpaceAssets, renameSpaceAsset } from "../paintSpace";
 import type {
   LoopPayload,
@@ -45,10 +47,31 @@ const KIND_LABEL: Record<PaintSpaceKind, string> = {
 export function PaintSpaceScreen({ onBack, onApplySticker, onApplyPalette, onApplyTemplate, onApplyLoop }: Props) {
   const [assets, setAssets] = useState<SpaceAsset[]>([]);
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+  const [publishing, setPublishing] = useState(false);
 
   const refresh = useCallback(async () => {
     setAssets(await loadSpaceAssets());
   }, []);
+
+  const handlePublish = useCallback(
+    async (input: Parameters<typeof publishPack>[0]) => {
+      setPublishing(false);
+      const { pack, queued } = await publishPack(input);
+      if (queued) {
+        Alert.alert(
+          "Submitted for review",
+          `"${pack.title}" is pending moderation. Community packs are reviewed before they appear in browse or featured.`
+        );
+      } else {
+        Alert.alert("Pack saved", `"${pack.title}" is saved privately in your locker.`);
+      }
+    },
+    []
+  );
+
+  const packableCount = assets.filter((asset) =>
+    ["brush", "sticker", "palette", "template"].includes(asset.kind)
+  ).length;
 
   useEffect(() => {
     void refresh();
@@ -104,6 +127,18 @@ export function PaintSpaceScreen({ onBack, onApplySticker, onApplyPalette, onApp
         </View>
       </View>
 
+      {packableCount > 0 ? (
+        <View style={styles.publishRow}>
+          <View style={styles.publishCopy}>
+            <Text style={styles.publishTitle}>Share a brush pack</Text>
+            <Text style={styles.publishNote}>
+              Group your brushes into a pack. Public packs are reviewed before they go live.
+            </Text>
+          </View>
+          <IconButton icon={Send} label="Publish a pack" onPress={() => setPublishing(true)} tone="dark" />
+        </View>
+      ) : null}
+
       {assets.length === 0 ? (
         <View style={styles.emptyState}>
           <Package size={44} color="#64748b" strokeWidth={1.8} />
@@ -152,6 +187,13 @@ export function PaintSpaceScreen({ onBack, onApplySticker, onApplyPalette, onApp
           </View>
         ))
       )}
+
+      <PublishPackModal
+        assets={assets}
+        onClose={() => setPublishing(false)}
+        onPublish={(input) => void handlePublish(input)}
+        visible={publishing}
+      />
 
       <Modal animationType="fade" transparent visible={!!renaming} onRequestClose={() => setRenaming(null)}>
         <View style={styles.modalBackdrop}>
@@ -341,6 +383,31 @@ const styles = StyleSheet.create({
   panelTitle: {
     color: "#0f172a",
     fontSize: 18,
+    fontWeight: "900"
+  },
+  publishCopy: {
+    flex: 1,
+    minWidth: 0
+  },
+  publishNote: {
+    color: "#64748b",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17
+  },
+  publishRow: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#dbe3ef",
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    padding: 12
+  },
+  publishTitle: {
+    color: "#0f172a",
+    fontSize: 15,
     fontWeight: "900"
   },
   preview: {

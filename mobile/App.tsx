@@ -434,6 +434,23 @@ export default function App() {
     [flushPendingSave, persistProject]
   );
 
+  // --- Event Engine: enter the studio for an event/daily prompt --------------
+  // Opens the studio with a project (creating one if needed). The prompt is
+  // surfaced to the user; seeding it onto the canvas is a later enhancement.
+  const enterStudioForPrompt = useCallback(
+    async (prompt: string) => {
+      if (prompt) {
+        Alert.alert("Today's prompt", prompt);
+      }
+      if (!currentProject) {
+        await createProject();
+      } else {
+        setMode("studio");
+      }
+    },
+    [createProject, currentProject]
+  );
+
   // --- AI Assist apply flows -------------------------------------------------
   // Apply a generated palette: first color becomes the active brush color.
   const applyAiPalette = useCallback(
@@ -604,7 +621,11 @@ export default function App() {
         ) : null}
 
         {mode === "discover" ? (
-          <DiscoverScreen onBack={() => setMode("gallery")} onTogether={() => setMode("together")} />
+          <DiscoverScreen
+            onBack={() => setMode("gallery")}
+            onEnterStudio={(prompt) => void enterStudioForPrompt(prompt)}
+            onTogether={() => setMode("together")}
+          />
         ) : null}
       </View>
       </SafeAreaView>

@@ -1,9 +1,32 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import DiscoveryHub from "./DiscoveryHub";
 import { kidSafetyPrinciples, revenueModels } from "../utils/social";
+import { addAsset, loadPaintSpace, savePaintSpace } from "../utils/paintSpace";
+import { getPackAssets } from "../utils/brushPacks";
 
 export default function MarketingSite({ onNavigate }) {
   const [discoveryQuery, setDiscoveryQuery] = useState("");
+
+  // "Get" a browsed community pack: copy its brushes into the shared Paint Space
+  // locker (same localStorage/IndexedDB store the studio reads) and record
+  // asset_uses. Returns false on a storage failure so browse can report honestly.
+  const handleGetPack = useCallback(async (pack) => {
+    try {
+      const newAssets = getPackAssets(pack);
+      if (newAssets.length === 0) {
+        return true;
+      }
+      const current = await loadPaintSpace();
+      let next = current;
+      for (const asset of newAssets) {
+        next = addAsset(next, asset);
+      }
+      await savePaintSpace(next);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   return (
     <main className="marketing-site">
@@ -73,7 +96,12 @@ export default function MarketingSite({ onNavigate }) {
         </div>
       </section>
 
-      <DiscoveryHub query={discoveryQuery} onQueryChange={setDiscoveryQuery} />
+      <DiscoveryHub
+        query={discoveryQuery}
+        onQueryChange={setDiscoveryQuery}
+        onNavigate={onNavigate}
+        onGetPack={handleGetPack}
+      />
 
       <section className="marketing-band" id="together">
         <div>

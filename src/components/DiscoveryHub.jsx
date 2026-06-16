@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import { discoverTags, discoverableRooms, publicGalleryPieces, roomPolicyFor, timedEvents } from "../utils/social";
+import { discoverTags, discoverableRooms, publicGalleryPieces, roomPolicyFor } from "../utils/social";
+import EventsPanel from "./EventsPanel";
+import BrushPackBrowse from "./BrushPackBrowse";
 
 function matchesSearch(item, query, activeTags) {
   const haystack = [
@@ -32,7 +34,7 @@ function GalleryArt({ palette }) {
   );
 }
 
-export default function DiscoveryHub({ query, onQueryChange }) {
+export default function DiscoveryHub({ query, onQueryChange, onNavigate, onGetPack }) {
   const [activeTags, setActiveTags] = useState([]);
   const [notice, setNotice] = useState("Browse is open. Joining stays invite-only or host-approved.");
   const [voteCounts, setVoteCounts] = useState(() =>
@@ -42,10 +44,6 @@ export default function DiscoveryHub({ query, onQueryChange }) {
 
   const filteredRooms = useMemo(
     () => discoverableRooms.filter((room) => matchesSearch(room, query, activeTags)),
-    [activeTags, query]
-  );
-  const filteredEvents = useMemo(
-    () => timedEvents.filter((event) => matchesSearch(event, query, activeTags)),
     [activeTags, query]
   );
   const filteredGallery = useMemo(
@@ -149,24 +147,7 @@ export default function DiscoveryHub({ query, onQueryChange }) {
         </section>
 
         <section className="discovery-panel events-panel" aria-label="Timed events">
-          <div className="panel-title-row">
-            <h3>Timed Events</h3>
-            <span>{filteredEvents.length} active</span>
-          </div>
-          <div className="event-list">
-            {filteredEvents.map((event) => (
-              <article key={event.id}>
-                <div>
-                  <span className={`status-pill status-${event.status.toLowerCase()}`}>{event.status}</span>
-                  <strong>{event.title}</strong>
-                </div>
-                <p>{event.theme}</p>
-                <small>
-                  {event.window} · {event.roomCount} rooms · {event.galleryCount} gallery posts
-                </small>
-              </article>
-            ))}
-          </div>
+          <EventsPanel onNavigate={onNavigate} />
         </section>
 
         <section className="discovery-panel gallery-vote-panel" aria-label="Community gallery voting">
@@ -193,6 +174,8 @@ export default function DiscoveryHub({ query, onQueryChange }) {
           </div>
         </section>
       </div>
+
+      <BrushPackBrowse query={query} onGet={onGetPack} />
     </section>
   );
 }
