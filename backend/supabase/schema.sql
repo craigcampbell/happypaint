@@ -1584,3 +1584,367 @@ create index tips_sender_idx on public.tips(sender_profile_id, created_at);
 create index tips_status_idx on public.tips(status, created_at);
 create index creator_payouts_profile_idx on public.creator_payouts(profile_id, status);
 create index economy_admin_actions_target_idx on public.economy_admin_actions(target_table, target_id, created_at);
+
+-- =====================================================================
+-- Room Replay & Timelapse (docs/product-research.md §"Replay and Process Sharing")
+-- SNAPSHOT-BASED, NOT per-stroke. Replay is reconstructed from a capped, decimated
+-- series of image snapshots, not the raw stroke_events stream:
+--   * Periodic keyframes are captured on a timer ('keyframe').
+--   * Meaningful changes (layer add, big fill, frame change) capture an 'event' snapshot.
+--   * The artist can force a 'manual' snapshot (e.g. before/after).
+-- The capture pipeline is expected to CAP total snapshots per session and DECIMATE
+-- (drop low-change_score intermediate frames) so storage stays bounded while major
+-- moments survive. seq is a monotonic per-session ordering used to play back frames.
+-- Finished timelapse exports (GIF/MP4/sprite) are materialized into timelapse_assets.
+-- =====================================================================
+
+create type replay_snapshot_kind as enum ('keyframe', 'event', 'manual');
+create type timelapse_format as enum ('gif', 'mp4', 'sprite');
+
+create table public.replay_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  -- A snapshot belongs to a live/recorded session and/or a saved project; both nullable
+  -- so manual before/after snapshots on a solo project still work.
+  session_id uuid references public.paint_sessions(id) on delete cascade,
+  project_snapshot_id uuid references public.project_snapshots(id) on delete set null,
+  owner_profile_id uuid not null references public.profiles(id) on delete cascade,
+  seq integer not null check (seq >= 0),
+  kind replay_snapshot_kind not null default 'keyframe',
+  -- Storage object key or signed URL of the rendered frame image.
+  image_url text,
+  storage_ref text,
+  width integer check (width is null or width > 0),
+  height integer check (height is null or height > 0),
+  -- 0..1 estimate of how much changed vs the prior snapshot; used to decimate.
+  change_score numeric check (change_score is null or (change_score >= 0 and change_score <= 1)),
+  captured_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  -- A snapshot must point at something to be meaningful.
+  check (session_id is not null or project_snapshot_id is not null),
+  -- Must carry a renderable reference.
+  check (image_url is not null or storage_ref is not null)
+);
+
+create table public.timelapse_assets (
+  id uuid primary key default gen_random_uuid(),
+  owner_profile_id uuid not null references public.profiles(id) on delete cascade,
+  source_session_id uuid references public.paint_sessions(id) on delete set null,
+  -- Optional link to the saved project the export was rendered from.
+  source_project_snapshot_id uuid references public.project_snapshots(id) on delete set null,
+  format timelapse_format not null default 'mp4',
+  frame_count integer not null default 0 check (frame_count >= 0),
+  duration_ms integer not null default 0 check (duration_ms >= 0),
+  asset_url text,
+  storage_ref text,
+  -- Exported clips are user-generated and surfaced socially, so they carry a safety gate.
+  safety_status media_safety_status not null default 'pending',
+  created_at timestamptz not null default now(),
+  check (asset_url is not null or storage_ref is not null)
+);
+
+comment on table public.replay_snapshots is 'Snapshot-based room/process replay: capped, decimated series of image frames (periodic keyframes + event + manual snapshots) ordered by seq. Not per-stroke; reconstructs process from rendered images.';
+comment on table public.timelapse_assets is 'Materialized timelapse exports (gif/mp4/sprite) rendered from replay_snapshots, moderated before public sharing.';
+
+-- =====================================================================
+-- Community Brush/Stamp/Pack moderation pipeline (docs/product-research.md §"Community Brushes and Stamps")
+-- space_assets already carries kind='brush'/'stamp' and asset_packs already has a
+-- status column. verification_reviews covers identity/guardian/teacher review only, so
+-- we add a dedicated asset-content review queue for brushes/stamps/packs (safety,
+-- copyright, adult content, spam, misleading names).
+-- =====================================================================
+
+-- Structured brush parameters (engine recipe) for brush/stamp assets. Guarded add in
+-- case it already exists; payload remains the general bag, brush_recipe is the typed slot.
+alter table public.space_assets
+  add column if not exists brush_recipe jsonb;
+
+create type asset_moderation_target_kind as enum ('asset', 'pack');
+create type asset_moderation_status as enum ('pending', 'approved', 'rejected', 'needs_changes');
+
+create table public.asset_moderation_queue (
+  id uuid primary key default gen_random_uuid(),
+  target_kind asset_moderation_target_kind not null,
+  -- Polymorphic: references space_assets.id (asset) or asset_packs.id (pack). Not a FK
+  -- because the target table varies by target_kind, matching the existing moderation_actions pattern.
+  target_id uuid not null,
+  submitted_by uuid references public.profiles(id) on delete set null,
+  status asset_moderation_status not null default 'pending',
+  reviewer_profile_id uuid references public.profiles(id) on delete set null,
+  reason text,
+  submitted_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+
+comment on table public.asset_moderation_queue is 'Review queue for community brushes/stamps/assets and packs (safety, copyright, adult content, spam, misleading names) before public/featured publishing.';
+
+-- =====================================================================
+-- AI Assist (docs/product-research.md §AI) — safety-gated, consent-gated.
+-- Under-13 spaces require a guardian on the consent record; generated assets flow
+-- through a moderation status before becoming public ("safety queue for generated assets").
+-- =====================================================================
+
+create type ai_generation_kind as enum ('palette', 'prompt_card', 'brush_recipe', 'line_cleanup', 'caption', 'background');
+create type ai_moderation_status as enum ('pending', 'approved', 'blocked');
+
+create table public.ai_consent (
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  -- Required for under-13 profiles; the guardian who granted AI consent.
+  guardian_profile_id uuid references public.profiles(id) on delete set null,
+  version text not null,
+  consented_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  primary key (profile_id, version),
+  check (revoked_at is null or revoked_at >= consented_at)
+);
+
+create table public.ai_generations (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  kind ai_generation_kind not null,
+  input jsonb not null default '{}',
+  output jsonb not null default '{}',
+  model text,
+  -- The consent version in force when this generation ran (audit trail).
+  consent_version text not null,
+  -- Generated content is gated until reviewed before it can be made public.
+  moderation_status ai_moderation_status not null default 'pending',
+  created_at timestamptz not null default now()
+);
+
+create table public.ai_credits (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  balance integer not null default 0 check (balance >= 0),
+  updated_at timestamptz not null default now()
+);
+
+comment on table public.ai_consent is 'AI Assist consent records per profile and policy version, guardian-gated for minors; revocable.';
+comment on table public.ai_generations is 'AI Assist generation log (palette/prompt/brush/cleanup/caption/background) with input/output, model, consent version, and a moderation gate before public use.';
+comment on table public.ai_credits is 'Optional per-profile AI Assist credit balance referenced by the economy.';
+
+-- =====================================================================
+-- Account deletion (App Review requirement, docs/social-backend.md §"Store Review Notes":
+-- "Add in-app account deletion before release"). Always available, never gated or sold.
+-- =====================================================================
+
+create type account_deletion_status as enum ('requested', 'processing', 'completed', 'cancelled');
+
+create table public.account_deletion_requests (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  status account_deletion_status not null default 'requested',
+  requested_at timestamptz not null default now(),
+  -- When the hard purge is scheduled to run (e.g. after a grace/cancellation window).
+  scheduled_purge_at timestamptz,
+  completed_at timestamptz,
+  note text
+);
+
+comment on table public.account_deletion_requests is 'In-app account deletion requests with grace window and purge scheduling; always available to the owning profile (App Review requirement).';
+
+-- =====================================================================
+-- Cross-device sync (light) — docs/social-backend.md: accounts unlock cross-device sync.
+-- Sync uses existing auth + profiles for identity and project_snapshots as the
+-- authoritative per-project state; clients sync drawing as stroke_events, not image
+-- streams. We do NOT build a full sync engine here. device_sync_state is a thin
+-- per-device cursor so a client can resume from its last synced point.
+-- =====================================================================
+
+create table public.device_sync_state (
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  device_id text not null,
+  last_synced_at timestamptz not null default now(),
+  primary key (profile_id, device_id)
+);
+
+comment on table public.device_sync_state is 'Thin per-device sync cursor (last_synced_at) for resuming cross-device sync; authoritative state lives in project_snapshots/stroke_events.';
+
+-- =====================================================================
+-- Row Level Security: enable + policies for replay, AI, moderation, deletion, sync tables.
+-- =====================================================================
+
+alter table public.replay_snapshots enable row level security;
+alter table public.timelapse_assets enable row level security;
+alter table public.asset_moderation_queue enable row level security;
+alter table public.ai_consent enable row level security;
+alter table public.ai_generations enable row level security;
+alter table public.ai_credits enable row level security;
+alter table public.account_deletion_requests enable row level security;
+alter table public.device_sync_state enable row level security;
+
+-- Replay snapshots: owner manages own; participants of the session can read; admins read all.
+create policy "replay snapshots owner or participant read"
+  on public.replay_snapshots for select
+  using (
+    owner_profile_id = auth.uid()
+    or public.is_admin()
+    or (
+      session_id is not null
+      and exists (
+        select 1 from public.session_participants sp
+        where sp.session_id = replay_snapshots.session_id and sp.profile_id = auth.uid()
+      )
+    )
+  );
+
+create policy "replay snapshots owner manage"
+  on public.replay_snapshots for all
+  using (owner_profile_id = auth.uid() or public.is_admin())
+  with check (owner_profile_id = auth.uid() or public.is_admin());
+
+-- Timelapse assets: owner manages own; surfaced publicly only once approved; admins read all.
+create policy "timelapse assets owner or approved read"
+  on public.timelapse_assets for select
+  using (
+    owner_profile_id = auth.uid()
+    or public.is_admin()
+    or safety_status = 'approved'
+  );
+
+create policy "timelapse assets owner manage"
+  on public.timelapse_assets for all
+  using (owner_profile_id = auth.uid() or public.is_admin())
+  with check (owner_profile_id = auth.uid() or public.is_admin());
+
+-- Asset moderation queue: submitter can create/read own submissions; admins manage all.
+create policy "asset moderation submitter or admin read"
+  on public.asset_moderation_queue for select
+  using (submitted_by = auth.uid() or public.is_admin());
+
+create policy "asset moderation submitter create"
+  on public.asset_moderation_queue for insert
+  with check (auth.uid() = submitted_by and status = 'pending');
+
+create policy "asset moderation admin manage"
+  on public.asset_moderation_queue for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- AI consent: owner manages own; guardian can read/manage child consent; admins read.
+create policy "ai consent self or guardian or admin read"
+  on public.ai_consent for select
+  using (
+    profile_id = auth.uid()
+    or guardian_profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = ai_consent.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "ai consent self or guardian manage"
+  on public.ai_consent for all
+  using (
+    profile_id = auth.uid()
+    or guardian_profile_id = auth.uid()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = ai_consent.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  )
+  with check (
+    profile_id = auth.uid()
+    or guardian_profile_id = auth.uid()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = ai_consent.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+-- AI generations: owner and guardian read; insert requires active (non-revoked) consent,
+-- with under-13 requiring a guardian on the consent record. Moderation status is server-set.
+create policy "ai generations self or guardian or admin read"
+  on public.ai_generations for select
+  using (
+    profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = ai_generations.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "ai generations self create with consent"
+  on public.ai_generations for insert
+  with check (
+    auth.uid() = profile_id
+    and moderation_status = 'pending'
+    and exists (
+      select 1 from public.ai_consent c
+      join public.profiles p on p.id = c.profile_id
+      where c.profile_id = auth.uid()
+        and c.version = ai_generations.consent_version
+        and c.revoked_at is null
+        and (
+          p.profile_kind <> 'child'
+          or c.guardian_profile_id is not null
+        )
+    )
+  );
+
+create policy "ai generations admin manage"
+  on public.ai_generations for update
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- AI credits: owner and guardian read; only the server/admin writes balances.
+create policy "ai credits self or guardian or admin read"
+  on public.ai_credits for select
+  using (
+    profile_id = auth.uid()
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = ai_credits.profile_id and p.guardian_profile_id = auth.uid()
+    )
+  );
+
+create policy "ai credits admin manage"
+  on public.ai_credits for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- Account deletion: the owning profile can always create, read, and cancel its own
+-- request; admins can read all. Never gated by plan/economy.
+create policy "account deletion self or admin read"
+  on public.account_deletion_requests for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "account deletion self create"
+  on public.account_deletion_requests for insert
+  with check (auth.uid() = profile_id and status = 'requested');
+
+-- Owner may cancel (or otherwise update) their own request; admins drive processing/completion.
+create policy "account deletion self or admin update"
+  on public.account_deletion_requests for update
+  using (profile_id = auth.uid() or public.is_admin())
+  with check (profile_id = auth.uid() or public.is_admin());
+
+-- Device sync state: strictly owner-managed; admins may read for support.
+create policy "device sync state self or admin read"
+  on public.device_sync_state for select
+  using (profile_id = auth.uid() or public.is_admin());
+
+create policy "device sync state owner manage"
+  on public.device_sync_state for all
+  using (profile_id = auth.uid())
+  with check (profile_id = auth.uid());
+
+-- =====================================================================
+-- Indexes for replay, AI, moderation, deletion, and sync tables.
+-- =====================================================================
+
+create index replay_snapshots_session_seq_idx on public.replay_snapshots(session_id, seq) where session_id is not null;
+create index replay_snapshots_owner_idx on public.replay_snapshots(owner_profile_id, captured_at);
+create index replay_snapshots_project_idx on public.replay_snapshots(project_snapshot_id) where project_snapshot_id is not null;
+create index timelapse_assets_owner_idx on public.timelapse_assets(owner_profile_id, created_at);
+create index timelapse_assets_session_idx on public.timelapse_assets(source_session_id) where source_session_id is not null;
+create index timelapse_assets_safety_idx on public.timelapse_assets(safety_status);
+create index asset_moderation_queue_status_idx on public.asset_moderation_queue(status, submitted_at);
+create index asset_moderation_queue_target_idx on public.asset_moderation_queue(target_kind, target_id);
+create index ai_consent_profile_idx on public.ai_consent(profile_id) where revoked_at is null;
+create index ai_generations_profile_idx on public.ai_generations(profile_id, created_at);
+create index ai_generations_moderation_idx on public.ai_generations(moderation_status, created_at);
+create index account_deletion_requests_profile_idx on public.account_deletion_requests(profile_id, status);
+create index account_deletion_requests_purge_idx on public.account_deletion_requests(scheduled_purge_at) where status in ('requested', 'processing');
+create index device_sync_state_profile_idx on public.device_sync_state(profile_id, last_synced_at);
