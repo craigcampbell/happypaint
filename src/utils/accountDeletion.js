@@ -17,7 +17,7 @@
 // Local-only by default (no live backend). Everything here is sync-ready.
 
 import { idbDelete, idbDeleteKV, isIdbAvailable } from "./idb";
-import { isCloudConfigured, getSession, signOut } from "./auth";
+import { isCloudConfigured, getSession, getSupabaseClient, signOut } from "./auth";
 
 // Mirror of account_deletion_requests, persisted locally so the UI can show the
 // pending request + scheduled purge even with no backend.
@@ -108,11 +108,18 @@ async function fileServerDeletion(request) {
     if (!session) {
       return { filed: false, reason: "signed-out" };
     }
-    // A real implementation calls an RPC / edge function that inserts an
-    // account_deletion_requests row server-side. We intentionally keep this a
-    // documented best-effort hook (no schema/network assumptions) so it stays
-    // green without a live backend.
-    return { filed: false, reason: "backend-hook-not-wired", request };
+    const client = getSupabaseClient();
+    if (!client) {
+      return { filed: false, reason: "no-client" };
+    }
+    // Server-side: the `request_account_deletion()` RPC (no args) inserts an
+    // account_deletion_requests row for auth.uid() and returns it. Best-effort —
+    // the local wipe is the source of truth on this device regardless of result.
+    const { data, error } = await client.rpc("request_account_deletion");
+    if (error) {
+      return { filed: false, reason: error.message || "rpc-error", request };
+    }
+    return { filed: true, reason: "filed", server_request: data ?? null };
   } catch {
     return { filed: false, reason: "error" };
   }

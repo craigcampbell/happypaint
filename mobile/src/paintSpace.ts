@@ -26,6 +26,14 @@ export async function loadSpaceAssets(): Promise<SpaceAsset[]> {
 
 export async function saveSpaceAssets(assets: SpaceAsset[]) {
   await AsyncStorage.setItem(PAINT_SPACE_KEY, JSON.stringify(assets));
+  // Best-effort cloud push (no-op unless signed in). Lazy require avoids a
+  // circular import (sync.ts imports this module).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require("./sync") as typeof import("./sync")).notifySpaceChanged();
+  } catch {
+    // sync is best-effort; never block local persistence
+  }
 }
 
 export async function upsertSpaceAsset(asset: SpaceAsset): Promise<SpaceAsset[]> {

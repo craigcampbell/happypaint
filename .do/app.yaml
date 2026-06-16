@@ -22,6 +22,20 @@ static_sites:
     environment_slug: node-js
     # SPA fallback: serve index.html for unknown paths (client-side routes).
     catchall_document: index.html
+    # Supabase wiring (optional — leave unset to ship a local-only build with no
+    # sync/auth). The anon key is PUBLIC and safe to embed in the client bundle;
+    # row-level security in backend/supabase/schema.sql is the real boundary.
+    # Vite inlines VITE_* vars at build time, so scope must be BUILD_TIME.
+    # Fill both values in (or via `doctl`/the App Platform UI) to enable Supabase.
+    envs:
+      - key: VITE_SUPABASE_URL
+        scope: BUILD_TIME
+        type: GENERAL
+        value: ""        # https://<project-ref>.supabase.co  (required to enable sync)
+      - key: VITE_SUPABASE_ANON_KEY
+        scope: BUILD_TIME
+        type: GENERAL
+        value: ""        # public anon key (required to enable sync)
     # Optional explicit routing (App Platform serves the site at "/").
     routes:
       - path: /

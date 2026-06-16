@@ -19,6 +19,7 @@ import {
   signOut,
 } from "../utils/auth";
 import { deleteAccountAndData, getDeletionRequest } from "../utils/accountDeletion";
+import { getSyncStatus, onSyncStatus } from "../utils/sync";
 
 export default function AccountPanel({ onClose, onDeleted }) {
   const [session, setSession] = useState(null);
@@ -27,6 +28,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletion, setDeletion] = useState(() => getDeletionRequest());
+  const [syncLabel, setSyncLabel] = useState(() => getSyncStatus().label);
 
   useEffect(() => {
     let active = true;
@@ -36,9 +38,16 @@ export default function AccountPanel({ onClose, onDeleted }) {
       }
     });
     const unsub = onAuthStateChange((value) => setSession(value));
+    // Reflect the live cloud-sync status (only meaningful when configured).
+    const unsubSync = onSyncStatus((_status, label) => {
+      if (active) {
+        setSyncLabel(label);
+      }
+    });
     return () => {
       active = false;
       unsub();
+      unsubSync();
     };
   }, []);
 
@@ -106,6 +115,9 @@ export default function AccountPanel({ onClose, onDeleted }) {
               <p>
                 Signed in as <strong>{label}</strong>.
               </p>
+              {isCloudConfigured ? (
+                <p className="account-note compliance">Cloud sync: {syncLabel}</p>
+              ) : null}
               <button type="button" onClick={handleSignOut} disabled={busy}>
                 Sign out
               </button>

@@ -5,22 +5,27 @@
 // Accounts unlock cross-device sync, friend invites, planned sessions, and live
 // painting." and §"Store Review Notes": "Keep login optional until the user
 // chooses sync or social features." So login is OPTIONAL — the whole app works
-// signed out; auth only gates future sync/social.
-//
-// DEPENDENCY NOTE: the preferred path was to add `@supabase/supabase-js` and
-// lazily create a client. The parallel web agent found its bundler couldn't
-// resolve a transitive dep of the SDK, and on RN the SDK also needs extra
-// polyfills (url, structuredClone, base64, AsyncStorage storage adapter). Per
-// the task's fallback guidance — and to keep `npm run typecheck`/builds green
-// with ZERO new dependencies — this module uses a PROVIDER ABSTRACTION:
-// LocalProvider is active now + a documented SupabaseProvider stub. The public
-// interface does not change when the SDK is wired later.
+// signed out; auth only gates sync/social.
 //
 // Mode is decided once from Expo env at module load and never throws:
 //   - CLOUD: both EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY set.
-//   - LOCAL (current state): same interface, every call resolves to a clear
+//     A Supabase client is created LAZILY (only on first use) with AsyncStorage
+//     as the auth storage adapter, persistSession + autoRefreshToken on, and
+//     detectSessionInUrl off (required on RN — there is no browser URL bar).
+//   - LOCAL (no env): same interface, every call resolves to a clear
 //     "Cloud sync not configured — your work is saved on this device." status.
-//     No network calls are ever made.
+//     No network calls are ever made and no client is ever instantiated.
+//
+// RN client requirements wired here:
+//   - `react-native-url-polyfill/auto` is imported at the app entry (App.tsx)
+//     so the SDK has WHATWG URL.
+//   - AsyncStorage is the auth storage; sessions persist across launches.
+//   - AppState drives supabase.auth.startAutoRefresh/stopAutoRefresh so the
+//     token refreshes while the app is foregrounded (Supabase RN guidance).
+
+import { AppState } from "react-native";
+import type { AppStateStatus } from "react-native";
+import type { SupabaseClient, Session } from "@supabase/supabase-js";
 
 // Expo inlines EXPO_PUBLIC_* vars into process.env at build time.
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
@@ -33,6 +38,10 @@ export const isCloudConfigured: boolean = Boolean(SUPABASE_URL && SUPABASE_ANON_
 export const LOCAL_ONLY_MESSAGE =
   "Cloud sync not configured — your work is saved on this device.";
 
+// Deep link the auth provider redirects back to (must match app.json `scheme`).
+// Used for magic-link `emailRedirectTo` and OAuth `redirectTo`.
+export const AUTH_REDIRECT_URL = "happypaint://auth-callback";
+
 // A minimal session shape (mirrors the fields we read from a Supabase session).
 export type AuthSession = {
   user: {
@@ -43,8 +52,7 @@ export type AuthSession = {
 
 export type AuthResult = { ok: boolean; message: string };
 
-// OAuth providers we surface as sign-in affordances (Apple/Google are
-// placeholders until the backend is configured; magic link is the primary path).
+// OAuth providers we surface as sign-in affordances.
 export type OAuthProviderId = "apple" | "google";
 export const OAUTH_PROVIDERS: Array<{ id: OAuthProviderId; label: string }> = [
   { id: "apple", label: "Continue with Apple" },
@@ -61,10 +69,18 @@ type AuthProvider = {
   signOut: () => Promise<AuthResult>;
 };
 
-// ---- LocalProvider — the active provider while cloud sync is unconfigured ----
-// Same interface as the (future) Supabase provider, but never touches the
-// network: there is no session, sign-in reports the local-only status, and
-// auth state never changes.
+// Reduce a full Supabase session to our minimal shape.
+function toAuthSession(session: Session | null): AuthSession | null {
+  if (!session?.user) {
+    return null;
+  }
+  return { user: { id: session.user.id, email: session.user.email ?? null } };
+}
+
+// ---- LocalProvider — active while cloud sync is unconfigured ----------------
+// Same interface as the Supabase provider, but never touches the network: there
+// is no session, sign-in reports the local-only status, and auth state never
+// changes. No client is ever created.
 const LocalProvider: AuthProvider = {
   async getSession() {
     return null;
@@ -83,57 +99,149 @@ const LocalProvider: AuthProvider = {
   }
 };
 
-// ---- SupabaseProvider — documented stub for when the backend is configured ----
-// To activate cloud sync on mobile:
-//   (1) install `@supabase/supabase-js` plus the RN polyfills it needs
-//       (react-native-url-polyfill, react-native-get-random-values, and a
-//        base64 polyfill), and pass an AsyncStorage auth storage adapter;
-//   (2) set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY;
-//   (3) implement the methods below using a lazily-created client, e.g.:
-//
-//   import AsyncStorage from "@react-native-async-storage/async-storage";
-//   import "react-native-url-polyfill/auto";
-//   let clientPromise: Promise<SupabaseClient> | null = null;
-//   async function getClient() {
-//     if (!clientPromise) {
-//       clientPromise = import("@supabase/supabase-js").then(({ createClient }) =>
-//         createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-//           auth: { storage: AsyncStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
-//         })
-//       );
-//     }
-//     return clientPromise;
-//   }
-//   getSession:          const { data } = await (await getClient()).auth.getSession(); return data.session;
-//   signInWithEmail:     (await getClient()).auth.signInWithOtp({ email, options: { emailRedirectTo } })
-//   signInWithProvider:  (await getClient()).auth.signInWithOAuth({ provider, options: { redirectTo } })
-//   signOut:             (await getClient()).auth.signOut()
-//   onAuthStateChange:   (await getClient()).auth.onAuthStateChange((_e, session) => handler(session))
-//
-// Until then the stub degrades to a clear "configure the SDK" message so the
-// app still builds and runs without the dependency.
+// ---- Supabase client (lazy singleton) --------------------------------------
+// Only instantiated when configured AND first used, so typecheck/builds stay
+// green and no network/setup work happens in local-only mode.
+let supabaseClient: SupabaseClient | null = null;
+let appStateSub: { remove: () => void } | null = null;
+
+function createSupabaseClient(): SupabaseClient {
+  // Required lazily so the module never pulls the SDK in local-only paths that
+  // don't reach here. AsyncStorage is the RN auth storage adapter.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createClient } = require("@supabase/supabase-js") as typeof import("@supabase/supabase-js");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const AsyncStorage =
+    require("@react-native-async-storage/async-storage").default as typeof import("@react-native-async-storage/async-storage").default;
+
+  const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      storage: AsyncStorage,
+      autoRefreshToken: true,
+      persistSession: true,
+      // RN has no browser URL bar; sessions arrive via deep links we handle.
+      detectSessionInUrl: false
+    }
+  });
+
+  // Foreground auto-refresh per Supabase RN guidance: refresh while active,
+  // pause in the background.
+  const onAppState = (state: AppStateStatus) => {
+    if (state === "active") {
+      client.auth.startAutoRefresh();
+    } else {
+      client.auth.stopAutoRefresh();
+    }
+  };
+  appStateSub = AppState.addEventListener("change", onAppState);
+  if (AppState.currentState === "active") {
+    client.auth.startAutoRefresh();
+  }
+
+  return client;
+}
+
+// Active client accessor for the sync layer. Returns null when unconfigured.
+export function getSupabaseClient(): SupabaseClient | null {
+  if (!isCloudConfigured) {
+    return null;
+  }
+  if (!supabaseClient) {
+    supabaseClient = createSupabaseClient();
+  }
+  return supabaseClient;
+}
+
+// Current signed-in profile id (= auth user id; `profiles.id` mirrors it via the
+// handle_new_user trigger). Null when signed out or unconfigured. Used by the
+// sync layer to key project_snapshots.profile_id / space_assets.owner_profile_id.
+let cachedProfileId: string | null = null;
+export function getActiveProfileId(): string | null {
+  return cachedProfileId;
+}
+
+// ---- SupabaseProvider — real implementation when configured -----------------
 const SupabaseProvider: AuthProvider = {
   async getSession() {
-    return null;
+    const client = getSupabaseClient();
+    if (!client) {
+      return null;
+    }
+    const { data } = await client.auth.getSession();
+    const session = toAuthSession(data.session);
+    cachedProfileId = session?.user.id ?? null;
+    return session;
   },
-  onAuthStateChange() {
-    return () => {};
+  onAuthStateChange(handler) {
+    const client = getSupabaseClient();
+    if (!client) {
+      return () => {};
+    }
+    const { data } = client.auth.onAuthStateChange((_event, session) => {
+      const mapped = toAuthSession(session);
+      cachedProfileId = mapped?.user.id ?? null;
+      handler(mapped);
+    });
+    return () => data.subscription.unsubscribe();
   },
   async signInWithEmail(email) {
-    return {
-      ok: false,
-      message: `Supabase env detected, but the SDK isn't wired yet. Magic link for ${email} not sent.`
-    };
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, message: LOCAL_ONLY_MESSAGE };
+    }
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: AUTH_REDIRECT_URL }
+    });
+    if (error) {
+      return { ok: false, message: error.message };
+    }
+    return { ok: true, message: `We sent a magic sign-in link to ${email}. Open it on this device to finish.` };
   },
-  async signInWithProvider(provider) {
-    return { ok: false, message: `Supabase env detected, but ${provider} sign-in isn't wired yet.` };
+  async signInWithProvider(providerId) {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, message: LOCAL_ONLY_MESSAGE };
+    }
+    const { data, error } = await client.auth.signInWithOAuth({
+      provider: providerId,
+      options: {
+        redirectTo: AUTH_REDIRECT_URL,
+        // We open the URL ourselves with RN Linking; the redirect deep link is
+        // exchanged for a session via handleAuthDeepLink().
+        skipBrowserRedirect: true
+      }
+    });
+    if (error) {
+      return { ok: false, message: error.message };
+    }
+    if (!data?.url) {
+      return { ok: false, message: "Couldn't start sign-in. Try again." };
+    }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { Linking } = require("react-native") as typeof import("react-native");
+      await Linking.openURL(data.url);
+    } catch {
+      return { ok: false, message: "Couldn't open the sign-in page." };
+    }
+    return { ok: true, message: "Finish signing in in your browser, then return to Happy Paint." };
   },
   async signOut() {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: true, message: "Signed out (local)." };
+    }
+    cachedProfileId = null;
+    const { error } = await client.auth.signOut();
+    if (error) {
+      return { ok: false, message: error.message };
+    }
     return { ok: true, message: "Signed out." };
   }
 };
 
-// The single active provider, chosen once from env. Local today.
+// The single active provider, chosen once from env.
 const provider: AuthProvider = isCloudConfigured ? SupabaseProvider : LocalProvider;
 
 // ---- Public interface (identical across providers) ----
@@ -179,6 +287,64 @@ export async function signOut(): Promise<AuthResult> {
     const message = error instanceof Error ? error.message : "Couldn't sign out.";
     return { ok: false, message };
   }
+}
+
+// Handle an auth redirect deep link (magic link / OAuth callback). RN has
+// detectSessionInUrl off, so we parse the tokens out of the redirect URL and
+// hand them to the client. Best-effort; returns true if a session was set.
+// No-op for non-auth URLs and in local mode.
+export async function handleAuthDeepLink(url: string | null): Promise<boolean> {
+  if (!url || !isCloudConfigured) {
+    return false;
+  }
+  const client = getSupabaseClient();
+  if (!client) {
+    return false;
+  }
+  try {
+    // Tokens may arrive in the fragment (#access_token=...) or query (?code=...).
+    const fragment = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";
+    const query = url.includes("?") ? url.slice(url.indexOf("?") + 1).split("#")[0] : "";
+    const params = new URLSearchParams(fragment || query);
+
+    const accessToken = params.get("access_token");
+    const refreshToken = params.get("refresh_token");
+    if (accessToken && refreshToken) {
+      const { data, error } = await client.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken
+      });
+      if (!error) {
+        cachedProfileId = data.session?.user.id ?? null;
+        return Boolean(data.session);
+      }
+      return false;
+    }
+
+    // PKCE / magic-link `code` exchange path.
+    const code = params.get("code");
+    if (code) {
+      const { data, error } = await client.auth.exchangeCodeForSession(code);
+      if (!error) {
+        cachedProfileId = data.session?.user.id ?? null;
+        return Boolean(data.session);
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Tear down the AppState auto-refresh subscription (e.g. on app teardown). Safe
+// to call any time; no-op when nothing was wired.
+export function disposeAuth(): void {
+  try {
+    appStateSub?.remove();
+  } catch {
+    // ignore
+  }
+  appStateSub = null;
 }
 
 // Short, human-readable identity label for a session (email, else uid prefix).

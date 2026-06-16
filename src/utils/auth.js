@@ -5,24 +5,20 @@
 // Accounts unlock cross-device sync, friend invites, planned sessions, and live
 // painting." and Store Review Notes: "Keep login optional until the user chooses
 // sync or social features." So login is OPTIONAL — the whole app works signed
-// out; auth only gates future sync/social.
-//
-// DEPENDENCY NOTE: the preferred path was to add `@supabase/supabase-js` and
-// lazily create a client. Installing it cleanly resolved, but this project's
-// bundler (Vite 8 / Rolldown) fails to resolve the SDK's transitive `tslib`
-// import from `@supabase/functions-js`, which broke `npm run build`. Per the
-// task's fallback guidance, we therefore use a PROVIDER ABSTRACTION here
-// (LocalProvider active now + a documented SupabaseProvider stub) WITHOUT the
-// dependency, keeping builds green. The SupabaseProvider stub below documents
-// exactly how to wire the SDK once the bundler/peer issue is resolved (install
-// `@supabase/supabase-js` + `tslib`, then implement the marked methods); the
-// public interface of this module does not change either way.
+// out; auth only gates sync/social.
 //
 // Mode is decided once from import.meta.env at module load and never throws:
-//   - CLOUD: both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
-//   - LOCAL (current state): same interface, every call resolves to a clear
-//     "Cloud sync not configured — your work is saved on this device." status.
-//     No network calls are ever made.
+//   - CLOUD: both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set. We lazily
+//     create a real @supabase/supabase-js client and back the provider interface
+//     with Supabase Auth (magic link + Apple/Google OAuth).
+//   - LOCAL (default): same interface, every sign-in call resolves to a clear
+//     "Cloud sync not configured — your work is saved on this device." status and
+//     NO network calls are ever made. The Supabase client is never instantiated.
+//
+// Importing the SDK at module load is safe even when unconfigured — `createClient`
+// is only ever called from the configured path, so missing env can't crash.
+
+import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -34,17 +30,58 @@ export const isCloudConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 export const LOCAL_ONLY_MESSAGE =
   "Cloud sync not configured — your work is saved on this device.";
 
-// OAuth providers we surface as sign-in affordances (Apple/Google are
-// placeholders until the backend is configured; magic link is the primary path).
+// OAuth providers we surface as sign-in affordances. Magic link is the primary
+// path; Apple/Google require the matching provider to be enabled in Supabase.
 export const OAUTH_PROVIDERS = [
   { id: "apple", label: "Continue with Apple" },
   { id: "google", label: "Continue with Google" },
 ];
 
-// ---- LocalProvider — the active provider while cloud sync is unconfigured ----
-// Same interface as the (future) Supabase provider, but never touches the
-// network: there is no session, sign-in reports the local-only status, and
-// auth state never changes.
+// ---- Lazily-created Supabase client (configured mode only) ----
+// Created on first use so a static import of this module never touches the
+// network and never instantiates a client in local-only mode.
+let cachedClient = null;
+
+// Returns the active Supabase client, or null when unconfigured. Never throws.
+export function getSupabaseClient() {
+  if (!isCloudConfigured) {
+    return null;
+  }
+  if (!cachedClient) {
+    try {
+      cachedClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+        },
+      });
+    } catch {
+      cachedClient = null;
+    }
+  }
+  return cachedClient;
+}
+
+// The profile id used to key sync rows server-side is the authenticated user's
+// uid (profiles.id === auth.users.id via the handle_new_user trigger). Returns
+// null when signed out / unconfigured. Never throws.
+export async function getProfileId() {
+  const client = getSupabaseClient();
+  if (!client) {
+    return null;
+  }
+  try {
+    const { data } = await client.auth.getSession();
+    return data?.session?.user?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+// ---- LocalProvider — active provider while cloud sync is unconfigured ----
+// Same interface as the Supabase provider, but never touches the network:
+// there is no session, sign-in reports the local-only status, auth never changes.
 const LocalProvider = {
   async getSession() {
     return null;
@@ -63,53 +100,85 @@ const LocalProvider = {
   },
 };
 
-// ---- SupabaseProvider — documented stub for when the backend is configured ----
-// To activate cloud sync: (1) resolve the bundler peer issue and install
-// `@supabase/supabase-js` (+ `tslib`); (2) set VITE_SUPABASE_URL and
-// VITE_SUPABASE_ANON_KEY; (3) implement the methods below using a lazily-created
-// client, e.g.:
-//
-//   let clientPromise;
-//   async function getClient() {
-//     if (!clientPromise) {
-//       clientPromise = import("@supabase/supabase-js").then(({ createClient }) =>
-//         createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-//           auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-//         }),
-//       );
-//     }
-//     return clientPromise;
-//   }
-//   getSession:           const { data } = await (await getClient()).auth.getSession(); return data.session;
-//   signInWithEmail:      (await getClient()).auth.signInWithOtp({ email, options: { emailRedirectTo } })
-//   signInWithProvider:   (await getClient()).auth.signInWithOAuth({ provider, options: { redirectTo } })
-//   signOut:              (await getClient()).auth.signOut()
-//   onAuthStateChange:    (await getClient()).auth.onAuthStateChange((_e, session) => handler(session))
-//
-// Until then the stub degrades to a clear "configure the SDK" message so the
-// app still builds and runs.
+// ---- SupabaseProvider — real auth, active when configured ----
 const SupabaseProvider = {
   async getSession() {
-    return null;
+    const client = getSupabaseClient();
+    if (!client) {
+      return null;
+    }
+    const { data } = await client.auth.getSession();
+    return data?.session ?? null;
   },
-  onAuthStateChange() {
-    return () => {};
-  },
-  async signInWithEmail(email) {
-    return {
-      ok: false,
-      message: `Supabase env detected, but the SDK isn't wired yet. Magic link for ${email} not sent.`,
+
+  // Subscribe to Supabase auth state. Returns an unsubscribe function.
+  onAuthStateChange(handler) {
+    const client = getSupabaseClient();
+    if (!client) {
+      return () => {};
+    }
+    const { data } = client.auth.onAuthStateChange((_event, session) => {
+      handler(session ?? null);
+    });
+    return () => {
+      try {
+        data?.subscription?.unsubscribe?.();
+      } catch {
+        // ignore
+      }
     };
   },
-  async signInWithProvider(provider) {
-    return { ok: false, message: `Supabase env detected, but ${provider} sign-in isn't wired yet.` };
+
+  // Email magic link (passwordless). The link returns the user to this origin,
+  // where detectSessionInUrl completes the sign-in.
+  async signInWithEmail(email) {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, message: LOCAL_ONLY_MESSAGE };
+    }
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) {
+      return { ok: false, message: error.message || "Couldn't send magic link." };
+    }
+    return { ok: true, message: `Magic link sent to ${email}. Check your inbox.` };
   },
+
+  // OAuth (Apple/Google). Redirects the browser to the provider; on return,
+  // detectSessionInUrl completes the sign-in. The provider must be enabled in
+  // the Supabase dashboard.
+  async signInWithProvider(provider) {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, message: LOCAL_ONLY_MESSAGE };
+    }
+    const { error } = await client.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) {
+      return { ok: false, message: error.message || `Couldn't start ${provider} sign-in.` };
+    }
+    // On success the browser navigates away to the provider.
+    return { ok: true, message: `Redirecting to ${provider}…` };
+  },
+
   async signOut() {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: true, message: "Signed out (local)." };
+    }
+    const { error } = await client.auth.signOut();
+    if (error) {
+      return { ok: false, message: error.message || "Couldn't sign out." };
+    }
     return { ok: true, message: "Signed out." };
   },
 };
 
-// The single active provider, chosen once from env. Local today.
+// The single active provider, chosen once from env.
 const provider = isCloudConfigured ? SupabaseProvider : LocalProvider;
 
 // ---- Public interface (identical across providers) ----

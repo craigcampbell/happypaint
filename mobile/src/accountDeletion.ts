@@ -22,7 +22,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { getSession, isCloudConfigured, signOut } from "./auth";
+import { getSession, getSupabaseClient, isCloudConfigured, signOut } from "./auth";
 import { makeId } from "./ids";
 import { clearAllReplayIndexes } from "./replay";
 import { STORAGE_KEYS, wipeStorageFiles } from "./storage";
@@ -111,12 +111,20 @@ async function fileServerDeletion(
     if (!session) {
       return { filed: false, reason: "signed-out" };
     }
-    // A real implementation calls an RPC / edge function that inserts an
-    // account_deletion_requests row server-side. We intentionally keep this a
-    // documented best-effort hook (no schema/network assumptions) so it stays
-    // green without a live backend.
+    const client = getSupabaseClient();
+    if (!client) {
+      return { filed: false, reason: "no-client" };
+    }
     void request;
-    return { filed: false, reason: "backend-hook-not-wired" };
+    // Server-side filing: the backend RPC inserts an account_deletion_requests
+    // row + schedules the purge Edge Function. Best-effort — the LOCAL wipe +
+    // sign-out below are the source of truth on this device and proceed
+    // regardless of the result.
+    const { error } = await client.rpc("request_account_deletion");
+    if (error) {
+      return { filed: false, reason: error.message };
+    }
+    return { filed: true, reason: "requested" };
   } catch {
     return { filed: false, reason: "error" };
   }

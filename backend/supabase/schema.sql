@@ -1948,3 +1948,142 @@ create index ai_generations_moderation_idx on public.ai_generations(moderation_s
 create index account_deletion_requests_profile_idx on public.account_deletion_requests(profile_id, status);
 create index account_deletion_requests_purge_idx on public.account_deletion_requests(scheduled_purge_at) where status in ('requested', 'processing');
 create index device_sync_state_profile_idx on public.device_sync_state(profile_id, last_synced_at);
+
+-- =====================================================================
+-- CLIENT CONTRACT: auth bootstrap, cross-device sync columns, account
+-- deletion RPC. These are the names the web + mobile clients code against.
+-- (docs/social-backend.md: accounts unlock cross-device sync + in-app deletion.)
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Profile auto-provisioning.
+-- Standard Supabase pattern: every new auth.users row gets a matching
+-- public.profiles row (profiles.id = auth.users.id). Defaults are kid-safe:
+-- profile_kind 'teen' (matches the column default), display_name derived from
+-- auth metadata when present. Idempotent: on conflict do nothing so re-runs,
+-- backfills, and provider re-links never error.
+-- ---------------------------------------------------------------------
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  derived_name text;
+begin
+  -- Prefer client-supplied display name, then full_name/name from OAuth (Apple/
+  -- Google) metadata, then the email local-part, then a stable fallback. Clamp
+  -- to the profiles.display_name length check (2..40).
+  derived_name := coalesce(
+    nullif(new.raw_user_meta_data ->> 'display_name', ''),
+    nullif(new.raw_user_meta_data ->> 'full_name', ''),
+    nullif(new.raw_user_meta_data ->> 'name', ''),
+    nullif(split_part(coalesce(new.email, ''), '@', 1), ''),
+    'New Artist'
+  );
+  derived_name := left(derived_name, 40);
+  if char_length(derived_name) < 2 then
+    derived_name := 'New Artist';
+  end if;
+
+  insert into public.profiles (id, display_name, profile_kind)
+  values (new.id, derived_name, 'teen')
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$$;
+
+comment on function public.handle_new_user() is 'After-insert trigger on auth.users: provisions a matching public.profiles row (id = auth.users.id) with kid-safe defaults. Idempotent (on conflict do nothing).';
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------
+-- 2. Cross-device sync columns (last-write-wins upsert by client_id).
+-- Clients UPSERT artwork keyed by (profile_id, client_id) on project_snapshots
+-- and (owner_profile_id, client_id) on space_assets. updated_at drives
+-- last-write-wins conflict resolution; updated_device records the writer.
+-- There is no updated_at auto-touch trigger pattern in this file, so clients
+-- MUST set updated_at on each write (documented in the client agents' contract).
+-- Guarded adds keep this re-runnable against an existing database.
+-- ---------------------------------------------------------------------
+alter table public.project_snapshots
+  add column if not exists client_id text,
+  add column if not exists updated_at timestamptz not null default now(),
+  add column if not exists updated_device text;
+
+create unique index if not exists project_snapshots_profile_client_idx
+  on public.project_snapshots(profile_id, client_id)
+  where client_id is not null;
+
+alter table public.space_assets
+  add column if not exists client_id text,
+  add column if not exists updated_device text;
+-- space_assets already has updated_at (set at table creation); clients set it on write.
+
+create unique index if not exists space_assets_owner_client_idx
+  on public.space_assets(owner_profile_id, client_id)
+  where client_id is not null;
+
+comment on column public.project_snapshots.client_id is 'Device-local artwork id for sync upsert dedupe. Clients UPSERT on (profile_id, client_id).';
+comment on column public.project_snapshots.updated_at is 'Client-set last-write timestamp driving last-write-wins sync (no server auto-touch trigger).';
+comment on column public.project_snapshots.updated_device is 'Identifier of the device that produced the latest write (for sync diagnostics).';
+comment on column public.space_assets.client_id is 'Device-local asset id for sync upsert dedupe. Clients UPSERT on (owner_profile_id, client_id).';
+comment on column public.space_assets.updated_device is 'Identifier of the device that produced the latest write (for sync diagnostics).';
+
+-- ---------------------------------------------------------------------
+-- 3. Account deletion RPC (the call clients make).
+-- request_account_deletion() upserts the caller's account_deletion_requests
+-- row: status 'requested', requested_at now(), scheduled_purge_at now()+30d
+-- (a 30-day grace window). security definer so it can write the row regardless
+-- of the in-flight request state, but it always scopes to auth.uid() — a caller
+-- can only ever schedule deletion of THEIR OWN account. Returns the request row.
+-- The actual hard purge runs out-of-band in the purge-account Edge Function.
+-- ---------------------------------------------------------------------
+create or replace function public.request_account_deletion()
+returns public.account_deletion_requests
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  caller uuid := auth.uid();
+  result public.account_deletion_requests;
+begin
+  if caller is null then
+    raise exception 'request_account_deletion: no authenticated user';
+  end if;
+
+  -- One open request per profile: reuse the existing one if present (idempotent),
+  -- otherwise create it. We only ever (re)schedule requests that are not already
+  -- completed; a completed purge cannot be "un-completed" here.
+  update public.account_deletion_requests
+    set status = 'requested',
+        requested_at = now(),
+        scheduled_purge_at = now() + interval '30 days',
+        completed_at = null
+    where profile_id = caller
+      and status in ('requested', 'processing', 'cancelled')
+    returning * into result;
+
+  if not found then
+    insert into public.account_deletion_requests
+      (profile_id, status, requested_at, scheduled_purge_at)
+    values
+      (caller, 'requested', now(), now() + interval '30 days')
+    returning * into result;
+  end if;
+
+  return result;
+end;
+$$;
+
+comment on function public.request_account_deletion() is 'Caller-scoped account deletion request: upserts the auth.uid() account_deletion_requests row (status requested, requested_at now, scheduled_purge_at now()+30d) and returns it. Hard purge runs in the purge-account Edge Function. Always available, never gated.';
+
+-- Clients call this RPC; service role / admin retain table access via RLS.
+revoke all on function public.request_account_deletion() from public;
+grant execute on function public.request_account_deletion() to authenticated;

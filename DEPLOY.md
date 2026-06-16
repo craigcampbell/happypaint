@@ -37,12 +37,47 @@ nginx -t && systemctl reload nginx
 certbot --nginx -d happypaint.app          # TLS
 ```
 
+## Supabase setup (auth + sync, optional)
+
+Supabase is a **separate** managed service (Postgres + Auth + Storage). It is
+NOT hosted on DigitalOcean — DO only needs two public env vars at build time.
+Skip this section entirely to ship a local-only build (no accounts/sync).
+
+1. **Create a Supabase project** at https://supabase.com (note the Project URL
+   and the `anon` public key under Project Settings → API).
+2. **Run the schema** in the SQL Editor (or via `psql`):
+   - `backend/supabase/schema.sql` (tables, RLS, the `handle_new_user` trigger,
+     sync columns, and the `request_account_deletion()` RPC), then
+   - `backend/supabase/storage.sql` (the `artwork` / `replay` / `previews`
+     buckets and their owner-folder policies).
+3. **Auth redirect URLs** (Authentication → URL Configuration): add your
+   DigitalOcean web domain (e.g. `https://happypaint.app`, plus
+   `http://localhost:5173` for local dev) and the **Expo mobile deep-link
+   scheme** (e.g. `happypaint://` / the Expo dev URL) so magic-link and OAuth
+   callbacks return to the apps.
+4. **Enable providers** (Authentication → Providers): email, phone, magic link,
+   and **Apple** + **Google** (configure each provider's client id/secret).
+5. **Copy URL + anon key into the clients:**
+   - **Web:** set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as
+     `BUILD_TIME` env vars in `.do/app.yaml` (or the App Platform UI). They are
+     baked into the static bundle at build time.
+   - **Mobile:** set `EXPO_PUBLIC_SUPABASE_URL` and
+     `EXPO_PUBLIC_SUPABASE_ANON_KEY` in the mobile env / EAS build secrets.
+   - See `.env.example` for the full list. The anon key is public/safe to ship;
+     RLS is the security boundary. Never ship the `service_role` key.
+6. **Account-deletion purge:** deploy and schedule the Edge Function —
+   `supabase functions deploy purge-account` and
+   `supabase secrets set SERVICE_ROLE_KEY=...`, then schedule it (pg_cron or a
+   scheduled function). Details in `backend/supabase/functions/README.md`.
+
 ## Notes
 
-- **No backend required to host the studio.** Drawing, layers, loops, gallery,
-  and the Paint Space locker persist client-side (IndexedDB) — they work on a
-  pure static host. Wiring real accounts/sync later means standing up the
-  Supabase backend in `backend/supabase/schema.sql` and pointing the app at it.
+- **Hosting the studio needs no backend; sync/auth are optional — configure
+  Supabase to enable them.** Drawing, layers, loops, gallery, and the Paint
+  Space locker persist client-side (IndexedDB) and work on a pure static host.
+  Accounts and cross-device sync turn on only when the Supabase env vars above
+  are set (see the "Supabase setup" section). Supabase is a separate service;
+  DigitalOcean only needs the two public `VITE_SUPABASE_*` build-time vars.
 - The GIF export Web Worker (`gif.worker-*.js`) is emitted as a normal hashed
   asset under `/assets/` and needs no special server config.
 - **Mobile (iOS/Android)** ships through the App/Play stores via Expo, not

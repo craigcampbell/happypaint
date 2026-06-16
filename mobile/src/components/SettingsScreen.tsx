@@ -35,6 +35,7 @@ import {
   type AiConsent
 } from "../aiAssist";
 import { deleteAccountAndData } from "../accountDeletion";
+import { onSyncStatusChange, syncStatusLabel, type SyncStatus } from "../sync";
 
 type Props = {
   calmMode: boolean;
@@ -69,6 +70,13 @@ export function SettingsScreen({
   const [consent, setConsent] = useState<AiConsent | null>(null);
   const [consentLoaded, setConsentLoaded] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
+
+  // Live cloud sync status (no-op string in local mode). Fires immediately with
+  // the current value, then on every change while mounted.
+  useEffect(() => {
+    return onSyncStatusChange((status) => setSyncStatus(status));
+  }, []);
 
   // Load the current session + AI consent on mount. Local mode resolves these
   // instantly (no network), so this is safe and never blocks the UI.
@@ -212,8 +220,11 @@ export function SettingsScreen({
         </View>
 
         {session ? (
-          <View style={[styles.actionRow, styles.actionRowLast]}>
+          <View style={[styles.actionRow, styles.actionRowLast, styles.signedInRow]}>
             <IconButton icon={LogOut} label="Sign out" onPress={() => void handleSignOut()} disabled={authBusy} />
+            {isCloudConfigured ? (
+              <Text style={styles.syncStatus}>{syncStatusLabel(syncStatus)}</Text>
+            ) : null}
           </View>
         ) : (
           <View style={styles.authBody}>
@@ -566,6 +577,16 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     padding: 16
+  },
+  signedInRow: {
+    alignItems: "center",
+    gap: 12
+  },
+  syncStatus: {
+    color: "#64748b",
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18
   },
   section: {
     backgroundColor: "#ffffff",

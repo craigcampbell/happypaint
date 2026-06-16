@@ -1,3 +1,7 @@
+// Supabase needs WHATWG URL on React Native; this polyfill must load before any
+// supabase-js code runs, so it sits at the very top of the app entry.
+import "react-native-url-polyfill/auto";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -30,6 +34,8 @@ import {
   type StoreItem
 } from "./src/economy";
 import { loadSpaceAssets } from "./src/paintSpace";
+import { handleAuthDeepLink, onAuthStateChange } from "./src/auth";
+import { startSync, stopSync, syncNow } from "./src/sync";
 import { recipeToBrushSettings } from "./src/brushStudio";
 import { clearReplaySnapshots } from "./src/replay";
 import {
@@ -182,6 +188,12 @@ export default function App() {
       if (!url) {
         return;
       }
+      // Auth redirect (magic link / OAuth callback). Best-effort; sets the
+      // Supabase session from the deep link when configured. No-op otherwise.
+      if (url.includes("auth-callback") || url.includes("access_token") || url.includes("code=")) {
+        void handleAuthDeepLink(url);
+        return;
+      }
       const code = url.split("/join/")[1]?.split(/[?#]/)[0]?.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
       if (code) {
         setPendingJoinCode(code);
@@ -192,6 +204,42 @@ export default function App() {
     void Linking.getInitialURL().then(handleUrl);
     const subscription = Linking.addEventListener("url", (event) => handleUrl(event.url));
     return () => subscription.remove();
+  }, []);
+
+  // Local-first cloud sync: start on sign-in, stop on sign-out. After a pull
+  // merges remote rows into the local stores, refresh in-memory state so the
+  // gallery + paint-space locker reflect cross-device work. Unconfigured /
+  // signed-out = no-op (onAuthStateChange is a no-op in local mode).
+  useEffect(() => {
+    let activeSub = true;
+    const unsubscribe = onAuthStateChange((session) => {
+      if (!activeSub) {
+        return;
+      }
+      if (session) {
+        startSync();
+        // Give the initial pull a beat to merge, then refresh local state.
+        void syncNow().then(async () => {
+          if (!activeSub) {
+            return;
+          }
+          const [mergedProjects, mergedAssets] = await Promise.all([loadProjects(), loadSpaceAssets()]);
+          if (!activeSub) {
+            return;
+          }
+          projectsRef.current = mergedProjects;
+          setProjects(mergedProjects);
+          setSpaceAssets(mergedAssets);
+        });
+      } else {
+        stopSync();
+      }
+    });
+    return () => {
+      activeSub = false;
+      unsubscribe();
+      stopSync();
+    };
   }, []);
 
   // Write the latest pending project to disk and clear the timer. Always reads

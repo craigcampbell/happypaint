@@ -30,6 +30,8 @@ import {
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
 import { idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
+import { getSession, onAuthStateChange } from "./utils/auth";
+import { schedulePush, startSync, stopSync } from "./utils/sync";
 import {
   addAsset,
   createAsset,
@@ -1047,6 +1049,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     galleryRef.current = next;
     setGallery(next);
     setStatus("Saved to gallery");
+    // Best-effort cloud push (debounced; no-op when signed out / local-only).
+    schedulePush();
   }, [composeCanvas, persistGallery, selectedTexture]);
 
   const exportPng = useCallback(async () => {
@@ -2090,6 +2094,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     paintSpaceAssetsRef.current = next;
     setPaintSpaceAssets(next);
+    // Best-effort cloud push (debounced; no-op when signed out / local-only).
+    schedulePush();
     return true;
   }, []);
 
@@ -2582,6 +2588,49 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       });
       applyDraftSettings(draft.settings);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Cloud sync lifecycle (optional; no-op in local-only mode) ----
+  // Start sync on sign-in, stop on sign-out. startSync() pulls remote rows and
+  // merges them into the local stores (last-write-wins); after it resolves we
+  // re-read the (now merged) gallery + Paint Space into memory so the UI shows
+  // synced pieces. Everything is best-effort and never blocks offline use.
+  useEffect(() => {
+    let active = true;
+    const refreshFromLocal = async () => {
+      const [items, assets] = await Promise.all([loadGallery(), loadPaintSpace()]);
+      if (!active) {
+        return;
+      }
+      galleryRef.current = items;
+      setGallery(items);
+      paintSpaceAssetsRef.current = assets;
+      setPaintSpaceAssets(assets);
+    };
+    const handleSession = async (session) => {
+      if (session) {
+        await startSync(session);
+        await refreshFromLocal();
+      } else {
+        stopSync();
+      }
+    };
+    getSession().then((session) => {
+      if (active && session) {
+        handleSession(session);
+      }
+    });
+    const unsub = onAuthStateChange((session) => {
+      if (active) {
+        handleSession(session);
+      }
+    });
+    return () => {
+      active = false;
+      unsub();
+      stopSync();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

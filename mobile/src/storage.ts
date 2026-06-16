@@ -292,6 +292,7 @@ export async function saveProjects(projects: DrawingProject[]) {
     await writeProjectBody(project);
   }
   await writeIndex(projects.map(toIndexEntry));
+  notifyProjectsChanged();
 }
 
 // Persist a single project body + update its index entry. Cheaper than rewriting
@@ -301,6 +302,20 @@ export async function saveProject(project: DrawingProject) {
   const index = await readIndex();
   const next = [toIndexEntry(project), ...index.filter((entry) => entry.id !== project.id)];
   await writeIndex(next);
+  // Best-effort cloud push (no-op unless signed in). Lazy require avoids a
+  // circular import (sync.ts imports this module).
+  notifyProjectsChanged();
+}
+
+// Notify the cloud sync layer that projects changed. Lazy-required so this
+// module stays import-cycle-free and never throws if sync isn't present.
+function notifyProjectsChanged() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require("./sync") as typeof import("./sync")).notifyProjectsChanged();
+  } catch {
+    // sync is best-effort; never block local persistence
+  }
 }
 
 export async function upsertProject(project: DrawingProject) {
