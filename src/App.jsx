@@ -11,11 +11,14 @@ import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   compositeLayers,
+  compositeLayerRange,
   createDefaultLayers,
   createLayer,
+  createLayerCanvas,
   cloneLayerCanvas,
   restoreLayersFromSnapshot,
   snapshotLayers,
+  snapshotActiveLayer,
 } from "./utils/layers";
 import { floodFill } from "./utils/fill";
 import { drawShape, drawText } from "./utils/shapes";
@@ -27,6 +30,7 @@ import {
   createFrame,
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
+import { idbGet, idbSet, isIdbAvailable } from "./utils/idb";
 import {
   addAsset,
   createAsset,
@@ -51,6 +55,12 @@ const STORAGE_KEYS = {
   gallery: "happypaint:gallery:v2",
   studio: "happypaint:studio-pass:v1",
 };
+
+// The draft autosave now lives in IndexedDB (much larger quota than the ~5MB
+// localStorage budget, and it stores layer PNGs as Blobs without base64
+// inflation). STORAGE_KEYS.draft is kept only for back-compat migration of an
+// existing localStorage draft (W3).
+const DRAFT_IDB_KEY = "draft:v4";
 
 // Downscaled GIF size keeps exports small and quantization fast. The 1600x1200
 // canvas is 4:3, so we keep that ratio.
@@ -92,6 +102,24 @@ function createImage(src) {
     image.onload = () => resolve(image);
     image.onerror = reject;
     image.src = src;
+  });
+}
+
+// Decode a PNG Blob into an Image, revoking the temporary object URL once the
+// browser has finished decoding it (or on error) so we never leak URLs.
+function createImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = (error) => {
+      URL.revokeObjectURL(url);
+      reject(error);
+    };
+    image.src = url;
   });
 }
 
@@ -139,6 +167,32 @@ function StudioApp({ initialJoinCode = "" }) {
   const displayContextRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const overlayContextRef = useRef(null);
+
+  // Full-resolution (1600x1200) document composite. Everything composites here
+  // at art resolution; the visible display canvas is a DPR-scaled blit of it so
+  // it stays crisp on Retina/tablet screens (W6).
+  const docCanvasRef = useRef(null);
+  const docContextRef = useRef(null);
+  const displayDprRef = useRef(1);
+
+  // Stroke-time composite caches (W1/W2). On stroke-start we pre-render the
+  // static content beneath the active layer (including onion-skin neighbours)
+  // and the static content above it into two offscreen canvases, so each move
+  // blits below + activeLayer + above (3 draws) instead of recompositing the
+  // whole stack + neighbour frames every pointer move.
+  const belowCacheRef = useRef(null); // canvas: onion + visible layers under active
+  const aboveCacheRef = useRef(null); // canvas: visible layers above active
+  const compositeCacheValidRef = useRef(false);
+  const activeStrokeLayerIdRef = useRef(null);
+
+  // rAF coalescing for per-move display updates (W5).
+  const rafPendingRef = useRef(0);
+
+  // GIF encode worker (W7). Lazily created; null if Workers are unavailable, in
+  // which case GIF export falls back to encoding synchronously on the main
+  // thread. Tracks the in-flight job id so stale results are ignored.
+  const gifWorkerRef = useRef(null);
+  const gifJobSeedRef = useRef(0);
 
   // Live layer stack (bottom-to-top) plus the active layer id. Refs hold the
   // canonical canvases so pointer handlers never go stale; React state mirrors
@@ -289,59 +343,230 @@ function StudioApp({ initialJoinCode = "" }) {
     setStatus(message);
   }, []);
 
-  // Recomposite the visible layer stack onto the display canvas. When onion
-  // skin is on and we're not previewing playback, the previous and next frame
-  // composites are drawn faintly beneath the active frame as editing guides.
-  const renderDisplay = useCallback(() => {
+  // Blit the 1600x1200 document composite onto the visible display canvas,
+  // scaling into its full DPR-sized backing store so the result is crisp on
+  // HiDPI screens (W6).
+  const blitToDisplay = useCallback(() => {
     const context = displayContextRef.current;
+    const doc = docCanvasRef.current;
+    const display = displayCanvasRef.current;
+    if (!context || !doc || !display) {
+      return;
+    }
+    context.clearRect(0, 0, display.width, display.height);
+    context.drawImage(doc, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, display.width, display.height);
+  }, []);
+
+  // Paint the onion-skin neighbour frames faintly onto the document context.
+  // Shared by the full recomposite and the "below" stroke cache so the result
+  // is identical whether or not a stroke is in progress.
+  const paintOnionSkin = useCallback((context) => {
+    if (!onionSkinRef.current || framesRef.current.length <= 1) {
+      return;
+    }
+    const index = activeFrameIndexRef.current;
+    const previous = framesRef.current[index - 1];
+    const next = framesRef.current[index + 1];
+    if (previous) {
+      context.globalAlpha = 0.28;
+      context.drawImage(compositeFrameToCanvas(previous), 0, 0);
+    }
+    if (next) {
+      context.globalAlpha = 0.2;
+      context.drawImage(compositeFrameToCanvas(next), 0, 0);
+    }
+    context.globalAlpha = 1;
+  }, []);
+
+  // Full recomposite of the active frame (onion + every layer) into the document
+  // canvas, then blit to the display. Used on stroke-end and on any structural /
+  // opacity / visibility / frame change. Invalidates the per-stroke caches since
+  // the layer stack they were built from may have changed.
+  const renderDisplay = useCallback(() => {
+    const context = docContextRef.current;
     if (!context) {
       return;
     }
     context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    if (onionSkinRef.current && framesRef.current.length > 1) {
-      const index = activeFrameIndexRef.current;
-      const previous = framesRef.current[index - 1];
-      const next = framesRef.current[index + 1];
-      if (previous) {
-        context.globalAlpha = 0.28;
-        context.drawImage(compositeFrameToCanvas(previous), 0, 0);
-      }
-      if (next) {
-        context.globalAlpha = 0.2;
-        context.drawImage(compositeFrameToCanvas(next), 0, 0);
-      }
-      context.globalAlpha = 1;
-    }
-
+    paintOnionSkin(context);
     compositeLayers(context, layersRef.current);
+    compositeCacheValidRef.current = false;
+    blitToDisplay();
+  }, [blitToDisplay, paintOnionSkin]);
+
+  // Drop the cached below/above composites so the next stroke rebuilds them.
+  const invalidateCompositeCache = useCallback(() => {
+    compositeCacheValidRef.current = false;
   }, []);
 
-  const pushHistory = useCallback(() => {
-    historyRef.current.push(snapshotLayers(layersRef.current, activeLayerIdRef.current));
-
-    if (historyRef.current.length > MAX_HISTORY) {
-      historyRef.current.shift();
+  // Pre-render the static content around the active layer once at stroke-start
+  // (W1/W2): "below" = onion neighbours + all visible layers under the active
+  // layer; "above" = all visible layers above it. During the stroke each move
+  // only blits below + activeLayer + above into the document canvas.
+  const buildCompositeCache = useCallback(() => {
+    const activeId = activeLayerIdRef.current;
+    const layers = layersRef.current;
+    const activeIndex = layers.findIndex((layer) => layer.id === activeId);
+    if (activeIndex < 0) {
+      compositeCacheValidRef.current = false;
+      return false;
     }
 
-    redoRef.current = [];
-    updateHistoryCounts();
-  }, [updateHistoryCounts]);
+    if (!belowCacheRef.current) {
+      belowCacheRef.current = createLayerCanvas();
+    }
+    if (!aboveCacheRef.current) {
+      aboveCacheRef.current = createLayerCanvas();
+    }
 
-  // Apply a layer snapshot (used by undo/redo). Ensures the active id still
-  // points at an existing layer.
+    const belowCtx = belowCacheRef.current.getContext("2d");
+    belowCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    paintOnionSkin(belowCtx);
+    compositeLayerRange(belowCtx, layers, 0, activeIndex);
+
+    const aboveCtx = aboveCacheRef.current.getContext("2d");
+    aboveCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    compositeLayerRange(aboveCtx, layers, activeIndex + 1, layers.length);
+
+    activeStrokeLayerIdRef.current = activeId;
+    compositeCacheValidRef.current = true;
+    return true;
+  }, [paintOnionSkin]);
+
+  // Fast per-move composite while a stroke is live: below cache + active layer
+  // (at its own opacity) + above cache, into the document canvas, then blit.
+  // Falls back to a full recomposite if the cache is stale.
+  const renderStrokeFrame = useCallback(() => {
+    const context = docContextRef.current;
+    if (!context) {
+      return;
+    }
+    if (!compositeCacheValidRef.current || activeStrokeLayerIdRef.current !== activeLayerIdRef.current) {
+      renderDisplay();
+      return;
+    }
+    const active = layersRef.current.find((layer) => layer.id === activeLayerIdRef.current);
+    if (!active) {
+      renderDisplay();
+      return;
+    }
+    context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    context.globalAlpha = 1;
+    context.drawImage(belowCacheRef.current, 0, 0);
+    if (active.visible && active.opacity > 0) {
+      context.globalAlpha = active.opacity;
+      context.drawImage(active.canvas, 0, 0);
+      context.globalAlpha = 1;
+    }
+    context.drawImage(aboveCacheRef.current, 0, 0);
+    blitToDisplay();
+  }, [blitToDisplay, renderDisplay]);
+
+  // Schedule a single per-move composite per painted frame (W5). Coalesces
+  // bursts of pointermove handlers into at most one composite per rAF.
+  const scheduleStrokeFrame = useCallback(() => {
+    if (rafPendingRef.current) {
+      return;
+    }
+    rafPendingRef.current = window.requestAnimationFrame(() => {
+      rafPendingRef.current = 0;
+      renderStrokeFrame();
+    });
+  }, [renderStrokeFrame]);
+
+  // Flush any pending rAF composite immediately (used on stroke-end).
+  const flushStrokeFrame = useCallback(() => {
+    if (rafPendingRef.current) {
+      window.cancelAnimationFrame(rafPendingRef.current);
+      rafPendingRef.current = 0;
+    }
+  }, []);
+
+  // Size the visible display canvas backing store to its CSS box * devicePixel-
+  // Ratio so the 1600x1200 document blits in crisp on Retina/tablet screens
+  // (W6). The overlay (pointer + shape preview) stays in 1600x1200 doc space so
+  // getPoint's rect-normalized mapping is unaffected. Re-blits after resizing.
+  const resizeDisplayCanvas = useCallback(() => {
+    const display = displayCanvasRef.current;
+    if (!display) {
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const rect = display.getBoundingClientRect();
+    const cssWidth = rect.width || display.clientWidth || CANVAS_WIDTH;
+    const cssHeight = rect.height || display.clientHeight || CANVAS_HEIGHT;
+    const backingWidth = Math.max(1, Math.round(cssWidth * dpr));
+    const backingHeight = Math.max(1, Math.round(cssHeight * dpr));
+    if (display.width !== backingWidth || display.height !== backingHeight) {
+      display.width = backingWidth;
+      display.height = backingHeight;
+      const context = display.getContext("2d", { alpha: true, desynchronized: true });
+      context.imageSmoothingEnabled = true;
+      displayContextRef.current = context;
+    }
+    displayDprRef.current = dpr;
+    blitToDisplay();
+  }, [blitToDisplay]);
+
+  // Push an undo entry. Brush/fill/shape/text ops only touch the ACTIVE layer,
+  // so they snapshot just that layer + a lightweight structural descriptor (W4)
+  // — roughly Nx less memory than cloning the whole stack. Structural ops
+  // (add/delete/reorder/merge/duplicate/visibility) pass scope="full".
+  const pushHistory = useCallback(
+    (scope = "active") => {
+      const entry =
+        scope === "full"
+          ? snapshotLayers(layersRef.current, activeLayerIdRef.current)
+          : snapshotActiveLayer(layersRef.current, activeLayerIdRef.current);
+      historyRef.current.push(entry);
+
+      if (historyRef.current.length > MAX_HISTORY) {
+        historyRef.current.shift();
+      }
+
+      redoRef.current = [];
+      updateHistoryCounts();
+    },
+    [updateHistoryCounts],
+  );
+
+  // Capture the current state in the SAME shape as the entry we are about to
+  // apply, so undo/redo round-trips correctly for both snapshot kinds.
+  const captureInverse = useCallback((entry) => {
+    return entry.kind === "active"
+      ? snapshotActiveLayer(layersRef.current, activeLayerIdRef.current)
+      : snapshotLayers(layersRef.current, activeLayerIdRef.current);
+  }, []);
+
+  // Apply a layer snapshot (used by undo/redo). Full snapshots rebuild the whole
+  // stack; active snapshots only swap the active layer's pixels back in, leaving
+  // every other layer untouched. Ensures the active id still points at a layer.
   const applySnapshot = useCallback(
     (snapshot) => {
-      layersRef.current = restoreLayersFromSnapshot(snapshot);
-      const stillExists = layersRef.current.some((layer) => layer.id === snapshot.activeLayerId);
-      activeLayerIdRef.current = stillExists
-        ? snapshot.activeLayerId
-        : layersRef.current[layersRef.current.length - 1]?.id || null;
+      if (snapshot.kind === "active") {
+        const target = layersRef.current.find((layer) => layer.id === snapshot.activeLayerId);
+        if (target && snapshot.activeCanvas) {
+          target.canvas = cloneLayerCanvas(snapshot.activeCanvas);
+        } else if (target && !snapshot.activeCanvas) {
+          target.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        }
+        const stillExists = layersRef.current.some((layer) => layer.id === snapshot.activeLayerId);
+        if (stillExists) {
+          activeLayerIdRef.current = snapshot.activeLayerId;
+        }
+      } else {
+        layersRef.current = restoreLayersFromSnapshot(snapshot);
+        const stillExists = layersRef.current.some((layer) => layer.id === snapshot.activeLayerId);
+        activeLayerIdRef.current = stillExists
+          ? snapshot.activeLayerId
+          : layersRef.current[layersRef.current.length - 1]?.id || null;
+      }
+      invalidateCompositeCache();
       renderDisplay();
       syncLayerState();
       updateHistoryCounts();
     },
-    [renderDisplay, syncLayerState, updateHistoryCounts],
+    [invalidateCompositeCache, renderDisplay, syncLayerState, updateHistoryCounts],
   );
 
   const undo = useCallback(() => {
@@ -349,20 +574,20 @@ function StudioApp({ initialJoinCode = "" }) {
     if (!previous) {
       return;
     }
-    redoRef.current.push(snapshotLayers(layersRef.current, activeLayerIdRef.current));
+    redoRef.current.push(captureInverse(previous));
     applySnapshot(previous);
     markChanged("Undo");
-  }, [applySnapshot, markChanged]);
+  }, [applySnapshot, captureInverse, markChanged]);
 
   const redo = useCallback(() => {
     const next = redoRef.current.pop();
     if (!next) {
       return;
     }
-    historyRef.current.push(snapshotLayers(layersRef.current, activeLayerIdRef.current));
+    historyRef.current.push(captureInverse(next));
     applySnapshot(next);
     markChanged("Redo");
-  }, [applySnapshot, markChanged]);
+  }, [applySnapshot, captureInverse, markChanged]);
 
   const clearCanvas = useCallback(() => {
     const active = getActiveLayer();
@@ -422,36 +647,82 @@ function StudioApp({ initialJoinCode = "" }) {
     [renderPaper, selectedTexture],
   );
 
+  // Honest, async draft autosave (W3). Layers are encoded to PNG Blobs and
+  // written to IndexedDB (large quota, no base64 inflation). `dirtyRef` is only
+  // cleared and "Autosaved" shown when the write actually SUCCEEDS; on any
+  // failure (quota, IndexedDB unavailable) we keep `dirtyRef` true so the timer
+  // retries and surface a clear "couldn't autosave" status. If IndexedDB is
+  // unavailable we fall back to localStorage with the same honest behaviour
+  // (this can still hit the ~5MB quota, hence the IndexedDB primary path).
   const saveDraft = useCallback(async () => {
     if (saveInFlightRef.current || layersRef.current.length === 0) {
       return;
     }
 
     saveInFlightRef.current = true;
+    try {
+      const savedAt = new Date().toISOString();
+      const activeLayerId = activeLayerIdRef.current;
+      const settings = settingsRef.current;
 
-    // Persist each layer's pixels plus meta so the full stack restores.
-    const layerData = [];
-    for (const layer of layersRef.current) {
-      const dataUrl = await canvasToDataUrl(layer.canvas);
-      layerData.push({
-        id: layer.id,
-        name: layer.name,
-        visible: layer.visible,
-        opacity: layer.opacity,
-        locked: layer.locked,
-        image: dataUrl,
-      });
+      if (isIdbAvailable()) {
+        // Encode each layer to a PNG Blob; store Blobs directly (no base64).
+        const layerData = [];
+        for (const layer of layersRef.current) {
+          const blob = await canvasToBlob(layer.canvas);
+          layerData.push({
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            opacity: layer.opacity,
+            locked: layer.locked,
+            blob,
+          });
+        }
+
+        await idbSet(DRAFT_IDB_KEY, {
+          version: 4,
+          layers: layerData,
+          activeLayerId,
+          settings,
+          savedAt,
+        });
+        // The IndexedDB write is now the source of truth — drop any legacy
+        // localStorage draft so it can't shadow it or hold quota.
+        try {
+          window.localStorage.removeItem(STORAGE_KEYS.draft);
+        } catch {
+          // ignore — removing a stale key failing is non-fatal
+        }
+      } else {
+        // Fallback: localStorage with base64 dataURLs. Throw on quota failure so
+        // we report honestly instead of swallowing it.
+        const layerData = [];
+        for (const layer of layersRef.current) {
+          const dataUrl = await canvasToDataUrl(layer.canvas);
+          layerData.push({
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            opacity: layer.opacity,
+            locked: layer.locked,
+            image: dataUrl,
+          });
+        }
+        window.localStorage.setItem(
+          STORAGE_KEYS.draft,
+          JSON.stringify({ layers: layerData, activeLayerId, settings, savedAt }),
+        );
+      }
+
+      dirtyRef.current = false;
+      setStatus("Autosaved");
+    } catch {
+      // Keep dirtyRef true so the next interval retries, and tell the truth.
+      setStatus("Couldn't autosave — storage full");
+    } finally {
+      saveInFlightRef.current = false;
     }
-
-    writeJson(STORAGE_KEYS.draft, {
-      layers: layerData,
-      activeLayerId: activeLayerIdRef.current,
-      settings: settingsRef.current,
-      savedAt: new Date().toISOString(),
-    });
-    dirtyRef.current = false;
-    saveInFlightRef.current = false;
-    setStatus("Autosaved");
   }, []);
 
   const applyDraftSettings = useCallback((draftSettings) => {
@@ -483,11 +754,16 @@ function StudioApp({ initialJoinCode = "" }) {
         if (item.id) {
           layer.id = item.id;
         }
-        if (item.image) {
-          const image = await createImage(item.image).catch(() => null);
-          if (image) {
-            layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          }
+        // New drafts store a PNG Blob; legacy localStorage drafts store a
+        // base64 dataURL under `image`. Support both.
+        let image = null;
+        if (item.blob) {
+          image = await createImageFromBlob(item.blob).catch(() => null);
+        } else if (item.image) {
+          image = await createImage(item.image).catch(() => null);
+        }
+        if (image) {
+          layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         }
         rebuilt.push(layer);
       }
@@ -509,15 +785,36 @@ function StudioApp({ initialJoinCode = "" }) {
     [renderDisplay, syncFrameState, syncLayerState],
   );
 
+  // Load the saved draft from IndexedDB; if none exists there but a legacy
+  // localStorage draft does, fall back to it and migrate it into IndexedDB so
+  // existing users never lose their work (W3 back-compat). Returns the draft
+  // object (with `layers`) or null. `migrated` tracks whether we already wrote
+  // the legacy draft forward so we only delete the localStorage copy once a
+  // fresh IndexedDB save has actually succeeded.
+  const loadDraft = useCallback(async () => {
+    if (isIdbAvailable()) {
+      const idbDraft = await idbGet(DRAFT_IDB_KEY).catch(() => null);
+      if (idbDraft?.layers?.length) {
+        return idbDraft;
+      }
+    }
+    // No IndexedDB draft — try the legacy localStorage draft (base64 layers).
+    const legacy = readJson(STORAGE_KEYS.draft, null);
+    if (legacy?.layers?.length) {
+      return { ...legacy, fromLegacy: true };
+    }
+    return null;
+  }, []);
+
   const restoreDraft = useCallback(async () => {
-    const draft = readJson(STORAGE_KEYS.draft, null);
+    const draft = await loadDraft();
 
     if (!draft?.layers?.length) {
       setStatus("No saved draft yet");
       return;
     }
 
-    pushHistory();
+    pushHistory("full");
     await restoreLayersFromDraft(draft.layers);
 
     if (draft.activeLayerId && layersRef.current.some((layer) => layer.id === draft.activeLayerId)) {
@@ -526,8 +823,14 @@ function StudioApp({ initialJoinCode = "" }) {
     }
 
     applyDraftSettings(draft.settings);
+    // Restoring a legacy localStorage draft schedules a migration to IndexedDB:
+    // mark dirty so the autosave timer rewrites it forward (and clears the
+    // localStorage copy) on its next tick.
+    if (draft.fromLegacy) {
+      dirtyRef.current = true;
+    }
     markChanged("Draft restored");
-  }, [applyDraftSettings, markChanged, pushHistory, restoreLayersFromDraft, syncLayerState]);
+  }, [applyDraftSettings, loadDraft, markChanged, pushHistory, restoreLayersFromDraft, syncLayerState]);
 
   const saveToGallery = useCallback(async () => {
     if (layersRef.current.length === 0) {
@@ -598,7 +901,7 @@ function StudioApp({ initialJoinCode = "" }) {
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
     async (item) => {
-      pushHistory();
+      pushHistory("full");
       setSelectedTexture(item.textureId || "linen");
 
       const layer = createLayer({ name: "Artwork" });
@@ -699,9 +1002,11 @@ function StudioApp({ initialJoinCode = "" }) {
         lastPointRef.current = point;
       }
 
-      renderDisplay();
+      // Coalesced, cache-backed display update (W1/W2/W5): at most one
+      // below + active + above composite per painted frame.
+      scheduleStrokeFrame();
     },
-    [getActiveLayer, getPoint, renderDisplay],
+    [getActiveLayer, getPoint, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -815,13 +1120,15 @@ function StudioApp({ initialJoinCode = "" }) {
         return;
       }
 
-      // Default: brush / eraser stroke.
+      // Default: brush / eraser stroke. Pre-render the static below/above
+      // composite ONCE here so each move only blits 3 layers (W1/W2).
       lastPointRef.current = getPoint(event.nativeEvent);
       pushHistory();
+      buildCompositeCache();
       drawBrushFromEvent(event);
       markChanged("Drawing");
     },
-    [beginInteraction, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -886,16 +1193,22 @@ function StudioApp({ initialJoinCode = "" }) {
         }
         shapeStartRef.current = null;
       } else {
+        // Brush/eraser: flush any pending per-move composite, then do one full
+        // recomposite (this also invalidates the per-stroke caches).
+        flushStrokeFrame();
+        renderDisplay();
         markChanged("Stroke saved");
       }
 
       activePointerRef.current = null;
       activeCanvasRectRef.current = null;
       lastPointRef.current = null;
+      activeStrokeLayerIdRef.current = null;
+      invalidateCompositeCache();
       updateHistoryCounts();
       refreshActiveThumbnail();
     },
-    [getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
@@ -909,7 +1222,7 @@ function StudioApp({ initialJoinCode = "" }) {
   );
 
   const handleAddLayer = useCallback(() => {
-    pushHistory();
+    pushHistory("full");
     const layer = createLayer({ name: `Layer ${layersRef.current.length + 1}` });
     layersRef.current = [...layersRef.current, layer];
     activeLayerIdRef.current = layer.id;
@@ -923,7 +1236,7 @@ function StudioApp({ initialJoinCode = "" }) {
       if (layersRef.current.length <= 1) {
         return;
       }
-      pushHistory();
+      pushHistory("full");
       const index = layersRef.current.findIndex((layer) => layer.id === id);
       layersRef.current = layersRef.current.filter((layer) => layer.id !== id);
       if (activeLayerIdRef.current === id) {
@@ -944,7 +1257,7 @@ function StudioApp({ initialJoinCode = "" }) {
       if (!source) {
         return;
       }
-      pushHistory();
+      pushHistory("full");
       const copy = createLayer({
         name: `${source.name} copy`,
         visible: source.visible,
@@ -970,7 +1283,7 @@ function StudioApp({ initialJoinCode = "" }) {
       if (index <= 0) {
         return;
       }
-      pushHistory();
+      pushHistory("full");
       const upper = layersRef.current[index];
       const lower = layersRef.current[index - 1];
       const context = lower.canvas.getContext("2d");
@@ -995,7 +1308,7 @@ function StudioApp({ initialJoinCode = "" }) {
       if (index < 0 || target < 0 || target >= layersRef.current.length) {
         return;
       }
-      pushHistory();
+      pushHistory("full");
       const next = layersRef.current.slice();
       const [moved] = next.splice(index, 1);
       next.splice(target, 0, moved);
@@ -1087,19 +1400,22 @@ function StudioApp({ initialJoinCode = "" }) {
     }
     commitLayersToFrame();
     setIsPlaying(true);
-    const context = displayContextRef.current;
+    const context = docContextRef.current;
     let cursor = 0;
 
     const step = () => {
       const frame = framesRef.current[cursor % framesRef.current.length];
+      // Composite the frame into the art-resolution document, then blit it to
+      // the DPR-sized display canvas (same path as editing — stays crisp).
       context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       compositeLayers(context, frame.layers);
+      blitToDisplay();
       cursor += 1;
       playTimerRef.current = window.setTimeout(step, Math.max(40, frame.durationMs));
     };
 
     step();
-  }, [commitLayersToFrame]);
+  }, [blitToDisplay, commitLayersToFrame]);
 
   const handleTogglePlay = useCallback(() => {
     if (playTimerRef.current) {
@@ -1229,8 +1545,26 @@ function StudioApp({ initialJoinCode = "" }) {
     });
   }, [renderDisplay]);
 
-  // ---- GIF export: composite each frame (paper + layers) downscaled, then
-  // encode with the self-contained GIF89a encoder. ----
+  // ---- GIF export: composite each frame (paper + layers) downscaled to
+  // ImageData, then encode off the main thread in a Web Worker so the tab never
+  // freezes during quantization + LZW (W7). Falls back to a synchronous encode
+  // if a Worker can't be created. ----
+
+  // Lazily create the GIF worker. Returns null if Workers are unsupported or
+  // construction throws (we then fall back to the synchronous encoder).
+  const getGifWorker = useCallback(() => {
+    if (gifWorkerRef.current !== null) {
+      return gifWorkerRef.current || null;
+    }
+    try {
+      gifWorkerRef.current = new Worker(new URL("./utils/gif.worker.js", import.meta.url), {
+        type: "module",
+      });
+    } catch {
+      gifWorkerRef.current = false; // sentinel: tried, unavailable
+    }
+    return gifWorkerRef.current || null;
+  }, []);
 
   const exportGif = useCallback(async () => {
     if (isExportingGif) {
@@ -1244,7 +1578,9 @@ function StudioApp({ initialJoinCode = "" }) {
     setStatus("Encoding GIF…");
 
     try {
-      const gifFrames = [];
+      // Composite each frame (paper + visible layers) to ImageData at GIF size
+      // on the main thread; the heavy encode happens off-thread.
+      const imageFrames = [];
       for (const frame of framesRef.current) {
         const canvas = document.createElement("canvas");
         canvas.width = GIF_EXPORT_WIDTH;
@@ -1257,19 +1593,67 @@ function StudioApp({ initialJoinCode = "" }) {
           textureId: selectedTexture,
         });
         compositeLayers(context, frame.layers, { width: GIF_EXPORT_WIDTH, height: GIF_EXPORT_HEIGHT });
-        gifFrames.push({ source: canvas, delayMs: frame.durationMs });
+        const imageData = context.getImageData(0, 0, GIF_EXPORT_WIDTH, GIF_EXPORT_HEIGHT);
+        imageFrames.push({ data: imageData, delayMs: frame.durationMs });
       }
 
-      const bytes = encodeGif(gifFrames, { width: GIF_EXPORT_WIDTH, height: GIF_EXPORT_HEIGHT });
+      const frameCount = framesRef.current.length;
+      const worker = getGifWorker();
+
+      let bytes;
+      if (worker) {
+        const jobId = (gifJobSeedRef.current += 1);
+        bytes = await new Promise((resolve, reject) => {
+          const handleMessage = (event) => {
+            const message = event.data || {};
+            if (message.id !== jobId) {
+              return;
+            }
+            worker.removeEventListener("message", handleMessage);
+            worker.removeEventListener("error", handleError);
+            if (message.ok) {
+              resolve(message.bytes);
+            } else {
+              reject(new Error(message.error || "GIF worker failed"));
+            }
+          };
+          const handleError = (error) => {
+            worker.removeEventListener("message", handleMessage);
+            worker.removeEventListener("error", handleError);
+            reject(error);
+          };
+          worker.addEventListener("message", handleMessage);
+          worker.addEventListener("error", handleError);
+
+          // Transfer each frame's pixel buffer to avoid a copy.
+          const payloadFrames = imageFrames.map((frame) => ({
+            buffer: frame.data.data.buffer,
+            width: frame.data.width,
+            height: frame.data.height,
+            delayMs: frame.delayMs,
+          }));
+          worker.postMessage(
+            { id: jobId, width: GIF_EXPORT_WIDTH, height: GIF_EXPORT_HEIGHT, frames: payloadFrames },
+            payloadFrames.map((frame) => frame.buffer),
+          );
+        });
+      } else {
+        // Fallback: encode synchronously on the main thread.
+        bytes = encodeGif(
+          imageFrames.map((frame) => ({ source: frame.data, delayMs: frame.delayMs })),
+          { width: GIF_EXPORT_WIDTH, height: GIF_EXPORT_HEIGHT },
+        );
+      }
+
       const blob = new Blob([bytes], { type: "image/gif" });
       downloadBlob(blob, `happy-paint-loop-${Date.now()}.gif`);
-      setStatus(`GIF exported (${framesRef.current.length} frames)`);
+      setStatus(`GIF exported (${frameCount} frames)`);
     } catch {
       setStatus("GIF export failed");
     } finally {
       setIsExportingGif(false);
     }
-  }, [commitLayersToFrame, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
+  }, [commitLayersToFrame, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
 
   // ---- Paint Space locker ----
 
@@ -1452,19 +1836,19 @@ function StudioApp({ initialJoinCode = "" }) {
   // ---- Initialization ----
 
   useEffect(() => {
-    const display = displayCanvasRef.current;
     const overlay = overlayCanvasRef.current;
-    display.width = CANVAS_WIDTH;
-    display.height = CANVAS_HEIGHT;
     overlay.width = CANVAS_WIDTH;
     overlay.height = CANVAS_HEIGHT;
-
-    const displayContext = display.getContext("2d", { alpha: true, desynchronized: true });
-    displayContext.lineCap = "round";
-    displayContext.lineJoin = "round";
-    displayContext.imageSmoothingEnabled = true;
-    displayContextRef.current = displayContext;
     overlayContextRef.current = overlay.getContext("2d", { alpha: true });
+
+    // The 1600x1200 art-resolution document everything composites into.
+    const doc = createLayerCanvas();
+    docCanvasRef.current = doc;
+    docContextRef.current = doc.getContext("2d", { alpha: true });
+
+    // The visible display canvas backing store is sized to CSS box * DPR (W6);
+    // resizeDisplayCanvas creates its context and performs the first blit.
+    resizeDisplayCanvas();
 
     const firstFrame = createFrame({ layers: createDefaultLayers() });
     framesRef.current = [firstFrame];
@@ -1485,19 +1869,67 @@ function StudioApp({ initialJoinCode = "" }) {
     setStudioUnlocked(Boolean(savedStudio));
     setPaintSpaceAssets(readPaintSpace());
 
-    const draft = readJson(STORAGE_KEYS.draft, null);
-    if (draft?.layers?.length) {
+    // Restore a saved draft (IndexedDB first, legacy localStorage second). A
+    // legacy draft is migrated forward to IndexedDB by marking dirty so the
+    // autosave timer rewrites it (W3 back-compat).
+    loadDraft().then((draft) => {
+      if (!draft?.layers?.length) {
+        return;
+      }
       restoreLayersFromDraft(draft.layers).then(() => {
         if (draft.activeLayerId && layersRef.current.some((layer) => layer.id === draft.activeLayerId)) {
           activeLayerIdRef.current = draft.activeLayerId;
           syncLayerState();
         }
+        if (draft.fromLegacy) {
+          dirtyRef.current = true;
+        }
         setStatus("Draft restored");
       });
       applyDraftSettings(draft.settings);
-    }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the display canvas backing store matched to its CSS size and the
+  // current device pixel ratio so it stays crisp through window resizes, layout
+  // changes, and DPR changes (e.g. dragging the tab between monitors) — W6.
+  useEffect(() => {
+    let mediaQuery = null;
+    const handleDprChange = () => {
+      resizeDisplayCanvas();
+      // matchMedia('resolution') must be re-armed after each change.
+      attachDprListener();
+    };
+    function attachDprListener() {
+      if (typeof window.matchMedia !== "function") {
+        return;
+      }
+      const dpr = window.devicePixelRatio || 1;
+      mediaQuery = window.matchMedia(`(resolution: ${dpr}dppx)`);
+      if (mediaQuery.addEventListener) {
+        mediaQuery.addEventListener("change", handleDprChange, { once: true });
+      } else if (mediaQuery.addListener) {
+        mediaQuery.addListener(handleDprChange);
+      }
+    }
+
+    const handleResize = () => resizeDisplayCanvas();
+    window.addEventListener("resize", handleResize);
+    attachDprListener();
+    resizeDisplayCanvas();
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (mediaQuery) {
+        if (mediaQuery.removeEventListener) {
+          mediaQuery.removeEventListener("change", handleDprChange);
+        } else if (mediaQuery.removeListener) {
+          mediaQuery.removeListener(handleDprChange);
+        }
+      }
+    };
+  }, [resizeDisplayCanvas]);
 
   useEffect(() => {
     autosaveTimerRef.current = window.setInterval(() => {
@@ -1511,12 +1943,20 @@ function StudioApp({ initialJoinCode = "" }) {
     };
   }, [saveDraft]);
 
-  // Stop any running loop preview when the studio unmounts.
+  // Stop any running loop preview and tear down the GIF worker on unmount.
   useEffect(() => {
     return () => {
       if (playTimerRef.current) {
         window.clearTimeout(playTimerRef.current);
         playTimerRef.current = null;
+      }
+      if (rafPendingRef.current) {
+        window.cancelAnimationFrame(rafPendingRef.current);
+        rafPendingRef.current = 0;
+      }
+      if (gifWorkerRef.current) {
+        gifWorkerRef.current.terminate();
+        gifWorkerRef.current = null;
       }
     };
   }, []);

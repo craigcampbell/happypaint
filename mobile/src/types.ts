@@ -130,6 +130,17 @@ export type DrawingProject = {
   strokes?: Stroke[];
 };
 
+// Lightweight gallery index entry. The shared list key stores only these so a
+// single read never pulls every project body (avoids the Android SQLite
+// CursorWindow ~2MB limit). Full bodies live in their own per-project entry.
+export type ProjectIndexEntry = {
+  id: string;
+  title: string;
+  updatedAt: number;
+  createdAt: number;
+  previewUri?: string;
+};
+
 // --- Paint Space locker -----------------------------------------------------
 // Mirrors backend public.space_assets (id, kind, title, payload, thumbnail,
 // createdAt) so the local locker is sync-ready. `kind` is a youth-facing subset

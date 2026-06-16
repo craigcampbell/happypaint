@@ -108,22 +108,24 @@ Biggest-first rationale: Layer Lite + drawing tools are the foundation everythin
 
 Audit of the drawing hot path across all platforms. Severity is the auditor's estimate. Fix order: data-loss → draw hot path → memory → export freeze → visible correctness → rest. See `performance_audit.md` for evidence, locations, and fixes.
 
-### 🟥 Critical
-- **W3 — Web autosave silently loses artwork.** PNG→localStorage overflows ~5MB quota; `QuotaExceededError` swallowed, "Autosaved" shown anyway. *(verified)*
-- **M1 — Mobile re-serializes whole project to AsyncStorage on every stroke.** No debounce; O(n²) writes; main-thread stalls. *(verified)*
-- **M5 — Mobile gallery silently wiped on Android.** Oversized payload exceeds ~2MB SQLite CursorWindow; `loadProjects` catch returns `[]`.
-- **W1 — Web full multi-layer recomposite per pointer move** (~9.6M px/move at 4 layers) — stroke lag.
-- **W2 — Web onion skin allocates + composites neighbor frame stacks every move** — multiplies W1.
-- **M2 — Mobile: every committed stroke is a permanent Skia node** (paint brush mounts up to 24 circles/stroke); unbounded repaint cost.
+**All Critical + High items fixed (2026-06-15).** Web build + lint clean; mobile typecheck clean.
 
-### 🟥 High
-- **W4 — Web undo history clones full layer stack/stroke** (~30MB/entry, up to ~550MB) — OOM risk.
-- **W6 — Web canvas blurry on all HiDPI/tablets** (no devicePixelRatio handling).
-- **W7 — Web GIF encode synchronous on main thread** — multi-second tab freeze.
-- **W5 — Web display update not rAF-coalesced** (compounds W1).
-- **M3 — Mobile live stroke repaints entire committed scene each rAF.**
-- **M4 — Mobile unbounded spray-dot growth + full path rebuild per frame** (O(n²)).
-- **M6 — Mobile export flag race + UI-thread GIF freeze** (wrong/blank exports on overlap).
+### 🟩 Critical — DONE
+- **W3 — Web autosave silently loses artwork.** ✅ Moved draft autosave to IndexedDB (blobs, large quota); failures now surfaced honestly ("Couldn't autosave — storage full"), dirty flag retained; legacy localStorage draft migrated. *(`src/utils/idb.js`, `App.jsx`)*
+- **M1 — Mobile re-serializes whole project on every stroke.** ✅ 1s trailing debounce + flush on background/unmount/back; per-project files (expo-file-system) + lightweight index; one-time migration from old key. *(`App.tsx`, `storage.ts`)*
+- **M5 — Mobile gallery silently wiped on Android.** ✅ Per-project files avoid the ~2MB CursorWindow; read failures logged & skipped per-entry (never returns `[]` destroying data); raw data preserved; coords quantized.
+- **W1 — Web full multi-layer recomposite per pointer move.** ✅ Cached below/active/above composites at stroke-start → 3 blits/move regardless of layer count; full recomposite only on stroke-end/structural change.
+- **W2 — Web onion skin recomposites neighbor frames every move.** ✅ Onion neighbors precomputed once into the cached "below" composite.
+- **M2 — Mobile every committed stroke is a permanent Skia node.** ✅ Committed items flattened into cached `SkPicture` per run; dropped the 24-circle paint decoration; `LayerItemsNode` memoized.
+
+### 🟩 High — DONE
+- **W4 — Web undo history clones full layer stack/stroke.** ✅ Active-layer-only snapshots for brush/fill/shape/text; full-stack snapshots only for structural ops (~4× less memory/entry).
+- **W6 — Web canvas blurry on HiDPI/tablets.** ✅ Display canvas backing store sized to `css × devicePixelRatio`; recomputed on resize + DPR change; doc stays 1600×1200.
+- **W7 — Web GIF encode froze the tab.** ✅ Encoding moved to a Web Worker (`gif.worker.js`) with transferable ImageData; sync fallback; button disabled + status during encode.
+- **W5 — Web display update not rAF-coalesced.** ✅ Per-move render gated behind a single pending rAF; flushed on stroke-end.
+- **M3 — Mobile live stroke repaints entire scene each rAF.** ✅ Committed content now cached SkPictures; only the live-stroke node is dynamic.
+- **M4 — Mobile unbounded spray growth + path rebuild.** ✅ `MAX_SPRAY_DOTS = 3000` cap; live path bounded; committed spray cached.
+- **M6 — Mobile export race + UI-thread GIF freeze.** ✅ Single in-flight export lock (preview snapshot coordinated); `encodeGif` async with `setTimeout(0)` yields + sample stride 4; per-frame `SkImage.dispose()`.
 
 ### 🟥 Medium
 - **W12** pointerleave ends stroke mid-drag · **W13** opacity slider recomposites per tick (non-undoable) · **W9** all frame thumbnails regenerated on any frame change · **W10** flood fill copies full ImageData + 1.92MB visited array · **W11** shape preview clears full overlay each move · **W8** GIF ByteBuffer is boxed number[].

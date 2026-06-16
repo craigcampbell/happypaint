@@ -23,6 +23,13 @@ export type RgbaFrame = {
 
 const ALPHA_THRESHOLD = 128;
 
+// M6: the encoder can't move to a real worker in RN, so to avoid an ANR we yield
+// to the event loop between frames (and periodically while mapping pixels) so
+// the UI stays responsive during a heavy export.
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 // --- Median-cut color quantization -----------------------------------------
 
 type Box = {
@@ -256,7 +263,7 @@ class ByteWriter {
 
 // --- Main encoder -----------------------------------------------------------
 
-export function encodeGif(frames: RgbaFrame[]): Uint8Array {
+export async function encodeGif(frames: RgbaFrame[]): Promise<Uint8Array> {
   if (frames.length === 0) {
     throw new Error("Cannot encode a GIF with no frames.");
   }
@@ -266,8 +273,10 @@ export function encodeGif(frames: RgbaFrame[]): Uint8Array {
 
   // Gather a sample of opaque colors across all frames for the global palette.
   // Reserve one slot for transparency, so quantize to at most 255 colors.
+  // M6: sample every 4th pixel for the palette to cut the median-cut input by
+  // ~4x. The palette is a coarse summary, so a stride here is visually safe.
   const opaque: number[] = [];
-  const sampleStride = 1; // every pixel; frames are small canvases.
+  const sampleStride = 4;
   for (const frame of frames) {
     const { data } = frame;
     for (let p = 0; p < data.length; p += 4 * sampleStride) {
@@ -275,6 +284,7 @@ export function encodeGif(frames: RgbaFrame[]): Uint8Array {
         opaque.push((data[p] << 16) | (data[p + 1] << 8) | data[p + 2]);
       }
     }
+    await yieldToEventLoop();
   }
 
   const palette = medianCut(opaque, 255);
@@ -360,6 +370,9 @@ export function encodeGif(frames: RgbaFrame[]): Uint8Array {
     writer.byte(minCodeSize);
     const compressed = lzwCompress(indices, minCodeSize);
     writer.subBlocks(compressed);
+
+    // M6: yield between frames so the JS thread isn't held for the whole encode.
+    await yieldToEventLoop();
   }
 
   writer.byte(0x3b); // trailer

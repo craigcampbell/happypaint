@@ -55,6 +55,7 @@ export function cloneLayerCanvas(source) {
 // so structural changes (reorder, add, delete, merge) are reversible too.
 export function snapshotLayers(layers, activeLayerId) {
   return {
+    kind: "full",
     activeLayerId,
     layers: layers.map((layer) => ({
       id: layer.id,
@@ -94,4 +95,39 @@ export function compositeLayers(context, layers, { width, height } = {}) {
   }
 
   context.globalAlpha = 1;
+}
+
+// Composite only a contiguous slice of the layer stack (used to pre-render the
+// "below active" and "above active" caches so a stroke never recomposites the
+// whole stack). from is inclusive, to is exclusive.
+export function compositeLayerRange(context, layers, from, to) {
+  for (let i = from; i < to; i += 1) {
+    const layer = layers[i];
+    if (!layer || !layer.visible || layer.opacity <= 0) {
+      continue;
+    }
+    context.globalAlpha = layer.opacity;
+    context.drawImage(layer.canvas, 0, 0);
+  }
+  context.globalAlpha = 1;
+}
+
+// Snapshot of ONLY the active layer plus a lightweight structural descriptor of
+// the whole stack (ids/meta, no pixels). Used for brush/fill/shape/text undo
+// entries that only touch the active layer — ~Nx smaller than a full snapshot.
+export function snapshotActiveLayer(layers, activeLayerId) {
+  const active = layers.find((layer) => layer.id === activeLayerId) || null;
+  return {
+    kind: "active",
+    activeLayerId,
+    // Lightweight ordered descriptor so undo can detect/repair structural drift.
+    order: layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      opacity: layer.opacity,
+      locked: layer.locked,
+    })),
+    activeCanvas: active ? cloneLayerCanvas(active.canvas) : null,
+  };
 }

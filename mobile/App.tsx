@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 
 import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
 import { DiscoverScreen } from "./src/components/DiscoverScreen";
@@ -13,7 +13,7 @@ import {
   ensureStorageReady,
   loadProjects,
   loadStoredSettings,
-  saveProjects,
+  saveProject,
   saveStoredSettings,
 } from "./src/storage";
 import type {
@@ -102,6 +102,12 @@ export default function App() {
   const [pendingJoinCode, setPendingJoinCode] = useState("");
   const [pendingSticker, setPendingSticker] = useState<StickerPayload | null>(null);
   const projectsRef = useRef<DrawingProject[]>([]);
+  // Debounced persistence (M1a): rapid strokes mutate in-memory state every
+  // commit but only write to disk on a trailing timer. `pendingSaveRef` always
+  // holds the LATEST project to flush (avoids stale-closure writes).
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<DrawingProject | null>(null);
+  const SAVE_DEBOUNCE_MS = 1000;
 
   useEffect(() => {
     let mounted = true;
@@ -146,15 +152,57 @@ export default function App() {
     return () => subscription.remove();
   }, []);
 
-  const persistProject = useCallback(async (project: DrawingProject) => {
-    setCurrentProject(project);
-    const nextProjects = [project, ...projectsRef.current.filter((item) => item.id !== project.id)].sort(
-      (a, b) => b.updatedAt - a.updatedAt
-    );
-    projectsRef.current = nextProjects;
-    setProjects(nextProjects);
-    await saveProjects(nextProjects);
+  // Write the latest pending project to disk and clear the timer. Always reads
+  // the freshest snapshot from the ref so a debounced flush never persists a
+  // stale closure value.
+  const flushPendingSave = useCallback(async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const project = pendingSaveRef.current;
+    if (!project) {
+      return;
+    }
+    pendingSaveRef.current = null;
+    await saveProject(project);
   }, []);
+
+  const persistProject = useCallback(
+    (project: DrawingProject) => {
+      // In-memory state updates immediately so the UI/gallery never lag.
+      setCurrentProject(project);
+      const nextProjects = [project, ...projectsRef.current.filter((item) => item.id !== project.id)].sort(
+        (a, b) => b.updatedAt - a.updatedAt
+      );
+      projectsRef.current = nextProjects;
+      setProjects(nextProjects);
+
+      // Disk write is debounced (trailing) and always flushes the latest project.
+      pendingSaveRef.current = project;
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        void flushPendingSave();
+      }, SAVE_DEBOUNCE_MS);
+    },
+    [flushPendingSave]
+  );
+
+  // Flush on app background and on unmount so a debounced write is never lost.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "background" || state === "inactive") {
+        void flushPendingSave();
+      }
+    });
+    return () => {
+      subscription.remove();
+      void flushPendingSave();
+    };
+  }, [flushPendingSave]);
 
   const updateSettings = useCallback(async (nextSettings: AppSettings) => {
     setSettings(nextSettings);
@@ -163,9 +211,12 @@ export default function App() {
 
   const createProject = useCallback(async () => {
     const project = makeProject();
-    await persistProject(project);
+    persistProject(project);
+    // A brand-new project has no strokes to trigger another save soon, so write
+    // it through immediately rather than waiting on the debounce timer.
+    await flushPendingSave();
     setMode("studio");
-  }, [persistProject]);
+  }, [flushPendingSave, persistProject]);
 
   const openProject = useCallback(
     async (project: DrawingProject) => {
@@ -232,10 +283,11 @@ export default function App() {
       const nextSettings = { ...settings, texture: payload.texture };
       setSettings(nextSettings);
       await saveStoredSettings(nextSettings);
-      await persistProject(project);
+      persistProject(project);
+      await flushPendingSave();
       setMode("studio");
     },
-    [persistProject, settings]
+    [flushPendingSave, persistProject, settings]
   );
 
   const applyLoop = useCallback(
@@ -244,10 +296,11 @@ export default function App() {
       const nextSettings = { ...settings, texture: payload.texture };
       setSettings(nextSettings);
       await saveStoredSettings(nextSettings);
-      await persistProject(project);
+      persistProject(project);
+      await flushPendingSave();
       setMode("studio");
     },
-    [persistProject, settings]
+    [flushPendingSave, persistProject, settings]
   );
 
   if (loading) {
@@ -282,7 +335,12 @@ export default function App() {
         {mode === "studio" && currentProject ? (
           <StudioScreen
             calmMode={settings.calmMode}
-            onBack={() => setMode("gallery")}
+            onBack={() => {
+              // Flush any debounced save before leaving so the latest strokes
+              // are on disk when the gallery re-reads from storage.
+              void flushPendingSave();
+              setMode("gallery");
+            }}
             onOpenPaintSpace={() => setMode("paintspace")}
             onOpenSettings={() => setMode("settings")}
             onProjectChange={persistProject}

@@ -47,16 +47,23 @@ import {
   View
 } from "react-native";
 import {
+  BlendMode,
   Canvas,
-  Circle,
+  createPicture,
   Group,
   Image as SkiaImage,
   Line,
   matchFont,
   Oval,
+  PaintStyle,
   Path,
+  Picture,
   Rect,
+  type SkCanvas,
+  type SkPicture,
   Skia,
+  StrokeCap,
+  StrokeJoin,
   Text as SkiaText,
   useCanvasRef,
   useImage,
@@ -127,6 +134,11 @@ type CanvasSize = {
 };
 
 const MIN_CANVAS_WIDTH = 240;
+
+// M4: hard cap on spray dots per stroke. Without this a long spray drag can
+// accumulate tens of thousands of dots, each a Skia sub-path, blowing up both
+// the live path rebuild cost and the serialized size.
+const MAX_SPRAY_DOTS = 3000;
 
 const TOOLS: Array<{ id: StudioTool; label: string }> = [
   { id: "brush", label: "Brush" },
@@ -217,6 +229,101 @@ function makeSprayPath(dots: SprayDot[]) {
   }
 
   return path;
+}
+
+// --- Imperative drawing (M2/M3) ---------------------------------------------
+// Committed stroke / shape / fill items are flattened into a single cached
+// SkPicture per contiguous run (see LayerCanvasItems below) instead of mounting
+// one React-managed Skia node per item. These helpers replicate exactly what
+// the declarative StrokeNode / ShapeNode render, but draw straight onto an
+// SkCanvas so the whole run collapses to one node Skia repaints.
+
+function strokePaint(color: string, opacity: number, width: number, style: PaintStyle, blend?: BlendMode) {
+  const paint = Skia.Paint();
+  paint.setAntiAlias(true);
+  paint.setColor(Skia.Color(color));
+  paint.setAlphaf(clamp(opacity, 0, 1));
+  paint.setStyle(style);
+  if (style === PaintStyle.Stroke) {
+    paint.setStrokeWidth(width);
+    paint.setStrokeCap(StrokeCap.Round);
+    paint.setStrokeJoin(StrokeJoin.Round);
+  }
+  if (blend !== undefined) {
+    paint.setBlendMode(blend);
+  }
+  return paint;
+}
+
+function drawStroke(canvas: SkCanvas, stroke: Stroke, paperBackground: string) {
+  if (stroke.brush === "spray") {
+    const path = makeSprayPath(stroke.sprayDots ?? []);
+    canvas.drawPath(path, strokePaint(stroke.color, stroke.opacity, 0, PaintStyle.Fill));
+    return;
+  }
+
+  const path = makePath(stroke.points);
+
+  if (stroke.brush === "marker") {
+    canvas.drawPath(path, strokePaint(stroke.color, stroke.opacity, stroke.size, PaintStyle.Stroke));
+    return;
+  }
+
+  if (stroke.brush === "pencil") {
+    canvas.drawPath(
+      path,
+      strokePaint(stroke.color, stroke.opacity * 0.72, Math.max(1, stroke.size * 0.62), PaintStyle.Stroke)
+    );
+    return;
+  }
+
+  if (stroke.brush === "eraser") {
+    canvas.drawPath(path, strokePaint(paperBackground, 1, stroke.size * 1.35, PaintStyle.Stroke));
+    return;
+  }
+
+  if (stroke.brush === "glow") {
+    canvas.drawPath(path, strokePaint(stroke.color, stroke.opacity * 0.34, stroke.size * 1.6, PaintStyle.Stroke));
+    canvas.drawPath(path, strokePaint(stroke.color, stroke.opacity * 0.84, stroke.size * 0.82, PaintStyle.Stroke));
+    canvas.drawPath(path, strokePaint("#ffffff", stroke.opacity * 0.36, Math.max(1, stroke.size * 0.22), PaintStyle.Stroke));
+    return;
+  }
+
+  // "paint" brush: a single stroked path. The old per-point Circle decoration
+  // (up to 24 nodes/stroke) is dropped entirely (M2).
+  canvas.drawPath(path, strokePaint(stroke.color, stroke.opacity * 0.82, stroke.size * 1.08, PaintStyle.Stroke));
+}
+
+function drawShape(canvas: SkCanvas, shape: ShapeItem) {
+  if (shape.shape === "line") {
+    const paint = strokePaint(shape.color, shape.opacity, shape.size, PaintStyle.Stroke);
+    canvas.drawLine(shape.startX, shape.startY, shape.endX, shape.endY, paint);
+    return;
+  }
+
+  const x = Math.min(shape.startX, shape.endX);
+  const y = Math.min(shape.startY, shape.endY);
+  const width = Math.abs(shape.endX - shape.startX);
+  const height = Math.abs(shape.endY - shape.startY);
+  const style = shape.filled ? PaintStyle.Fill : PaintStyle.Stroke;
+  const paint = strokePaint(shape.color, shape.opacity, shape.size, style);
+  const rect = Skia.XYWHRect(x, y, width, height);
+
+  if (shape.shape === "rect") {
+    canvas.drawRect(rect, paint);
+  } else {
+    canvas.drawOval(rect, paint);
+  }
+}
+
+function drawFill(canvas: SkCanvas, color: string, opacity: number, canvasWidth: number, canvasHeight: number) {
+  canvas.drawRect(Skia.XYWHRect(0, 0, canvasWidth, canvasHeight), strokePaint(color, opacity, 0, PaintStyle.Fill));
+}
+
+// True for the item kinds that can be flattened into an SkPicture. Image and
+// text items need async decode / font resources, so they stay declarative.
+function isPictureItem(item: LayerItem): item is StrokeItem | ShapeItem | FillItem {
+  return item.kind === "stroke" || item.kind === "shape" || item.kind === "fill";
 }
 
 type StrokeNodeProps = {
@@ -315,21 +422,18 @@ const StrokeNode = memo(function StrokeNode({ stroke, paperBackground }: StrokeN
     );
   }
 
+  // "paint" brush: a single stroked path. The old per-point Circle decoration
+  // (up to 24 mounted nodes per stroke) is dropped to bound node growth (M2).
   return (
-    <Group>
-      <Path
-        path={path}
-        color={stroke.color}
-        opacity={stroke.opacity * 0.82}
-        strokeCap="round"
-        strokeJoin="round"
-        strokeWidth={stroke.size * 1.08}
-        style="stroke"
-      />
-      {stroke.points.slice(-24).map((point, index) => (
-        <Circle color={stroke.color} cx={point.x} cy={point.y} key={`${stroke.id}-${index}`} opacity={stroke.opacity * 0.22} r={point.size * 0.2} />
-      ))}
-    </Group>
+    <Path
+      path={path}
+      color={stroke.color}
+      opacity={stroke.opacity * 0.82}
+      strokeCap="round"
+      strokeJoin="round"
+      strokeWidth={stroke.size * 1.08}
+      style="stroke"
+    />
   );
 }, (previous, next) => previous.stroke === next.stroke && previous.paperBackground === next.paperBackground);
 
@@ -393,37 +497,95 @@ type LayerItemsProps = {
   canvasHeight: number;
 };
 
-function LayerItemsNode({ items, paperBackground, canvasWidth, canvasHeight }: LayerItemsProps) {
+// A render block is either a cached SkPicture flattening a contiguous run of
+// stroke/shape/fill items (one Skia node total), or a single declarative
+// image/text item that needs a hook-driven resource.
+type RenderBlock =
+  | { type: "picture"; key: string; items: Array<StrokeItem | ShapeItem | FillItem> }
+  | { type: "element"; key: string; item: ImageItem | TextItem };
+
+// M2 + M3: flatten committed stroke/shape/fill items per contiguous run into a
+// single memoized SkPicture so Skia repaints one node per run rather than one
+// per item, and the live stroke (a sibling node) no longer forces a re-walk of
+// every committed mark each frame. Image/text items stay declarative (they need
+// useImage / matchFont) and preserve z-order by splitting the run list.
+const LayerItemsNode = memo(function LayerItemsNode({ items, paperBackground, canvasWidth, canvasHeight }: LayerItemsProps) {
+  const blocks = useMemo<RenderBlock[]>(() => {
+    const result: RenderBlock[] = [];
+    let run: Array<StrokeItem | ShapeItem | FillItem> = [];
+    const flushRun = () => {
+      if (run.length > 0) {
+        result.push({ type: "picture", key: `pic-${run[0].id}`, items: run });
+        run = [];
+      }
+    };
+    for (const item of items) {
+      if (isPictureItem(item)) {
+        run.push(item);
+      } else {
+        flushRun();
+        result.push({ type: "element", key: item.id, item });
+      }
+    }
+    flushRun();
+    return result;
+  }, [items]);
+
   return (
     <>
-      {items.map((item) => {
-        if (item.kind === "stroke") {
-          return <StrokeNode key={item.id} paperBackground={paperBackground} stroke={item.stroke} />;
+      {blocks.map((block) => {
+        if (block.type === "element") {
+          if (block.item.kind === "image") {
+            return <ImageItemNode item={block.item} key={block.key} />;
+          }
+          return <TextNode item={block.item} key={block.key} />;
         }
-        if (item.kind === "fill") {
-          return (
-            <Rect
-              color={item.color}
-              height={canvasHeight}
-              key={item.id}
-              opacity={item.opacity}
-              width={canvasWidth}
-              x={0}
-              y={0}
-            />
-          );
-        }
-        if (item.kind === "shape") {
-          return <ShapeNode key={item.id} shape={item} />;
-        }
-        if (item.kind === "image") {
-          return <ImageItemNode item={item} key={item.id} />;
-        }
-        return <TextNode item={item} key={item.id} />;
+        return (
+          <PictureBlock
+            canvasHeight={canvasHeight}
+            canvasWidth={canvasWidth}
+            items={block.items}
+            key={block.key}
+            paperBackground={paperBackground}
+          />
+        );
       })}
     </>
   );
-}
+});
+
+type PictureBlockProps = {
+  items: Array<StrokeItem | ShapeItem | FillItem>;
+  paperBackground: string;
+  canvasWidth: number;
+  canvasHeight: number;
+};
+
+// Builds (and memoizes) one SkPicture for a contiguous run of flattenable items.
+// Recomputed only when the run's items array, the paper color, or the canvas
+// size changes — not on every live-stroke frame.
+const PictureBlock = memo(function PictureBlock({ items, paperBackground, canvasWidth, canvasHeight }: PictureBlockProps) {
+  const picture = useMemo<SkPicture>(
+    () =>
+      createPicture(
+        (canvas) => {
+          for (const item of items) {
+            if (item.kind === "stroke") {
+              drawStroke(canvas, item.stroke, paperBackground);
+            } else if (item.kind === "shape") {
+              drawShape(canvas, item);
+            } else {
+              drawFill(canvas, item.color, item.opacity, canvasWidth, canvasHeight);
+            }
+          }
+        },
+        Skia.XYWHRect(0, 0, canvasWidth, canvasHeight)
+      ),
+    [items, paperBackground, canvasWidth, canvasHeight]
+  );
+
+  return <Picture picture={picture} />;
+});
 
 type ImageItemNodeProps = {
   item: ImageItem;
@@ -490,6 +652,11 @@ export function StudioScreen({
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // M6: single in-flight export/snapshot guard. Any capture that flips the
+  // canvas into export mode (transparent PNG, per-frame snapshot, GIF) must
+  // hold this so two captures can't run at once and grab the wrong scene. Also
+  // used to stop the debounced preview snapshot from racing an export.
+  const exportInFlightRef = useRef(false);
 
   const textureImage = settings.texture === "linen" ? linenImage : settings.texture === "canvas" ? canvasImage : null;
   const textureMeta = TEXTURES.find((texture) => texture.id === settings.texture) ?? TEXTURES[0];
@@ -636,6 +803,11 @@ export function StudioScreen({
 
   const savePreview = useCallback(
     async (nextProject: DrawingProject) => {
+      // M6: never snapshot for a preview while an export capture owns the canvas
+      // (it has flipped the background/frame). Skip; the next commit reschedules.
+      if (exportInFlightRef.current) {
+        return;
+      }
       try {
         const uri = await captureToUri(previewPath(nextProject.id));
         onProjectChange({ ...nextProject, previewUri: `${uri}?updated=${Date.now()}` });
@@ -723,8 +895,15 @@ export function StudioScreen({
       stroke.points.push(...points);
       if (stroke.brush === "spray") {
         const sprayDots = stroke.sprayDots ?? [];
+        // M4: stop accumulating once the per-stroke cap is hit. Bounds both the
+        // live path rebuild cost and the serialized payload.
         for (const sprayedPoint of points) {
-          sprayDots.push(...makeSprayDots(sprayedPoint));
+          if (sprayDots.length >= MAX_SPRAY_DOTS) {
+            break;
+          }
+          const dots = makeSprayDots(sprayedPoint);
+          const room = MAX_SPRAY_DOTS - sprayDots.length;
+          sprayDots.push(...(dots.length > room ? dots.slice(0, room) : dots));
         }
         stroke.sprayDots = sprayDots;
       }
@@ -1257,12 +1436,17 @@ export function StudioScreen({
   // texture and import) for one synchronous render, snapshot, then flip back.
   const captureTransparent = useCallback(
     async (uri: string) => {
+      if (exportInFlightRef.current) {
+        throw new Error("Another export is still running. Please wait for it to finish.");
+      }
+      exportInFlightRef.current = true;
       setExporting(true);
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       try {
         return await captureToUri(uri);
       } finally {
         setExporting(false);
+        exportInFlightRef.current = false;
       }
     },
     [captureToUri]
@@ -1325,6 +1509,23 @@ export function StudioScreen({
 
   // --- Per-frame snapshot helpers (loop export) ------------------------------
   // Render a single frame transparently, snapshot it, and return the SkImage.
+  // M6: acquire/release the single in-flight export lock for a whole capture
+  // sequence. GIF/loop export snapshot many frames; the lock is held across the
+  // entire loop so the preview snapshot (and a second export) can't interleave.
+  const withExportLock = useCallback(async <T,>(run: () => Promise<T>): Promise<T> => {
+    if (exportInFlightRef.current) {
+      throw new Error("Another export is still running. Please wait for it to finish.");
+    }
+    exportInFlightRef.current = true;
+    try {
+      return await run();
+    } finally {
+      exportInFlightRef.current = false;
+    }
+  }, []);
+
+  // Snapshot a single frame transparently. Assumes the export lock is already
+  // held by the caller (it is invoked inside a withExportLock sequence).
   const snapshotFrameImage = useCallback(
     async (frameId: string) => {
       setExporting(true);
@@ -1349,6 +1550,10 @@ export function StudioScreen({
       Alert.alert("Add more frames", "A loop needs at least 2 frames. Add a frame in the Loop panel first.");
       return;
     }
+    if (exportInFlightRef.current) {
+      Alert.alert("Export in progress", "Please wait for the current export to finish.");
+      return;
+    }
     setBusyLabel("Building GIF...");
     try {
       const rgbaFrames: RgbaFrame[] = [];
@@ -1357,36 +1562,46 @@ export function StudioScreen({
       let pixelReadFailed = false;
       const pngImages: { base64: string }[] = [];
 
-      for (const frame of frames) {
-        const image = await snapshotFrameImage(frame.id);
-        if (!image) {
-          throw new Error("The painting is still getting ready.");
-        }
-        const w = image.width();
-        const h = image.height();
-        width = w;
-        height = h;
-        // Keep a PNG copy for the sprite-sheet fallback.
-        pngImages.push({ base64: image.encodeToBase64() });
-
-        if (!pixelReadFailed) {
-          const pixels = image.readPixels(0, 0, {
-            width: w,
-            height: h,
-            colorType: 4, // ColorType.RGBA_8888
-            alphaType: 3 // AlphaType.Unpremul
-          });
-          if (pixels && pixels instanceof Uint8Array && pixels.length === w * h * 4) {
-            rgbaFrames.push({ width: w, height: h, data: pixels, delayMs: frame.durationMs });
-          } else {
-            pixelReadFailed = true;
+      // M6: hold the export lock for the whole capture sequence so no other
+      // capture (preview snapshot or a second export) can grab the canvas while
+      // it is flipped into per-frame export mode.
+      await withExportLock(async () => {
+        for (const frame of frames) {
+          const image = await snapshotFrameImage(frame.id);
+          if (!image) {
+            throw new Error("The painting is still getting ready.");
           }
+          const w = image.width();
+          const h = image.height();
+          width = w;
+          height = h;
+          // Keep a PNG copy for the sprite-sheet fallback.
+          pngImages.push({ base64: image.encodeToBase64() });
+
+          if (!pixelReadFailed) {
+            const pixels = image.readPixels(0, 0, {
+              width: w,
+              height: h,
+              colorType: 4, // ColorType.RGBA_8888
+              alphaType: 3 // AlphaType.Unpremul
+            });
+            if (pixels && pixels instanceof Uint8Array && pixels.length === w * h * 4) {
+              rgbaFrames.push({ width: w, height: h, data: pixels, delayMs: frame.durationMs });
+            } else {
+              pixelReadFailed = true;
+            }
+          }
+          // M6: free the per-frame Skia image immediately so we never hold every
+          // frame's native bitmap at once.
+          image.dispose();
         }
-      }
+      });
 
       if (!pixelReadFailed && rgbaFrames.length === frames.length) {
-        // Real GIF path.
-        const bytes = encodeGif(rgbaFrames);
+        // Real GIF path. Encoding yields to the event loop between frames so the
+        // UI stays responsive (M6).
+        setBusyLabel("Encoding GIF...");
+        const bytes = await encodeGif(rgbaFrames);
         const base64 = bytesToBase64(bytes);
         const uri = loopExportPath(latestProject.id, "gif");
         await writePng(uri, base64); // writes base64 to file (encoding-agnostic)
@@ -1411,12 +1626,17 @@ export function StudioScreen({
         const img = Skia.Image.MakeImageFromEncoded(data);
         if (img) {
           canvas.drawImage(img, width * i, 0);
+          img.dispose();
         }
       }
       surface.flush();
       const sheet = surface.makeImageSnapshot();
       const sheetUri = loopExportPath(latestProject.id, "png");
-      await writePng(sheetUri, sheet.encodeToBase64());
+      const sheetBase64 = sheet.encodeToBase64();
+      // M6/M11: release the sprite-sheet surface and snapshot native memory.
+      sheet.dispose();
+      surface.dispose();
+      await writePng(sheetUri, sheetBase64);
       const sidecarUri = `${sheetUri}.json`;
       await writeText(
         sidecarUri,
@@ -1440,7 +1660,7 @@ export function StudioScreen({
     } finally {
       setBusyLabel(null);
     }
-  }, [frames, latestProject.id, snapshotFrameImage]);
+  }, [frames, latestProject.id, snapshotFrameImage, withExportLock]);
 
   // --- Save to Paint Space ---------------------------------------------------
   const saveStickerToSpace = useCallback(async () => {
@@ -1518,20 +1738,28 @@ export function StudioScreen({
   }, [settings.color]);
 
   const saveLoopToSpace = useCallback(async () => {
+    if (exportInFlightRef.current) {
+      Alert.alert("Export in progress", "Please wait for the current export to finish.");
+      return;
+    }
     setBusyLabel("Saving loop...");
     try {
       const id = makeSpaceAssetId();
       const previews: LoopFramePreview[] = [];
-      for (let i = 0; i < frames.length; i += 1) {
-        const frame = frames[i];
-        const image = await snapshotFrameImage(frame.id);
-        let uri = "";
-        if (image) {
-          uri = spaceAssetPath(`${id}-${i}`);
-          await writePng(uri, image.encodeToBase64());
+      // M6: hold the lock for the whole per-frame capture loop.
+      await withExportLock(async () => {
+        for (let i = 0; i < frames.length; i += 1) {
+          const frame = frames[i];
+          const image = await snapshotFrameImage(frame.id);
+          let uri = "";
+          if (image) {
+            uri = spaceAssetPath(`${id}-${i}`);
+            await writePng(uri, image.encodeToBase64());
+            image.dispose();
+          }
+          previews.push({ uri, durationMs: frame.durationMs });
         }
-        previews.push({ uri, durationMs: frame.durationMs });
-      }
+      });
       const loopFrames: Frame[] = latestProject.frames.map((frame) => ({
         ...frame,
         layers: frame.layers.map((layer) => ({ ...layer, items: layer.items.map((item) => ({ ...item })) }))
@@ -1553,7 +1781,7 @@ export function StudioScreen({
     } finally {
       setBusyLabel(null);
     }
-  }, [frames, latestProject.frames, latestProject.title, settings.texture, snapshotFrameImage]);
+  }, [frames, latestProject.frames, latestProject.title, settings.texture, snapshotFrameImage, withExportLock]);
 
   const showBackground = !exporting;
   // During an export snapshot we render only the targeted frame's layers.
@@ -1721,7 +1949,7 @@ export function StudioScreen({
         />
 
         <View style={styles.toolbar}>
-          <IconButton icon={Film} label="Export GIF" onPress={exportGif} />
+          <IconButton icon={Film} label="Export GIF" onPress={exportGif} disabled={!!busyLabel} />
         </View>
       </View>
 
@@ -1731,10 +1959,10 @@ export function StudioScreen({
           <RNText style={styles.panelTitle}>Save to Paint Space</RNText>
         </View>
         <View style={styles.toolbar}>
-          <IconButton icon={ImagePlus} label="Sticker" onPress={saveStickerToSpace} />
-          <IconButton icon={FileImage} label="Template" onPress={saveTemplateToSpace} />
+          <IconButton icon={ImagePlus} label="Sticker" onPress={saveStickerToSpace} disabled={!!busyLabel} />
+          <IconButton icon={FileImage} label="Template" onPress={saveTemplateToSpace} disabled={!!busyLabel} />
           <IconButton icon={Sparkles} label="Palette" onPress={savePaletteToSpace} />
-          <IconButton icon={Film} label="Loop" onPress={saveLoopToSpace} />
+          <IconButton icon={Film} label="Loop" onPress={saveLoopToSpace} disabled={!!busyLabel} />
           <IconButton icon={FolderOpen} label="Open locker" onPress={onOpenPaintSpace} />
         </View>
       </View>
