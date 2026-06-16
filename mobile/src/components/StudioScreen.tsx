@@ -37,7 +37,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -46,6 +45,7 @@ import {
   TextInput,
   View
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
   AlphaType,
   BlendMode,
@@ -1182,77 +1182,81 @@ export function StudioScreen({
     [canDraw, canvasSize.height, canvasSize.width, placeFill, promptForText, settings.tool]
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        // M10: basic palm/multitouch rejection on the JS thread. A single second
-        // finger or a palm landing mid-stroke would otherwise feed its
-        // coordinates into the SAME active stroke and yank the line across the
-        // canvas. We refuse to claim the responder while more than one touch is
-        // down, ignore multi-touch move events, and abort the active stroke the
-        // moment a second touch appears. (A fully UI-thread-correct solution —
-        // pointer-id tracking, pressure, true palm rejection — would need
-        // react-native-gesture-handler, which is intentionally not a dependency.)
-        onStartShouldSetPanResponder: (event) => event.nativeEvent.touches.length <= 1,
-        onMoveShouldSetPanResponder: (event) => event.nativeEvent.touches.length <= 1,
-        onPanResponderGrant: (event) => {
-          if (!canDraw) {
-            return;
-          }
-          // Don't begin a stroke if more than one finger is already down.
-          if (event.nativeEvent.touches.length > 1) {
-            return;
-          }
-          const { locationX, locationY } = event.nativeEvent;
-          if (settings.tool === "brush" || settings.tool === "eraser") {
-            startStroke(locationX, locationY);
-          } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
-            startShape(clamp(locationX, 0, canvasSize.width), clamp(locationY, 0, canvasSize.height));
-          }
-        },
-        onPanResponderMove: (event) => {
-          if (!canDraw) {
-            return;
-          }
-          // A second finger / palm touched down during the drag: end the current
-          // stroke/shape cleanly rather than letting the extra touch jump it.
-          if (event.nativeEvent.touches.length > 1) {
-            if (settings.tool === "brush" || settings.tool === "eraser") {
-              finishStroke();
-            } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
-              finishShape();
-            }
-            return;
-          }
-          const { locationX, locationY } = event.nativeEvent;
-          if (settings.tool === "brush" || settings.tool === "eraser") {
-            addStrokePoint(locationX, locationY);
-          } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
-            moveShape(locationX, locationY);
-          }
-        },
-        onPanResponderRelease: (event) => {
-          if (!canDraw) {
-            return;
-          }
-          if (settings.tool === "brush" || settings.tool === "eraser") {
-            finishStroke();
-          } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
-            finishShape();
-          } else {
-            handleTap(event.nativeEvent.locationX, event.nativeEvent.locationY);
-          }
-        },
-        onPanResponderTerminate: () => {
-          if (settings.tool === "brush" || settings.tool === "eraser") {
-            finishStroke();
-          } else {
-            finishShape();
-          }
+  // RNGH replaces the old PanResponder (finding M10). `.maxPointers(1)` means a
+  // second finger or a resting palm can never feed coordinates into the active
+  // stroke — the gesture simply won't recognize a 2+ pointer interaction — so the
+  // manual `touches.length > 1` JS guards are gone. With NO reanimated installed,
+  // these callbacks run on the JS thread by default, so the existing JS stroke
+  // logic / refs / state setters are called directly (no runOnJS, no worklets).
+  //
+  // A Pan only activates after movement, so pure taps (fill / text tools) are
+  // handled by a separate Tap gesture; the two are composed with Gesture.Race so
+  // exactly one wins per interaction. The Pan handles brush/eraser/shape/line.
+  //
+  // e.x / e.y are LOCAL to the GestureDetector's view (the canvas frame), which
+  // is the same coordinate space the old PanResponder's locationX/locationY used;
+  // they are clamped to canvasSize exactly as before.
+  const pan = useMemo(() => {
+    const panGesture = Gesture.Pan()
+      .minPointers(1)
+      .maxPointers(1)
+      // A stroke that briefly leaves the canvas bounds should not be dropped; the
+      // points are clamped to canvasSize when added.
+      .shouldCancelWhenOutside(false)
+      .onBegin((e) => {
+        if (!canDraw) {
+          return;
         }
-      }),
-    [addStrokePoint, canDraw, canvasSize.height, canvasSize.width, finishShape, finishStroke, handleTap, moveShape, settings.tool, startShape, startStroke]
-  );
+        if (settings.tool === "brush" || settings.tool === "eraser") {
+          startStroke(e.x, e.y);
+        } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
+          startShape(clamp(e.x, 0, canvasSize.width), clamp(e.y, 0, canvasSize.height));
+        }
+      })
+      .onUpdate((e) => {
+        if (!canDraw) {
+          return;
+        }
+        if (settings.tool === "brush" || settings.tool === "eraser") {
+          addStrokePoint(e.x, e.y);
+        } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
+          moveShape(e.x, e.y);
+        }
+      })
+      .onEnd(() => {
+        if (settings.tool === "brush" || settings.tool === "eraser") {
+          finishStroke();
+        } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
+          finishShape();
+        }
+      })
+      // onFinalize fires for every interaction (including a cancelled / failed
+      // gesture where onEnd never ran), so it cleans up any dangling active
+      // stroke/shape. finishStroke/finishShape are idempotent: with nothing
+      // active they no-op, and after a real onEnd the refs are already cleared.
+      .onFinalize(() => {
+        if (settings.tool === "brush" || settings.tool === "eraser") {
+          finishStroke();
+        } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
+          finishShape();
+        }
+      });
+
+    // Fill / text are placed on a single tap (no drag). Race so a tap that turns
+    // into a drag still goes to the Pan, and a clean tap places the fill/text.
+    const tapGesture = Gesture.Tap()
+      .maxDuration(400)
+      .onEnd((e, success) => {
+        if (!success || !canDraw) {
+          return;
+        }
+        if (settings.tool === "fill" || settings.tool === "text") {
+          handleTap(e.x, e.y);
+        }
+      });
+
+    return Gesture.Race(panGesture, tapGesture);
+  }, [addStrokePoint, canDraw, canvasSize.height, canvasSize.width, finishShape, finishStroke, handleTap, moveShape, settings.tool, startShape, startStroke]);
 
   // --- Undo / clear ----------------------------------------------------------
   const undo = useCallback(() => {
@@ -1983,7 +1987,8 @@ export function StudioScreen({
         }}
         style={styles.canvasShell}
       >
-        <View style={[styles.canvasFrame, { height: canvasSize.height }]} {...panResponder.panHandlers}>
+        <GestureDetector gesture={pan}>
+          <View style={[styles.canvasFrame, { height: canvasSize.height }]}>
           <Canvas ref={canvasRef} style={styles.canvas}>
             {showBackground ? (
               <Rect color={paperBackground} height={canvasSize.height} width={canvasSize.width} x={0} y={0} />
@@ -2051,7 +2056,8 @@ export function StudioScreen({
               );
             })}
           </Canvas>
-        </View>
+          </View>
+        </GestureDetector>
         {!canDraw ? (
           <RNText style={styles.lockedHint}>
             {activeLayer && !activeLayer.visible ? "Active layer is hidden." : "Active layer is locked."}

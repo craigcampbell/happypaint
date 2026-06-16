@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
 import { makeId } from "./src/ids";
@@ -302,17 +303,20 @@ export default function App() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loading}>
-          <ActivityIndicator color="#0f766e" />
-          <Text style={styles.loadingText}>Opening Happy Paint</Text>
-        </View>
-      </SafeAreaView>
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.loading}>
+            <ActivityIndicator color="#0f766e" />
+            <Text style={styles.loadingText}>Opening Happy Paint</Text>
+          </View>
+        </SafeAreaView>
+      </GestureHandlerRootView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <GestureHandlerRootView style={styles.root}>
+      <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.app}>
         {mode === "gallery" ? (
@@ -380,7 +384,8 @@ export default function App() {
           <DiscoverScreen onBack={() => setMode("gallery")} onTogether={() => setMode("together")} />
         ) : null}
       </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -394,6 +399,9 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 12,
     justifyContent: "center"
+  },
+  root: {
+    flex: 1
   },
   loadingText: {
     color: "#0f172a",

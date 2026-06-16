@@ -1,0 +1,27 @@
+# DigitalOcean App Platform spec for the Happy Paint web app (static site).
+#
+# The web studio uses client-side routing (history.pushState) for /studio,
+# /join/:code, and /admin. `catchall_document` serves index.html for any
+# unmatched path so those routes resolve on hard refresh / direct link.
+#
+# Deploy:  doctl apps create --spec .do/app.yaml
+# Update:  doctl apps update <APP_ID> --spec .do/app.yaml
+# (Or paste this spec in the App Platform UI.)
+name: happypaint
+region: nyc
+static_sites:
+  - name: web
+    # Point this at your GitHub repo + default branch.
+    github:
+      repo: your-org/happypaint
+      branch: main
+      deploy_on_push: true
+    # Vite build -> dist/
+    build_command: npm ci && npm run build
+    output_dir: dist
+    environment_slug: node-js
+    # SPA fallback: serve index.html for unknown paths (client-side routes).
+    catchall_document: index.html
+    # Optional explicit routing (App Platform serves the site at "/").
+    routes:
+      - path: /

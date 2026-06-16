@@ -30,15 +30,15 @@ import {
   createFrame,
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
-import { idbGet, idbSet, isIdbAvailable } from "./utils/idb";
+import { idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import {
   addAsset,
   createAsset,
+  loadPaintSpace,
   makeId,
-  readPaintSpace,
   removeAsset,
   renameAsset as renamePaintSpaceAsset,
-  writePaintSpace,
+  savePaintSpace,
 } from "./utils/paintSpace";
 import LayerPanel from "./components/LayerPanel";
 import FrameStrip from "./components/FrameStrip";
@@ -62,6 +62,14 @@ const STORAGE_KEYS = {
 // inflation). STORAGE_KEYS.draft is kept only for back-compat migration of an
 // existing localStorage draft (W3).
 const DRAFT_IDB_KEY = "draft:v4";
+
+// The gallery and Paint Space lockers now persist their full arrays in
+// IndexedDB (much larger quota than the ~5MB localStorage budget, and a quota
+// overflow rejects instead of silently dropping the save). STORAGE_KEYS.gallery
+// is kept only for one-time back-compat migration and as the private-mode
+// fallback store. Gallery items keep their base64 dataURLs; IDB swallows them
+// happily and they stay sync-ready for the backend.
+const GALLERY_IDB_KEY = "gallery:v2";
 
 // Downscaled GIF size keeps exports small and quantization fast. The 1600x1200
 // canvas is 4:3, so we keep that ratio.
@@ -242,6 +250,10 @@ function StudioApp({ initialJoinCode = "" }) {
   const autosaveTimerRef = useRef(null);
   const saveInFlightRef = useRef(false);
   const settingsRef = useRef(null);
+  // Mirror the gallery / Paint Space arrays so the async save callbacks build the
+  // next array from the latest committed value without re-creating on each change.
+  const galleryRef = useRef([]);
+  const paintSpaceAssetsRef = useRef([]);
 
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
@@ -865,6 +877,49 @@ function StudioApp({ initialJoinCode = "" }) {
     markChanged("Draft restored");
   }, [applyDraftSettings, loadDraft, markChanged, pushHistory, restoreLayersFromDraft, syncLayerState]);
 
+  // Persist the gallery array. IndexedDB when available (large quota), else
+  // localStorage. Rejects on failure so the caller can surface an honest status
+  // instead of silently dropping a saved piece.
+  const persistGallery = useCallback(async (items) => {
+    if (isIdbAvailable()) {
+      await idbSetKV(GALLERY_IDB_KEY, items);
+      return;
+    }
+    // Private-mode fallback: let QuotaExceededError surface (no silent catch).
+    window.localStorage.setItem(STORAGE_KEYS.gallery, JSON.stringify(items));
+  }, []);
+
+  // Async gallery load: IndexedDB first; if empty there but a legacy localStorage
+  // gallery exists, migrate it forward into IndexedDB and clear the localStorage
+  // copy so existing users keep their saved pieces. Falls back to localStorage
+  // when IndexedDB is unavailable. Never throws (worst case: an empty gallery).
+  const loadGallery = useCallback(async () => {
+    if (isIdbAvailable()) {
+      try {
+        const stored = await idbGetKV(GALLERY_IDB_KEY);
+        if (Array.isArray(stored)) {
+          return stored;
+        }
+        const legacy = readJson(STORAGE_KEYS.gallery, null);
+        if (Array.isArray(legacy) && legacy.length > 0) {
+          await idbSetKV(GALLERY_IDB_KEY, legacy);
+          try {
+            window.localStorage.removeItem(STORAGE_KEYS.gallery);
+          } catch {
+            // Non-fatal: leaving the legacy key just costs a little quota.
+          }
+          return legacy;
+        }
+        return [];
+      } catch {
+        const legacy = readJson(STORAGE_KEYS.gallery, []);
+        return Array.isArray(legacy) ? legacy : [];
+      }
+    }
+    const legacy = readJson(STORAGE_KEYS.gallery, []);
+    return Array.isArray(legacy) ? legacy : [];
+  }, []);
+
   const saveToGallery = useCallback(async () => {
     if (layersRef.current.length === 0) {
       return;
@@ -881,13 +936,18 @@ function StudioApp({ initialJoinCode = "" }) {
       createdAt: new Date().toISOString(),
     };
 
-    setGallery((current) => {
-      const next = [item, ...current].slice(0, MAX_GALLERY_ITEMS);
-      writeJson(STORAGE_KEYS.gallery, next);
-      return next;
-    });
+    const next = [item, ...galleryRef.current].slice(0, MAX_GALLERY_ITEMS);
+    try {
+      await persistGallery(next);
+    } catch {
+      // Honest failure: don't pretend the save worked.
+      setStatus("Couldn't save gallery — storage full");
+      return;
+    }
+    galleryRef.current = next;
+    setGallery(next);
     setStatus("Saved to gallery");
-  }, [composeCanvas, selectedTexture]);
+  }, [composeCanvas, persistGallery, selectedTexture]);
 
   const exportPng = useCallback(async () => {
     const exportCanvas = await composeCanvas();
@@ -1800,12 +1860,20 @@ function StudioApp({ initialJoinCode = "" }) {
 
   // ---- Paint Space locker ----
 
-  const persistPaintSpace = useCallback((updater) => {
-    setPaintSpaceAssets((current) => {
-      const next = updater(current);
-      writePaintSpace(next);
-      return next;
-    });
+  // Apply an updater to the locker, persist it (IndexedDB, else localStorage),
+  // and only commit to React state if the write SUCCEEDS. On failure we surface
+  // an honest status and leave the previous state intact (no silent drop).
+  const persistPaintSpace = useCallback(async (updater) => {
+    const next = updater(paintSpaceAssetsRef.current);
+    try {
+      await savePaintSpace(next);
+    } catch {
+      setStatus("Couldn't save to Paint Space — storage full");
+      return false;
+    }
+    paintSpaceAssetsRef.current = next;
+    setPaintSpaceAssets(next);
+    return true;
   }, []);
 
   const saveStickerToSpace = useCallback(async () => {
@@ -1818,8 +1886,9 @@ function StudioApp({ initialJoinCode = "" }) {
       payload: { image: await canvasToDataUrl(stickerCanvas) },
       thumbnail: await canvasToDataUrl(thumbCanvas),
     });
-    persistPaintSpace((current) => addAsset(current, asset));
-    setStatus("Saved sticker to Paint Space");
+    if (await persistPaintSpace((current) => addAsset(current, asset))) {
+      setStatus("Saved sticker to Paint Space");
+    }
   }, [commitLayersToFrame, composeCanvas, persistPaintSpace]);
 
   const saveTemplateToSpace = useCallback(async () => {
@@ -1832,11 +1901,12 @@ function StudioApp({ initialJoinCode = "" }) {
       payload: { image: await canvasToDataUrl(fullCanvas), textureId: selectedTexture },
       thumbnail: await canvasToDataUrl(thumbCanvas),
     });
-    persistPaintSpace((current) => addAsset(current, asset));
-    setStatus("Saved template to Paint Space");
+    if (await persistPaintSpace((current) => addAsset(current, asset))) {
+      setStatus("Saved template to Paint Space");
+    }
   }, [commitLayersToFrame, composeCanvas, persistPaintSpace, selectedTexture]);
 
-  const savePaletteToSpace = useCallback(() => {
+  const savePaletteToSpace = useCallback(async () => {
     // Recent colors first, then current selection, de-duped.
     const colors = [];
     for (const color of [selectedColor, ...recentColors]) {
@@ -1853,8 +1923,9 @@ function StudioApp({ initialJoinCode = "" }) {
       title: `Palette ${todayName()}`,
       payload: { colors: colors.slice(0, MAX_PALETTE_COLORS) },
     });
-    persistPaintSpace((current) => addAsset(current, asset));
-    setStatus("Saved palette to Paint Space");
+    if (await persistPaintSpace((current) => addAsset(current, asset))) {
+      setStatus("Saved palette to Paint Space");
+    }
   }, [persistPaintSpace, recentColors, selectedColor]);
 
   const saveLoopToSpace = useCallback(async () => {
@@ -1870,24 +1941,28 @@ function StudioApp({ initialJoinCode = "" }) {
       payload: { frames: loopFrames },
       thumbnail: loopFrames[0]?.image || "",
     });
-    persistPaintSpace((current) => addAsset(current, asset));
-    setStatus(`Saved ${loopFrames.length}-frame loop to Paint Space`);
+    if (await persistPaintSpace((current) => addAsset(current, asset))) {
+      setStatus(`Saved ${loopFrames.length}-frame loop to Paint Space`);
+    }
   }, [commitLayersToFrame, persistPaintSpace]);
 
   const handleRenameAsset = useCallback(
-    (asset) => {
+    async (asset) => {
       const title = window.prompt("Rename asset:", asset.title);
       if (title && title.trim()) {
-        persistPaintSpace((current) => renamePaintSpaceAsset(current, asset.id, title.trim()));
+        await persistPaintSpace((current) =>
+          renamePaintSpaceAsset(current, asset.id, title.trim()),
+        );
       }
     },
     [persistPaintSpace],
   );
 
   const handleDeleteAsset = useCallback(
-    (asset) => {
-      persistPaintSpace((current) => removeAsset(current, asset.id));
-      setStatus("Asset deleted");
+    async (asset) => {
+      if (await persistPaintSpace((current) => removeAsset(current, asset.id))) {
+        setStatus("Asset deleted");
+      }
     },
     [persistPaintSpace],
   );
@@ -2006,11 +2081,21 @@ function StudioApp({ initialJoinCode = "" }) {
     redoRef.current = [];
     updateHistoryCounts();
 
-    const savedGallery = readJson(STORAGE_KEYS.gallery, []);
     const savedStudio = readJson(STORAGE_KEYS.studio, false);
-    setGallery(Array.isArray(savedGallery) ? savedGallery : []);
     setStudioUnlocked(Boolean(savedStudio));
-    setPaintSpaceAssets(readPaintSpace());
+
+    // Gallery + Paint Space now load async from IndexedDB (with one-time legacy
+    // localStorage migration). The UI briefly shows empty until these resolve.
+    // We mirror into the refs so the async save callbacks build on the latest
+    // committed array.
+    loadGallery().then((items) => {
+      galleryRef.current = items;
+      setGallery(items);
+    });
+    loadPaintSpace().then((assets) => {
+      paintSpaceAssetsRef.current = assets;
+      setPaintSpaceAssets(assets);
+    });
 
     // Restore a saved draft (IndexedDB first, legacy localStorage second). A
     // legacy draft is migrated forward to IndexedDB by marking dirty so the

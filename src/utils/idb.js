@@ -5,8 +5,15 @@
 // surface an honest "couldn't save" status instead of silently losing artwork.
 
 const DB_NAME = "happypaint";
-const DB_VERSION = 1;
+// v2 adds the generic "kv" store used by the gallery and Paint Space locker so
+// large base64 dataURLs no longer ride in the ~5MB localStorage budget (and a
+// quota overflow can't silently drop a save). The existing "drafts" store is
+// left untouched so the W3 autosave migration keeps working.
+const DB_VERSION = 2;
 const STORE_NAME = "drafts";
+// Generic key/value store. The gallery and Paint Space each persist their full
+// array under a single stable key here.
+const KV_STORE_NAME = "kv";
 
 // Returns true when IndexedDB is usable in this environment (it is unavailable
 // or throws on access in some private-browsing modes).
@@ -37,6 +44,10 @@ function openDb() {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
+      // Added in v2 — adding a new store leaves the existing drafts store intact.
+      if (!db.objectStoreNames.contains(KV_STORE_NAME)) {
+        db.createObjectStore(KV_STORE_NAME);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
@@ -49,18 +60,18 @@ function openDb() {
   return dbPromise;
 }
 
-function runTransaction(mode, work) {
+function runTransaction(mode, work, storeName = STORE_NAME) {
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
         let tx;
         try {
-          tx = db.transaction(STORE_NAME, mode);
+          tx = db.transaction(storeName, mode);
         } catch (error) {
           reject(error);
           return;
         }
-        const store = tx.objectStore(STORE_NAME);
+        const store = tx.objectStore(storeName);
         let result;
         let settled = false;
         const fail = (error) => {
@@ -120,4 +131,48 @@ export function idbDelete(key) {
       throw request.error || new Error("IndexedDB delete failed");
     };
   });
+}
+
+// ---- Generic key/value store (gallery, Paint Space) ----
+// Same honest semantics as the draft helpers: every op rejects on error so the
+// caller can surface a real "couldn't save" status instead of swallowing it.
+
+export function idbGetKV(key) {
+  return runTransaction(
+    "readonly",
+    (store, setResult) => {
+      const request = store.get(key);
+      request.onsuccess = () => setResult(request.result ?? null);
+      request.onerror = () => {
+        throw request.error || new Error("IndexedDB get failed");
+      };
+    },
+    KV_STORE_NAME,
+  );
+}
+
+export function idbSetKV(key, value) {
+  return runTransaction(
+    "readwrite",
+    (store) => {
+      const request = store.put(value, key);
+      request.onerror = () => {
+        throw request.error || new Error("IndexedDB put failed");
+      };
+    },
+    KV_STORE_NAME,
+  );
+}
+
+export function idbDeleteKV(key) {
+  return runTransaction(
+    "readwrite",
+    (store) => {
+      const request = store.delete(key);
+      request.onerror = () => {
+        throw request.error || new Error("IndexedDB delete failed");
+      };
+    },
+    KV_STORE_NAME,
+  );
 }
