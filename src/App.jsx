@@ -34,6 +34,7 @@ import { idbGet, idbSet, isIdbAvailable } from "./utils/idb";
 import {
   addAsset,
   createAsset,
+  makeId,
   readPaintSpace,
   removeAsset,
   renameAsset as renamePaintSpaceAsset,
@@ -154,12 +155,18 @@ function todayName() {
 }
 
 function downloadBlob(blob, filename) {
+  // Append the anchor to the DOM before clicking (some browsers — notably
+  // Firefox — ignore clicks on detached anchors) and defer the revoke so the
+  // download has time to start before the object URL is torn down (W15).
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function StudioApp({ initialJoinCode = "" }) {
@@ -188,6 +195,12 @@ function StudioApp({ initialJoinCode = "" }) {
   // rAF coalescing for per-move display updates (W5).
   const rafPendingRef = useRef(0);
 
+  // Opacity-slider drag state (W13): a single undo snapshot is taken at
+  // drag-start, and the live recomposite during the drag is rAF-throttled
+  // instead of running synchronously on every slider tick.
+  const opacityRafRef = useRef(0);
+  const opacityDragActiveRef = useRef(false);
+
   // GIF encode worker (W7). Lazily created; null if Workers are unavailable, in
   // which case GIF export falls back to encoding synchronously on the main
   // thread. Tracks the in-flight job id so stale results are ignored.
@@ -215,8 +228,16 @@ function StudioApp({ initialJoinCode = "" }) {
   const redoRef = useRef([]);
   const lastPointRef = useRef(null);
   const shapeStartRef = useRef(null);
+  // Bounding box of the last shape/line preview drawn onto the overlay, so each
+  // pointermove only clears that region (plus a margin) instead of the whole
+  // 1600x1200 overlay (W11).
+  const shapePreviewRectRef = useRef(null);
   const activePointerRef = useRef(null);
   const activeCanvasRectRef = useRef(null);
+  // Pen prioritization / palm rejection (W14). Once a pen contact is seen we
+  // prefer it: touch contacts (especially large-contact palm rests) are ignored
+  // while a pen is the active input. Mouse and lone-finger touch keep working.
+  const penSeenRef = useRef(false);
   const dirtyRef = useRef(false);
   const autosaveTimerRef = useRef(null);
   const saveInFlightRef = useRef(false);
@@ -279,18 +300,30 @@ function StudioApp({ initialJoinCode = "" }) {
   }, []);
 
   // Mirror frame meta into React state (shallow refs; canvases stay in refs)
-  // and refresh thumbnails for the strip.
-  const syncFrameState = useCallback(() => {
-    commitLayersToFrame();
-    const snapshot = framesRef.current.map((frame) => ({ id: frame.id, durationMs: frame.durationMs }));
-    setFrames(snapshot);
-    setActiveFrameIndex(activeFrameIndexRef.current);
-    const thumbs = {};
-    for (const frame of framesRef.current) {
-      thumbs[frame.id] = renderFrameThumbnail(frame);
-    }
-    setFrameThumbnails(thumbs);
-  }, [commitLayersToFrame, renderFrameThumbnail]);
+  // and refresh thumbnails for the strip. To avoid recompositing + PNG-encoding
+  // every frame on any structural change (W9), only frames whose id is NOT
+  // already in the thumbnail cache (i.e. newly created/duplicated) are
+  // regenerated; `regenerateIds` forces specific existing ids (e.g. the active
+  // frame after an edit, or all frames on a full reset). Untouched frames reuse
+  // their existing dataURL, and stale entries for removed frames are dropped.
+  const syncFrameState = useCallback(
+    ({ regenerateIds = null } = {}) => {
+      commitLayersToFrame();
+      const snapshot = framesRef.current.map((frame) => ({ id: frame.id, durationMs: frame.durationMs }));
+      setFrames(snapshot);
+      setActiveFrameIndex(activeFrameIndexRef.current);
+      const forced = regenerateIds === "all" ? null : new Set(regenerateIds || []);
+      setFrameThumbnails((current) => {
+        const thumbs = {};
+        for (const frame of framesRef.current) {
+          const needsRegen = regenerateIds === "all" || !current[frame.id] || forced?.has(frame.id);
+          thumbs[frame.id] = needsRegen ? renderFrameThumbnail(frame) : current[frame.id];
+        }
+        return thumbs;
+      });
+    },
+    [commitLayersToFrame, renderFrameThumbnail],
+  );
 
   // Refresh just the active frame's thumbnail after an edit (cheap; one frame).
   const refreshActiveThumbnail = useCallback(() => {
@@ -780,7 +813,7 @@ function StudioApp({ initialJoinCode = "" }) {
       activeLayerIdRef.current = frame.activeLayerId;
       renderDisplay();
       syncLayerState();
-      syncFrameState();
+      syncFrameState({ regenerateIds: "all" });
     },
     [renderDisplay, syncFrameState, syncLayerState],
   );
@@ -840,7 +873,7 @@ function StudioApp({ initialJoinCode = "" }) {
     const fullCanvas = await composeCanvas();
     const previewCanvas = await composeCanvas({ width: 400, height: 300 });
     const item = {
-      id: crypto.randomUUID(),
+      id: makeId("gallery"),
       name: `Happy Paint ${todayName()}`,
       layer: await canvasToDataUrl(fullCanvas),
       textureId: selectedTexture,
@@ -1041,8 +1074,36 @@ function StudioApp({ initialJoinCode = "" }) {
     [getActiveLayer],
   );
 
+  // Decide whether to ignore a pointerdown for palm rejection / pen priority
+  // (W14). Conservative: pen always wins and is remembered; once a pen has been
+  // used, touch contacts are ignored (the user is drawing with the pen and
+  // resting their hand); and any touch with a large contact patch is treated as
+  // a palm. Mouse and a normal lone finger are never rejected.
+  const shouldRejectPointer = useCallback((event) => {
+    const type = event.pointerType;
+    if (type === "pen") {
+      penSeenRef.current = true;
+      return false;
+    }
+    if (type === "touch") {
+      if (penSeenRef.current) {
+        return true; // Prefer the pen; ignore resting-hand / second-finger touches.
+      }
+      // Palm heuristic: real fingertips report a small contact patch. A large
+      // width/height is almost certainly a palm or forearm resting on a tablet.
+      const PALM_CONTACT = 45; // CSS px
+      if ((event.width || 0) > PALM_CONTACT || (event.height || 0) > PALM_CONTACT) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
   const startStroke = useCallback(
     (event) => {
+      if (shouldRejectPointer(event)) {
+        return;
+      }
       const settings = settingsRef.current;
       const tool = settings?.tool || "brush";
 
@@ -1128,7 +1189,7 @@ function StudioApp({ initialJoinCode = "" }) {
       drawBrushFromEvent(event);
       markChanged("Drawing");
     },
-    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -1141,17 +1202,30 @@ function StudioApp({ initialJoinCode = "" }) {
       const tool = settingsRef.current?.tool || "brush";
 
       if (tool === "rect" || tool === "ellipse" || tool === "line") {
-        // Preview shape on the overlay so the active layer stays clean.
+        // Preview shape on the overlay so the active layer stays clean. Clear
+        // only the previous preview's bounding box (plus a margin to cover the
+        // stroke width / round caps), not the entire 1600x1200 overlay (W11).
         const overlay = overlayContextRef.current;
         const start = shapeStartRef.current;
         if (overlay && start) {
-          overlay.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          drawShape(overlay, tool, start, getPoint(event.nativeEvent), {
+          const prev = shapePreviewRectRef.current;
+          if (prev) {
+            overlay.clearRect(prev.x, prev.y, prev.w, prev.h);
+          }
+          const end = getPoint(event.nativeEvent);
+          drawShape(overlay, tool, start, end, {
             color: settingsRef.current.color,
             size: settingsRef.current.size,
             opacity: settingsRef.current.opacity,
             fillShape: settingsRef.current.fillShape,
           });
+          // Record this preview's bbox (with a margin) for the next clear.
+          const margin = Math.max(2, settingsRef.current.size || 1) + 4;
+          const x = Math.min(start.x, end.x) - margin;
+          const y = Math.min(start.y, end.y) - margin;
+          const w = Math.abs(end.x - start.x) + margin * 2;
+          const h = Math.abs(end.y - start.y) + margin * 2;
+          shapePreviewRectRef.current = { x, y, w, h };
         }
         return;
       }
@@ -1192,6 +1266,7 @@ function StudioApp({ initialJoinCode = "" }) {
           overlay.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         }
         shapeStartRef.current = null;
+        shapePreviewRectRef.current = null;
       } else {
         // Brush/eraser: flush any pending per-move composite, then do one full
         // recomposite (this also invalidates the per-stroke caches).
@@ -1350,18 +1425,51 @@ function StudioApp({ initialJoinCode = "" }) {
     [markChanged, syncLayerState],
   );
 
+  // Take the single undo snapshot for an opacity drag (W13). Called on the
+  // slider's pointerdown/focus so the whole drag collapses to one history entry
+  // instead of one per tick.
+  const handleOpacityDragStart = useCallback(() => {
+    if (opacityDragActiveRef.current) {
+      return;
+    }
+    opacityDragActiveRef.current = true;
+    pushHistory("full");
+  }, [pushHistory]);
+
+  const handleOpacityDragEnd = useCallback(() => {
+    opacityDragActiveRef.current = false;
+    // Flush any pending throttled recomposite so the final opacity is shown.
+    if (opacityRafRef.current) {
+      window.cancelAnimationFrame(opacityRafRef.current);
+      opacityRafRef.current = 0;
+    }
+    renderDisplay();
+  }, [renderDisplay]);
+
   const handleOpacityChange = useCallback(
     (id, opacity) => {
       const layer = layersRef.current.find((item) => item.id === id);
       if (!layer) {
         return;
       }
+      // If the change arrives without a preceding drag-start (e.g. keyboard
+      // arrow on the slider), still snapshot once so it stays undoable.
+      if (!opacityDragActiveRef.current) {
+        handleOpacityDragStart();
+      }
       layer.opacity = opacity;
-      renderDisplay();
+      // Sync the UI state immediately (cheap), but rAF-throttle the heavier full
+      // recomposite so dragging the slider doesn't recomposite per tick (W13).
       syncLayerState();
       dirtyRef.current = true;
+      if (!opacityRafRef.current) {
+        opacityRafRef.current = window.requestAnimationFrame(() => {
+          opacityRafRef.current = 0;
+          renderDisplay();
+        });
+      }
     },
-    [renderDisplay, syncLayerState],
+    [handleOpacityDragStart, renderDisplay, syncLayerState],
   );
 
   const handleRenameLayer = useCallback(
@@ -1386,7 +1494,7 @@ function StudioApp({ initialJoinCode = "" }) {
 
   const stopPlayback = useCallback(() => {
     if (playTimerRef.current) {
-      window.clearTimeout(playTimerRef.current);
+      window.cancelAnimationFrame(playTimerRef.current);
       playTimerRef.current = null;
     }
     setIsPlaying(false);
@@ -1394,6 +1502,10 @@ function StudioApp({ initialJoinCode = "" }) {
     renderDisplay();
   }, [renderDisplay]);
 
+  // Playback uses a requestAnimationFrame loop with a timestamp accumulator
+  // (W17) instead of a drifting setTimeout chain: each rAF advances by the real
+  // elapsed time, so authored per-frame durations are honoured even when the
+  // tab was just unthrottled, and timers don't pile up in background tabs.
   const startPlayback = useCallback(() => {
     if (framesRef.current.length <= 1) {
       return;
@@ -1402,19 +1514,50 @@ function StudioApp({ initialJoinCode = "" }) {
     setIsPlaying(true);
     const context = docContextRef.current;
     let cursor = 0;
+    let lastTime = 0;
+    let accumulator = 0;
 
-    const step = () => {
-      const frame = framesRef.current[cursor % framesRef.current.length];
+    const paintFrame = (frame) => {
       // Composite the frame into the art-resolution document, then blit it to
       // the DPR-sized display canvas (same path as editing — stays crisp).
       context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       compositeLayers(context, frame.layers);
       blitToDisplay();
-      cursor += 1;
-      playTimerRef.current = window.setTimeout(step, Math.max(40, frame.durationMs));
     };
 
-    step();
+    const step = (timestamp) => {
+      const frames = framesRef.current;
+      if (frames.length === 0) {
+        return;
+      }
+      if (lastTime === 0) {
+        // First tick: show frame 0 immediately and start the clock.
+        lastTime = timestamp;
+        paintFrame(frames[0]);
+        playTimerRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+      accumulator += timestamp - lastTime;
+      lastTime = timestamp;
+      // Advance as many frames as the elapsed time covers (catch up after a
+      // background-throttle pause), clamping each duration like the old loop.
+      let advanced = false;
+      let guard = 0;
+      let duration = Math.max(40, frames[cursor % frames.length].durationMs);
+      while (accumulator >= duration && guard < frames.length + 1) {
+        accumulator -= duration;
+        cursor += 1;
+        advanced = true;
+        guard += 1;
+        duration = Math.max(40, frames[cursor % frames.length].durationMs);
+      }
+      if (advanced) {
+        paintFrame(frames[cursor % frames.length]);
+      }
+      playTimerRef.current = window.requestAnimationFrame(step);
+    };
+
+    playTimerRef.current = window.requestAnimationFrame(step);
   }, [blitToDisplay, commitLayersToFrame]);
 
   const handleTogglePlay = useCallback(() => {
@@ -1947,12 +2090,16 @@ function StudioApp({ initialJoinCode = "" }) {
   useEffect(() => {
     return () => {
       if (playTimerRef.current) {
-        window.clearTimeout(playTimerRef.current);
+        window.cancelAnimationFrame(playTimerRef.current);
         playTimerRef.current = null;
       }
       if (rafPendingRef.current) {
         window.cancelAnimationFrame(rafPendingRef.current);
         rafPendingRef.current = 0;
+      }
+      if (opacityRafRef.current) {
+        window.cancelAnimationFrame(opacityRafRef.current);
+        opacityRafRef.current = 0;
       }
       if (gifWorkerRef.current) {
         gifWorkerRef.current.terminate();
@@ -2043,7 +2190,6 @@ function StudioApp({ initialJoinCode = "" }) {
               onPointerMove={continueStroke}
               onPointerUp={finishStroke}
               onPointerCancel={finishStroke}
-              onPointerLeave={finishStroke}
             />
           </div>
         </div>
@@ -2114,6 +2260,8 @@ function StudioApp({ initialJoinCode = "" }) {
           onToggleLock={handleToggleLock}
           onRename={handleRenameLayer}
           onOpacityChange={handleOpacityChange}
+          onOpacityDragStart={handleOpacityDragStart}
+          onOpacityDragEnd={handleOpacityDragEnd}
         />
 
         <FrameStrip

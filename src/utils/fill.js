@@ -62,6 +62,12 @@ export function floodFill(canvas, startX, startY, hexColor, { tolerance = 0.12, 
   const visited = new Uint8Array(width * height);
   const stack = [[x, y]];
   let touched = false;
+  // Track the filled region's bounding box so we only putImageData the dirty
+  // sub-rect instead of the whole 1600x1200 buffer (W10).
+  let minX = x;
+  let minY = y;
+  let maxX = x;
+  let maxY = y;
 
   while (stack.length > 0) {
     const [px, py] = stack.pop();
@@ -94,6 +100,10 @@ export function floodFill(canvas, startX, startY, hexColor, { tolerance = 0.12, 
       data[offset + 2] = fill.b;
       data[offset + 3] = fillAlpha;
       touched = true;
+      if (cx < minX) minX = cx;
+      if (cx > maxX) maxX = cx;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
 
       if (py > 0) {
         const upIndex = (py - 1) * width + cx;
@@ -122,7 +132,11 @@ export function floodFill(canvas, startX, startY, hexColor, { tolerance = 0.12, 
   }
 
   if (touched) {
-    context.putImageData(image, 0, 0);
+    // putImageData's dirty-rect overload writes only the filled bounding box
+    // back to the canvas, leaving the rest of the (unmodified) buffer alone.
+    const dirtyW = maxX - minX + 1;
+    const dirtyH = maxY - minY + 1;
+    context.putImageData(image, 0, 0, minX, minY, dirtyW, dirtyH);
   }
 
   return touched;

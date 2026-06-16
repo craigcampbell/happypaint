@@ -20,15 +20,27 @@ export const ASSET_KINDS = [
   { id: "loop", label: "Loops" },
 ];
 
-let assetIdSeed = 0;
+let idSeed = 0;
+
+// Guarded id helper. crypto.randomUUID matches the backend uuid shape when
+// available, but it throws in non-secure contexts (plain HTTP) and isn't
+// present on older engines — fall back to a collision-resistant local id so we
+// never throw (W16). Shared by every call site that previously used
+// crypto.randomUUID unguarded.
+export function makeId(prefix = "id") {
+  idSeed += 1;
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      // Non-secure context: fall through to the local id.
+    }
+  }
+  return `${prefix}-${Date.now().toString(36)}-${idSeed}`;
+}
 
 function nextAssetId() {
-  assetIdSeed += 1;
-  // crypto.randomUUID matches the backend uuid shape when available.
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return `asset-${Date.now().toString(36)}-${assetIdSeed}`;
+  return makeId("asset");
 }
 
 export function readPaintSpace() {

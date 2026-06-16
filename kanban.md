@@ -127,10 +127,10 @@ Audit of the drawing hot path across all platforms. Severity is the auditor's es
 - **M4 — Mobile unbounded spray growth + path rebuild.** ✅ `MAX_SPRAY_DOTS = 3000` cap; live path bounded; committed spray cached.
 - **M6 — Mobile export race + UI-thread GIF freeze.** ✅ Single in-flight export lock (preview snapshot coordinated); `encodeGif` async with `setTimeout(0)` yields + sample stride 4; per-frame `SkImage.dispose()`.
 
-### 🟥 Medium
-- **W12** pointerleave ends stroke mid-drag · **W13** opacity slider recomposites per tick (non-undoable) · **W9** all frame thumbnails regenerated on any frame change · **W10** flood fill copies full ImageData + 1.92MB visited array · **W11** shape preview clears full overlay each move · **W8** GIF ByteBuffer is boxed number[].
-- **M9** eraser paints opaque paper → broken transparent/sticker/GIF export · **M7** stale `latestProject` can drop rapid commits · **M8** `makeId` collision risk in clone loops · **M10** PanResponder drops fast points, no palm rejection · **M11** Skia surfaces/images not disposed on export · **M12** hardcoded `readPixels` colorType/alphaType · **M13** `useImage`/`matchFont` per item, no cache · **M14** whole studio re-renders per live-stroke.
+### 🟩 Medium — DONE
+- **W8** ✅ GIF buffer now growable Uint8Array · **W9** ✅ only affected frame thumbnails regenerated · **W10** ✅ fill writes back only the dirty sub-rect · **W11** ✅ shape preview clears only previous bbox · **W12** ✅ removed `onPointerLeave` (relies on pointer capture) · **W13** ✅ opacity slider rAF-throttled + single undoable snapshot per drag.
+- **M7** ✅ `latestProjectRef` + synchronous `commitProject` so rapid commits chain · **M8** ✅ monotonic counter in shared `ids.ts` (also fixed double `createDefaultLayers` bug) · **M9** ✅ eraser uses `BlendMode.Clear` inside per-layer offscreen groups → truly erases, correct on transparent/sticker/GIF export · **M10** ✅ multitouch/palm guards (`touches.length > 1`); full pen tracking would need gesture-handler · **M11** ✅ all export/preview SkImages + sprite-sheet surface disposed · **M12** ✅ `ColorType.RGBA_8888`/`AlphaType.Unpremul` enums · **M13** ✅ `useImage(null)` guard + shared font cache per size · **M14** ✅ live stroke isolated in `<LiveStrokeLayer>` (parent chrome no longer reconciles per frame).
 
-### 🟥 Low
-- **W14** no palm/pen prioritization · **W15** object URL revoked before download · **W16** unguarded `crypto.randomUUID` (HTTP) · **W17** playback setTimeout drift.
-- **M15** sticker-apply fires before layout · **M16** GIF disposal/flicker + delay clamp mismatch · **M17** preview-failure redundant save.
+### 🟩 Low — DONE
+- **W14** ✅ pen-priority + palm (large contact) rejection · **W15** ✅ anchor appended + deferred URL revoke · **W16** ✅ guarded `makeId` everywhere · **W17** ✅ playback uses rAF + timestamp accumulator.
+- **M15** ✅ sticker-apply gated on canvas layout · **M16** ✅ export min-delay aligned to preview (40ms); disposal=2 kept (loops genuinely transparent) · **M17** ✅ snapshot failure reschedules preview only, no redundant save.

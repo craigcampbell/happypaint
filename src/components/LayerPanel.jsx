@@ -16,6 +16,8 @@ export default function LayerPanel({
   onToggleLock,
   onRename,
   onOpacityChange,
+  onOpacityDragStart,
+  onOpacityDragEnd,
 }) {
   // Render top layer first so the panel reads the same way it stacks visually.
   const ordered = layers.slice().reverse();
@@ -82,6 +84,10 @@ export default function LayerPanel({
                       max="100"
                       value={Math.round(layer.opacity * 100)}
                       onChange={(event) => onOpacityChange(layer.id, Number(event.target.value) / 100)}
+                      onPointerDown={onOpacityDragStart}
+                      onPointerUp={onOpacityDragEnd}
+                      onFocus={onOpacityDragStart}
+                      onBlur={onOpacityDragEnd}
                     />
                     <output>{Math.round(layer.opacity * 100)}%</output>
                   </label>

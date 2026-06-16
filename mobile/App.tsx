@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 
 import { createDefaultFrames, DEFAULT_FRAME_DURATION_MS, DEFAULT_SETTINGS } from "./src/constants";
+import { makeId } from "./src/ids";
 import { DiscoverScreen } from "./src/components/DiscoverScreen";
 import { GalleryScreen } from "./src/components/GalleryScreen";
 import { PaintSpaceScreen } from "./src/components/PaintSpaceScreen";
@@ -42,7 +43,7 @@ function makeProject(): DrawingProject {
   const now = Date.now();
   const frames = createDefaultFrames();
   return {
-    id: `project-${now}-${Math.random().toString(36).slice(2)}`,
+    id: makeId("project"),
     title: `Painting ${new Date(now).toLocaleDateString()}`,
     createdAt: now,
     updatedAt: now,
@@ -50,10 +51,6 @@ function makeProject(): DrawingProject {
     frames,
     activeFrameId: frames[0].id
   };
-}
-
-function makeId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 // Deep-copy a saved frame stack (fresh ids) so an applied template/loop is an
@@ -83,7 +80,7 @@ function projectFromFrames(title: string, texture: DrawingProject["texture"], fr
   const now = Date.now();
   const cloned = frames.length > 0 ? cloneFrames(frames) : createDefaultFrames();
   return {
-    id: `project-${now}-${Math.random().toString(36).slice(2)}`,
+    id: makeId("project"),
     title,
     createdAt: now,
     updatedAt: now,

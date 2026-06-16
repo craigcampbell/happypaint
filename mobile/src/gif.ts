@@ -349,10 +349,20 @@ export async function encodeGif(frames: RgbaFrame[]): Promise<Uint8Array> {
     }
 
     // Graphic control extension (delay in centiseconds, transparency on).
-    const delayCs = Math.max(2, Math.round(frame.delayMs / 10));
+    // M16: clamp the minimum delay to 4cs (40ms) so the EXPORTED timing matches
+    // the in-app preview clamp (also 40ms). The old 2cs (20ms) floor made fast
+    // loops play roughly twice as quickly in the exported GIF as in preview.
+    const delayCs = Math.max(4, Math.round(frame.delayMs / 10));
     writer.byte(0x21); // extension introducer
     writer.byte(0xf9); // graphic control label
     writer.byte(0x04); // block size
+    // M16: these loops ARE genuinely transparent (alpha < threshold maps to the
+    // reserved transparent index, and the logical-screen background-color index
+    // is that same transparent index). Each frame is a full-canvas image, so
+    // disposal=2 ("restore to background", i.e. clear to transparency) gives a
+    // clean transparent frame every tick with no ghosting of the prior frame.
+    // disposal=1 (leave in place) would let one frame's transparent holes reveal
+    // the previous frame underneath — that is the ghosting case to avoid here.
     writer.byte(0x09); // packed: disposal=2 (restore bg), transparent flag=1
     writer.word(delayCs);
     writer.byte(transparentIndex & 0xff); // transparent color index

@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { makeId } from "./ids";
 import type { SpaceAsset } from "./types";
 
 // Local Paint Space locker. Mirrors the backend `space_assets` shape (id, kind,
@@ -53,5 +54,5 @@ export async function renameSpaceAsset(assetId: string, title: string): Promise<
 }
 
 export function makeSpaceAssetId() {
-  return `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return makeId("asset");
 }

@@ -19,34 +19,61 @@ const TRANSPARENT_ALPHA_THRESHOLD = 16;
 // ---- Byte buffer ----------------------------------------------------------
 
 class ByteBuffer {
-  constructor() {
-    this.bytes = [];
+  constructor(initialCapacity = 1024) {
+    // Growable typed buffer (W8): avoids building a huge boxed number[] and a
+    // final Uint8Array.from copy. Capacity doubles as needed; `length` tracks
+    // the bytes actually written.
+    this.buffer = new Uint8Array(Math.max(16, initialCapacity));
+    this.length = 0;
+  }
+
+  ensureCapacity(extra) {
+    const needed = this.length + extra;
+    if (needed <= this.buffer.length) {
+      return;
+    }
+    let capacity = this.buffer.length;
+    while (capacity < needed) {
+      capacity *= 2;
+    }
+    const next = new Uint8Array(capacity);
+    next.set(this.buffer.subarray(0, this.length));
+    this.buffer = next;
   }
 
   writeByte(value) {
-    this.bytes.push(value & 0xff);
+    this.ensureCapacity(1);
+    this.buffer[this.length] = value & 0xff;
+    this.length += 1;
   }
 
   writeBytes(values) {
+    this.ensureCapacity(values.length);
     for (let i = 0; i < values.length; i += 1) {
-      this.bytes.push(values[i] & 0xff);
+      this.buffer[this.length] = values[i] & 0xff;
+      this.length += 1;
     }
   }
 
   // Little-endian 16-bit (GIF uses LE for screen size, delays, loop count).
   writeShort(value) {
-    this.bytes.push(value & 0xff);
-    this.bytes.push((value >> 8) & 0xff);
+    this.ensureCapacity(2);
+    this.buffer[this.length] = value & 0xff;
+    this.buffer[this.length + 1] = (value >> 8) & 0xff;
+    this.length += 2;
   }
 
   writeString(text) {
+    this.ensureCapacity(text.length);
     for (let i = 0; i < text.length; i += 1) {
-      this.bytes.push(text.charCodeAt(i) & 0xff);
+      this.buffer[this.length] = text.charCodeAt(i) & 0xff;
+      this.length += 1;
     }
   }
 
   toUint8Array() {
-    return Uint8Array.from(this.bytes);
+    // Return a right-sized view (copy) of the written region.
+    return this.buffer.slice(0, this.length);
   }
 }
 

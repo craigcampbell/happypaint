@@ -32,7 +32,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -47,8 +47,10 @@ import {
   View
 } from "react-native";
 import {
+  AlphaType,
   BlendMode,
   Canvas,
+  ColorType,
   createPicture,
   Group,
   Image as SkiaImage,
@@ -80,6 +82,7 @@ import {
   TEXTURES
 } from "../constants";
 import { bytesToBase64, encodeGif, type RgbaFrame } from "../gif";
+import { makeId } from "../ids";
 import {
   copyImportAsync,
   exportPath,
@@ -151,15 +154,28 @@ const TOOLS: Array<{ id: StudioTool; label: string }> = [
 ];
 
 // matchFont uses platform/system fonts so no font asset is required, which keeps
-// text rendering Android-safe in Skia 2.6.2.
+// text rendering Android-safe in Skia 2.6.2. On Android "sans-serif" is the
+// guaranteed system family (matchFont falls back to it anyway), so this is the
+// Android-safe choice.
 const baseFontStyle = {
   fontFamily: Platform.select({ ios: "Helvetica", android: "sans-serif", default: "serif" }) ?? "serif",
   fontStyle: "normal" as const,
   fontWeight: "bold" as const
 };
 
-function makeId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+// M13: matchFont was called per TextItem with no cache, so N text items =>
+// N font objects (and re-creation on every render). Share one font per size
+// across all text items via a module-level cache keyed by font size.
+const fontCache = new Map<number, ReturnType<typeof matchFont>>();
+
+function getSharedFont(size: number) {
+  const cached = fontCache.get(size);
+  if (cached) {
+    return cached;
+  }
+  const font = matchFont({ ...baseFontStyle, fontSize: size });
+  fontCache.set(size, font);
+  return font;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -278,7 +294,16 @@ function drawStroke(canvas: SkCanvas, stroke: Stroke, paperBackground: string) {
   }
 
   if (stroke.brush === "eraser") {
-    canvas.drawPath(path, strokePaint(paperBackground, 1, stroke.size * 1.35, PaintStyle.Stroke));
+    // M9: truly cut pixels with a clear blend instead of painting opaque paper.
+    // The color/opacity are irrelevant under BlendMode.Clear; only the geometry
+    // matters. This is isolated to the layer because each layer is composited as
+    // its own offscreen group (see the layer <Group layer> in the render tree),
+    // so the clear removes pixels from THIS layer only and the marks vanish on a
+    // transparent / sticker / GIF export rather than becoming paper-colored blobs.
+    canvas.drawPath(
+      path,
+      strokePaint("#000000", 1, stroke.size * 1.35, PaintStyle.Stroke, BlendMode.Clear)
+    );
     return;
   }
 
@@ -373,12 +398,14 @@ const StrokeNode = memo(function StrokeNode({ stroke, paperBackground }: StrokeN
   }
 
   if (stroke.brush === "eraser") {
-    // Eraser paints the paper color. With layers this only fully "erases" on the
-    // bottom (paper) layer; on upper layers it paints an opaque paper-colored mark.
+    // M9: clear blend cuts pixels from the (offscreen) layer group rather than
+    // painting opaque paper, so live preview matches the committed picture and
+    // erased regions stay transparent on export. Color is ignored under Clear.
     return (
       <Path
+        blendMode="clear"
         path={path}
-        color={paperBackground}
+        color="#000000"
         opacity={1}
         strokeCap="round"
         strokeJoin="round"
@@ -592,7 +619,9 @@ type ImageItemNodeProps = {
 };
 
 function ImageItemNode({ item }: ImageItemNodeProps) {
-  const image = useImage(item.uri);
+  // M13: guard against an empty uri (e.g. a sticker import that hasn't resolved
+  // a path yet) so useImage isn't handed "" to decode.
+  const image = useImage(item.uri || null);
   if (!image) {
     return null;
   }
@@ -614,10 +643,49 @@ type TextNodeProps = {
 };
 
 function TextNode({ item }: TextNodeProps) {
-  const font = useMemo(() => matchFont({ ...baseFontStyle, fontSize: item.size }), [item.size]);
+  const font = useMemo(() => getSharedFont(item.size), [item.size]);
   // Skia draws text from the baseline; nudge down so the tap point is roughly the top.
   return <SkiaText color={item.color} font={font} opacity={item.opacity} text={item.text} x={item.x} y={item.y + item.size} />;
 }
+
+// M14: the in-progress stroke/shape used to live in StudioScreen's own state, so
+// each rAF tick (~60/s) re-rendered the ENTIRE studio body (toolbars, layer list,
+// frame strip). This component owns the live-stroke/shape state itself and the
+// parent drives it imperatively through a ref, so only this tiny node subtree
+// reconciles per frame; the chrome doesn't. The rAF coalescing still happens in
+// the parent's scheduleLiveStrokeRender, which now calls setStroke here.
+export type LiveStrokeHandle = {
+  setStroke: (stroke: Stroke | null) => void;
+  setShape: (shape: ShapeItem | null) => void;
+};
+
+type LiveStrokeLayerProps = {
+  paperBackground: string;
+};
+
+const LiveStrokeLayer = forwardRef<LiveStrokeHandle, LiveStrokeLayerProps>(function LiveStrokeLayer(
+  { paperBackground },
+  ref
+) {
+  const [stroke, setStroke] = useState<Stroke | null>(null);
+  const [shape, setShape] = useState<ShapeItem | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      setStroke,
+      setShape
+    }),
+    []
+  );
+
+  return (
+    <>
+      {stroke ? <StrokeNode paperBackground={paperBackground} stroke={stroke} /> : null}
+      {shape ? <ShapeNode shape={shape} /> : null}
+    </>
+  );
+});
 
 export function StudioScreen({
   calmMode,
@@ -635,10 +703,10 @@ export function StudioScreen({
   const canvasRef = useCanvasRef();
   const linenImage = useImage(require("../../assets/linen.png"));
   const canvasImage = useImage(require("../../assets/canvas.png"));
-  const importedImage = useImage(project.importedImageUri ?? "");
+  // M13: pass null (not "") when there is no import so Skia never tries to decode
+  // an empty path.
+  const importedImage = useImage(project.importedImageUri ?? null);
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: MIN_CANVAS_WIDTH, height: MIN_CANVAS_WIDTH / CANVAS_ASPECT_RATIO });
-  const [liveStroke, setLiveStroke] = useState<Stroke | null>(null);
-  const [liveShape, setLiveShape] = useState<ShapeItem | null>(null);
   const [exporting, setExporting] = useState(false);
   // When set, the canvas renders ONLY this frame's layers (no paper/texture/import)
   // for one render so we can snapshot it — used by GIF export and loop saving.
@@ -650,6 +718,11 @@ export function StudioScreen({
   const activeStrokeRef = useRef<Stroke | null>(null);
   const lastPointRef = useRef<DrawPoint | null>(null);
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
+  // M14: the in-progress shape value lives in a ref (so finishShape can read it
+  // without the parent re-rendering each move); the visual is pushed to the
+  // isolated <LiveStrokeLayer> imperatively.
+  const liveShapeRef = useRef<ShapeItem | null>(null);
+  const liveLayerRef = useRef<LiveStrokeHandle | null>(null);
   const rafRef = useRef<number | null>(null);
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // M6: single in-flight export/snapshot guard. Any capture that flips the
@@ -731,10 +804,22 @@ export function StudioScreen({
     [activeFrameId, frames, project, settings.texture]
   );
 
-  // Write a layer stack (and optional active layer) back into the active frame.
+  // M7: every mutation must build on the FRESHEST committed project, not on a
+  // render-time closure snapshot. Two commits in the same tick (e.g. a sticker
+  // apply landing alongside a stroke finish) would otherwise both read the same
+  // stale `latestProject` and the second would clobber the first, dropping an
+  // item. This ref always holds the latest project we know about — updated on
+  // every render from the incoming props AND synchronously on every local commit
+  // (commitProject) so the next mutation in the same tick sees the prior one.
+  const latestProjectRef = useRef<DrawingProject>(latestProject);
+  latestProjectRef.current = latestProject;
+
+  // Write a layer stack (and optional active layer) back into the active frame
+  // of the freshest project (M7: reads the ref, not the render snapshot).
   const writeActiveFrameLayers = useCallback(
     (nextLayers: Layer[], nextActiveLayerId?: string): DrawingProject => {
-      const nextFrames = latestProject.frames.map((frame) => {
+      const base = latestProjectRef.current;
+      const nextFrames = base.frames.map((frame) => {
         if (frame.id !== activeFrameId) {
           return frame;
         }
@@ -746,9 +831,9 @@ export function StudioScreen({
           : nextLayers[0]?.id;
         return { ...frame, layers: nextLayers, activeLayerId: resolvedActive };
       });
-      return { ...latestProject, frames: nextFrames, updatedAt: Date.now() };
+      return { ...base, frames: nextFrames, updatedAt: Date.now() };
     },
-    [activeFrameId, latestProject]
+    [activeFrameId]
   );
 
   const canDraw = !!activeLayer && activeLayer.visible && !activeLayer.locked;
@@ -760,46 +845,30 @@ export function StudioScreen({
     [onSettingsChange, settings]
   );
 
-  // Commit a single new item to the active layer of the active frame.
-  const appendItemToActiveLayer = useCallback(
-    (item: LayerItem, position: "top" | "bottom" = "top") => {
-      const nextLayers = layers.map((layer) => {
-        if (layer.id !== activeLayerId) {
-          return layer;
-        }
-        const items = position === "bottom" ? [item, ...layer.items] : [...layer.items, item];
-        return { ...layer, items };
-      });
-      const nextProject = writeActiveFrameLayers(nextLayers);
-      onProjectChange(nextProject);
-      schedulePreviewSave(nextProject);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeLayerId, layers, onProjectChange, writeActiveFrameLayers]
-  );
-
-  const updateLayers = useCallback(
-    (nextLayers: Layer[], nextActiveId?: string) => {
-      const nextProject = writeActiveFrameLayers(nextLayers, nextActiveId);
-      onProjectChange(nextProject);
-      schedulePreviewSave(nextProject);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [onProjectChange, writeActiveFrameLayers]
-  );
-
   const captureToUri = useCallback(
     async (uri: string) => {
       const image = canvasRef.current?.makeImageSnapshot();
-      const base64 = image?.encodeToBase64();
-      if (!base64) {
-        throw new Error("The painting is still getting ready.");
+      // M11: encode then ALWAYS release the native snapshot. This path runs on
+      // the debounced preview save (~every 420ms while drawing) plus every PNG /
+      // share / photos / template export, so a leaked SkImage here accumulates
+      // native memory fast.
+      try {
+        const base64 = image?.encodeToBase64();
+        if (!base64) {
+          throw new Error("The painting is still getting ready.");
+        }
+        await writePng(uri, base64);
+        return uri;
+      } finally {
+        image?.dispose();
       }
-      await writePng(uri, base64);
-      return uri;
     },
     [canvasRef]
   );
+
+  // Forward ref to schedulePreviewSave so savePreview's failure path can retry
+  // the preview without referencing a hook declared after it (M17).
+  const reschedulePreviewRef = useRef<((project: DrawingProject) => void) | null>(null);
 
   const savePreview = useCallback(
     async (nextProject: DrawingProject) => {
@@ -812,7 +881,10 @@ export function StudioScreen({
         const uri = await captureToUri(previewPath(nextProject.id));
         onProjectChange({ ...nextProject, previewUri: `${uri}?updated=${Date.now()}` });
       } catch {
-        onProjectChange(nextProject);
+        // M17: the project body was already persisted on commit, so do NOT fire
+        // another full onProjectChange here (it was a redundant whole-project
+        // save). Only the PREVIEW snapshot failed — just retry it later.
+        reschedulePreviewRef.current?.(nextProject);
       }
     },
     [captureToUri, onProjectChange]
@@ -830,6 +902,52 @@ export function StudioScreen({
       }, 420);
     },
     [savePreview]
+  );
+
+  reschedulePreviewRef.current = schedulePreviewSave;
+
+  // M7: centralized commit. Advances the freshest-project ref SYNCHRONOUSLY so a
+  // second mutation in the same tick chains off the first, then notifies the
+  // parent and schedules the debounced preview snapshot.
+  const commitProject = useCallback(
+    (nextProject: DrawingProject) => {
+      latestProjectRef.current = nextProject;
+      onProjectChange(nextProject);
+      schedulePreviewSave(nextProject);
+    },
+    [onProjectChange, schedulePreviewSave]
+  );
+
+  // Commit a single new item to the active layer of the active frame. M7: read
+  // the active frame's CURRENT layers from the freshest project ref so two
+  // commits in the same tick (sticker apply + stroke finish) chain instead of
+  // one clobbering the other.
+  const appendItemToActiveLayer = useCallback(
+    (item: LayerItem, position: "top" | "bottom" = "top") => {
+      const base = latestProjectRef.current;
+      const frame = base.frames.find((f) => f.id === activeFrameId) ?? base.frames[0];
+      const baseLayers = frame?.layers ?? layers;
+      const targetLayerId =
+        frame?.activeLayerId && baseLayers.some((l) => l.id === frame.activeLayerId)
+          ? frame.activeLayerId
+          : baseLayers[0]?.id;
+      const nextLayers = baseLayers.map((layer) => {
+        if (layer.id !== targetLayerId) {
+          return layer;
+        }
+        const items = position === "bottom" ? [item, ...layer.items] : [...layer.items, item];
+        return { ...layer, items };
+      });
+      commitProject(writeActiveFrameLayers(nextLayers));
+    },
+    [activeFrameId, commitProject, layers, writeActiveFrameLayers]
+  );
+
+  const updateLayers = useCallback(
+    (nextLayers: Layer[], nextActiveId?: string) => {
+      commitProject(writeActiveFrameLayers(nextLayers, nextActiveId));
+    },
+    [commitProject, writeActiveFrameLayers]
   );
 
   useEffect(() => {
@@ -852,7 +970,9 @@ export function StudioScreen({
     }
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      setLiveStroke(
+      // M14: push the live stroke into the isolated layer; the parent never
+      // re-renders for this. rAF coalescing is preserved.
+      liveLayerRef.current?.setStroke(
         activeStrokeRef.current
           ? {
               ...activeStrokeRef.current,
@@ -918,7 +1038,7 @@ export function StudioScreen({
     const stroke = activeStrokeRef.current;
     activeStrokeRef.current = null;
     lastPointRef.current = null;
-    setLiveStroke(null);
+    liveLayerRef.current?.setStroke(null);
 
     if (!stroke || stroke.points.length === 0) {
       return;
@@ -961,7 +1081,7 @@ export function StudioScreen({
       }
       const shapeKind: ShapeKind =
         settings.tool === "rect" ? "rect" : settings.tool === "ellipse" ? "ellipse" : "line";
-      setLiveShape({
+      const next: ShapeItem = {
         kind: "shape",
         id: "live-shape",
         shape: shapeKind,
@@ -973,15 +1093,20 @@ export function StudioScreen({
         size: settings.size,
         opacity: settings.opacity,
         filled: settings.shapeFilled
-      });
+      };
+      // M14: keep the value in a ref for finishShape and push the visual into the
+      // isolated layer; the parent chrome doesn't re-render on shape drags.
+      liveShapeRef.current = next;
+      liveLayerRef.current?.setShape(next);
     },
     [canvasSize.height, canvasSize.width, settings.color, settings.opacity, settings.shapeFilled, settings.size, settings.tool]
   );
 
   const finishShape = useCallback(() => {
-    const live = liveShape;
+    const live = liveShapeRef.current;
     shapeStartRef.current = null;
-    setLiveShape(null);
+    liveShapeRef.current = null;
+    liveLayerRef.current?.setShape(null);
     if (!live) {
       return;
     }
@@ -991,7 +1116,7 @@ export function StudioScreen({
       return;
     }
     appendItemToActiveLayer({ ...live, id: makeId("shape") });
-  }, [appendItemToActiveLayer, liveShape]);
+  }, [appendItemToActiveLayer]);
 
   // --- Fill tool -------------------------------------------------------------
   const placeFill = useCallback(() => {
@@ -1060,10 +1185,22 @@ export function StudioScreen({
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: () => true,
-        onStartShouldSetPanResponder: () => true,
+        // M10: basic palm/multitouch rejection on the JS thread. A single second
+        // finger or a palm landing mid-stroke would otherwise feed its
+        // coordinates into the SAME active stroke and yank the line across the
+        // canvas. We refuse to claim the responder while more than one touch is
+        // down, ignore multi-touch move events, and abort the active stroke the
+        // moment a second touch appears. (A fully UI-thread-correct solution —
+        // pointer-id tracking, pressure, true palm rejection — would need
+        // react-native-gesture-handler, which is intentionally not a dependency.)
+        onStartShouldSetPanResponder: (event) => event.nativeEvent.touches.length <= 1,
+        onMoveShouldSetPanResponder: (event) => event.nativeEvent.touches.length <= 1,
         onPanResponderGrant: (event) => {
           if (!canDraw) {
+            return;
+          }
+          // Don't begin a stroke if more than one finger is already down.
+          if (event.nativeEvent.touches.length > 1) {
             return;
           }
           const { locationX, locationY } = event.nativeEvent;
@@ -1075,6 +1212,16 @@ export function StudioScreen({
         },
         onPanResponderMove: (event) => {
           if (!canDraw) {
+            return;
+          }
+          // A second finger / palm touched down during the drag: end the current
+          // stroke/shape cleanly rather than letting the extra touch jump it.
+          if (event.nativeEvent.touches.length > 1) {
+            if (settings.tool === "brush" || settings.tool === "eraser") {
+              finishStroke();
+            } else if (settings.tool === "rect" || settings.tool === "ellipse" || settings.tool === "line") {
+              finishShape();
+            }
             return;
           }
           const { locationX, locationY } = event.nativeEvent;
@@ -1135,12 +1282,15 @@ export function StudioScreen({
   // --- Layer operations ------------------------------------------------------
   const selectLayer = useCallback(
     (id: string) => {
-      const nextFrames = latestProject.frames.map((frame) =>
+      const base = latestProjectRef.current;
+      const nextFrames = base.frames.map((frame) =>
         frame.id === activeFrameId ? { ...frame, activeLayerId: id } : frame
       );
-      onProjectChange({ ...latestProject, frames: nextFrames });
+      const next = { ...base, frames: nextFrames };
+      latestProjectRef.current = next;
+      onProjectChange(next);
     },
-    [activeFrameId, latestProject, onProjectChange]
+    [activeFrameId, onProjectChange]
   );
 
   const addLayer = useCallback(() => {
@@ -1234,44 +1384,47 @@ export function StudioScreen({
   // --- Frame operations ------------------------------------------------------
   const commitFrames = useCallback(
     (nextFrames: Frame[], nextActiveFrameId?: string) => {
+      const base = latestProjectRef.current;
       const activeStillExists = nextFrames.some(
         (frame) => frame.id === (nextActiveFrameId ?? activeFrameId)
       );
       const resolvedActive = activeStillExists ? nextActiveFrameId ?? activeFrameId : nextFrames[0]?.id;
-      const nextProject: DrawingProject = {
-        ...latestProject,
+      commitProject({
+        ...base,
         frames: nextFrames,
         activeFrameId: resolvedActive,
         updatedAt: Date.now()
-      };
-      onProjectChange(nextProject);
-      schedulePreviewSave(nextProject);
+      });
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeFrameId, latestProject, onProjectChange]
+    [activeFrameId, commitProject]
   );
 
   const selectFrame = useCallback(
     (id: string) => {
-      onProjectChange({ ...latestProject, activeFrameId: id });
+      const base = latestProjectRef.current;
+      const next = { ...base, activeFrameId: id };
+      latestProjectRef.current = next;
+      onProjectChange(next);
     },
-    [latestProject, onProjectChange]
+    [onProjectChange]
   );
 
   const addFrame = useCallback(() => {
     const frame = createFrame();
-    const index = latestProject.frames.findIndex((item) => item.id === activeFrameId);
-    const nextFrames = [...latestProject.frames];
+    const baseFrames = latestProjectRef.current.frames;
+    const index = baseFrames.findIndex((item) => item.id === activeFrameId);
+    const nextFrames = [...baseFrames];
     nextFrames.splice(index + 1, 0, frame);
     commitFrames(nextFrames, frame.id);
-  }, [activeFrameId, commitFrames, latestProject.frames]);
+  }, [activeFrameId, commitFrames]);
 
   const duplicateFrame = useCallback(() => {
-    const index = latestProject.frames.findIndex((item) => item.id === activeFrameId);
+    const baseFrames = latestProjectRef.current.frames;
+    const index = baseFrames.findIndex((item) => item.id === activeFrameId);
     if (index < 0) {
       return;
     }
-    const source = latestProject.frames[index];
+    const source = baseFrames[index];
     // Deep copy: fresh ids on frame, layers, and items.
     const idMap = new Map<string, string>();
     const copiedLayers: Layer[] = source.layers.map((layer) => {
@@ -1289,51 +1442,56 @@ export function StudioScreen({
       layers: copiedLayers,
       activeLayerId: idMap.get(source.activeLayerId) ?? copiedLayers[0]?.id
     };
-    const nextFrames = [...latestProject.frames];
+    const nextFrames = [...baseFrames];
     nextFrames.splice(index + 1, 0, copy);
     commitFrames(nextFrames, copy.id);
-  }, [activeFrameId, commitFrames, latestProject.frames]);
+  }, [activeFrameId, commitFrames]);
 
   const deleteFrame = useCallback(
     (id: string) => {
-      if (latestProject.frames.length <= 1) {
+      const baseFrames = latestProjectRef.current.frames;
+      if (baseFrames.length <= 1) {
         Alert.alert("Keep one frame", "A loop needs at least one frame.");
         return;
       }
-      const nextFrames = latestProject.frames.filter((frame) => frame.id !== id);
+      const nextFrames = baseFrames.filter((frame) => frame.id !== id);
       commitFrames(nextFrames, nextFrames[0]?.id);
     },
-    [commitFrames, latestProject.frames]
+    [commitFrames]
   );
 
   const moveFrame = useCallback(
     (id: string, direction: -1 | 1) => {
-      const index = latestProject.frames.findIndex((frame) => frame.id === id);
+      const baseFrames = latestProjectRef.current.frames;
+      const index = baseFrames.findIndex((frame) => frame.id === id);
       const target = index + direction;
-      if (index < 0 || target < 0 || target >= latestProject.frames.length) {
+      if (index < 0 || target < 0 || target >= baseFrames.length) {
         return;
       }
-      const nextFrames = [...latestProject.frames];
+      const nextFrames = [...baseFrames];
       const [moved] = nextFrames.splice(index, 1);
       nextFrames.splice(target, 0, moved);
       commitFrames(nextFrames);
     },
-    [commitFrames, latestProject.frames]
+    [commitFrames]
   );
 
   const setFrameDuration = useCallback(
     (durationMs: number) => {
-      const nextFrames = latestProject.frames.map((frame) =>
+      const nextFrames = latestProjectRef.current.frames.map((frame) =>
         frame.id === activeFrameId ? { ...frame, durationMs } : frame
       );
       commitFrames(nextFrames);
     },
-    [activeFrameId, commitFrames, latestProject.frames]
+    [activeFrameId, commitFrames]
   );
 
   const toggleOnionSkin = useCallback(() => {
-    onProjectChange({ ...latestProject, onionSkin: !latestProject.onionSkin, updatedAt: Date.now() });
-  }, [latestProject, onProjectChange]);
+    const base = latestProjectRef.current;
+    const next = { ...base, onionSkin: !base.onionSkin, updatedAt: Date.now() };
+    latestProjectRef.current = next;
+    onProjectChange(next);
+  }, [onProjectChange]);
 
   // --- Loop preview playback -------------------------------------------------
   useEffect(() => {
@@ -1377,6 +1535,14 @@ export function StudioScreen({
     if (!pendingSticker) {
       return;
     }
+    // M15: don't size/place the sticker until the canvas has a real laid-out
+    // width. Before onLayout fires, canvasSize is still the MIN_CANVAS_WIDTH
+    // placeholder, which would size the sticker against the wrong dimensions.
+    // The sticker stays queued; once onLayout updates canvasSize this effect
+    // re-runs (canvasSize is in the deps) and applies it at the correct size.
+    if (canvasSize.width <= MIN_CANVAS_WIDTH) {
+      return;
+    }
     const maxW = canvasSize.width * 0.6;
     const maxH = canvasSize.height * 0.6;
     const ratio = pendingSticker.height > 0 ? pendingSticker.width / pendingSticker.height : 1;
@@ -1398,8 +1564,7 @@ export function StudioScreen({
     };
     appendItemToActiveLayer(item);
     onStickerConsumed?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSticker]);
+  }, [appendItemToActiveLayer, canvasSize.height, canvasSize.width, onStickerConsumed, pendingSticker]);
 
   // --- Import ----------------------------------------------------------------
   const importFromPhotos = useCallback(async () => {
@@ -1411,10 +1576,12 @@ export function StudioScreen({
     if (result.canceled || !result.assets[0]?.uri) {
       return;
     }
-    const importedUri = await copyImportAsync(result.assets[0].uri, latestProject.id);
-    const nextProject = { ...latestProject, importedImageUri: importedUri, updatedAt: Date.now() };
+    const base = latestProjectRef.current;
+    const importedUri = await copyImportAsync(result.assets[0].uri, base.id);
+    const nextProject = { ...latestProjectRef.current, importedImageUri: importedUri, updatedAt: Date.now() };
+    latestProjectRef.current = nextProject;
     onProjectChange(nextProject);
-  }, [latestProject, onProjectChange]);
+  }, [onProjectChange]);
 
   const importFromFiles = useCallback(async () => {
     const result = await DocumentPicker.getDocumentAsync({
@@ -1425,10 +1592,12 @@ export function StudioScreen({
     if (result.canceled || !result.assets[0]?.uri) {
       return;
     }
-    const importedUri = await copyImportAsync(result.assets[0].uri, latestProject.id);
-    const nextProject = { ...latestProject, importedImageUri: importedUri, updatedAt: Date.now() };
+    const base = latestProjectRef.current;
+    const importedUri = await copyImportAsync(result.assets[0].uri, base.id);
+    const nextProject = { ...latestProjectRef.current, importedImageUri: importedUri, updatedAt: Date.now() };
+    latestProjectRef.current = nextProject;
     onProjectChange(nextProject);
-  }, [latestProject, onProjectChange]);
+  }, [onProjectChange]);
 
   // --- Export ----------------------------------------------------------------
   // captureToUri snapshots whatever the Canvas currently renders. For a
@@ -1582,8 +1751,10 @@ export function StudioScreen({
             const pixels = image.readPixels(0, 0, {
               width: w,
               height: h,
-              colorType: 4, // ColorType.RGBA_8888
-              alphaType: 3 // AlphaType.Unpremul
+              // M12: use the proper Skia enums instead of hardcoded literals so a
+              // future/platform Skia build can't silently swap channels.
+              colorType: ColorType.RGBA_8888,
+              alphaType: AlphaType.Unpremul
             });
             if (pixels && pixels instanceof Uint8Array && pixels.length === w * h * 4) {
               rgbaFrames.push({ width: w, height: h, data: pixels, delayMs: frame.durationMs });
@@ -1843,7 +2014,9 @@ export function StudioScreen({
               <Group opacity={0.25}>
                 {onionFrame.layers.map((layer) =>
                   layer.visible ? (
-                    <Group key={`onion-${layer.id}`} opacity={layer.opacity}>
+                    // M9: same offscreen isolation so onion-skin eraser marks clear
+                    // only within their layer.
+                    <Group key={`onion-${layer.id}`} layer opacity={layer.opacity}>
                       <LayerItemsNode
                         canvasHeight={canvasSize.height}
                         canvasWidth={canvasSize.width}
@@ -1860,17 +2033,20 @@ export function StudioScreen({
                 return null;
               }
               return (
-                <Group key={layer.id} opacity={layer.opacity}>
+                // M9: `layer` forces this layer into its own offscreen group so an
+                // eraser stroke's BlendMode.Clear cuts pixels from THIS layer only
+                // (committed picture + live preview) instead of punching through to
+                // the canvas background or covering lower layers with paper color.
+                <Group key={layer.id} layer opacity={layer.opacity}>
                   <LayerItemsNode
                     canvasHeight={canvasSize.height}
                     canvasWidth={canvasSize.width}
                     items={layer.items}
                     paperBackground={paperBackground}
                   />
-                  {liveEditable && index === activeIndex && liveStroke ? (
-                    <StrokeNode paperBackground={paperBackground} stroke={liveStroke} />
+                  {liveEditable && index === activeIndex ? (
+                    <LiveStrokeLayer paperBackground={paperBackground} ref={liveLayerRef} />
                   ) : null}
-                  {liveEditable && index === activeIndex && liveShape ? <ShapeNode shape={liveShape} /> : null}
                 </Group>
               );
             })}
@@ -2160,7 +2336,11 @@ export function StudioScreen({
           <IconButton
             icon={Eraser}
             label="Remove import"
-            onPress={() => onProjectChange({ ...latestProject, importedImageUri: undefined, updatedAt: Date.now() })}
+            onPress={() => {
+              const next = { ...latestProjectRef.current, importedImageUri: undefined, updatedAt: Date.now() };
+              latestProjectRef.current = next;
+              onProjectChange(next);
+            }}
             disabled={!latestProject.importedImageUri}
           />
         </View>

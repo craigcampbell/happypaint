@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 
 import { createDefaultLayers, DEFAULT_FRAME_DURATION_MS, strokesToItems } from "./constants";
+import { makeId } from "./ids";
 import type { DrawingProject, Frame, Layer, LayerItem, ProjectIndexEntry } from "./types";
 
 // Legacy single-key store (every project serialized into one JSON blob). Read
@@ -48,15 +49,11 @@ function projectBodyPath(projectId: string) {
   return `${PROJECTS_DIR}/project-${projectId}.json`;
 }
 
-function makeFrameId() {
-  return `frame-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 function frameFromLayers(layers: Layer[], activeLayerId?: string): Frame {
   const resolvedActive =
     activeLayerId && layers.some((layer) => layer.id === activeLayerId) ? activeLayerId : layers[0].id;
   return {
-    id: makeFrameId(),
+    id: makeId("frame"),
     durationMs: DEFAULT_FRAME_DURATION_MS,
     layers,
     activeLayerId: resolvedActive
