@@ -32,7 +32,7 @@ export default function MarketingSite({ onNavigate }) {
     <main className="marketing-site">
       <section className="marketing-hero">
         <div className="marketing-nav">
-          <strong>Happy Paint</strong>
+          <strong>Drawesome 🎨</strong>
           <nav aria-label="Marketing navigation">
             <button type="button" onClick={() => onNavigate("/studio")}>
               Browser Studio
@@ -45,7 +45,7 @@ export default function MarketingSite({ onNavigate }) {
 
         <div className="hero-copy">
           <p className="eyebrow">Drawing, coloring, and shared art time</p>
-          <h1>Happy Paint</h1>
+          <h1>Drawesome 🎨</h1>
           <p>
             A fast, kid-conscious studio for solo art, planned paint sessions, and invite-only creative rooms.
           </p>

@@ -79,6 +79,7 @@ import MarketingSite from "./components/MarketingSite";
 import TogetherPanel from "./components/TogetherPanel";
 import AdminConsole from "./components/AdminConsole";
 import AccountPanel from "./components/AccountPanel";
+import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
 
 const MAX_HISTORY = 18;
@@ -286,6 +287,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const replayRecorderRef = useRef(null);
   const replayFlushTimerRef = useRef(0);
 
+  // --- Realtime multiplayer (shared canvas) ---
+  // Everyone in the same room draws together. A friend's strokes land on a
+  // dedicated offscreen "remote" canvas that is blitted on top of the local
+  // layer composite, so remote art never touches the local layer/undo system.
+  const roomId = (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
+  const remoteCanvasRef = useRef(null); // offscreen 1600x1200: all friends' art, merged
+  const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
+  const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
+  const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
+  const remoteCursorsRef = useRef(new Map()); // userId -> { x, y, name, color, drawing, ts }
+  const cursorSentAtRef = useRef(0);
+  const [remoteCursors, setRemoteCursors] = useState([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [showChat, setShowChat] = useState(true);
+
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
 
@@ -490,6 +506,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     paintOnionSkin(context);
     compositeLayers(context, layersRef.current);
+    if (remoteCanvasRef.current) {
+      context.globalAlpha = 1;
+      context.drawImage(remoteCanvasRef.current, 0, 0);
+    }
     compositeCacheValidRef.current = false;
     blitToDisplay();
   }, [blitToDisplay, paintOnionSkin]);
@@ -559,6 +579,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       context.globalAlpha = 1;
     }
     context.drawImage(aboveCacheRef.current, 0, 0);
+    if (remoteCanvasRef.current) {
+      context.globalAlpha = 1;
+      context.drawImage(remoteCanvasRef.current, 0, 0);
+    }
     blitToDisplay();
   }, [blitToDisplay, renderDisplay]);
 
@@ -696,6 +720,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     pushHistory();
     active.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    // Clear is shared: wipe the friends' merged canvas locally and tell the room.
+    if (remoteCanvasRef.current) {
+      remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+    remoteStrokeLastRef.current.clear();
+    mpRef.current?.sendClear();
     renderDisplay();
     refreshActiveThumbnail();
     markChanged("Layer cleared");
@@ -742,6 +772,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       compositeLayers(context, layersRef.current, { width, height });
+      // Bake friends' shared strokes into exports/gallery saves too.
+      if (remoteCanvasRef.current) {
+        context.globalAlpha = 1;
+        context.drawImage(remoteCanvasRef.current, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, width, height);
+      }
       return canvas;
     },
     [renderPaper, selectedTexture],
@@ -1178,6 +1213,45 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     };
   }, []);
 
+  // Send the buffered points of the in-progress stroke to the room. Throttled
+  // to ~40ms unless `force` (stroke end) so volume stays sane while feeling live.
+  const flushStrokeNet = useCallback((force) => {
+    const net = strokeNetRef.current;
+    const mp = mpRef.current;
+    if (!net || !mp || net.pending.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - net.lastSent < 40) {
+      return;
+    }
+    net.lastSent = now;
+    const points = net.pending;
+    net.pending = [];
+    mp.sendOp({ kind: "draw", strokeId: net.id, settings: net.settings, points });
+  }, []);
+
+  // Relay this pointer's position to the room as a live cursor (throttled to
+  // ~50ms). Coordinates are normalised 0..1 so each friend can place the cursor
+  // correctly regardless of their own canvas size. `drawing` reflects whether a
+  // stroke is in progress so the cursor can pulse while painting.
+  const sendCursorThrottled = useCallback(
+    (event) => {
+      const mp = mpRef.current;
+      if (!mp) {
+        return;
+      }
+      const now = Date.now();
+      if (now - cursorSentAtRef.current < 50) {
+        return;
+      }
+      cursorSentAtRef.current = now;
+      const p = getPoint(event.nativeEvent);
+      mp.sendCursor(p.x / CANVAS_WIDTH, p.y / CANVAS_HEIGHT, activePointerRef.current === event.pointerId);
+    },
+    [getPoint],
+  );
+
   const drawBrushFromEvent = useCallback(
     (event) => {
       const settings = settingsRef.current;
@@ -1192,18 +1266,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const coalescedEvents = typeof nativeEvent.getCoalescedEvents === "function" ? nativeEvent.getCoalescedEvents() : [];
       const events = coalescedEvents.length > 0 ? coalescedEvents : [nativeEvent];
 
+      const net = strokeNetRef.current;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
         drawBrushSegment(context, lastPoint, point, settings);
         lastPointRef.current = point;
+        if (net) {
+          net.pending.push({ x: Math.round(point.x), y: Math.round(point.y), pressure: point.pressure });
+        }
       }
+
+      // Stream the buffered points to the room (throttled), so friends see the
+      // stroke grow live rather than only on pen-up.
+      flushStrokeNet(false);
 
       // Coalesced, cache-backed display update (W1/W2/W5): at most one
       // below + active + above composite per painted frame.
       scheduleStrokeFrame();
     },
-    [getActiveLayer, getPoint, scheduleStrokeFrame],
+    [flushStrokeNet, getActiveLayer, getPoint, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -1330,6 +1412,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             opacity: settings.opacity,
             fontSize: settings.textSize,
           });
+          mpRef.current?.sendOp({
+            kind: "text",
+            point: { x: point.x, y: point.y },
+            text,
+            opts: { color: settings.color, opacity: settings.opacity, fontSize: settings.textSize },
+          });
           renderDisplay();
           refreshActiveThumbnail();
           recordReplay(true);
@@ -1352,6 +1440,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       lastPointRef.current = getPoint(event.nativeEvent);
       pushHistory();
       buildCompositeCache();
+      // Open an outgoing network stroke so each painted point streams to friends.
+      strokeNetRef.current = {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        settings: {
+          brush: settings.brush,
+          color: settings.color,
+          size: settings.size,
+          opacity: settings.opacity,
+          variation: settings.variation,
+        },
+        pending: [],
+        lastSent: 0,
+      };
       drawBrushFromEvent(event);
       markChanged("Drawing");
     },
@@ -1360,6 +1461,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const continueStroke = useCallback(
     (event) => {
+      // Relay a live cursor even while not painting (hover presence).
+      sendCursorThrottled(event);
+
       if (activePointerRef.current !== event.pointerId) {
         return;
       }
@@ -1419,11 +1523,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         if (start && active) {
           const end = getPoint(event.nativeEvent);
           pushHistory();
-          drawShape(active.canvas.getContext("2d"), tool, start, end, {
+          const shapeOpts = {
             color: settingsRef.current.color,
             size: settingsRef.current.size,
             opacity: settingsRef.current.opacity,
             fillShape: settingsRef.current.fillShape,
+          };
+          drawShape(active.canvas.getContext("2d"), tool, start, end, shapeOpts);
+          mpRef.current?.sendOp({
+            kind: "shape",
+            tool,
+            start: { x: start.x, y: start.y },
+            end: { x: end.x, y: end.y },
+            opts: shapeOpts,
           });
           renderDisplay();
           markChanged("Shape added");
@@ -1434,8 +1546,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         shapeStartRef.current = null;
         shapePreviewRectRef.current = null;
       } else {
-        // Brush/eraser: flush any pending per-move composite, then do one full
-        // recomposite (this also invalidates the per-stroke caches).
+        // Brush/eraser: push the tail of the stroke to the room, then flush any
+        // pending per-move composite and do one full recomposite (this also
+        // invalidates the per-stroke caches).
+        flushStrokeNet(true);
+        strokeNetRef.current = null;
         flushStrokeFrame();
         renderDisplay();
         markChanged("Stroke saved");
@@ -2488,6 +2603,115 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   // ---- Initialization ----
 
+  // ---- Realtime multiplayer wiring ----------------------------------------
+
+  // The shared friends canvas is created lazily on first remote op so a purely
+  // solo session never allocates it.
+  const getRemoteCtx = useCallback(() => {
+    if (!remoteCanvasRef.current) {
+      remoteCanvasRef.current = createLayerCanvas();
+    }
+    return remoteCanvasRef.current.getContext("2d");
+  }, []);
+
+  // Apply one remote op onto the shared friends canvas. `draw` ops carry
+  // incremental points keyed by strokeId (we connect consecutive points per
+  // stroke); `shape` / `text` are one-shot. Never touches local layers or undo.
+  const applyRemoteOp = useCallback(
+    (op) => {
+      if (!op) {
+        return;
+      }
+      const ctx = getRemoteCtx();
+      if (op.kind === "draw") {
+        const settings = op.settings || {};
+        const lastMap = remoteStrokeLastRef.current;
+        let last = lastMap.get(op.strokeId);
+        for (const point of op.points || []) {
+          drawBrushSegment(ctx, last || point, point, settings);
+          last = point;
+        }
+        lastMap.set(op.strokeId, last);
+      } else if (op.kind === "shape") {
+        drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
+      } else if (op.kind === "text") {
+        drawText(ctx, op.point, op.text, op.opts || {});
+      }
+    },
+    [getRemoteCtx],
+  );
+
+  const handleMpMessage = useCallback(
+    (data) => {
+      switch (data.type) {
+        case "history":
+          (data.ops || []).forEach(applyRemoteOp);
+          remoteStrokeLastRef.current.clear();
+          renderDisplay();
+          break;
+        case "op":
+          applyRemoteOp(data.op);
+          // Mid-local-stroke, reuse the cheap stroke compositor; otherwise full.
+          if (activePointerRef.current != null) {
+            scheduleStrokeFrame();
+          } else {
+            renderDisplay();
+          }
+          break;
+        case "clear":
+          if (remoteCanvasRef.current) {
+            remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          }
+          remoteStrokeLastRef.current.clear();
+          renderDisplay();
+          break;
+        case "cursor":
+          remoteCursorsRef.current.set(data.userId, {
+            x: data.x,
+            y: data.y,
+            name: data.name,
+            color: data.color,
+            drawing: data.drawing,
+            ts: Date.now(),
+          });
+          break;
+        case "cursor_leave":
+        case "userLeft":
+          if (data.userId) {
+            remoteCursorsRef.current.delete(data.userId);
+          }
+          break;
+        default:
+          break;
+      }
+    },
+    [applyRemoteOp, renderDisplay, scheduleStrokeFrame],
+  );
+
+  const mp = useMultiplayer(roomId, handleMpMessage);
+
+  // The imperative draw handlers (defined earlier) reach the senders via a ref.
+  useEffect(() => {
+    mpRef.current = { sendOp: mp.sendOp, sendCursor: mp.sendCursor, sendClear: mp.sendClear };
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear]);
+
+  // Pump remote cursors into React state, dropping any gone quiet (>4s).
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const live = [];
+      remoteCursorsRef.current.forEach((cursor, userId) => {
+        if (now - cursor.ts > 4000) {
+          remoteCursorsRef.current.delete(userId);
+        } else {
+          live.push({ userId, ...cursor });
+        }
+      });
+      setRemoteCursors(live);
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     const overlay = overlayCanvasRef.current;
     overlay.width = CANVAS_WIDTH;
@@ -2805,11 +3029,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   return (
     <main className="studio-shell">
-      <section className="studio-workspace" aria-label="Happy Paint drawing studio">
+      <section className="studio-workspace" aria-label="Drawesome drawing studio">
         <div className="topbar">
           <div>
-            <p className="eyebrow">Happy Paint</p>
-            <h1>Studio</h1>
+            <p className="eyebrow">paint together, live ✨</p>
+            <h1>Drawesome 🎨</h1>
           </div>
           <div className="topbar-actions">
             <button type="button" onClick={undo} disabled={historyCount === 0}>
@@ -2836,6 +3060,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </div>
 
+        <div className="mp-bar">
+          <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
+          <strong className="mp-room">Room {roomId}</strong>
+          <span className="mp-count">{mp.connected ? `${mp.users.length} painting together` : "Connecting…"}</span>
+          <div className="mp-avatars">
+            {mp.users.slice(0, 8).map((u) => (
+              <span
+                key={u.id}
+                className="mp-avatar"
+                style={{ background: u.color }}
+                title={u.name + (mp.self && u.id === mp.self.id ? " (you)" : "")}
+              >
+                {u.name.slice(0, 1)}
+              </span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mp-invite"
+            onClick={() => {
+              const link = `${window.location.origin}/join/${roomId}`;
+              navigator.clipboard?.writeText(link).then(
+                () => setStatus("Invite link copied — send it to a friend!"),
+                () => setStatus(link),
+              );
+            }}
+          >
+            Invite a friend
+          </button>
+        </div>
+
         <div className="canvas-stage">
           <div className="canvas-paper" style={paperStyle}>
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
@@ -2848,8 +3103,70 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onPointerUp={finishStroke}
               onPointerCancel={finishStroke}
             />
+            <div className="remote-cursor-layer" aria-hidden="true">
+              {remoteCursors.map((cursor) => (
+                <div
+                  key={cursor.userId}
+                  className={cursor.drawing ? "remote-cursor is-drawing" : "remote-cursor"}
+                  style={{ left: `${cursor.x * 100}%`, top: `${cursor.y * 100}%` }}
+                >
+                  <span className="remote-cursor-dot" style={{ background: cursor.color }} />
+                  <span className="remote-cursor-name" style={{ background: cursor.color }}>
+                    {cursor.name}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
+
+        {showChat ? (
+          <div className="mp-chat">
+            <div className="mp-chat-head">
+              <span>Room chat</span>
+              <button type="button" onClick={() => setShowChat(false)} aria-label="Hide chat">
+                –
+              </button>
+            </div>
+            <div className="mp-chat-log">
+              {mp.chat.length === 0 ? (
+                <p className="mp-chat-empty">Say hi to your friends! 👋</p>
+              ) : (
+                mp.chat.map((line, index) => (
+                  <p key={index} className="mp-chat-line">
+                    <strong style={{ color: line.user?.color }}>{line.user?.name}:</strong> {line.message}
+                  </p>
+                ))
+              )}
+            </div>
+            <form
+              className="mp-chat-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const text = chatDraft.trim();
+                if (text) {
+                  // The server echoes chat back to the sender, so the message
+                  // appears once it round-trips — no local push (avoids dupes).
+                  mp.sendChat(text);
+                  setChatDraft("");
+                }
+              }}
+            >
+              <input
+                type="text"
+                value={chatDraft}
+                maxLength={300}
+                onChange={(event) => setChatDraft(event.target.value)}
+                placeholder="Type a message…"
+              />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        ) : (
+          <button type="button" className="mp-chat-toggle" onClick={() => setShowChat(true)}>
+            💬 Chat{mp.chat.length ? ` (${mp.chat.length})` : ""}
+          </button>
+        )}
 
         <div className="gallery-strip" aria-label="Saved artwork">
           <div className="gallery-heading">
