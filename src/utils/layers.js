@@ -3,8 +3,12 @@
 // changes. Layers are ordered bottom-to-top: index 0 paints first (lowest),
 // the last index paints last (on top).
 
-export const CANVAS_WIDTH = 1600;
-export const CANVAS_HEIGHT = 1200;
+// The shared mural is a large world that everyone pans/zooms around — far bigger
+// than any one screen, so friends can spread out into their own areas and still
+// meet in the middle. Kept to a mobile-friendly memory budget (each layer is a
+// canvas of this size).
+export const CANVAS_WIDTH = 3200;
+export const CANVAS_HEIGHT = 2000;
 
 let layerIdSeed = 0;
 
@@ -35,14 +39,10 @@ export function createLayer({ name = "Layer", visible = true, opacity = 1, locke
   };
 }
 
-// The default Layer Lite stack from the product docs.
+// A single drawing layer by default — leaner memory on the big shared mural and
+// far less clutter on phones. Artists can add more layers from the panel.
 export function createDefaultLayers() {
-  return [
-    createLayer({ name: "Background" }),
-    createLayer({ name: "Sketch" }),
-    createLayer({ name: "Color" }),
-    createLayer({ name: "Detail" }),
-  ];
+  return [createLayer({ name: "Canvas" })];
 }
 
 export function cloneLayerCanvas(source) {

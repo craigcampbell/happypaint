@@ -302,6 +302,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [chatDraft, setChatDraft] = useState("");
   const [showChat, setShowChat] = useState(true);
 
+  // --- Viewport: pan / zoom across the large mural ---
+  // World coords are the CANVAS_WIDTH x CANVAS_HEIGHT document. The view maps
+  // world -> CSS px in the display box: cssX = worldX * scale + tx.
+  const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
+  const viewInitRef = useRef(false);
+  const pointersRef = useRef(new Map()); // active pointers (gesture detection)
+  const gestureRef = useRef(null); // two-finger pan/zoom state
+  const panPointerRef = useRef(null); // single-pointer pan (hand tool)
+  const panLastRef = useRef({ x: 0, y: 0 });
+  const handToolRef = useRef(false);
+  const viewRectRef = useRef(null); // display rect captured at gesture start
+  const [zoomPct, setZoomPct] = useState(100);
+  const [handTool, setHandTool] = useState(false);
+  const imageInputRef = useRef(null); // hidden file input for GIF / image import
+
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
 
@@ -376,9 +391,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     setActiveLayerId(activeLayerIdRef.current);
   }, [commitLayersToFrame]);
 
-  // Render a small thumbnail data URL for one frame.
+  // Render a small thumbnail data URL for one frame, on a white page so it
+  // matches the canvas (transparent layers were showing through as junk).
   const renderFrameThumbnail = useCallback((frame) => {
-    const canvas = compositeFrameToCanvas(frame, { width: FRAME_THUMB_WIDTH, height: FRAME_THUMB_HEIGHT });
+    const canvas = document.createElement("canvas");
+    canvas.width = FRAME_THUMB_WIDTH;
+    canvas.height = FRAME_THUMB_HEIGHT;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, FRAME_THUMB_WIDTH, FRAME_THUMB_HEIGHT);
+    const composed = compositeFrameToCanvas(frame, { width: FRAME_THUMB_WIDTH, height: FRAME_THUMB_HEIGHT });
+    ctx.drawImage(composed, 0, 0);
     return canvas.toDataURL("image/png");
   }, []);
 
@@ -459,9 +482,49 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     setStatus(message);
   }, []);
 
-  // Blit the 1600x1200 document composite onto the visible display canvas,
-  // scaling into its full DPR-sized backing store so the result is crisp on
-  // HiDPI screens (W6).
+  const getViewportSize = () => {
+    const display = displayCanvasRef.current;
+    if (!display) {
+      return { w: 1, h: 1 };
+    }
+    const rect = display.getBoundingClientRect();
+    return { w: rect.width || 1, h: rect.height || 1 };
+  };
+
+  const fitScaleFor = (w, h) => Math.min(w / CANVAS_WIDTH, h / CANVAS_HEIGHT);
+
+  // Keep scale within [≈fit, 8x] and keep the page framed: centered when it is
+  // smaller than the viewport, otherwise pinned so it always covers the box.
+  const clampView = (v) => {
+    const { w, h } = getViewportSize();
+    const fit = fitScaleFor(w, h);
+    v.scale = Math.max(fit * 0.9, Math.min(8, v.scale));
+    const worldW = CANVAS_WIDTH * v.scale;
+    const worldH = CANVAS_HEIGHT * v.scale;
+    v.tx = worldW <= w ? (w - worldW) / 2 : Math.min(0, Math.max(w - worldW, v.tx));
+    v.ty = worldH <= h ? (h - worldH) / 2 : Math.min(0, Math.max(h - worldH, v.ty));
+    return v;
+  };
+
+  const syncZoomLabel = () => {
+    const { w, h } = getViewportSize();
+    const fit = fitScaleFor(w, h) || 1;
+    setZoomPct(Math.round((viewRef.current.scale / fit) * 100));
+  };
+
+  const fitView = () => {
+    const { w, h } = getViewportSize();
+    const fit = fitScaleFor(w, h);
+    viewRef.current = {
+      scale: fit,
+      tx: (w - CANVAS_WIDTH * fit) / 2,
+      ty: (h - CANVAS_HEIGHT * fit) / 2,
+    };
+    syncZoomLabel();
+  };
+
+  // Blit the document through the current view: a neutral backdrop (the "table"),
+  // a white mural page, then the composited drawing, with a soft page border.
   const blitToDisplay = useCallback(() => {
     const context = displayContextRef.current;
     const doc = docCanvasRef.current;
@@ -469,9 +532,52 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (!context || !doc || !display) {
       return;
     }
+    const dpr = displayDprRef.current || 1;
+    const { scale, tx, ty } = viewRef.current;
+    context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, display.width, display.height);
-    context.drawImage(doc, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, display.width, display.height);
+    context.fillStyle = "#e9eef4";
+    context.fillRect(0, 0, display.width, display.height);
+    context.setTransform(scale * dpr, 0, 0, scale * dpr, tx * dpr, ty * dpr);
+    context.imageSmoothingEnabled = scale < 2.5;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    context.drawImage(doc, 0, 0);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.strokeStyle = "rgba(45,108,223,0.35)";
+    context.lineWidth = Math.max(1, dpr);
+    context.strokeRect(tx * dpr, ty * dpr, CANVAS_WIDTH * scale * dpr, CANVAS_HEIGHT * scale * dpr);
   }, []);
+
+  const applyView = () => {
+    clampView(viewRef.current);
+    syncZoomLabel();
+    blitToDisplay();
+  };
+
+  // Zoom by `factor` about a focal point given in CSS px within the display box.
+  const zoomAt = (factor, fx, fy) => {
+    const v = viewRef.current;
+    const worldX = (fx - v.tx) / v.scale;
+    const worldY = (fy - v.ty) / v.scale;
+    v.scale = v.scale * factor;
+    clampView(v);
+    v.tx = fx - worldX * v.scale;
+    v.ty = fy - worldY * v.scale;
+    applyView();
+  };
+
+  const zoomByButton = (factor) => {
+    const { w, h } = getViewportSize();
+    zoomAt(factor, w / 2, h / 2);
+  };
+
+  const panBy = (dx, dy) => {
+    const v = viewRef.current;
+    v.tx += dx;
+    v.ty += dy;
+    applyView();
+  };
 
   // Paint the onion-skin neighbour frames faintly onto the document context.
   // Shared by the full recomposite and the "below" stroke cache so the result
@@ -629,6 +735,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       displayContextRef.current = context;
     }
     displayDprRef.current = dpr;
+    if (!viewInitRef.current) {
+      viewInitRef.current = true;
+      fitView();
+    } else {
+      clampView(viewRef.current);
+      syncZoomLabel();
+    }
     blitToDisplay();
   }, [blitToDisplay]);
 
@@ -1108,6 +1221,54 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, [composeCanvas]);
 
+  // Import a GIF / image (open to everyone) and stamp it onto the active layer,
+  // centred in the current view, then broadcast it so friends see it too.
+  const importImage = useCallback(
+    async (file) => {
+      if (!file) {
+        return;
+      }
+      const active = getActiveLayer();
+      if (!active) {
+        return;
+      }
+      if (active.locked || !active.visible) {
+        setStatus(active.locked ? "Layer is locked" : "Layer is hidden");
+        return;
+      }
+      setStatus("Importing…");
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => resolve("");
+        reader.readAsDataURL(file);
+      });
+      const image = dataUrl ? await createImage(dataUrl).catch(() => null) : null;
+      if (!image) {
+        setStatus("Couldn't load that image");
+        return;
+      }
+      const maxW = CANVAS_WIDTH * 0.45;
+      const maxH = CANVAS_HEIGHT * 0.45;
+      const ratio = Math.min(maxW / image.width, maxH / image.height, 1);
+      const w = Math.max(1, Math.round(image.width * ratio));
+      const h = Math.max(1, Math.round(image.height * ratio));
+      const { scale, tx, ty } = viewRef.current;
+      const vs = getViewportSize();
+      const cx = (vs.w / 2 - tx) / scale;
+      const cy = (vs.h / 2 - ty) / scale;
+      const x = Math.round(cx - w / 2);
+      const y = Math.round(cy - h / 2);
+      pushHistory();
+      active.canvas.getContext("2d").drawImage(image, x, y, w, h);
+      renderDisplay();
+      refreshActiveThumbnail();
+      mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h });
+      markChanged("Image added");
+    },
+    [getActiveLayer, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay],
+  );
+
   const sharePng = useCallback(async () => {
     const exportCanvas = await composeCanvas();
     const blob = await canvasToBlob(exportCanvas);
@@ -1204,11 +1365,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const getPoint = useCallback((event) => {
     const canvas = displayCanvasRef.current;
     const rect = activeCanvasRectRef.current || canvas.getBoundingClientRect();
+    const { scale, tx, ty } = viewRef.current;
+    const cssX = event.clientX - rect.left;
+    const cssY = event.clientY - rect.top;
     const pressure = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "mouse" ? 0.62 : 0.72;
 
+    // Screen (CSS px) -> world coords through the current view.
     return {
-      x: ((event.clientX - rect.left) / rect.width) * CANVAS_WIDTH,
-      y: ((event.clientY - rect.top) / rect.height) * CANVAS_HEIGHT,
+      x: (cssX - tx) / scale,
+      y: (cssY - ty) / scale,
       pressure,
     };
   }, []);
@@ -1568,6 +1733,100 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     },
     [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
+
+  // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
+  // One finger / mouse draws (unless the hand tool is on); two fingers pan and
+  // pinch-zoom; the wheel zooms about the cursor. We track every active pointer
+  // so a second finger can take over a stroke as a gesture.
+
+  const abortActiveStroke = () => {
+    if (activePointerRef.current != null) {
+      flushStrokeFrame();
+      strokeNetRef.current = null;
+      activePointerRef.current = null;
+      lastPointRef.current = null;
+      activeStrokeLayerIdRef.current = null;
+      invalidateCompositeCache();
+      renderDisplay();
+    }
+  };
+
+  const handleCanvasPointerDown = (event) => {
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    viewRectRef.current = event.currentTarget.getBoundingClientRect();
+
+    if (pointersRef.current.size >= 2) {
+      abortActiveStroke();
+      const pts = [...pointersRef.current.values()];
+      gestureRef.current = {
+        lastDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
+        lastMid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
+      };
+      return;
+    }
+
+    if (handToolRef.current) {
+      panPointerRef.current = event.pointerId;
+      panLastRef.current = { x: event.clientX, y: event.clientY };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      return;
+    }
+
+    startStroke(event);
+  };
+
+  const handleCanvasPointerMove = (event) => {
+    if (pointersRef.current.has(event.pointerId)) {
+      pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    if (gestureRef.current) {
+      const pts = [...pointersRef.current.values()];
+      if (pts.length < 2) {
+        return;
+      }
+      const rect = viewRectRef.current || event.currentTarget.getBoundingClientRect();
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      const g = gestureRef.current;
+      panBy(mid.x - g.lastMid.x, mid.y - g.lastMid.y);
+      zoomAt(dist / g.lastDist, mid.x - rect.left, mid.y - rect.top);
+      g.lastDist = dist;
+      g.lastMid = mid;
+      return;
+    }
+
+    if (panPointerRef.current === event.pointerId) {
+      panBy(event.clientX - panLastRef.current.x, event.clientY - panLastRef.current.y);
+      panLastRef.current = { x: event.clientX, y: event.clientY };
+      return;
+    }
+
+    continueStroke(event);
+  };
+
+  const handleCanvasPointerUp = (event) => {
+    pointersRef.current.delete(event.pointerId);
+
+    if (gestureRef.current) {
+      if (pointersRef.current.size < 2) {
+        gestureRef.current = null;
+      }
+      return;
+    }
+    if (panPointerRef.current === event.pointerId) {
+      panPointerRef.current = null;
+      return;
+    }
+    finishStroke(event);
+  };
+
+  const toggleHandTool = () => {
+    setHandTool((on) => {
+      handToolRef.current = !on;
+      return !on;
+    });
+  };
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
 
@@ -2636,9 +2895,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
       } else if (op.kind === "text") {
         drawText(ctx, op.point, op.text, op.opts || {});
+      } else if (op.kind === "image" && op.dataUrl) {
+        const image = new Image();
+        image.onload = () => {
+          ctx.drawImage(image, op.x, op.y, op.w, op.h);
+          renderDisplay();
+        };
+        image.src = op.dataUrl;
       }
     },
-    [getRemoteCtx],
+    [getRemoteCtx, renderDisplay],
   );
 
   const handleMpMessage = useCallback(
@@ -2699,17 +2965,42 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
+      const { scale, tx, ty } = viewRef.current;
       const live = [];
       remoteCursorsRef.current.forEach((cursor, userId) => {
         if (now - cursor.ts > 4000) {
           remoteCursorsRef.current.delete(userId);
         } else {
-          live.push({ userId, ...cursor });
+          live.push({
+            userId,
+            name: cursor.name,
+            color: cursor.color,
+            drawing: cursor.drawing,
+            leftPx: cursor.x * CANVAS_WIDTH * scale + tx,
+            topPx: cursor.y * CANVAS_HEIGHT * scale + ty,
+          });
         }
       });
       setRemoteCursors(live);
     }, 120);
     return () => window.clearInterval(timer);
+  }, []);
+
+  // Non-passive wheel listener so zoom can preventDefault page scroll.
+  useEffect(() => {
+    const el = overlayCanvasRef.current;
+    if (!el) {
+      return undefined;
+    }
+    const onWheel = (event) => {
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -3045,6 +3336,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={clearCanvas}>
               Clear
             </button>
+            <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
+              🖼 GIF
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*,image/gif"
+              style={{ display: "none" }}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                importImage(file);
+                event.target.value = "";
+              }}
+            />
             <button type="button" className="primary-action" onClick={saveToGallery}>
               Save
             </button>
@@ -3092,23 +3397,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         </div>
 
         <div className="canvas-stage">
-          <div className="canvas-paper" style={paperStyle}>
+          <div className="canvas-paper">
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
             <canvas
               ref={overlayCanvasRef}
-              className="drawing-canvas overlay-canvas"
+              className={handTool ? "drawing-canvas overlay-canvas is-pan" : "drawing-canvas overlay-canvas"}
               aria-hidden="true"
-              onPointerDown={startStroke}
-              onPointerMove={continueStroke}
-              onPointerUp={finishStroke}
-              onPointerCancel={finishStroke}
+              onPointerDown={handleCanvasPointerDown}
+              onPointerMove={handleCanvasPointerMove}
+              onPointerUp={handleCanvasPointerUp}
+              onPointerCancel={handleCanvasPointerUp}
             />
             <div className="remote-cursor-layer" aria-hidden="true">
               {remoteCursors.map((cursor) => (
                 <div
                   key={cursor.userId}
                   className={cursor.drawing ? "remote-cursor is-drawing" : "remote-cursor"}
-                  style={{ left: `${cursor.x * 100}%`, top: `${cursor.y * 100}%` }}
+                  style={{ transform: `translate(${cursor.leftPx}px, ${cursor.topPx}px)` }}
                 >
                   <span className="remote-cursor-dot" style={{ background: cursor.color }} />
                   <span className="remote-cursor-name" style={{ background: cursor.color }}>
@@ -3116,6 +3421,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   </span>
                 </div>
               ))}
+            </div>
+
+            <div className="zoom-controls" role="group" aria-label="Zoom and pan">
+              <button type="button" onClick={() => zoomByButton(1 / 1.25)} aria-label="Zoom out">
+                −
+              </button>
+              <button type="button" className="zoom-pct" onClick={fitView} title="Fit whole canvas">
+                {zoomPct}%
+              </button>
+              <button type="button" onClick={() => zoomByButton(1.25)} aria-label="Zoom in">
+                +
+              </button>
+              <button
+                type="button"
+                className={handTool ? "zoom-hand is-active" : "zoom-hand"}
+                onClick={toggleHandTool}
+                aria-pressed={handTool}
+                title="Pan tool (or use two fingers)"
+              >
+                ✋
+              </button>
             </div>
           </div>
         </div>
@@ -3463,8 +3789,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </p>
           ) : null}
         </section>
-
-        <TogetherPanel initialJoinCode={initialJoinCode} onStatus={setStatus} />
       </aside>
 
       {showPaintSpace ? (
