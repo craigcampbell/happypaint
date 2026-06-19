@@ -3165,3 +3165,125 @@ button:disabled {
   color: #8a98a6;
   text-align: center;
 }
+
+/* ---- Save toast + My Art gallery ---------------------------------------- */
+.save-toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  max-width: 92vw;
+  padding: 11px 18px;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.3);
+  animation: toast-in 0.18s ease;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.myart-card {
+  width: min(680px, 100%);
+  max-height: 86vh;
+  overflow: auto;
+  background: #fff;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35);
+}
+.myart-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.myart-head h2 { margin: 0; font-size: 1.25rem; }
+.myart-count {
+  color: #5a6b7b;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+.myart-head button[aria-label="Close"] {
+  margin-left: auto;
+  min-width: 38px;
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0;
+}
+.myart-empty {
+  color: #44515d;
+  line-height: 1.5;
+  padding: 18px;
+  border: 1px dashed #cdd7e0;
+  border-radius: 12px;
+  text-align: center;
+}
+.myart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.myart-item {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #e3e9ef;
+}
+.myart-open {
+  width: 100%;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #f6f9fc;
+  text-align: left;
+}
+.myart-open img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  display: block;
+  background: #fff;
+}
+.myart-noimg {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  font-size: 28px;
+  background: #fff;
+}
+.myart-open span {
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #2d3b49;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.myart-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #e3e9ef;
+}
+.myart-note {
+  margin: 14px 0 0;
+  font-size: 0.76rem;
+  color: #8a98a6;
+  text-align: center;
+}
+
+/* Reveal the saved-art access on mobile via the toolbar button + modal. */

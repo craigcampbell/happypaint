@@ -1,5 +1,5 @@
-const CACHE_NAME = "happypaint-static-v3";
-const STATIC_ASSETS = ["/", "/index.html", "/linen.png", "/canvas.png", "/vite.svg"];
+const CACHE_NAME = "happypaint-static-v4";
+const STATIC_ASSETS = ["/linen.png", "/canvas.png", "/vite.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -29,7 +29,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (request.mode === "navigate") {
+  // NEVER cache or intercept live endpoints — the API and websocket must always
+  // hit the network (caching the API was returning stale/empty saved-art lists).
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws")) {
+    return;
+  }
+
+  // App shell / navigations: network-first so new builds load without a hard
+  // refresh, falling back to cache when offline.
+  if (request.mode === "navigate" || url.pathname === "/" || url.pathname.endsWith("/index.html")) {
     event.respondWith(fetch(request).catch(() => caches.match("/index.html")));
     return;
   }

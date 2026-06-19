@@ -334,6 +334,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [nameDraft, setNameDraft] = useState("");
   const profileRef = useRef(null); // persisted { name, color }, applied on connect
 
+  // Saved-to-server artwork ("My Art"), keyed by an anonymous per-device id.
+  const userKeyRef = useRef(null);
+  const [myDrawings, setMyDrawings] = useState([]);
+  const [savesMax, setSavesMax] = useState(12);
+  const [showMyArt, setShowMyArt] = useState(false);
+  const [savingArt, setSavingArt] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
 
@@ -1253,6 +1262,120 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setStatus("Transparent PNG exported");
     }
   }, [composeCanvas]);
+
+  // ---- Saved artwork on the server ("My Art") ----
+  const showToast = useCallback((message) => {
+    setToast(message);
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
+  }, []);
+
+  const loadMyDrawings = useCallback(async () => {
+    const key = userKeyRef.current;
+    if (!key) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+      const data = await res.json();
+      setMyDrawings(Array.isArray(data.items) ? data.items : []);
+      if (data.max) {
+        setSavesMax(data.max);
+      }
+    } catch {
+      // Offline / server down — leave the list as-is.
+    }
+  }, []);
+
+  const saveToServer = useCallback(async () => {
+    const key = userKeyRef.current;
+    if (!key || savingArt) {
+      return;
+    }
+    setSavingArt(true);
+    showToast("Saving…");
+    try {
+      const full = await composeCanvas({ width: 1600, height: 1000 });
+      const preview = await composeCanvas({ width: 320, height: 200 });
+      const image = await canvasToDataUrl(full);
+      const thumb = await canvasToDataUrl(preview);
+      const res = await fetch("/api/artworks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userKey: key, name: `Drawing ${todayName()}`, image, thumb }),
+      });
+      if (res.status === 409) {
+        const data = await res.json().catch(() => ({ max: savesMax }));
+        showToast(`You've saved the max (${data.max}). Open 📁 My Art and delete one first.`);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error("save failed");
+      }
+      const data = await res.json();
+      showToast(`Saved! 🎉 (${data.count}/${data.max}) — find it in 📁 My Art`);
+      await loadMyDrawings();
+    } catch {
+      showToast("Couldn't save — please try again");
+    } finally {
+      setSavingArt(false);
+    }
+  }, [composeCanvas, loadMyDrawings, savesMax, savingArt, showToast]);
+
+  const openDrawing = useCallback(
+    async (id) => {
+      const key = userKeyRef.current;
+      if (!key) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error("not found");
+        }
+        const data = await res.json();
+        const image = await createImage(data.image).catch(() => null);
+        if (!image) {
+          throw new Error("decode failed");
+        }
+        pushHistory("full");
+        const layer = createLayer({ name: "Saved art" });
+        layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        const frame = createFrame({ layers: [layer] });
+        framesRef.current = [frame];
+        activeFrameIndexRef.current = 0;
+        layersRef.current = frame.layers;
+        activeLayerIdRef.current = frame.activeLayerId;
+        renderDisplay();
+        syncLayerState();
+        syncFrameState();
+        setShowMyArt(false);
+        markChanged("Opened your saved drawing");
+        showToast("Opened — keep drawing! ✏️");
+      } catch {
+        showToast("Couldn't open that drawing");
+      }
+    },
+    [markChanged, renderDisplay, showToast, syncFrameState, syncLayerState],
+  );
+
+  const deleteDrawing = useCallback(
+    async (id) => {
+      const key = userKeyRef.current;
+      if (!key) {
+        return;
+      }
+      try {
+        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { method: "DELETE" });
+      } catch {
+        // ignore
+      }
+      await loadMyDrawings();
+    },
+    [loadMyDrawings],
+  );
 
   // Import a GIF / image (open to everyone) and stamp it onto the active layer,
   // centred in the current view, then broadcast it so friends see it too.
@@ -3041,6 +3164,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, []);
 
+  // Ensure an anonymous per-device user key, then load this user's saved art.
+  useEffect(() => {
+    let key = null;
+    try {
+      key = window.localStorage.getItem("drawesome:userkey:v1");
+    } catch {
+      key = null;
+    }
+    if (!key) {
+      key = "u_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      try {
+        window.localStorage.setItem("drawesome:userkey:v1", key);
+      } catch {
+        // ephemeral key if storage is blocked
+      }
+    }
+    userKeyRef.current = key;
+    loadMyDrawings();
+  }, [loadMyDrawings]);
+
   // Save the profile and push it to the room.
   const saveProfile = useCallback(
     (name, color) => {
@@ -3472,8 +3615,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 event.target.value = "";
               }}
             />
-            <button type="button" className="primary-action" onClick={saveToGallery}>
-              Save
+            <button type="button" className="primary-action" onClick={saveToServer} disabled={savingArt}>
+              {savingArt ? "Saving…" : "💾 Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                loadMyDrawings();
+                setShowMyArt(true);
+              }}
+            >
+              📁 My Art
             </button>
             <button type="button" onClick={sharePng}>
               Share
@@ -3668,6 +3820,50 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   Yes, clear it
                 </button>
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {toast ? <div className="save-toast" role="status">{toast}</div> : null}
+
+        {showMyArt ? (
+          <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="myart-title">
+            <div className="myart-card">
+              <div className="myart-head">
+                <h2 id="myart-title">📁 My Art</h2>
+                <span className="myart-count">
+                  {myDrawings.length}/{savesMax} saved
+                </span>
+                <button type="button" onClick={() => setShowMyArt(false)} aria-label="Close">
+                  ✕
+                </button>
+              </div>
+              {myDrawings.length === 0 ? (
+                <p className="myart-empty">
+                  No saved drawings yet. Tap <strong>💾 Save</strong> to keep one here — you can come back
+                  and open it anytime on this device.
+                </p>
+              ) : (
+                <div className="myart-grid">
+                  {myDrawings.map((art) => (
+                    <div key={art.id} className="myart-item">
+                      <button type="button" className="myart-open" onClick={() => openDrawing(art.id)} title="Open to keep drawing">
+                        {art.thumb ? <img src={art.thumb} alt={art.name} /> : <span className="myart-noimg">🎨</span>}
+                        <span>{art.name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="myart-delete"
+                        onClick={() => deleteDrawing(art.id)}
+                        aria-label={`Delete ${art.name}`}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="myart-note">Saved on the server for this device. Sign-in to sync across devices is coming soon.</p>
             </div>
           </div>
         ) : null}

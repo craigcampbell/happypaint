@@ -118,3 +118,16 @@ and speak the same small JSON protocol the web client uses:
 
 See `server.js` for the full message set and `src/hooks/useMultiplayer.js` +
 `src/App.jsx` for the reference client.
+
+## Saved drawings ("My Art")
+
+Tapping **💾 Save** stores the artwork on the server so kids can come back and
+keep drawing (the **📁 My Art** button reopens them).
+
+- Files live in **`.artworks/`** (one JSON per device key). This folder is
+  git-ignored — **back it up** if you want to keep saved art across machines.
+- Each device gets an anonymous key (browser localStorage). Saves are capped at
+  **12 per device** (`MAX_SAVES` env var). This is the storage a future sign-in
+  will adopt — swap the device key for an authenticated user id.
+- The service worker (`public/sw.js`) is network-first for the app shell and
+  **never** caches `/api/*` — bump `CACHE_NAME` if you change it.

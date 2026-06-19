@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -175,6 +175,84 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('error', () => { /* close handler does cleanup */ });
+});
+
+// ---- Saved artwork (per device key; account-ready) ------------------------
+// Each device gets an anonymous user key (stored client-side). Artworks are
+// persisted on disk keyed by that key, capped per user. This is the storage the
+// future sign-in will adopt — swap the key for an authenticated user id.
+const ARTWORK_DIR = process.env.ARTWORK_DIR || join(__dirname, '.artworks');
+const MAX_SAVES = Number(process.env.MAX_SAVES || 12);
+
+function sanitizeKey(key) {
+  return String(key || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+}
+function userArtFile(key) {
+  return join(ARTWORK_DIR, `${sanitizeKey(key)}.json`);
+}
+function loadUserArt(key) {
+  try {
+    const arr = JSON.parse(readFileSync(userArtFile(key), 'utf8'));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function saveUserArt(key, arr) {
+  mkdirSync(ARTWORK_DIR, { recursive: true });
+  writeFileSync(userArtFile(key), JSON.stringify(arr));
+}
+
+app.use(express.json({ limit: '16mb' }));
+
+app.get('/api/artworks', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const key = sanitizeKey(req.query.userKey);
+  if (!key) {
+    return res.json({ items: [], max: MAX_SAVES });
+  }
+  const items = loadUserArt(key).map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt, thumb: a.thumb }));
+  res.json({ items, max: MAX_SAVES });
+});
+
+app.get('/api/artworks/:id', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const key = sanitizeKey(req.query.userKey);
+  const item = loadUserArt(key).find((a) => a.id === req.params.id);
+  if (!item) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  res.json({ id: item.id, name: item.name, image: item.image });
+});
+
+app.post('/api/artworks', (req, res) => {
+  const { userKey, name, image, thumb } = req.body || {};
+  const key = sanitizeKey(userKey);
+  if (!key || typeof image !== 'string' || !image.startsWith('data:image')) {
+    return res.status(400).json({ error: 'bad request' });
+  }
+  const arr = loadUserArt(key);
+  if (arr.length >= MAX_SAVES) {
+    return res.status(409).json({ error: 'limit', max: MAX_SAVES });
+  }
+  const item = {
+    id: 'art_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    name: String(name || 'My drawing').slice(0, 60),
+    createdAt: Date.now(),
+    thumb: typeof thumb === 'string' ? thumb : '',
+    image,
+  };
+  arr.unshift(item);
+  saveUserArt(key, arr);
+  res.json({ ok: true, id: item.id, count: arr.length, max: MAX_SAVES });
+});
+
+app.delete('/api/artworks/:id', (req, res) => {
+  const key = sanitizeKey(req.query.userKey);
+  const arr = loadUserArt(key);
+  const next = arr.filter((a) => a.id !== req.params.id);
+  saveUserArt(key, next);
+  res.json({ ok: true, count: next.length, max: MAX_SAVES });
 });
 
 // ---- Static host ----------------------------------------------------------
