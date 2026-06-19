@@ -32,9 +32,44 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 // Each room keeps its connected users and a capped op history for replay.
 const rooms = new Map();
 
+// Per-room mural persistence: the op history is written to disk (debounced) and
+// reloaded on startup, so a server restart doesn't wipe the painting and late
+// joiners always replay the full mural.
+const ROOM_DIR = process.env.ROOM_DIR || join(__dirname, '.rooms');
+const persistTimers = new Map();
+function roomFile(roomId) {
+  return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
+}
+function loadRoomHistory(roomId) {
+  try {
+    const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
+    return Array.isArray(data.history) ? data.history : [];
+  } catch {
+    return [];
+  }
+}
+function persistRoom(roomId) {
+  if (persistTimers.has(roomId)) {
+    return;
+  }
+  persistTimers.set(roomId, setTimeout(() => {
+    persistTimers.delete(roomId);
+    const room = rooms.get(roomId);
+    if (!room) {
+      return;
+    }
+    try {
+      mkdirSync(ROOM_DIR, { recursive: true });
+      writeFileSync(roomFile(roomId), JSON.stringify({ history: room.history, savedAt: Date.now() }));
+    } catch {
+      // Non-fatal — persistence is best-effort.
+    }
+  }, 2500));
+}
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { users: new Map(), history: [], lastCleared: null });
+    rooms.set(roomId, { users: new Map(), history: loadRoomHistory(roomId), lastCleared: null });
   }
   return rooms.get(roomId);
 }
@@ -117,6 +152,7 @@ wss.on('connection', (ws, req) => {
           room.history.splice(0, room.history.length - MAX_HISTORY);
         }
         broadcast(roomId, { type: 'op', op }, id);
+        persistRoom(roomId);
         break;
       }
       case 'cursor':
@@ -139,7 +175,8 @@ wss.on('connection', (ws, req) => {
         // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
         room.lastCleared = room.history;
         room.history = [];
-        broadcast(roomId, { type: 'clear', userId: id, name }, id);
+        broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
+        persistRoom(roomId);
         break;
       case 'undo_clear':
         // Restore the most recently cleared mural for the whole room.
@@ -147,6 +184,7 @@ wss.on('connection', (ws, req) => {
           room.history = room.lastCleared;
           room.lastCleared = null;
           broadcast(roomId, { type: 'history', ops: room.history, restored: true });
+          persistRoom(roomId);
         }
         break;
       case 'chat':

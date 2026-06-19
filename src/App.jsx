@@ -638,10 +638,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     paintOnionSkin(context);
     compositeLayers(context, layersRef.current);
-    if (remoteCanvasRef.current) {
-      context.globalAlpha = 1;
-      context.drawImage(remoteCanvasRef.current, 0, 0);
-    }
     compositeCacheValidRef.current = false;
     blitToDisplay();
   }, [blitToDisplay, paintOnionSkin]);
@@ -711,10 +707,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       context.globalAlpha = 1;
     }
     context.drawImage(aboveCacheRef.current, 0, 0);
-    if (remoteCanvasRef.current) {
-      context.globalAlpha = 1;
-      context.drawImage(remoteCanvasRef.current, 0, 0);
-    }
     blitToDisplay();
   }, [blitToDisplay, renderDisplay]);
 
@@ -868,23 +860,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, []);
 
   const clearCanvas = useCallback(() => {
-    const active = getActiveLayer();
-    if (!active) {
+    if (layersRef.current.length === 0) {
       return;
     }
-    pushHistory();
-    active.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    // Clear is shared: wipe the friends' merged canvas locally and tell the room.
-    if (remoteCanvasRef.current) {
-      remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    }
+    // Clear is a shared wipe: clear EVERY layer (the mural everyone shares) so it
+    // empties for all artists, snapshot for local undo, and tell the room.
+    pushHistory("full");
+    layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
     remoteStrokeLastRef.current.clear();
     mpRef.current?.sendClear();
     renderDisplay();
     refreshActiveThumbnail();
     markChanged("Canvas cleared");
     showClearBanner("You");
-  }, [getActiveLayer, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
+  }, [markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
 
   // Build the paper-texture background as an offscreen canvas at any size.
   const renderPaper = useCallback(async (context, { width, height, textureId }) => {
@@ -927,11 +916,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       compositeLayers(context, layersRef.current, { width, height });
-      // Bake friends' shared strokes into exports/gallery saves too.
-      if (remoteCanvasRef.current) {
-        context.globalAlpha = 1;
-        context.drawImage(remoteCanvasRef.current, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, width, height);
-      }
       return canvas;
     },
     [renderPaper, selectedTexture],
@@ -3035,22 +3019,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   // The shared friends canvas is created lazily on first remote op so a purely
   // solo session never allocates it.
+  // Friends' strokes land on the SAME shared canvas everyone paints on (the base
+  // layer), so strokes stack in arrival order and anyone can paint over anyone.
   const getRemoteCtx = useCallback(() => {
-    if (!remoteCanvasRef.current) {
-      remoteCanvasRef.current = createLayerCanvas();
-    }
-    return remoteCanvasRef.current.getContext("2d");
+    const layer = layersRef.current[0];
+    return layer ? layer.canvas.getContext("2d") : null;
   }, []);
 
-  // Apply one remote op onto the shared friends canvas. `draw` ops carry
-  // incremental points keyed by strokeId (we connect consecutive points per
-  // stroke); `shape` / `text` are one-shot. Never touches local layers or undo.
+  // Apply one remote op onto the shared mural. `draw` ops carry incremental points
+  // keyed by strokeId (we connect consecutive points per stroke); `shape` / `text`
+  // / `image` are one-shot.
   const applyRemoteOp = useCallback(
     (op) => {
       if (!op) {
         return;
       }
       const ctx = getRemoteCtx();
+      if (!ctx) {
+        return;
+      }
       if (op.kind === "draw") {
         const settings = op.settings || {};
         const lastMap = remoteStrokeLastRef.current;
@@ -3089,14 +3076,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         }
         case "history":
-          // Rebuild the friends' canvas from scratch (used for join AND for
+          // Rebuild the shared mural from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
-          if (remoteCanvasRef.current) {
-            remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          }
+          layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
           remoteStrokeLastRef.current.clear();
           (data.ops || []).forEach(applyRemoteOp);
           renderDisplay();
+          refreshActiveThumbnail();
           if (data.restored) {
             setClearBanner(null);
             setStatus("Canvas brought back 🎉");
@@ -3112,11 +3098,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           break;
         case "clear":
-          if (remoteCanvasRef.current) {
-            remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          }
+          layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
           remoteStrokeLastRef.current.clear();
           renderDisplay();
+          refreshActiveThumbnail();
           showClearBanner(data.name || "Someone");
           break;
         case "cursor":
@@ -3139,7 +3124,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, renderDisplay, scheduleStrokeFrame, showClearBanner],
+    [applyRemoteOp, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage);
