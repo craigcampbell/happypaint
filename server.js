@@ -121,10 +121,20 @@ wss.on('connection', (ws, req) => {
       }
       case 'cursor':
         broadcast(roomId, {
-          type: 'cursor', userId: id, name, color,
+          type: 'cursor', userId: id, name: user.name, color: user.color,
           x: data.x, y: data.y, drawing: !!data.drawing,
         }, id);
         break;
+      case 'rename': {
+        if (typeof data.name === 'string' && data.name.trim()) {
+          user.name = data.name.trim().slice(0, 20);
+        }
+        if (typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color)) {
+          user.color = data.color;
+        }
+        broadcast(roomId, { type: 'userList', users: userListOf(room) });
+        break;
+      }
       case 'clear':
         // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
         room.lastCleared = room.history;
@@ -142,7 +152,7 @@ wss.on('connection', (ws, req) => {
       case 'chat':
         if (typeof data.message === 'string' && data.message.trim()) {
           broadcast(roomId, {
-            type: 'chat', user: { id, name, color },
+            type: 'chat', user: { id, name: user.name, color: user.color },
             message: String(data.message).slice(0, 300), ts: Date.now(),
           });
         }

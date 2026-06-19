@@ -84,6 +84,17 @@ import "./App.css";
 
 const MAX_HISTORY = 18;
 const MAX_GALLERY_ITEMS = 10;
+// Cap layers per artist — each is a full-size canvas, so this keeps memory and
+// compositing sane on phones/tablets.
+const MAX_LAYERS = 6;
+
+// Avatar colour choices for the profile menu.
+const AVATAR_COLORS = [
+  "#FF6B6B", "#F8961E", "#FEE440", "#8AC926", "#06D6A0",
+  "#4ECDC4", "#45B7D1", "#2D6CDF", "#9B5DE5", "#F15BB5",
+];
+
+const PROFILE_STORAGE_KEY = "drawesome:profile:v1";
 
 const STORAGE_KEYS = {
   draft: "happypaint:draft:v3",
@@ -319,6 +330,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearBanner, setClearBanner] = useState(null); // { by } when the mural was cleared
   const clearBannerTimerRef = useRef(null);
+  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const profileRef = useRef(null); // persisted { name, color }, applied on connect
 
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
@@ -1346,6 +1360,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
       setSelectedBrush(brushId);
       setSelectedTool("brush");
+      // Picking a brush means you want to draw — drop out of the pan/hand tool.
+      handToolRef.current = false;
+      setHandTool(false);
     },
     [studioUnlocked],
   );
@@ -1377,6 +1394,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     (color) => {
       setSelectedColor(color);
       rememberColor(color);
+      handToolRef.current = false;
+      setHandTool(false);
     },
     [rememberColor],
   );
@@ -1858,6 +1877,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   );
 
   const handleAddLayer = useCallback(() => {
+    if (layersRef.current.length >= MAX_LAYERS) {
+      setStatus(`Layer limit reached (${MAX_LAYERS} max)`);
+      return;
+    }
     pushHistory("full");
     const layer = createLayer({ name: `Layer ${layersRef.current.length + 1}` });
     layersRef.current = [...layersRef.current, layer];
@@ -1890,6 +1913,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleDuplicateLayer = useCallback(
     (id) => {
+      if (layersRef.current.length >= MAX_LAYERS) {
+        setStatus(`Layer limit reached (${MAX_LAYERS} max)`);
+        return;
+      }
       const index = layersRef.current.findIndex((layer) => layer.id === id);
       const source = layersRef.current[index];
       if (!source) {
@@ -2929,6 +2956,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const handleMpMessage = useCallback(
     (data) => {
       switch (data.type) {
+        case "connected": {
+          // Re-apply a saved name/colour so the artist keeps their identity
+          // across reconnects (and eventually, sign-in).
+          const saved = profileRef.current;
+          if (saved?.name && saved.name !== data.userName) {
+            mpRef.current?.sendRename?.(saved.name, saved.color);
+          }
+          break;
+        }
         case "history":
           // Rebuild the friends' canvas from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
@@ -2992,8 +3028,36 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendCursor: mp.sendCursor,
       sendClear: mp.sendClear,
       sendRestore: mp.sendRestore,
+      sendRename: mp.sendRename,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename]);
+
+  // Load any saved profile (name/colour) once.
+  useEffect(() => {
+    try {
+      profileRef.current = JSON.parse(window.localStorage.getItem(PROFILE_STORAGE_KEY) || "null");
+    } catch {
+      profileRef.current = null;
+    }
+  }, []);
+
+  // Save the profile and push it to the room.
+  const saveProfile = useCallback(
+    (name, color) => {
+      const clean = (name || "").trim().slice(0, 20) || mp.self?.name || "Artist";
+      const nextColor = color || mp.self?.color;
+      mp.sendRename(clean, nextColor);
+      profileRef.current = { name: clean, color: nextColor };
+      try {
+        window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileRef.current));
+      } catch {
+        // Non-fatal.
+      }
+      setShowAvatarMenu(false);
+      setStatus("Profile updated");
+    },
+    [mp],
+  );
 
   // Pump remote cursors into React state, dropping any gone quiet (>4s).
   useEffect(() => {
@@ -3035,6 +3099,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Spacebar toggles the pan/hand tool — unless you're typing (e.g. chat).
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.code !== "Space" && event.key !== " ") {
+        return;
+      }
+      const target = event.target;
+      const tag = (target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) {
+        return;
+      }
+      event.preventDefault();
+      if (event.repeat) {
+        return;
+      }
+      setHandTool((on) => {
+        handToolRef.current = !on;
+        return !on;
+      });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   useEffect(() => {
@@ -3428,6 +3516,68 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           >
             Invite a friend
           </button>
+
+          <div className="mp-you">
+            <button
+              type="button"
+              className="avatar-btn"
+              onClick={() => {
+                setNameDraft(mp.self?.name || "");
+                setShowAvatarMenu((open) => !open);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={showAvatarMenu}
+              title="Your profile"
+            >
+              <span className="avatar-dot" style={{ background: mp.self?.color || "#9aa6b2" }}>
+                {(mp.self?.name || "?").slice(0, 1).toUpperCase()}
+              </span>
+              <span className="avatar-name">{mp.self?.name || "You"}</span>
+            </button>
+
+            {showAvatarMenu ? (
+              <div className="avatar-menu" role="menu">
+                <p className="avatar-menu-title">You</p>
+                <label className="avatar-field">
+                  <span>Display name</span>
+                  <input
+                    type="text"
+                    value={nameDraft}
+                    maxLength={20}
+                    placeholder="Your name"
+                    onChange={(event) => setNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        saveProfile(nameDraft, mp.self?.color);
+                      }
+                    }}
+                  />
+                </label>
+                <span className="avatar-field-label">Color</span>
+                <div className="avatar-colors">
+                  {AVATAR_COLORS.map((swatch) => (
+                    <button
+                      key={swatch}
+                      type="button"
+                      className={`avatar-color ${mp.self?.color === swatch ? "is-active" : ""}`}
+                      style={{ background: swatch }}
+                      onClick={() => saveProfile(nameDraft, swatch)}
+                      aria-label={`Use ${swatch}`}
+                    />
+                  ))}
+                </div>
+                <div className="avatar-actions">
+                  <button type="button" onClick={() => setShowAvatarMenu(false)}>
+                    Cancel
+                  </button>
+                  <button type="button" className="primary-action" onClick={() => saveProfile(nameDraft, mp.self?.color)}>
+                    Save
+                  </button>
+                </div>
+                <p className="avatar-note">Sign in &amp; saved profiles coming soon 🔒</p>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="canvas-stage">
@@ -3607,7 +3757,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 type="button"
                 key={tool.id}
                 className={`brush-chip ${selectedTool === tool.id ? "is-active" : ""}`}
-                onClick={() => setSelectedTool(tool.id)}
+                onClick={() => {
+                  setSelectedTool(tool.id);
+                  handToolRef.current = false;
+                  setHandTool(false);
+                }}
                 aria-pressed={selectedTool === tool.id}
               >
                 <span>{tool.name}</span>
@@ -3742,9 +3896,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <input
               type="color"
               value={selectedColor}
-              onChange={(event) => {
-                setSelectedColor(event.target.value);
+              // Live-preview the colour while dragging in the picker, but only
+              // add ONE swatch to recents when the pick is committed (on blur) —
+              // otherwise every intermediate shade spawned a duplicate swatch.
+              onChange={(event) => setSelectedColor(event.target.value)}
+              onBlur={(event) => {
                 rememberColor(event.target.value);
+                handToolRef.current = false;
+                setHandTool(false);
               }}
             />
           </label>

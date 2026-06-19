@@ -3069,3 +3069,99 @@ button:disabled {
   background: #b91c1c;
   border-color: #b91c1c;
 }
+
+/* ---- Avatar / profile menu ---------------------------------------------- */
+.mp-you { position: relative; }
+.avatar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #dbe6f5;
+  font-weight: 800;
+}
+.avatar-dot {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+.avatar-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2d3b49;
+}
+.avatar-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 248px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid #dbe6f5;
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(32, 47, 58, 0.25);
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+}
+.avatar-menu-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7a8a99;
+}
+.avatar-field { display: grid; gap: 5px; }
+.avatar-field span,
+.avatar-field-label {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #44515d;
+}
+.avatar-field input {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #cdd7e0;
+  border-radius: 9px;
+  font: inherit;
+}
+.avatar-colors {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 7px;
+}
+.avatar-color {
+  min-height: 0;
+  aspect-ratio: 1;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.avatar-color.is-active {
+  box-shadow: 0 0 0 3px #2d6cdf;
+}
+.avatar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.avatar-actions button { min-height: 38px; }
+.avatar-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #8a98a6;
+  text-align: center;
+}

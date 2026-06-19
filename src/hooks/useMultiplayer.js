@@ -127,6 +127,14 @@ export function useMultiplayer(roomId, onMessage) {
   const sendClear = useCallback(() => send({ type: "clear" }), [send]);
   const sendRestore = useCallback(() => send({ type: "undo_clear" }), [send]);
   const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
+  const sendRename = useCallback(
+    (name, color) => {
+      send({ type: "rename", name, color });
+      // Optimistically reflect the change in our own presence.
+      setSelf((current) => (current ? { ...current, name: name ?? current.name, color: color ?? current.color } : current));
+    },
+    [send],
+  );
 
-  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendChat };
+  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendRename, sendChat };
 }
