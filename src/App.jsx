@@ -316,6 +316,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [zoomPct, setZoomPct] = useState(100);
   const [handTool, setHandTool] = useState(false);
   const imageInputRef = useRef(null); // hidden file input for GIF / image import
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearBanner, setClearBanner] = useState(null); // { by } when the mural was cleared
+  const clearBannerTimerRef = useRef(null);
 
   const [layers, setLayers] = useState([]);
   const [activeLayerId, setActiveLayerId] = useState(null);
@@ -826,6 +829,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     markChanged("Redo");
   }, [applySnapshot, captureInverse, markChanged]);
 
+  // Show the "mural cleared — bring it back" banner for a while (whoever cleared).
+  const showClearBanner = useCallback((by) => {
+    setClearBanner({ by });
+    if (clearBannerTimerRef.current) {
+      window.clearTimeout(clearBannerTimerRef.current);
+    }
+    clearBannerTimerRef.current = window.setTimeout(() => setClearBanner(null), 30000);
+  }, []);
+
+  // Ask the room to undo the most recent clear (restores it for everyone).
+  const restoreCanvas = useCallback(() => {
+    mpRef.current?.sendRestore?.();
+    setStatus("Bringing the canvas back…");
+  }, []);
+
   const clearCanvas = useCallback(() => {
     const active = getActiveLayer();
     if (!active) {
@@ -841,8 +859,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     mpRef.current?.sendClear();
     renderDisplay();
     refreshActiveThumbnail();
-    markChanged("Layer cleared");
-  }, [getActiveLayer, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay]);
+    markChanged("Canvas cleared");
+    showClearBanner("You");
+  }, [getActiveLayer, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
 
   // Build the paper-texture background as an offscreen canvas at any size.
   const renderPaper = useCallback(async (context, { width, height, textureId }) => {
@@ -2911,9 +2930,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     (data) => {
       switch (data.type) {
         case "history":
-          (data.ops || []).forEach(applyRemoteOp);
+          // Rebuild the friends' canvas from scratch (used for join AND for
+          // restoring a cleared mural), so always start from a clean slate.
+          if (remoteCanvasRef.current) {
+            remoteCanvasRef.current.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          }
           remoteStrokeLastRef.current.clear();
+          (data.ops || []).forEach(applyRemoteOp);
           renderDisplay();
+          if (data.restored) {
+            setClearBanner(null);
+            setStatus("Canvas brought back 🎉");
+          }
           break;
         case "op":
           applyRemoteOp(data.op);
@@ -2930,6 +2958,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           remoteStrokeLastRef.current.clear();
           renderDisplay();
+          showClearBanner(data.name || "Someone");
           break;
         case "cursor":
           remoteCursorsRef.current.set(data.userId, {
@@ -2951,15 +2980,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, renderDisplay, scheduleStrokeFrame],
+    [applyRemoteOp, renderDisplay, scheduleStrokeFrame, showClearBanner],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage);
 
   // The imperative draw handlers (defined earlier) reach the senders via a ref.
   useEffect(() => {
-    mpRef.current = { sendOp: mp.sendOp, sendCursor: mp.sendCursor, sendClear: mp.sendClear };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear]);
+    mpRef.current = {
+      sendOp: mp.sendOp,
+      sendCursor: mp.sendCursor,
+      sendClear: mp.sendClear,
+      sendRestore: mp.sendRestore,
+    };
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore]);
 
   // Pump remote cursors into React state, dropping any gone quiet (>4s).
   useEffect(() => {
@@ -3333,7 +3367,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={redo} disabled={redoCount === 0}>
               Redo
             </button>
-            <button type="button" onClick={clearCanvas}>
+            <button type="button" onClick={() => setShowClearConfirm(true)}>
               Clear
             </button>
             <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
@@ -3443,8 +3477,50 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 ✋
               </button>
             </div>
+
+            {clearBanner ? (
+              <div className="clear-banner" role="status">
+                <span>
+                  🧹 {clearBanner.by === "You" ? "You" : clearBanner.by} cleared the canvas.
+                </span>
+                <button type="button" className="primary-action" onClick={restoreCanvas}>
+                  Bring it back
+                </button>
+                <button type="button" className="clear-banner-dismiss" onClick={() => setClearBanner(null)} aria-label="Dismiss">
+                  ✕
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
+
+        {showClearConfirm ? (
+          <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="clear-confirm-title">
+            <div className="confirm-card">
+              <h2 id="clear-confirm-title">Clear the whole canvas? 😱</h2>
+              <p>
+                This wipes the shared mural for <strong>everyone</strong> in the room — your friends might be
+                mad! You can bring it back with <strong>“Bring it back”</strong> right after, but only for a
+                little while.
+              </p>
+              <div className="confirm-actions">
+                <button type="button" onClick={() => setShowClearConfirm(false)}>
+                  Never mind
+                </button>
+                <button
+                  type="button"
+                  className="confirm-danger"
+                  onClick={() => {
+                    setShowClearConfirm(false);
+                    clearCanvas();
+                  }}
+                >
+                  Yes, clear it
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {showChat ? (
           <div className="mp-chat">

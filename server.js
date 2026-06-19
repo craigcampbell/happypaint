@@ -34,7 +34,7 @@ const rooms = new Map();
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { users: new Map(), history: [] });
+    rooms.set(roomId, { users: new Map(), history: [], lastCleared: null });
   }
   return rooms.get(roomId);
 }
@@ -126,8 +126,18 @@ wss.on('connection', (ws, req) => {
         }, id);
         break;
       case 'clear':
+        // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
+        room.lastCleared = room.history;
         room.history = [];
-        broadcast(roomId, { type: 'clear', userId: id }, id);
+        broadcast(roomId, { type: 'clear', userId: id, name }, id);
+        break;
+      case 'undo_clear':
+        // Restore the most recently cleared mural for the whole room.
+        if (room.lastCleared && room.lastCleared.length) {
+          room.history = room.lastCleared;
+          room.lastCleared = null;
+          broadcast(roomId, { type: 'history', ops: room.history, restored: true });
+        }
         break;
       case 'chat':
         if (typeof data.message === 'string' && data.message.trim()) {

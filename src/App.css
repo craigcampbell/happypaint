@@ -2998,3 +2998,74 @@ button:disabled {
   /* Chat shouldn't cover the canvas on small screens until opened. */
   .mp-chat { width: min(86vw, 300px); }
 }
+
+/* ---- Clear confirmation + recovery banner ------------------------------- */
+.clear-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  box-shadow: 0 12px 30px rgba(180, 83, 9, 0.22);
+  color: #7c2d12;
+  font-weight: 800;
+  z-index: 30;
+}
+.clear-banner span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clear-banner .primary-action {
+  min-height: 36px;
+  border-radius: 999px;
+  background: #ea580c;
+  border-color: #ea580c;
+}
+.clear-banner-dismiss {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #9a3412;
+  font-size: 14px;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(3px);
+}
+.confirm-card {
+  width: min(440px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35);
+}
+.confirm-card h2 { margin: 0 0 8px; font-size: 1.3rem; }
+.confirm-card p { margin: 0 0 18px; color: #44515d; line-height: 1.5; }
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.confirm-danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+.confirm-danger:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}

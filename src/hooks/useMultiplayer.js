@@ -125,7 +125,8 @@ export function useMultiplayer(roomId, onMessage) {
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
   const sendClear = useCallback(() => send({ type: "clear" }), [send]);
+  const sendRestore = useCallback(() => send({ type: "undo_clear" }), [send]);
   const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
 
-  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendChat };
+  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendChat };
 }
