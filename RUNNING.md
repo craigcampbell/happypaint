@@ -109,7 +109,7 @@ and speak the same small JSON protocol the web client uses:
 
 - Send a stroke (incrementally, as points are drawn):
   `{"type":"op","op":{"kind":"draw","strokeId":"<unique>","settings":{"brush":"marker","color":"#ff0000","size":12,"opacity":1,"variation":0},"points":[{"x":10,"y":10},{"x":40,"y":40}]}}`
-  Coordinates are in the shared 1600×1200 canvas space.
+  Coordinates are in the shared 3840×2400 canvas space (see `CANVAS_WIDTH`/`CANVAS_HEIGHT` in `src/utils/layers.js`).
 - Other ops: `{"kind":"shape",...}`, `{"kind":"text",...}`; plus top-level
   `{"type":"cursor","x":0..1,"y":0..1,"drawing":true}`, `{"type":"clear"}`,
   `{"type":"chat","message":"hi"}`, `{"type":"ping"}`.

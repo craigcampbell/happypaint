@@ -339,6 +339,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
+  const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
   const [savingArt, setSavingArt] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
@@ -3568,6 +3570,31 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const showShapeFillOption = selectedTool === "rect" || selectedTool === "ellipse";
 
+  // Drag the chat window by its header (pointer-based, works with touch).
+  const startChatDrag = (event) => {
+    if (event.target.closest("button")) {
+      return; // let the hide button work
+    }
+    const chat = event.currentTarget.closest(".mp-chat");
+    if (!chat) {
+      return;
+    }
+    const rect = chat.getBoundingClientRect();
+    const offX = event.clientX - rect.left;
+    const offY = event.clientY - rect.top;
+    const onMove = (ev) => {
+      const left = Math.max(4, Math.min(window.innerWidth - 60, ev.clientX - offX));
+      const top = Math.max(4, Math.min(window.innerHeight - 44, ev.clientY - offY));
+      setChatPos({ left, top });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
   return (
     <main className="studio-shell">
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
@@ -3854,9 +3881,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         ) : null}
 
         {showChat ? (
-          <div className="mp-chat">
-            <div className="mp-chat-head">
-              <span>Room chat</span>
+          <div
+            className="mp-chat"
+            style={chatPos ? { left: chatPos.left, top: chatPos.top, right: "auto", bottom: "auto" } : undefined}
+          >
+            <div className="mp-chat-head" onPointerDown={startChatDrag}>
+              <span>💬 Room chat</span>
               <button type="button" onClick={() => setShowChat(false)} aria-label="Hide chat">
                 –
               </button>
@@ -3927,7 +3957,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         </div>
       </section>
 
-      <aside className="tool-rail" aria-label="Drawing tools">
+      <aside className={toolsOpen ? "tool-rail is-open" : "tool-rail"} aria-label="Drawing tools">
+        <div className="drawer-handle">
+          <span className="drawer-grip" aria-hidden="true" />
+          <button type="button" className="drawer-done" onClick={() => setToolsOpen(false)}>
+            Done
+          </button>
+        </div>
         <div className="status-line">{status}</div>
 
         <section className="tool-section">
@@ -4206,6 +4242,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           ) : null}
         </section>
       </aside>
+
+      {/* Mobile: a floating button opens the tools as a bottom sheet, and a
+          backdrop closes it — so the canvas can fill the screen. */}
+      <button
+        type="button"
+        className={toolsOpen ? "mobile-tools-toggle is-open" : "mobile-tools-toggle"}
+        onClick={() => setToolsOpen((open) => !open)}
+        aria-label={toolsOpen ? "Close tools" : "Open tools"}
+      >
+        {toolsOpen ? "✕" : "🎨 Tools"}
+      </button>
+      {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}
 
       {showPaintSpace ? (
         <PaintSpacePanel

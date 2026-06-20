@@ -3287,3 +3287,127 @@ button:disabled {
 }
 
 /* Reveal the saved-art access on mobile via the toolbar button + modal. */
+
+/* ---- Draggable + resizable chat ----------------------------------------- */
+.mp-chat {
+  height: 360px;
+  min-width: 220px;
+  min-height: 190px;
+  max-width: 96vw;
+  max-height: 90vh;
+  resize: both;
+  overflow: hidden;
+}
+.mp-chat-head {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.mp-chat-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* ---- Mobile tools drawer + slim chrome (phones / iPad) ------------------- */
+.drawer-handle { display: none; }
+.mobile-tools-toggle { display: none; }
+.tools-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 55;
+}
+.mobile-tools-toggle {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 65;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  background: #2d6cdf;
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 10px 30px rgba(45, 108, 223, 0.42);
+}
+.mobile-tools-toggle.is-open { background: #ef4444; }
+.drawer-handle {
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.drawer-grip {
+  flex: 1 1 auto;
+  height: 5px;
+  max-width: 60px;
+  margin: 0 auto;
+  border-radius: 3px;
+  background: #cdd7e0;
+}
+.drawer-done { min-height: 36px; }
+
+@media (max-width: 1024px) {
+  .studio-shell {
+    grid-template-columns: 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .studio-workspace {
+    height: 100vh;
+    padding: 8px;
+    gap: 8px;
+  }
+  .canvas-stage { flex: 1 1 auto; }
+  .gallery-strip { display: none; }
+
+  /* Slim the chrome so the canvas gets the screen */
+  .topbar { gap: 8px; align-items: center; flex-direction: row; }
+  .topbar h1 { font-size: 1.15rem; }
+  .topbar .eyebrow { display: none; }
+  .topbar-actions {
+    width: auto;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    justify-content: flex-start;
+    display: flex;
+  }
+  .topbar-actions button {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 38px;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+  .mp-bar {
+    padding: 6px 10px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .mp-bar .mp-avatars { display: none; }
+
+  /* Tool rail → bottom sheet */
+  .tool-rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    width: auto;
+    max-height: 82vh;
+    border-radius: 18px 18px 0 0;
+    border-left: none;
+    border-top: 1px solid #cdd7e0;
+    box-shadow: 0 -16px 44px rgba(31, 45, 53, 0.22);
+    transform: translateY(102%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+  }
+  .tool-rail.is-open { transform: translateY(0); }
+  .drawer-handle { display: flex; }
+  .mobile-tools-toggle { display: inline-flex; }
+  .tools-backdrop { display: block; }
+}

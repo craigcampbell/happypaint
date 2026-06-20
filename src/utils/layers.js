@@ -7,8 +7,8 @@
 // than any one screen, so friends can spread out into their own areas and still
 // meet in the middle. Kept to a mobile-friendly memory budget (each layer is a
 // canvas of this size).
-export const CANVAS_WIDTH = 3200;
-export const CANVAS_HEIGHT = 2000;
+export const CANVAS_WIDTH = 3840;
+export const CANVAS_HEIGHT = 2400;
 
 let layerIdSeed = 0;
 
