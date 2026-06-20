@@ -341,6 +341,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showMyArt, setShowMyArt] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
+  const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
+  const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
@@ -3570,6 +3572,41 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const showShapeFillOption = selectedTool === "rect" || selectedTool === "ellipse";
 
+  // Remember the last real brush so flipping back from the eraser restores it.
+  if (selectedBrush && selectedBrush !== "eraser") {
+    lastPaintBrushRef.current = selectedBrush;
+  }
+
+  const activatePaint = () => {
+    handToolRef.current = false;
+    setHandTool(false);
+    setSelectedTool("brush");
+    if (selectedBrush === "eraser") {
+      setSelectedBrush(lastPaintBrushRef.current || "marker");
+    }
+  };
+
+  const activateEraser = () => {
+    handToolRef.current = false;
+    setHandTool(false);
+    setSelectedTool("brush");
+    setSelectedBrush("eraser");
+  };
+
+  const isPaintActive = !handTool && selectedTool === "brush" && selectedBrush !== "eraser";
+  const isEraserActive = !handTool && selectedTool === "brush" && selectedBrush === "eraser";
+
+  // Tapping Paint flips to the brush; tapping it again (already painting) opens
+  // the tools drawer and scrolls to the brush/colour section.
+  const onPaintButton = () => {
+    const wasPainting = isPaintActive;
+    activatePaint();
+    if (wasPainting) {
+      setToolsOpen(true);
+      window.setTimeout(() => brushSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    }
+  };
+
   // Drag the chat window by its header (pointer-based, works with touch).
   const startChatDrag = (event) => {
     if (event.target.closest("button")) {
@@ -3891,6 +3928,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 –
               </button>
             </div>
+            <div className="mp-chat-room">
+              <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
+              <strong>Room {roomId}</strong>
+              <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
+              <button
+                type="button"
+                className="mp-chat-invite"
+                onClick={() => {
+                  const link = `${window.location.origin}/join/${roomId}`;
+                  navigator.clipboard?.writeText(link).then(
+                    () => setStatus("Invite link copied — send it to a friend!"),
+                    () => setStatus(link),
+                  );
+                }}
+              >
+                Invite
+              </button>
+            </div>
             <div className="mp-chat-log">
               {mp.chat.length === 0 ? (
                 <p className="mp-chat-empty">Say hi to your friends! 👋</p>
@@ -3965,6 +4020,71 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </button>
         </div>
         <div className="status-line">{status}</div>
+
+        <section className="tool-section mobile-actions">
+          <h2>Actions</h2>
+          <div className="mobile-actions-grid">
+            <button type="button" onClick={undo} disabled={historyCount === 0}>
+              ↶ Undo
+            </button>
+            <button type="button" onClick={redo} disabled={redoCount === 0}>
+              ↷ Redo
+            </button>
+            <button type="button" onClick={() => setShowClearConfirm(true)}>
+              Clear
+            </button>
+            <button type="button" onClick={() => imageInputRef.current?.click()}>
+              🖼 GIF
+            </button>
+            <button type="button" className="primary-action" onClick={saveToServer} disabled={savingArt}>
+              {savingArt ? "Saving…" : "💾 Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                loadMyDrawings();
+                setShowMyArt(true);
+              }}
+            >
+              📁 My Art
+            </button>
+            <button type="button" onClick={sharePng}>
+              Share
+            </button>
+            <button type="button" onClick={exportPng}>
+              Export
+            </button>
+          </div>
+        </section>
+
+        <section className="tool-section mobile-profile">
+          <h2>You</h2>
+          <label className="avatar-field">
+            <span>Display name</span>
+            <input
+              type="text"
+              value={nameDraft}
+              maxLength={20}
+              placeholder={mp.self?.name || "Your name"}
+              onChange={(event) => setNameDraft(event.target.value)}
+            />
+          </label>
+          <div className="avatar-colors">
+            {AVATAR_COLORS.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                className={mp.self?.color === swatch ? "avatar-color is-active" : "avatar-color"}
+                style={{ background: swatch }}
+                onClick={() => saveProfile(nameDraft, swatch)}
+                aria-label={`Use ${swatch}`}
+              />
+            ))}
+          </div>
+          <button type="button" className="primary-action" onClick={() => saveProfile(nameDraft, mp.self?.color)}>
+            Save name
+          </button>
+        </section>
 
         <section className="tool-section">
           <h2>Tool</h2>
@@ -4072,7 +4192,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section">
+        <section className="tool-section" ref={brushSectionRef}>
           <h2>Brushes</h2>
           <div className="brush-grid">
             {brushCatalog.map((brush) => {
@@ -4243,16 +4363,55 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         </section>
       </aside>
 
-      {/* Mobile: a floating button opens the tools as a bottom sheet, and a
-          backdrop closes it — so the canvas can fill the screen. */}
-      <button
-        type="button"
-        className={toolsOpen ? "mobile-tools-toggle is-open" : "mobile-tools-toggle"}
-        onClick={() => setToolsOpen((open) => !open)}
-        aria-label={toolsOpen ? "Close tools" : "Open tools"}
-      >
-        {toolsOpen ? "✕" : "🎨 Tools"}
-      </button>
+      {/* Mobile: an always-on bottom bar to flip paint/eraser/pan and open the
+          tools/chat, so the canvas itself can fill the whole screen. */}
+      <div className="mobile-quickbar" role="toolbar" aria-label="Quick tools">
+        <button
+          type="button"
+          className={isPaintActive ? "qb-btn is-active" : "qb-btn"}
+          onClick={onPaintButton}
+          aria-pressed={isPaintActive}
+        >
+          <span className="qb-ico" aria-hidden="true">✏️</span>
+          <span className="qb-label">Paint</span>
+        </button>
+        <button
+          type="button"
+          className={isEraserActive ? "qb-btn is-active" : "qb-btn"}
+          onClick={activateEraser}
+          aria-pressed={isEraserActive}
+        >
+          <span className="qb-ico" aria-hidden="true">🧽</span>
+          <span className="qb-label">Eraser</span>
+        </button>
+        <button
+          type="button"
+          className={handTool ? "qb-btn is-active" : "qb-btn"}
+          onClick={toggleHandTool}
+          aria-pressed={handTool}
+        >
+          <span className="qb-ico" aria-hidden="true">✋</span>
+          <span className="qb-label">Pan</span>
+        </button>
+        <button
+          type="button"
+          className={toolsOpen ? "qb-btn is-active" : "qb-btn"}
+          onClick={() => setToolsOpen((open) => !open)}
+          aria-pressed={toolsOpen}
+        >
+          <span className="qb-ico" aria-hidden="true">🎨</span>
+          <span className="qb-label">Tools</span>
+        </button>
+        <button
+          type="button"
+          className={showChat ? "qb-btn is-active" : "qb-btn"}
+          onClick={() => setShowChat((open) => !open)}
+          aria-pressed={showChat}
+        >
+          <span className="qb-ico" aria-hidden="true">💬</span>
+          <span className="qb-label">Chat{mp.chat.length ? ` ${mp.chat.length}` : ""}</span>
+        </button>
+      </div>
       {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}
 
       {showPaintSpace ? (

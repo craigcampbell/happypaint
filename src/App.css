@@ -3411,3 +3411,110 @@ button:disabled {
   .mobile-tools-toggle { display: inline-flex; }
   .tools-backdrop { display: block; }
 }
+
+/* ---- Mobile: chrome-free canvas + always-on quick bar -------------------- */
+.mobile-quickbar { display: none; }
+.mobile-actions,
+.mobile-profile { display: none; }
+.mp-chat-room { display: none; }
+
+/* chat room-info row (shown in chat on mobile) */
+.mp-chat-room {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e3e9ef;
+  font-size: 13px;
+  font-weight: 800;
+  color: #2d3b49;
+}
+.mp-chat-room .mp-chat-room-count { color: #6b7a89; font-weight: 700; }
+.mp-chat-room .mp-chat-invite {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: #2d6cdf;
+  color: #fff;
+}
+
+@media (max-width: 1024px) {
+  .topbar { display: none !important; }
+  .mp-bar { display: none !important; }
+  .mp-chat-toggle { display: none !important; }
+  .mobile-tools-toggle { display: none !important; }
+
+  .studio-workspace { padding: 0; gap: 0; }
+  .canvas-paper { border-radius: 0; border: none; }
+
+  .mobile-actions { display: grid !important; }
+  .mobile-profile { display: grid !important; }
+  .mp-chat-room { display: flex !important; }
+
+  .mobile-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .mobile-actions-grid button {
+    width: auto;
+    min-height: 46px;
+    padding: 0 6px;
+    font-size: 0.82rem;
+  }
+
+  /* Always-on quick bar floating over the canvas */
+  .mobile-quickbar {
+    display: flex;
+    position: fixed;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    gap: 4px;
+    padding: 5px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 10px 30px rgba(32, 47, 58, 0.28);
+    border: 1px solid #dbe3ec;
+    z-index: 70;
+    max-width: 96vw;
+  }
+  .qb-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    min-width: 54px;
+    min-height: 52px;
+    padding: 4px 6px;
+    border: none;
+    border-radius: 14px;
+    background: transparent;
+    color: #2d3b49;
+    font-weight: 800;
+  }
+  .qb-btn:hover:not(:disabled) { box-shadow: none; }
+  .qb-ico { font-size: 20px; line-height: 1; }
+  .qb-label { font-size: 10px; }
+  .qb-btn.is-active { background: #2d6cdf; color: #fff; }
+
+  /* Zoom → top-right, out of the way; drop the redundant hand button */
+  .zoom-controls {
+    left: auto;
+    right: 10px;
+    top: 10px;
+    bottom: auto;
+    transform: none;
+  }
+  .zoom-controls .zoom-hand { display: none; }
+
+  /* Drawer should clear the floating quick bar */
+  .tool-rail { max-height: 80vh; padding-bottom: 78px; }
+}
+
+@media (max-width: 1024px) {
+  /* Keep the chat clear of the floating quick bar by default. */
+  .mp-chat { bottom: 84px; right: 12px; width: min(92vw, 320px); }
+}
