@@ -119,6 +119,31 @@ and speak the same small JSON protocol the web client uses:
 See `server.js` for the full message set and `src/hooks/useMultiplayer.js` +
 `src/App.jsx` for the reference client.
 
+## Rooms (public + private)
+
+- **`MAIN`** is the **public** canvas — anyone who taps "Join the public canvas"
+  (or just opens `/studio`) draws there together. Treat it as public.
+- **Private rooms** are invite-only by obscurity: "Create a private room" makes a
+  random code and opens `/join/<CODE>`. Only people with that link/code can join.
+
+## Admin & moderation
+
+A parent/moderator dashboard lives at **`drawesome.art/admin`**.
+
+- **Login key:** printed in the server log on boot and saved to **`.admin-key`**
+  in the project folder (git-ignored). Set your own with the `ADMIN_KEY` env var.
+  Enter it once at `/admin`; it's stored in your browser and never ships in the app.
+- **What it shows:** open **reports**, **active rooms** (with how many are painting
+  and stroke counts), and resolved history. Auto-refreshes every few seconds.
+- **Actions:** **View** a room (opens it in a new tab), **Clear** a room's canvas
+  for everyone, and **Resolve** a report.
+- **Reports:** any artist can tap **⚠️** in a room's chat to report it; reports are
+  stored in **`.reports.json`** (git-ignored) and appear in the dashboard.
+
+> ⚠️ The public `MAIN` canvas has no automatic content filtering — moderation is
+> reactive (reports + clear). Keep `/admin` open during public sessions, or steer
+> kids to **private rooms** for a closed group.
+
 ## Saved drawings ("My Art")
 
 Tapping **💾 Save** stores the artwork on the server so kids can come back and

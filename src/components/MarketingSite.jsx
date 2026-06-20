@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import DiscoveryHub from "./DiscoveryHub";
-import { kidSafetyPrinciples, revenueModels } from "../utils/social";
+import { createInviteCode, kidSafetyPrinciples, revenueModels } from "../utils/social";
 import { addAsset, loadPaintSpace, savePaintSpace } from "../utils/paintSpace";
 import { getPackAssets } from "../utils/brushPacks";
 
@@ -51,13 +51,13 @@ export default function MarketingSite({ onNavigate }) {
           </p>
           <div className="hero-actions">
             <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>
-              Paint in Browser
+              🎨 Join the public canvas
             </button>
-            <a className="button-link" href="#discover">
-              Browse Rooms
-            </a>
+            <button type="button" onClick={() => onNavigate(`/join/${createInviteCode()}`)}>
+              🔒 Create a private room
+            </button>
             <button type="button" onClick={() => onNavigate("/join")}>
-              Join With Code
+              Join with a code
             </button>
           </div>
           <label className="hero-search" htmlFor="hero-discovery-search">

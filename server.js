@@ -16,6 +16,7 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -293,6 +294,104 @@ app.delete('/api/artworks/:id', (req, res) => {
   res.json({ ok: true, count: next.length, max: MAX_SAVES });
 });
 
+// ---- Admin + moderation ---------------------------------------------------
+// Admin key: from env, else a persisted random key (printed on boot). The parent
+// enters it once at /admin; it never ships in the client bundle.
+const ADMIN_KEY_FILE = join(__dirname, '.admin-key');
+let ADMIN_KEY = process.env.ADMIN_KEY || '';
+if (!ADMIN_KEY) {
+  try { ADMIN_KEY = readFileSync(ADMIN_KEY_FILE, 'utf8').trim(); } catch { ADMIN_KEY = ''; }
+}
+if (!ADMIN_KEY) {
+  ADMIN_KEY = randomBytes(12).toString('hex');
+  try { writeFileSync(ADMIN_KEY_FILE, ADMIN_KEY); } catch { /* ignore */ }
+}
+
+const REPORTS_FILE = join(__dirname, '.reports.json');
+let reports = [];
+try {
+  const parsed = JSON.parse(readFileSync(REPORTS_FILE, 'utf8'));
+  reports = Array.isArray(parsed) ? parsed : [];
+} catch {
+  reports = [];
+}
+function persistReports() {
+  try { writeFileSync(REPORTS_FILE, JSON.stringify(reports.slice(0, 500))); } catch { /* ignore */ }
+}
+
+function isAdmin(req) {
+  const key = req.get('x-admin-key') || req.query.key;
+  return Boolean(key) && key === ADMIN_KEY;
+}
+function adminGuard(req, res) {
+  res.set('Cache-Control', 'no-store');
+  if (!isAdmin(req)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// Anyone can file a report (no auth) — that's the point.
+app.post('/api/report', (req, res) => {
+  const { room, reason, reporterName } = req.body || {};
+  if (!room) {
+    return res.status(400).json({ error: 'room required' });
+  }
+  reports.unshift({
+    id: 'rep_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    room: String(room).toUpperCase().slice(0, 16),
+    reason: String(reason || '').slice(0, 300),
+    reporterName: String(reporterName || 'anonymous').slice(0, 20),
+    ts: Date.now(),
+    status: 'open',
+  });
+  if (reports.length > 500) reports.length = 500;
+  persistReports();
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/check', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/rooms', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const list = [];
+  rooms.forEach((room, id) => list.push({ id, users: room.users.size, strokes: room.history.length }));
+  list.sort((a, b) => b.users - a.users || b.strokes - a.strokes);
+  res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
+});
+
+app.post('/api/admin/rooms/:id/clear', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().slice(0, 16);
+  const room = rooms.get(id);
+  if (room) {
+    room.lastCleared = room.history;
+    room.history = [];
+    broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
+    persistRoom(id);
+  }
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/reports', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json({ reports });
+});
+
+app.post('/api/admin/reports/:id/resolve', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const report = reports.find((r) => r.id === req.params.id);
+  if (report) {
+    report.status = 'resolved';
+    persistReports();
+  }
+  res.json({ ok: true });
+});
+
 // ---- Static host ----------------------------------------------------------
 app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
@@ -315,6 +414,7 @@ if (existsSync(distPath)) {
 
 server.listen(PORT, () => {
   console.log(`Happy Paint server on http://localhost:${PORT}  (ws path /ws)`);
+  console.log(`Admin key for /admin (also in .admin-key): ${ADMIN_KEY}`);
 });
 
 function shutdown() {

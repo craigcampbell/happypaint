@@ -3518,3 +3518,120 @@ button:disabled {
   /* Keep the chat clear of the floating quick bar by default. */
   .mp-chat { bottom: 84px; right: 12px; width: min(92vw, 320px); }
 }
+
+/* ---- Report + private-room controls ------------------------------------- */
+.mp-chat-iconbtn {
+  min-height: 32px;
+  min-width: 36px;
+  padding: 0 8px;
+  border: 1px solid #cdd7e0;
+  border-radius: 999px;
+  background: #fff;
+}
+.report-textarea {
+  width: 100%;
+  margin: 0 0 16px;
+  padding: 10px;
+  border: 1px solid #cdd7e0;
+  border-radius: 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+/* ---- Admin portal ------------------------------------------------------- */
+.admin-login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: linear-gradient(180deg, #0f172a, #1e293b);
+}
+.admin-login-card {
+  width: min(440px, 100%);
+  background: #fff;
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
+}
+.admin-login-card h1 { margin: 0 0 8px; }
+.admin-login-card p { color: #475569; margin: 0 0 14px; }
+.admin-login-card input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #cdd7e0;
+  border-radius: 10px;
+  font: inherit;
+  margin-bottom: 12px;
+}
+.admin-error { color: #dc2626; font-weight: 700; }
+.admin-login-actions { display: flex; justify-content: space-between; gap: 10px; }
+
+.admin-portal {
+  min-height: 100vh;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 18px;
+  color: #0f172a;
+}
+.admin-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.admin-top h1 { margin: 0; }
+.admin-top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.admin-section { margin-bottom: 26px; }
+.admin-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.admin-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+.admin-empty {
+  color: #64748b;
+  padding: 16px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+}
+.admin-list { display: grid; gap: 10px; }
+.admin-report,
+.admin-room {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+}
+.admin-report.is-done {
+  opacity: 0.7;
+  box-shadow: none;
+  padding: 10px 14px;
+}
+.admin-report-main { min-width: 0; }
+.admin-muted { color: #64748b; font-weight: 600; }
+.admin-reason { margin: 6px 0 0; color: #0f172a; }
+.admin-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.admin-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+.admin-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+
+@media (max-width: 1024px) {
+  /* Report/new-room buttons stay reachable in the chat on mobile. */
+  .mp-chat-room { flex-wrap: wrap; }
+}

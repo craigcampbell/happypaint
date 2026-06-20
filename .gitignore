@@ -27,3 +27,5 @@ server.err.log
 .murals/
 .artworks/
 .rooms/
+.admin-key
+.reports.json

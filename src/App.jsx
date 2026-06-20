@@ -77,7 +77,7 @@ import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
 import MarketingSite from "./components/MarketingSite";
 import TogetherPanel from "./components/TogetherPanel";
-import AdminConsole from "./components/AdminConsole";
+import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
@@ -341,6 +341,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showMyArt, setShowMyArt] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
+  const [showReport, setShowReport] = useState(false);
+  const [reportReason, setReportReason] = useState("");
   const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
   const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
@@ -3607,6 +3609,31 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   };
 
+  // Create a fresh private (invite-only) room with a random code and go there.
+  const createPrivateRoom = () => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 6; i += 1) {
+      code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    window.location.href = `/join/${code}`;
+  };
+
+  const submitReport = async () => {
+    try {
+      await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: roomId, reason: reportReason, reporterName: mp.self?.name || "anonymous" }),
+      });
+      showToast("Thanks — a moderator will take a look. 🙏");
+    } catch {
+      showToast("Couldn't send the report — please try again");
+    }
+    setShowReport(false);
+    setReportReason("");
+  };
+
   // Drag the chat window by its header (pointer-based, works with touch).
   const startChatDrag = (event) => {
     if (event.target.closest("button")) {
@@ -3917,6 +3944,34 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         ) : null}
 
+        {showReport ? (
+          <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="report-title">
+            <div className="confirm-card">
+              <h2 id="report-title">⚠️ Report this room</h2>
+              <p>
+                Tell a moderator what's wrong in <strong>Room {roomId}</strong> (e.g. mean or inappropriate
+                drawings). They'll review it.
+              </p>
+              <textarea
+                className="report-textarea"
+                value={reportReason}
+                maxLength={300}
+                rows={3}
+                placeholder="What happened?"
+                onChange={(event) => setReportReason(event.target.value)}
+              />
+              <div className="confirm-actions">
+                <button type="button" onClick={() => setShowReport(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="confirm-danger" onClick={submitReport}>
+                  Send report
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {showChat ? (
           <div
             className="mp-chat"
@@ -3938,12 +3993,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 onClick={() => {
                   const link = `${window.location.origin}/join/${roomId}`;
                   navigator.clipboard?.writeText(link).then(
-                    () => setStatus("Invite link copied — send it to a friend!"),
+                    () => showToast("Invite link copied — send it to a friend!"),
                     () => setStatus(link),
                   );
                 }}
               >
                 Invite
+              </button>
+              <button type="button" className="mp-chat-iconbtn" onClick={createPrivateRoom} title="Create a private room">
+                🔒
+              </button>
+              <button type="button" className="mp-chat-iconbtn" onClick={() => setShowReport(true)} title="Report something">
+                ⚠️
               </button>
             </div>
             <div className="mp-chat-log">
@@ -4552,7 +4613,7 @@ export default function App() {
   }
 
   if (path.startsWith("/admin")) {
-    return <AdminConsole onNavigate={navigate} />;
+    return <LiveAdmin onNavigate={navigate} />;
   }
 
   return <MarketingSite onNavigate={navigate} />;
