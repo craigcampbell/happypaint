@@ -3756,3 +3756,12 @@ button:disabled {
   font-size: 0.74rem;
   color: #64748b;
 }
+.metric-num.is-ok {
+  color: #16a34a;
+}
+.metric-num.is-warn {
+  color: #d97706;
+}
+.metric-num.is-bad {
+  color: #dc2626;
+}

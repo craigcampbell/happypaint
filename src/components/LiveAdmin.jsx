@@ -13,12 +13,20 @@ function formatUptime(s) {
 }
 
 function timeAgo(ts) {
+  if (!ts) return "—";
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   return `${h}h ago`;
+}
+
+// Green / amber / red cue for "is the server straining?" numbers.
+function health(value, warn, bad) {
+  if (value >= bad) return "is-bad";
+  if (value >= warn) return "is-warn";
+  return "is-ok";
 }
 
 export default function LiveAdmin({ onNavigate }) {
@@ -229,6 +237,11 @@ export default function LiveAdmin({ onNavigate }) {
               </span>
             </div>
             <div className="metric">
+              <span className="metric-num">{metrics.peakUsers ?? 0}</span>
+              <span className="metric-label">Peak online</span>
+              <span className="metric-sub">{metrics.peakAt ? `record ${timeAgo(metrics.peakAt)}` : "no traffic yet"}</span>
+            </div>
+            <div className="metric">
               <span className="metric-num">{metrics.rooms}</span>
               <span className="metric-label">Rooms</span>
               <span className="metric-sub">{metrics.strokes.toLocaleString()} strokes</span>
@@ -243,6 +256,28 @@ export default function LiveAdmin({ onNavigate }) {
                 heap {metrics.memory.heapUsedMB}/{metrics.memory.heapTotalMB} MB
               </span>
             </div>
+            {typeof metrics.cpuPct === "number" ? (
+              <div className="metric">
+                <span className={`metric-num ${health(metrics.cpuPct, 70, 90)}`}>
+                  {metrics.cpuPct}
+                  <small> %</small>
+                </span>
+                <span className="metric-label">CPU</span>
+                <span className="metric-sub">single Node thread</span>
+              </div>
+            ) : null}
+            {metrics.loopLag ? (
+              <div className="metric">
+                <span className={`metric-num ${health(metrics.loopLag.meanMs, 30, 80)}`}>
+                  {metrics.loopLag.meanMs}
+                  <small> ms</small>
+                </span>
+                <span className="metric-label">Event-loop lag</span>
+                <span className="metric-sub">
+                  p99 {metrics.loopLag.p99Ms} · max {metrics.loopLag.maxMs} ms
+                </span>
+              </div>
+            ) : null}
             <div className="metric">
               <span className="metric-num">{formatUptime(metrics.uptimeSec)}</span>
               <span className="metric-label">Uptime</span>
@@ -296,7 +331,9 @@ export default function LiveAdmin({ onNavigate }) {
               <div key={room.id} className="admin-room">
                 <div className="admin-report-main">
                   <strong>Room {room.id}</strong>
-                  <span className="admin-muted">· {room.users} painting · {room.strokes} strokes</span>
+                  <span className="admin-muted">
+                    · {room.users} painting · {room.strokes} strokes · active {timeAgo(room.lastActivity)}
+                  </span>
                 </div>
                 <div className="admin-actions">
                   <button type="button" onClick={() => openRoom(room.id)}>View</button>

@@ -30,3 +30,4 @@ server.err.log
 .admin-key
 .reports.json
 .sheets.json
+.metrics.json

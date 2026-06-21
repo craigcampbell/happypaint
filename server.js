@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
+import { monitorEventLoopDelay } from 'perf_hooks';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,6 +33,48 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 // ---- Rooms ----------------------------------------------------------------
 // Each room keeps its connected users and a capped op history for replay.
 const rooms = new Map();
+
+// ---- Health instrumentation -----------------------------------------------
+// Event-loop delay (how late the loop is firing — the best "is the server
+// straining?" signal), CPU%, and an all-time peak-concurrent-users counter.
+const ELD_RESOLUTION_MS = 20;
+const eld = monitorEventLoopDelay({ resolution: ELD_RESOLUTION_MS });
+eld.enable();
+// The OS timer granularity (≈15.6ms on Windows) gives every sample a fixed
+// floor, so even a totally idle loop reports ~30ms here. We learn that floor
+// from the smallest delay ever observed and subtract it, so the number we show
+// is *excess* lag: ~0 when healthy, climbing only when the loop is genuinely
+// backed up. Self-calibrating, so it's honest on Windows and Linux alike.
+let loopFloorMs = Infinity;
+let lastCpu = process.cpuUsage();
+let lastCpuAt = Date.now();
+
+const METRICS_FILE = join(__dirname, '.metrics.json');
+let peakUsers = 0;
+let peakAt = 0;
+try {
+  const saved = JSON.parse(readFileSync(METRICS_FILE, 'utf8'));
+  peakUsers = saved.peakUsers || 0;
+  peakAt = saved.peakAt || 0;
+} catch {
+  peakUsers = 0;
+}
+function persistPeak() {
+  try { writeFileSync(METRICS_FILE, JSON.stringify({ peakUsers, peakAt })); } catch { /* ignore */ }
+}
+function totalUsers() {
+  let n = 0;
+  rooms.forEach((room) => { n += room.users.size; });
+  return n;
+}
+function notePeak() {
+  const t = totalUsers();
+  if (t > peakUsers) {
+    peakUsers = t;
+    peakAt = Date.now();
+    persistPeak();
+  }
+}
 
 // Per-room mural persistence: the op history is written to disk (debounced) and
 // reloaded on startup, so a server restart doesn't wipe the painting and late
@@ -71,7 +114,7 @@ function persistRoom(roomId) {
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     const saved = loadRoom(roomId);
-    rooms.set(roomId, { users: new Map(), history: saved.history, lastCleared: null, sheetId: saved.sheetId });
+    rooms.set(roomId, { users: new Map(), history: saved.history, lastCleared: null, sheetId: saved.sheetId, lastActivity: Date.now() });
   }
   return rooms.get(roomId);
 }
@@ -126,6 +169,8 @@ wss.on('connection', (ws, req) => {
   const color = pick(USER_COLORS);
   const user = { id, name, color, ws, connectedAt: Date.now(), lastActivity: Date.now() };
   room.users.set(id, user);
+  room.lastActivity = Date.now();
+  notePeak();
   ws.roomId = roomId;
   ws.userId = id;
 
@@ -147,6 +192,7 @@ wss.on('connection', (ws, req) => {
       return;
     }
     user.lastActivity = Date.now();
+    room.lastActivity = Date.now();
 
     switch (data.type) {
       case 'op': {
@@ -370,8 +416,8 @@ app.get('/api/admin/check', (req, res) => {
 app.get('/api/admin/rooms', (req, res) => {
   if (!adminGuard(req, res)) return;
   const list = [];
-  rooms.forEach((room, id) => list.push({ id, users: room.users.size, strokes: room.history.length }));
-  list.sort((a, b) => b.users - a.users || b.strokes - a.strokes);
+  rooms.forEach((room, id) => list.push({ id, users: room.users.size, strokes: room.history.length, lastActivity: room.lastActivity || 0 }));
+  list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity || b.strokes - a.strokes);
   res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
 });
 
@@ -475,6 +521,36 @@ app.get('/api/admin/metrics', (req, res) => {
   });
   const mem = process.memoryUsage();
   const mb = (b) => Math.round((b / 1048576) * 10) / 10;
+
+  // CPU% since the previous poll: cpu-microseconds used / wall-microseconds
+  // elapsed. ~100 means one core fully pinned. Node is mostly single-threaded
+  // so anything sustained above ~80 means the box is the bottleneck.
+  const cpuDelta = process.cpuUsage(lastCpu);
+  const wallMs = Math.max(1, now - lastCpuAt);
+  const cpuPct = Math.round(((cpuDelta.user + cpuDelta.system) / 1000 / wallMs) * 100 * 10) / 10;
+  lastCpu = process.cpuUsage();
+  lastCpuAt = now;
+
+  // Event-loop lag since the previous poll (the clearest "server straining"
+  // signal — high lag = laggy drawing for everyone). We subtract the learned OS
+  // timer floor so this reads ~0 when healthy. Reset so each poll is fresh.
+  const rawMinMs = eld.min / 1e6;
+  if (Number.isFinite(rawMinMs) && rawMinMs >= 0.1 && rawMinMs < 5000) {
+    loopFloorMs = Math.min(loopFloorMs, rawMinMs);
+  }
+  const floor = Number.isFinite(loopFloorMs) ? loopFloorMs : ELD_RESOLUTION_MS;
+  const lag = (ns) => {
+    const v = ns / 1e6;
+    return Number.isFinite(v) && v > floor ? Math.round((v - floor) * 10) / 10 : 0;
+  };
+  const loop = {
+    meanMs: lag(eld.mean),
+    p99Ms: lag(eld.percentile(99)),
+    maxMs: lag(eld.max),
+    baselineMs: Math.round(floor * 10) / 10,
+  };
+  eld.reset();
+
   res.json({
     uptimeSec: Math.round((now - serverStart) / 1000),
     node: process.version,
@@ -487,6 +563,10 @@ app.get('/api/admin/metrics', (req, res) => {
     },
     connections: wss.clients.size,
     users: { total: totalUsers, active, inactive: totalUsers - active },
+    peakUsers,
+    peakAt,
+    cpuPct,
+    loopLag: loop,
     rooms: rooms.size,
     strokes: totalStrokes,
     reports: { open: reports.filter((r) => r.status === 'open').length, total: reports.length },
