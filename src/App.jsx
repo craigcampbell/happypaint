@@ -81,6 +81,7 @@ import TogetherPanel from "./components/TogetherPanel";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
+import ColoringSheetModal from "./components/ColoringSheetModal";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
 
@@ -418,6 +419,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [mutedSelf, setMutedSelf] = useState(false);
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
+  const [showSheetModal, setShowSheetModal] = useState(false);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
   const savedBrushAssets = useMemo(
@@ -3115,22 +3117,29 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         renderDisplay();
         return;
       }
+      const applySrc = (src) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous"; // keep the export canvas untainted
+        img.onload = () => {
+          const scale = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
+          const w = img.width * scale;
+          const h = img.height * scale;
+          sheetRectRef.current = { x: (CANVAS_WIDTH - w) / 2, y: (CANVAS_HEIGHT - h) / 2, w, h };
+          sheetImageRef.current = img;
+          renderDisplay();
+        };
+        img.src = src;
+      };
+      // Library sheets (id is "lib:<filename>") are served as a static PNG.
+      if (id.startsWith("lib:")) {
+        applySrc(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
+        return;
+      }
+      // Custom admin uploads come back as a data URL from the API.
       fetch(`/api/sheets/${id}`, { cache: "no-store" })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
-          if (!data?.image) {
-            return;
-          }
-          const img = new Image();
-          img.onload = () => {
-            const scale = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
-            const w = img.width * scale;
-            const h = img.height * scale;
-            sheetRectRef.current = { x: (CANVAS_WIDTH - w) / 2, y: (CANVAS_HEIGHT - h) / 2, w, h };
-            sheetImageRef.current = img;
-            renderDisplay();
-          };
-          img.src = data.image;
+          if (data?.image) applySrc(data.image);
         })
         .catch(() => {});
     },
@@ -3315,6 +3324,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const applySheet = useCallback((id) => {
     mpRef.current?.sendSheet?.(id || null);
   }, []);
+
+  // Apply a library sheet from the modal. Picking a sheet starts a fresh page,
+  // so if there's existing art (or a sheet) we confirm, then wipe + set.
+  const applyLibrarySheet = useCallback(
+    (sheet) => {
+      if (!sheet?.id) return;
+      const hasContent = Boolean(sheetId) || historyCount > 0;
+      if (hasContent && !window.confirm("Start a fresh page with this coloring sheet? It clears the canvas for everyone in the room.")) {
+        return;
+      }
+      if (hasContent) mpRef.current?.sendClear?.();
+      mpRef.current?.sendSheet?.(`lib:${sheet.id}`);
+      setShowSheetModal(false);
+      showToast(`Coloring sheet: ${sheet.title}`);
+    },
+    [sheetId, historyCount, showToast],
+  );
 
   // Load any saved profile (name/colour) once.
   useEffect(() => {
@@ -4469,24 +4495,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </button>
             ) : null}
           </div>
-          {sheets.length === 0 ? (
-            <p className="economy-note">No coloring sheets yet — a grown-up can add them in the admin.</p>
-          ) : (
-            <div className="sheet-grid">
-              {sheets.map((sheet) => (
-                <button
-                  type="button"
-                  key={sheet.id}
-                  className={sheetId === sheet.id ? "sheet-chip is-active" : "sheet-chip"}
-                  onClick={() => applySheet(sheet.id)}
-                  title={sheet.name}
-                >
-                  {sheet.thumb ? <img src={sheet.thumb} alt={sheet.name} /> : <span className="sheet-noimg">🎨</span>}
-                  <span className="sheet-name">{sheet.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
+          <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
+            🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
+          </button>
           {sheetId ? (
             <label className="color-picker sheet-toggle">
               <span>Lines on top (colour under)</span>
@@ -4787,6 +4798,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </div>
           </section>
         </div>
+      ) : null}
+
+      {showSheetModal ? (
+        <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
       ) : null}
 
       {showWallet && economy ? (

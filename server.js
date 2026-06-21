@@ -349,7 +349,7 @@ wss.on('connection', async (ws, req) => {
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
         // Set (or clear) the room's coloring sheet for everyone.
-        room.sheetId = data.sheetId ? String(data.sheetId).slice(0, 64) : null;
+        room.sheetId = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
         persistRoom(roomId);
         break;
@@ -788,6 +788,100 @@ app.get('/api/admin/metrics', (req, res) => {
   });
 });
 
+// ---- Coloring sheet library (6k+ static sheets) ---------------------------
+// Full PNGs + generated webp thumbnails are served statically from a directory
+// (a Docker volume in production); a filename-derived search index lets kids
+// find a sheet with no AI classifier. Build it with scripts/prep-sheets.mjs.
+const COLORING_DIR = process.env.COLORING_DIR || join(__dirname, 'coloring-library');
+app.use('/coloring-sheets/full', express.static(join(COLORING_DIR, 'full'), { maxAge: '7d', immutable: true }));
+app.use('/coloring-sheets/thumbs', express.static(join(COLORING_DIR, 'thumbs'), { maxAge: '7d', immutable: true }));
+
+let coloringIndexRaw = null;
+let coloringSheets = [];
+function loadColoringIndex() {
+  if (coloringIndexRaw !== null) return;
+  try {
+    coloringIndexRaw = readFileSync(join(COLORING_DIR, 'index.json'), 'utf8');
+    coloringSheets = JSON.parse(coloringIndexRaw).sheets || [];
+  } catch {
+    coloringIndexRaw = JSON.stringify({ count: 0, sheets: [] });
+    coloringSheets = [];
+  }
+}
+
+// The full search index (id + title + searchable text); the client fetches it
+// once and searches in-browser. Hundreds of KB, gzipped + cached.
+app.get('/api/coloring-sheets', (_req, res) => {
+  loadColoringIndex();
+  res.set('Cache-Control', 'public, max-age=300');
+  res.type('application/json').send(coloringIndexRaw);
+});
+
+// "Today's theme": admin pick -> calendar/holiday match -> deterministic daily
+// rotation. Returns one sheet { id, title } (or null when the library is empty).
+const SHEET_THEME_FILE = join(DATA_DIR, '.sheet-theme.json');
+const HOLIDAYS = [
+  { mmdd: '07-04', win: 4, terms: ['july', 'fireworks', 'patriotic'] },
+  { mmdd: '12-25', win: 10, terms: ['christmas', 'santa', 'snowman', 'winter'] },
+  { mmdd: '10-31', win: 7, terms: ['halloween', 'pumpkin', 'ghost'] },
+  { mmdd: '02-14', win: 3, terms: ['valentine', 'heart', 'love'] },
+  { mmdd: '03-17', win: 2, terms: ['leprechaun', 'patrick', 'shamrock'] },
+  { mmdd: '11-25', win: 4, terms: ['thanksgiving', 'turkey'] },
+  { mmdd: '04-12', win: 16, terms: ['easter', 'bunny', 'egg'] },
+  { mmdd: '01-01', win: 2, terms: ['year', 'fireworks'] },
+];
+const daysSinceEpoch = (d) => Math.floor(d.getTime() / 86400000);
+
+app.get('/api/coloring-sheets/today', (_req, res) => {
+  loadColoringIndex();
+  res.set('Cache-Control', 'public, max-age=600');
+  if (!coloringSheets.length) return res.json({ sheet: null });
+  const now = new Date();
+  const seed = daysSinceEpoch(now);
+
+  // 1) Admin override for today.
+  try {
+    const theme = JSON.parse(readFileSync(SHEET_THEME_FILE, 'utf8'));
+    const todayStr = now.toISOString().slice(0, 10);
+    if (theme && theme.sheetId && (!theme.date || theme.date === todayStr)) {
+      const match = coloringSheets.find((s) => s.id === theme.sheetId);
+      if (match) return res.json({ sheet: { id: match.id, title: match.title }, source: 'admin' });
+    }
+  } catch { /* no override set */ }
+
+  // 2) Holiday match within a window around the date.
+  for (const h of HOLIDAYS) {
+    const [hm, hd] = h.mmdd.split('-').map(Number);
+    const target = new Date(now.getFullYear(), hm - 1, hd);
+    if (Math.abs(daysSinceEpoch(now) - daysSinceEpoch(target)) <= h.win) {
+      const matches = coloringSheets.filter((s) => h.terms.some((t) => s.q.includes(t)));
+      if (matches.length) {
+        const pick = matches[seed % matches.length];
+        return res.json({ sheet: { id: pick.id, title: pick.title }, source: 'holiday' });
+      }
+    }
+  }
+
+  // 3) Deterministic daily rotation (same sheet for everyone that day).
+  const pick = coloringSheets[seed % coloringSheets.length];
+  return res.json({ sheet: { id: pick.id, title: pick.title }, source: 'daily' });
+});
+
+// Admin: set or clear today's themed sheet.
+app.post('/api/admin/sheet-theme', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const { sheetId } = req.body || {};
+  try {
+    const payload = sheetId
+      ? { sheetId: String(sheetId).slice(0, 200), date: new Date().toISOString().slice(0, 10) }
+      : {};
+    writeFileSync(SHEET_THEME_FILE, JSON.stringify(payload));
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'failed' });
+  }
+});
+
 // ---- Static host ----------------------------------------------------------
 app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
@@ -800,6 +894,12 @@ if (existsSync(distPath)) {
   app.use((req, res) => {
     if (req.method !== 'GET') {
       res.status(404).end();
+      return;
+    }
+    // Don't serve the SPA shell for missing API / asset requests — 404 instead,
+    // so a broken image is a 404, not an HTML page with a 200.
+    if (req.path.startsWith('/api/') || req.path.startsWith('/coloring-sheets/')) {
+      res.status(404).json({ error: 'not found' });
       return;
     }
     res.sendFile(join(distPath, 'index.html'));
