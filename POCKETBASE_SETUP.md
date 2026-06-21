@@ -1,12 +1,17 @@
 # Self-hosting drawesome.art with PocketBase (accounts) in Docker
 
-Everything runs in two containers on your machine, behind your existing
-Cloudflare tunnel. No monthly bill, all data on your disk.
+Everything runs in three containers on your machine — the app, PocketBase, and
+the Cloudflare tunnel itself. One `docker compose` command brings the whole thing
+up and Docker restarts it on reboot. No monthly bill, all data on your disk.
 
 ```
-  drawesome.art      ──tunnel──▶  localhost:8787   app   (Node: SPA + live drawing)
-  pb.drawesome.art   ──tunnel──▶  localhost:8090   pocketbase  (Google accounts + SQLite + files)
+  drawesome.art     ─┐                   ┌─▶ app:8787         (Node: SPA + live drawing)
+                     ├─ cloudflared ─────┤
+  pb.drawesome.art  ─┘   (in the stack)  └─▶ pocketbase:8090  (Google accounts + SQLite + files)
 ```
+
+Because the tunnel runs *inside* the Docker network, its public hostnames point
+at the **service names** (`app:8787`, `pocketbase:8090`) — not `localhost`.
 
 > Versions matter: this targets **PocketBase v0.39.x**. PocketBase moves fast and
 > v0.23 was a breaking rewrite — ignore any older tutorial (admins → superusers,
@@ -18,14 +23,14 @@ secret needs to leave your machine.
 
 ---
 
-## 1. Bring up the stack
+## 1. Bring up app + PocketBase (for setup)
 From the repo root:
 ```bash
 docker compose up -d --build
 ```
-This builds the app + PocketBase, creates the `pb_data/` and `app_data/` folders
-(your persistent data), and starts both. Ports bind to `127.0.0.1` only — the
-tunnel is the only way in.
+This builds + starts the app and PocketBase and creates `pb_data/` + `app_data/`
+(your persistent data). The tunnel is added in step 3 and started in step 8.
+During setup you can reach PocketBase's admin at `http://localhost:8090/_/`.
 
 ## 2. Create the PocketBase admin (superuser) **[you]**
 Since v0.23 the first admin can't be made by visiting the dashboard — create it
@@ -35,13 +40,33 @@ docker compose exec pocketbase /pb/pocketbase superuser upsert you@example.com a
 ```
 You can now log into the dashboard (after step 3) at `https://pb.drawesome.art/_/`.
 
-## 3. Add the PocketBase hostname to your Cloudflare tunnel **[you]**
-In the Cloudflare Zero Trust dashboard (or your tunnel config), add a **public
-hostname**:
-- **Subdomain/host:** `pb.drawesome.art`
-- **Service:** `http://localhost:8090`
+## 3. Move the tunnel into the stack **[you]**
+The tunnel now runs as the `cloudflared` container, so three things change:
 
-(Your existing `drawesome.art → http://localhost:8787` route stays as-is.)
+1. **Point the hostnames at the service names.** In Cloudflare Zero Trust →
+   Networks → Tunnels → your tunnel → **Public Hostnames**:
+   - `drawesome.art` → Service `http://app:8787` *(change from `localhost:8787`)*
+   - `pb.drawesome.art` → Service `http://pocketbase:8090` *(add this one)*
+
+   These are the Docker **service names** — cloudflared reaches them because it's
+   on the same network.
+
+2. **Give the container your tunnel token.** On the host:
+   ```bash
+   cloudflared tunnel token drawesome.art
+   ```
+   (or copy it from the dashboard's `cloudflared service install <TOKEN>` line).
+   Put it in your repo-root `.env`:
+   ```
+   TUNNEL_TOKEN=eyJ...your token...
+   ```
+
+3. **Stop the host cloudflared** so the connector lives only in Docker — otherwise
+   the old host connector keeps trying the now-`app:8787` route it can't reach:
+   ```bash
+   # Windows: stop the "cloudflared" service (services.msc) or Ctrl-C its terminal
+   # Linux:   sudo systemctl stop cloudflared
+   ```
 
 ## 4. Create the Google OAuth client **[you]**
 In **Google Cloud Console → APIs & Services → Credentials → Create credentials →
@@ -82,18 +107,26 @@ In the dashboard → **New collection** → name `snapshots` (Base type), fields
 
 (Cascade-delete on `owner` means "delete my account" also removes their saved art.)
 
-## 7. Point the app at PocketBase and rebuild **[you]**
-Create a repo-root `.env`:
+## 7. Point the app at PocketBase **[you]**
+In the same repo-root `.env` (it now also has `TUNNEL_TOKEN` from step 3), add:
 ```
 VITE_PB_URL=https://pb.drawesome.art
 ```
-Then rebuild just the app so the value bakes into the SPA:
+This is baked into the SPA at build time.
+
+## 8. Start the full stack — with the tunnel
 ```bash
-docker compose up -d --build app
+docker compose --profile tunnel up -d --build
 ```
-That's it — open `https://drawesome.art`, the avatar/Account panel now has a
-working **Continue with Google**, and a signed-in grown-up owns + hosts their
-room and gets a cross-device gallery.
+This brings up **app + PocketBase + cloudflared** together (the `--profile tunnel`
+is what includes the tunnel container). Now `https://drawesome.art` and
+`https://pb.drawesome.art` are live through the containerized tunnel, sign-in
+works, and the whole stack comes back automatically after a reboot.
+
+> Open `https://drawesome.art` → the Account panel's **Continue with Google** now
+> works, and a signed-in grown-up owns + hosts their room with a cross-device
+> gallery. (Plain `docker compose up -d` — no `--profile tunnel` — runs app +
+> PocketBase only, handy for local testing without exposing anything.)
 
 ---
 

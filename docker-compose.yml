@@ -41,3 +41,22 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./app_data:/data
+
+  # The Cloudflare tunnel, in the stack. Only starts with `--profile tunnel`, so
+  # a plain `docker compose up` (local testing) doesn't need a token. Because it
+  # runs ON this network, the tunnel's public hostnames point at the SERVICE
+  # names, not localhost:
+  #   drawesome.art     -> http://app:8787
+  #   pb.drawesome.art  -> http://pocketbase:8090
+  # Set TUNNEL_TOKEN in .env (see POCKETBASE_SETUP.md). Stop any host cloudflared
+  # first so the connector lives only here.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+      - pocketbase
