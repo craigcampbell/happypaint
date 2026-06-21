@@ -40,3 +40,6 @@ server.err.log
 pb_data/
 app_data/
 backups/
+
+# Temp commit-message scratch file
+.commitmsg.txt
