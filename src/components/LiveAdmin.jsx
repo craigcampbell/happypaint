@@ -2,6 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 
 const KEY_STORAGE = "drawesome:adminkey:v1";
 
+function formatUptime(s) {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
 function timeAgo(ts) {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
@@ -25,6 +35,7 @@ export default function LiveAdmin({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [reports, setReports] = useState([]);
   const [sheets, setSheets] = useState([]);
+  const [metrics, setMetrics] = useState(null);
   const [uploading, setUploading] = useState(false);
 
   // A unique query string per request defeats any stale service-worker / proxy
@@ -58,6 +69,10 @@ export default function LiveAdmin({ onNavigate }) {
       setAuthed(true);
       const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
+      const m = await fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (m) setMetrics(m);
     } catch {
       // leave as-is on a transient error
     }
@@ -201,6 +216,51 @@ export default function LiveAdmin({ onNavigate }) {
           </button>
         </div>
       </header>
+
+      {metrics ? (
+        <section className="admin-section">
+          <h2>Live metrics</h2>
+          <div className="metric-grid">
+            <div className="metric">
+              <span className="metric-num">{metrics.users.total}</span>
+              <span className="metric-label">Connected</span>
+              <span className="metric-sub">
+                {metrics.users.active} active · {metrics.users.inactive} idle
+              </span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{metrics.rooms}</span>
+              <span className="metric-label">Rooms</span>
+              <span className="metric-sub">{metrics.strokes.toLocaleString()} strokes</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">
+                {metrics.memory.rssMB}
+                <small> MB</small>
+              </span>
+              <span className="metric-label">RAM (RSS)</span>
+              <span className="metric-sub">
+                heap {metrics.memory.heapUsedMB}/{metrics.memory.heapTotalMB} MB
+              </span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{formatUptime(metrics.uptimeSec)}</span>
+              <span className="metric-label">Uptime</span>
+              <span className="metric-sub">{metrics.connections} sockets</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{metrics.reports.open}</span>
+              <span className="metric-label">Open reports</span>
+              <span className="metric-sub">{metrics.reports.total} total</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{metrics.sheets}</span>
+              <span className="metric-label">Sheets</span>
+              <span className="metric-sub">Node {metrics.node}</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="admin-section">
         <h2>Reports {openReports.length ? <span className="admin-badge">{openReports.length} open</span> : null}</h2>

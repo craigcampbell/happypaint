@@ -124,7 +124,7 @@ wss.on('connection', (ws, req) => {
   const id = nextUserId();
   const name = pick(ANIMAL_NAMES);
   const color = pick(USER_COLORS);
-  const user = { id, name, color, ws };
+  const user = { id, name, color, ws, connectedAt: Date.now(), lastActivity: Date.now() };
   room.users.set(id, user);
   ws.roomId = roomId;
   ws.userId = id;
@@ -146,6 +146,7 @@ wss.on('connection', (ws, req) => {
     } catch {
       return;
     }
+    user.lastActivity = Date.now();
 
     switch (data.type) {
       case 'op': {
@@ -454,6 +455,43 @@ app.delete('/api/admin/sheets/:id', (req, res) => {
   sheets = sheets.filter((s) => s.id !== req.params.id);
   persistSheets();
   res.json({ ok: true });
+});
+
+// ---- Live metrics (admin) -------------------------------------------------
+const serverStart = Date.now();
+app.get('/api/admin/metrics', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const now = Date.now();
+  const ACTIVE_MS = 60000; // drew/moved/chatted within the last minute = "active"
+  let totalUsers = 0;
+  let active = 0;
+  let totalStrokes = 0;
+  rooms.forEach((room) => {
+    totalStrokes += room.history.length;
+    room.users.forEach((u) => {
+      totalUsers += 1;
+      if (now - (u.lastActivity || 0) < ACTIVE_MS) active += 1;
+    });
+  });
+  const mem = process.memoryUsage();
+  const mb = (b) => Math.round((b / 1048576) * 10) / 10;
+  res.json({
+    uptimeSec: Math.round((now - serverStart) / 1000),
+    node: process.version,
+    pid: process.pid,
+    memory: {
+      rssMB: mb(mem.rss),
+      heapUsedMB: mb(mem.heapUsed),
+      heapTotalMB: mb(mem.heapTotal),
+      externalMB: mb(mem.external),
+    },
+    connections: wss.clients.size,
+    users: { total: totalUsers, active, inactive: totalUsers - active },
+    rooms: rooms.size,
+    strokes: totalStrokes,
+    reports: { open: reports.filter((r) => r.status === 'open').length, total: reports.length },
+    sheets: sheets.length,
+  });
 });
 
 // ---- Static host ----------------------------------------------------------

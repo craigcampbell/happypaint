@@ -3720,3 +3720,39 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Admin metrics cards ------------------------------------------------- */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
+}
+.metric {
+  display: grid;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+}
+.metric-num {
+  font-size: 1.65rem;
+  font-weight: 900;
+  color: #0f172a;
+  line-height: 1.1;
+}
+.metric-num small {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #64748b;
+}
+.metric-label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #334155;
+}
+.metric-sub {
+  font-size: 0.74rem;
+  color: #64748b;
+}
