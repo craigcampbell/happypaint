@@ -18,13 +18,42 @@ import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
+import { verifyAccessToken } from './server/pocketbaseAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Minimal .env loader (no dependency) so the same repo-root .env that Vite reads
+// at build time also configures the server at runtime — e.g. SUPABASE_URL /
+// SUPABASE_ANON_KEY for sign-in identity. Only fills vars not already set in the
+// real process environment, so launch-env always wins.
+(function loadDotEnv() {
+  try {
+    const txt = readFileSync(join(__dirname, '.env'), 'utf8');
+    for (const line of txt.split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
+      if (!m || line.trim().startsWith('#')) continue;
+      let val = m[2];
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (process.env[m[1]] === undefined) process.env[m[1]] = val;
+    }
+  } catch {
+    // No .env file — perfectly fine; the app runs fully local/anonymous.
+  }
+})();
+
 const PORT = Number(process.env.PORT || 8787);
 const MAX_HISTORY = Number(process.env.MAX_HISTORY || 6000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
+const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
+
+// All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
+// lives under one directory so a single Docker volume persists everything. Defaults
+// to the app dir, so non-Docker runs behave exactly as before.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
 const server = createServer(app);
@@ -49,7 +78,7 @@ let loopFloorMs = Infinity;
 let lastCpu = process.cpuUsage();
 let lastCpuAt = Date.now();
 
-const METRICS_FILE = join(__dirname, '.metrics.json');
+const METRICS_FILE = join(DATA_DIR, '.metrics.json');
 let peakUsers = 0;
 let peakAt = 0;
 try {
@@ -79,7 +108,7 @@ function notePeak() {
 // Per-room mural persistence: the op history is written to disk (debounced) and
 // reloaded on startup, so a server restart doesn't wipe the painting and late
 // joiners always replay the full mural.
-const ROOM_DIR = process.env.ROOM_DIR || join(__dirname, '.rooms');
+const ROOM_DIR = process.env.ROOM_DIR || join(DATA_DIR, '.rooms');
 const persistTimers = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
@@ -87,9 +116,20 @@ function roomFile(roomId) {
 function loadRoom(roomId) {
   try {
     const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
-    return { history: Array.isArray(data.history) ? data.history : [], sheetId: data.sheetId || null };
+    return {
+      history: Array.isArray(data.history) ? data.history : [],
+      sheetId: data.sheetId || null,
+      // Only the opaque profile id is persisted — never a human-readable name —
+      // so a deleted account leaves no identifying data on disk. Display names
+      // come live from the connected roster.
+      ownerProfileId: data.ownerProfileId || null,
+      coHosts: Array.isArray(data.coHosts) ? data.coHosts : [],
+      mutedProfileIds: Array.isArray(data.mutedProfileIds) ? data.mutedProfileIds : [],
+      locked: !!data.locked,
+      title: typeof data.title === 'string' ? data.title : null,
+    };
   } catch {
-    return { history: [], sheetId: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null };
   }
 }
 function persistRoom(roomId) {
@@ -104,7 +144,17 @@ function persistRoom(roomId) {
     }
     try {
       mkdirSync(ROOM_DIR, { recursive: true });
-      writeFileSync(roomFile(roomId), JSON.stringify({ history: room.history, sheetId: room.sheetId || null, savedAt: Date.now() }));
+      // Note: room.lastCleared is intentionally in-memory only — never persisted.
+      writeFileSync(roomFile(roomId), JSON.stringify({
+        history: room.history,
+        sheetId: room.sheetId || null,
+        ownerProfileId: room.ownerProfileId || null,
+        coHosts: Array.isArray(room.coHosts) ? room.coHosts : [],
+        mutedProfileIds: Array.from(room.mutedProfileIds || []),
+        locked: !!room.locked,
+        title: room.title || null,
+        savedAt: Date.now(),
+      }));
     } catch {
       // Non-fatal — persistence is best-effort.
     }
@@ -114,7 +164,19 @@ function persistRoom(roomId) {
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     const saved = loadRoom(roomId);
-    rooms.set(roomId, { users: new Map(), history: saved.history, lastCleared: null, sheetId: saved.sheetId, lastActivity: Date.now() });
+    rooms.set(roomId, {
+      users: new Map(),
+      history: saved.history,
+      lastCleared: null,
+      sheetId: saved.sheetId,
+      ownerProfileId: saved.ownerProfileId,
+      coHosts: saved.coHosts,
+      mutedProfileIds: new Set(saved.mutedProfileIds),
+      kickedProfiles: new Map(), // profileId -> expiry ts; in-memory short ban
+      locked: saved.locked,
+      title: saved.title,
+      lastActivity: Date.now(),
+    });
   }
   return rooms.get(roomId);
 }
@@ -138,8 +200,23 @@ function pick(list) {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+// A user hosts a room if they're the owner (the first signed-in grown-up to
+// claim it) or a promoted co-host. Anonymous users (no profileId) never host.
+function isHost(room, user) {
+  if (!user || !user.profileId) return false;
+  return user.profileId === room.ownerProfileId || (room.coHosts || []).includes(user.profileId);
+}
+
 function userListOf(room) {
-  return Array.from(room.users.values()).map((u) => ({ id: u.id, name: u.name, color: u.color }));
+  return Array.from(room.users.values()).map((u) => ({
+    id: u.id,
+    name: u.name,
+    color: u.color,
+    signedIn: Boolean(u.profileId),
+    isOwner: Boolean(u.profileId && u.profileId === room.ownerProfileId),
+    isHost: isHost(room, u),
+    muted: !!u.muted,
+  }));
 }
 
 function broadcast(roomId, message, exceptId = null) {
@@ -153,7 +230,7 @@ function broadcast(roomId, message, exceptId = null) {
   });
 }
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
   const room = getRoom(roomId);
@@ -164,17 +241,68 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
+  // Optional identity. A signed-in user passes their Supabase access token; we
+  // validate it with the public anon key (no secrets) and learn their profile.
+  // Anonymous users pass nothing and stay anonymous — sign-in only unlocks
+  // ownership/host powers, never the ability to draw.
+  const token = url.searchParams.get('token');
+  const identity = token ? await verifyAccessToken(token) : null;
+  if (ws.readyState !== 1) return; // user disconnected during validation
+
+  // Honor a recent host kick (signed-in users only; short in-memory ban). A
+  // kicked anonymous user can't be reliably blocked behind the tunnel, but the
+  // client tears its own socket down so it won't silently auto-rejoin.
+  if (identity && room.kickedProfiles.size) {
+    const expiry = room.kickedProfiles.get(identity.profileId);
+    if (expiry && expiry > Date.now()) {
+      ws.send(JSON.stringify({ type: 'kicked', by: 'a host' }));
+      ws.close(1008, 'kicked');
+      return;
+    }
+    if (expiry) room.kickedProfiles.delete(identity.profileId);
+  }
+
   const id = nextUserId();
-  const name = pick(ANIMAL_NAMES);
+  const name = (identity && identity.displayName) || pick(ANIMAL_NAMES);
   const color = pick(USER_COLORS);
-  const user = { id, name, color, ws, connectedAt: Date.now(), lastActivity: Date.now() };
+  const user = {
+    id,
+    name,
+    color,
+    ws,
+    profileId: identity ? identity.profileId : null,
+    verified: Boolean(identity),
+    // Mute follows the signed-in identity across reconnects (anonymous = per-session).
+    muted: identity ? room.mutedProfileIds.has(identity.profileId) : false,
+    connectedAt: Date.now(),
+    lastActivity: Date.now(),
+  };
   room.users.set(id, user);
   room.lastActivity = Date.now();
   notePeak();
   ws.roomId = roomId;
   ws.userId = id;
 
-  ws.send(JSON.stringify({ type: 'connected', userId: id, userName: name, userColor: color, roomId }));
+  // First signed-in grown-up to enter an unowned room claims & hosts it.
+  // Guard on still-unowned so two simultaneous joiners can't both claim.
+  if (user.profileId && !room.ownerProfileId) {
+    room.ownerProfileId = user.profileId;
+    persistRoom(roomId);
+  }
+
+  ws.send(JSON.stringify({
+    type: 'connected',
+    userId: id,
+    userName: name,
+    userColor: color,
+    roomId,
+    profileId: user.profileId,
+    isOwner: Boolean(user.profileId && user.profileId === room.ownerProfileId),
+    isHost: isHost(room, user),
+    locked: !!room.locked,
+    muted: !!user.muted,
+    roomTitle: room.title || null,
+  }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   if (room.history.length > 0) {
     ws.send(JSON.stringify({ type: 'history', ops: room.history }));
@@ -197,6 +325,9 @@ wss.on('connection', (ws, req) => {
     switch (data.type) {
       case 'op': {
         if (!data.op) break;
+        // When a host locks the room, only hosts may keep drawing. This is the
+        // real boundary — clients also disable the canvas, but this enforces it.
+        if (room.locked && !isHost(room, user)) break;
         // Tag with the author so replay/cursors can attribute it.
         const op = { ...data.op, userId: id };
         room.history.push(op);
@@ -214,6 +345,9 @@ wss.on('connection', (ws, req) => {
         }, id);
         break;
       case 'set_sheet':
+        // Setting the shared coloring sheet is a host decision once the room is
+        // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
+        if (room.ownerProfileId && !isHost(room, user)) break;
         // Set (or clear) the room's coloring sheet for everyone.
         room.sheetId = data.sheetId ? String(data.sheetId).slice(0, 64) : null;
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
@@ -230,6 +364,9 @@ wss.on('connection', (ws, req) => {
         break;
       }
       case 'clear':
+        // In an owned room only a host may wipe the shared mural; unowned public
+        // rooms keep the original free-for-all behavior.
+        if (room.ownerProfileId && !isHost(room, user)) break;
         // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
         room.lastCleared = room.history;
         room.history = [];
@@ -237,6 +374,7 @@ wss.on('connection', (ws, req) => {
         persistRoom(roomId);
         break;
       case 'undo_clear':
+        if (room.ownerProfileId && !isHost(room, user)) break;
         // Restore the most recently cleared mural for the whole room.
         if (room.lastCleared && room.lastCleared.length) {
           room.history = room.lastCleared;
@@ -246,6 +384,7 @@ wss.on('connection', (ws, req) => {
         }
         break;
       case 'chat':
+        if (user.muted) break; // a host muted this user
         if (typeof data.message === 'string' && data.message.trim()) {
           broadcast(roomId, {
             type: 'chat', user: { id, name: user.name, color: user.color },
@@ -253,6 +392,76 @@ wss.on('connection', (ws, req) => {
           });
         }
         break;
+
+      // ---- Host-only room controls (require a verified host) ----------------
+      case 'lock':
+      case 'unlock': {
+        if (!isHost(room, user)) break;
+        room.locked = data.type === 'lock';
+        broadcast(roomId, { type: 'room_state', locked: room.locked, by: user.name });
+        persistRoom(roomId);
+        break;
+      }
+      case 'rename_room': {
+        if (!isHost(room, user)) break;
+        const title = typeof data.name === 'string' ? data.name.trim().slice(0, 40) : '';
+        room.title = title || null;
+        broadcast(roomId, { type: 'room_renamed', title: room.title });
+        persistRoom(roomId);
+        break;
+      }
+      case 'mute': {
+        if (!isHost(room, user)) break;
+        const target = room.users.get(data.targetId);
+        if (target && !isHost(room, target)) {
+          target.muted = data.muted !== false;
+          // Bind the mute to the signed-in identity so it survives a reconnect.
+          if (target.profileId) {
+            if (target.muted) room.mutedProfileIds.add(target.profileId);
+            else room.mutedProfileIds.delete(target.profileId);
+            persistRoom(roomId);
+          }
+          if (target.ws.readyState === 1) {
+            target.ws.send(JSON.stringify({ type: 'muted', muted: target.muted }));
+          }
+          broadcast(roomId, { type: 'userList', users: userListOf(room) });
+        }
+        break;
+      }
+      case 'kick': {
+        if (!isHost(room, user)) break;
+        const target = room.users.get(data.targetId);
+        if (target && target.id !== id && !isHost(room, target)) {
+          // Short ban so a signed-in kicked user can't immediately reconnect.
+          if (target.profileId) {
+            room.kickedProfiles.set(target.profileId, Date.now() + KICK_BAN_MS);
+          }
+          if (target.ws.readyState === 1) {
+            target.ws.send(JSON.stringify({ type: 'kicked', by: user.name }));
+            target.ws.close(1008, 'kicked');
+          }
+          // close handler removes them + broadcasts userLeft
+        }
+        break;
+      }
+      case 'promote':
+      case 'demote': {
+        // Only the room owner can hand out / take back co-host.
+        if (!user.profileId || user.profileId !== room.ownerProfileId) break;
+        const target = room.users.get(data.targetId);
+        if (!target || !target.profileId || target.profileId === room.ownerProfileId) break;
+        const set = new Set(room.coHosts || []);
+        if (data.type === 'promote') set.add(target.profileId);
+        else set.delete(target.profileId);
+        room.coHosts = Array.from(set);
+        if (target.ws.readyState === 1) {
+          target.ws.send(JSON.stringify({ type: 'role_changed', isHost: isHost(room, target) }));
+        }
+        broadcast(roomId, { type: 'userList', users: userListOf(room) });
+        persistRoom(roomId);
+        break;
+      }
+
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong' }));
         break;
@@ -265,9 +474,14 @@ wss.on('connection', (ws, req) => {
     room.users.delete(id);
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
-    // Drop empty rooms but keep their history briefly? For tonight, keep history
-    // so a room that empties and refills still shows the mural. Memory is fine
-    // for a handful of small rooms.
+    // Never leave a room locked with no host present — otherwise an owner who
+    // leaves (or deletes their account) could brick the canvas for everyone.
+    if (room.locked && !Array.from(room.users.values()).some((u) => isHost(room, u))) {
+      room.locked = false;
+      broadcast(roomId, { type: 'room_state', locked: false, by: 'auto' });
+      persistRoom(roomId);
+    }
+    // Keep history so a room that empties and refills still shows the mural.
   });
 
   ws.on('error', () => { /* close handler does cleanup */ });
@@ -277,7 +491,7 @@ wss.on('connection', (ws, req) => {
 // Each device gets an anonymous user key (stored client-side). Artworks are
 // persisted on disk keyed by that key, capped per user. This is the storage the
 // future sign-in will adopt — swap the key for an authenticated user id.
-const ARTWORK_DIR = process.env.ARTWORK_DIR || join(__dirname, '.artworks');
+const ARTWORK_DIR = process.env.ARTWORK_DIR || join(DATA_DIR, '.artworks');
 const MAX_SAVES = Number(process.env.MAX_SAVES || 12);
 
 function sanitizeKey(key) {
@@ -354,7 +568,7 @@ app.delete('/api/artworks/:id', (req, res) => {
 // ---- Admin + moderation ---------------------------------------------------
 // Admin key: from env, else a persisted random key (printed on boot). The parent
 // enters it once at /admin; it never ships in the client bundle.
-const ADMIN_KEY_FILE = join(__dirname, '.admin-key');
+const ADMIN_KEY_FILE = join(DATA_DIR, '.admin-key');
 let ADMIN_KEY = process.env.ADMIN_KEY || '';
 if (!ADMIN_KEY) {
   try { ADMIN_KEY = readFileSync(ADMIN_KEY_FILE, 'utf8').trim(); } catch { ADMIN_KEY = ''; }
@@ -364,7 +578,7 @@ if (!ADMIN_KEY) {
   try { writeFileSync(ADMIN_KEY_FILE, ADMIN_KEY); } catch { /* ignore */ }
 }
 
-const REPORTS_FILE = join(__dirname, '.reports.json');
+const REPORTS_FILE = join(DATA_DIR, '.reports.json');
 let reports = [];
 try {
   const parsed = JSON.parse(readFileSync(REPORTS_FILE, 'utf8'));
@@ -451,7 +665,7 @@ app.post('/api/admin/reports/:id/resolve', (req, res) => {
 
 // ---- Coloring sheets ------------------------------------------------------
 // Admin uploads line-art images; anyone can list them and apply one to a room.
-const SHEETS_FILE = join(__dirname, '.sheets.json');
+const SHEETS_FILE = join(DATA_DIR, '.sheets.json');
 let sheets = [];
 try {
   const parsed = JSON.parse(readFileSync(SHEETS_FILE, 'utf8'));

@@ -3765,3 +3765,111 @@ button:disabled {
 .metric-num.is-bad {
   color: #dc2626;
 }
+
+/* ---- Host controls (per-room owner/co-host) ---- */
+.mp-host-btn {
+  border: 1px solid #f59e0b;
+  background: linear-gradient(#fff7ed, #fef3c7);
+  color: #92400e;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mp-host-btn:hover {
+  background: #fde68a;
+}
+.mp-lock-chip {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.host-modal .host-section {
+  margin-top: 14px;
+}
+.host-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.host-danger {
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.host-danger:hover {
+  background: #fee2e2;
+}
+.host-painter-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.host-painter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+.host-painter-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.host-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.host-tag {
+  font-size: 0.7rem;
+  font-weight: 800;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.host-tag.muted {
+  color: #475569;
+  background: #e2e8f0;
+}
+.host-painter-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.host-painter-actions button {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.host-painter-actions button.host-danger {
+  border-color: #fca5a5;
+}

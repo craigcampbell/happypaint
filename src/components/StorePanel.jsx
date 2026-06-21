@@ -38,7 +38,10 @@ function StoreItemCard({ item, owned, balance, onBuy }) {
       <div>
         <h3>{item.title}</h3>
         <p>
-          {item.price_drops} Drops <small className="store-money">≈ {dropsToApproxMoney(item.price_drops)}</small>
+          {item.price_drops} Drops{" "}
+          {dropsToApproxMoney(item.price_drops) ? (
+            <small className="store-money">≈ {dropsToApproxMoney(item.price_drops)}</small>
+          ) : null}
         </p>
       </div>
       <p className="store-item-desc">{item.description}</p>
@@ -81,22 +84,30 @@ export default function StorePanel({ economy, onClose, onBuyDrops, onBuyItem }) 
           </button>
         </div>
         <p className="ps-subtitle">
-          You have <strong>{balance} Drops</strong> ≈ {dropsToApproxMoney(balance)}.
+          You have <strong>{balance} Drops</strong>
+          {dropsToApproxMoney(balance) ? ` ≈ ${dropsToApproxMoney(balance)}` : ""}.
         </p>
 
-        <div className="store-section">
-          <h3>Get Drops</h3>
-          <p className="economy-note">
-            Real purchases use the App Store, Google Play, or web checkout. This preview is a mock — no real payment is
-            taken. Purchased Drops never expire.
-            {minor ? " Spending is guardian-controllable, behind a parental gate." : ""}
-          </p>
-          <div className="pack-grid">
-            {DROP_PRODUCTS.map((product) => (
-              <DropProductCard key={product.id} product={product} onBuy={onBuyDrops} />
-            ))}
+        {DROP_PRODUCTS.length > 0 ? (
+          <div className="store-section">
+            <h3>Get Drops</h3>
+            <p className="economy-note">
+              Real purchases use the App Store, Google Play, or web checkout. This preview is a mock — no real payment is
+              taken. Purchased Drops never expire.
+              {minor ? " Spending is guardian-controllable, behind a parental gate." : ""}
+            </p>
+            <div className="pack-grid">
+              {DROP_PRODUCTS.map((product) => (
+                <DropProductCard key={product.id} product={product} onBuy={onBuyDrops} />
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <p className="economy-note">
+            ✨ Drops are just for fun — you earn them by painting. They aren&apos;t money, can&apos;t be bought, and
+            can&apos;t be cashed out. Spend them on cosmetic brushes, themes, and packs below.
+          </p>
+        )}
 
         {STORE_CATEGORIES.map((category) => {
           const items = STORE_ITEMS.filter((item) => item.category === category.id);

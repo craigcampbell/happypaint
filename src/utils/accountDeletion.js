@@ -17,7 +17,7 @@
 // Local-only by default (no live backend). Everything here is sync-ready.
 
 import { idbDelete, idbDeleteKV, isIdbAvailable } from "./idb";
-import { isCloudConfigured, getSession, getSupabaseClient, signOut } from "./auth";
+import { isCloudConfigured, getSession, getPocketBase, signOut } from "./auth";
 
 // Mirror of account_deletion_requests, persisted locally so the UI can show the
 // pending request + scheduled purge even with no backend.
@@ -108,20 +108,22 @@ async function fileServerDeletion(request) {
     if (!session) {
       return { filed: false, reason: "signed-out" };
     }
-    const client = await getSupabaseClient();
-    if (!client) {
+    const pb = await getPocketBase();
+    if (!pb || !pb.authStore.isValid) {
       return { filed: false, reason: "no-client" };
     }
-    // Server-side: the `request_account_deletion()` RPC (no args) inserts an
-    // account_deletion_requests row for auth.uid() and returns it. Best-effort —
-    // the local wipe is the source of truth on this device regardless of result.
-    const { data, error } = await client.rpc("request_account_deletion");
-    if (error) {
-      return { filed: false, reason: error.message || "rpc-error", request };
+    // PocketBase: a user may delete their OWN record (collection delete rule
+    // `@request.auth.id = id`), which immediately and permanently removes the
+    // account and cascade-deletes their owned rows (gallery snapshots). This is
+    // a true hard delete, not a scheduled request. Best-effort — the local wipe
+    // is the source of truth on this device regardless of result.
+    const id = pb.authStore.record?.id;
+    if (id) {
+      await pb.collection("users").delete(id);
     }
-    return { filed: true, reason: "filed", server_request: data ?? null };
-  } catch {
-    return { filed: false, reason: "error" };
+    return { filed: true, reason: "deleted", server_request: request ?? null };
+  } catch (error) {
+    return { filed: false, reason: error?.message || "error" };
   }
 }
 

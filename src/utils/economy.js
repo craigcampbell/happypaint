@@ -40,17 +40,25 @@ export const DIRECTION = { credit: "credit", debit: "debit" };
 // Mock platforms (mirror backend `drop_platform`). Used for copy only here.
 export const PLATFORM = { apple: "apple", google: "google", web: "web" };
 
+// PLAY-MONEY MODE. Drops are a cosmetic, non-cash, non-transferable in-app
+// counter you EARN by painting — there is no way to buy them with real money and
+// no payout/cash-out. We keep this ON for the family release: real in-app
+// purchases + creator payouts carry app-store, COPPA, and money-handling
+// obligations that need their own deliberate, reviewed setup. Flipping this to
+// false re-exposes the (still-unwired) real-money catalog.
+export const PLAY_MONEY_ONLY = true;
+
 // ---- drop_products: $ -> Drops (suggested pricing from the doc) ----
 // Purchased Drops never expire (Apple/Play rule + doc). These are catalog rows
-// only; the mock "buy" credits Drops without any real payment.
-export const DROP_PRODUCTS = [
+// only; the mock "buy" credits Drops without any real payment. In play-money
+// mode the catalog is empty so NO surface frames Drops as purchasable with cash.
+const REAL_DROP_PRODUCTS = [
   { id: "drops_80", sku: "happypaint.drops.80", platform: PLATFORM.web, drop_amount: 80, price_cents: 99, active: true },
   { id: "drops_450", sku: "happypaint.drops.450", platform: PLATFORM.web, drop_amount: 450, price_cents: 499, active: true },
   { id: "drops_1000", sku: "happypaint.drops.1000", platform: PLATFORM.web, drop_amount: 1000, price_cents: 999, active: true },
-  { id: "drops_2200", sku: "happypaint.drops.2200", platform: PLATFORM.web, drop_amount: 2200, price_cents: 2200 - 1, active: true },
+  { id: "drops_2200", sku: "happypaint.drops.2200", platform: PLATFORM.web, drop_amount: 2200, price_cents: 1999, active: true },
 ];
-// Fix the last price explicitly ($19.99) — keep legible, no math surprises.
-DROP_PRODUCTS[3].price_cents = 1999;
+export const DROP_PRODUCTS = PLAY_MONEY_ONLY ? [] : REAL_DROP_PRODUCTS;
 
 // Store catalog — spendable-with-Drops items. Each item is a transparent bundle
 // (no randomized contents / loot boxes). `grants` is a mock entitlement key that
@@ -146,7 +154,9 @@ export function formatPrice(cents) {
 // available $/Drop rate in the catalog (the largest pack — best value). Shown
 // near spend moments per the doc ("always show approximate local-money equiv").
 export function dropsToApproxMoney(drops) {
-  const best = DROP_PRODUCTS.reduce((acc, p) =>
+  // Play-money mode: Drops have no cash value, so show no money equivalence.
+  if (PLAY_MONEY_ONLY || REAL_DROP_PRODUCTS.length === 0) return "";
+  const best = REAL_DROP_PRODUCTS.reduce((acc, p) =>
     p.price_cents / p.drop_amount < acc.price_cents / acc.drop_amount ? p : acc,
   );
   const cents = Math.round((drops * best.price_cents) / best.drop_amount);
@@ -341,6 +351,21 @@ export function awardKudos(state, amount, source = "kudos_award", sourceId = nul
   return appendEntries(state, [entry]);
 }
 
+// Earn-by-painting: the play-money way Drops enter a wallet. A pure credit (no
+// purchase, no receipt, no real money) so kids earn Drops just by making art.
+// Returns the same state when amount rounds to 0.
+export function earnDropsForPainting(state, amount = 1) {
+  const amt = Math.max(0, Math.round(amount || 0));
+  if (!amt) return state;
+  const entry = makeLedgerEntry({
+    amount: amt,
+    currency_type: CURRENCY.drops,
+    direction: DIRECTION.credit,
+    source: "paint_earn",
+  });
+  return appendEntries(state, [entry]);
+}
+
 // Send a Drops tip. Spends Drops from the sender and records the tip into the
 // (mock) creator's locked balance via a creator-currency credit. In this local
 // surface the sender IS the creator (single profile), so both sides land in the
@@ -432,6 +457,7 @@ export function describeLedgerSource(entry) {
     tip_sent: "Tip sent",
     tip_received: "Tip received",
     kudos_award: "Kudos earned",
+    paint_earn: "Earned by painting",
     legacy_studio_grant: "Creator Brushes (migrated)",
   };
   return map[entry.source] || entry.source;

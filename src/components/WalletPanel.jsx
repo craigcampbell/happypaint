@@ -52,7 +52,11 @@ export default function WalletPanel({ economy, onClose, onOpenStore }) {
           <div className="wallet-balance is-drops">
             <span className="wallet-balance-label">Drops</span>
             <strong>{wallet.drops_balance}</strong>
-            <small>≈ {dropsToApproxMoney(wallet.drops_balance)}</small>
+            {dropsToApproxMoney(wallet.drops_balance) ? (
+              <small>≈ {dropsToApproxMoney(wallet.drops_balance)}</small>
+            ) : (
+              <small>earned by painting</small>
+            )}
           </div>
           <div className="wallet-balance is-kudos">
             <span className="wallet-balance-label">Kudos</span>

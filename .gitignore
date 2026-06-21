@@ -31,3 +31,12 @@ server.err.log
 .reports.json
 .sheets.json
 .metrics.json
+
+# Local secrets / config — never commit
+.env
+.session-secret
+
+# Docker / self-hosted data volumes
+pb_data/
+app_data/
+backups/

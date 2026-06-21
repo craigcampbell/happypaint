@@ -9,10 +9,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // the Cloudflare tunnel (wss://drawesome.art/ws) and in local dev. A dev page
 // served by Vite on :5173 is redirected to the server on :8787.
 
-function resolveSocketUrl(roomId) {
+function resolveSocketUrl(roomId, token) {
+  // A signed-in user's Supabase access token rides along as a query param; the
+  // server validates it (anon key only) to learn who owns/hosts the room. Empty
+  // for anonymous users — sign-in is optional.
+  const tokenQs = token ? `&token=${encodeURIComponent(token)}` : "";
   const override = import.meta.env.VITE_WS_URL;
   if (override) {
-    return `${override}?room=${encodeURIComponent(roomId)}`;
+    return `${override}?room=${encodeURIComponent(roomId)}${tokenQs}`;
   }
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   let host = window.location.host;
@@ -20,10 +24,10 @@ function resolveSocketUrl(roomId) {
   if (host.endsWith(":5173")) {
     host = host.replace(":5173", ":8787");
   }
-  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}`;
+  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${tokenQs}`;
 }
 
-export function useMultiplayer(roomId, onMessage) {
+export function useMultiplayer(roomId, onMessage, token) {
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -47,7 +51,7 @@ export function useMultiplayer(roomId, onMessage) {
 
     let ws;
     try {
-      ws = new WebSocket(resolveSocketUrl(roomId));
+      ws = new WebSocket(resolveSocketUrl(roomId, token));
     } catch {
       // Malformed URL or blocked — retry shortly.
       reconnectTimerRef.current = window.setTimeout(connect, 2000);
@@ -101,7 +105,7 @@ export function useMultiplayer(roomId, onMessage) {
     };
 
     ws.onerror = () => { /* onclose drives the retry */ };
-  }, [roomId]);
+  }, [roomId, token]);
 
   useEffect(() => {
     connect();
@@ -122,6 +126,18 @@ export function useMultiplayer(roomId, onMessage) {
     }
   }, []);
 
+  // Permanently tear down the socket and stop reconnecting (used when a host
+  // kicks us — otherwise the auto-reconnect would silently put us right back).
+  const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
+    if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+    if (pingTimerRef.current) window.clearInterval(pingTimerRef.current);
+    const ws = wsRef.current;
+    wsRef.current = null;
+    ws?.close();
+    setConnected(false);
+  }, []);
+
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
   const sendClear = useCallback(() => send({ type: "clear" }), [send]);
@@ -137,5 +153,18 @@ export function useMultiplayer(roomId, onMessage) {
     [send],
   );
 
-  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat };
+  // Host-only room controls (the server enforces that the sender is a host).
+  const sendLock = useCallback(() => send({ type: "lock" }), [send]);
+  const sendUnlock = useCallback(() => send({ type: "unlock" }), [send]);
+  const sendKick = useCallback((targetId) => send({ type: "kick", targetId }), [send]);
+  const sendMute = useCallback((targetId, muted) => send({ type: "mute", targetId, muted }), [send]);
+  const sendRenameRoom = useCallback((name) => send({ type: "rename_room", name }), [send]);
+  const sendPromote = useCallback((targetId) => send({ type: "promote", targetId }), [send]);
+  const sendDemote = useCallback((targetId) => send({ type: "demote", targetId }), [send]);
+
+  return {
+    connected, users, self, chat, disconnect,
+    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
+    sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
+  };
 }

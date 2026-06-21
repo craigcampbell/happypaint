@@ -59,8 +59,12 @@ export default function AccountPanel({ onClose, onDeleted }) {
   };
 
   const handleProvider = async (provider) => {
+    // Open the popup synchronously on tap so Safari (the iPad/iPhone audience)
+    // doesn't block it — the SDK loads async, so we hand the open window to
+    // sign-in which points it at the provider once ready.
+    const popup = window.open("", "_blank", "width=520,height=680");
     setBusy(true);
-    const result = await signInWithProvider(provider);
+    const result = await signInWithProvider(provider, popup);
     setMessage(result.message);
     setBusy(false);
   };

@@ -47,7 +47,7 @@ export default function CreatorDashboard({ economy, paintSpaceAssets = [], onClo
           <div className="creator-stat">
             <span>Tips received</span>
             <strong>{tipsTotal} Drops</strong>
-            <small>≈ {dropsToApproxMoney(tipsTotal)}</small>
+            {dropsToApproxMoney(tipsTotal) ? <small>≈ {dropsToApproxMoney(tipsTotal)}</small> : null}
           </div>
           <div className="creator-stat">
             <span>Locked creator balance</span>

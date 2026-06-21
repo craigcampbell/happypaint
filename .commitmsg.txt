@@ -1,0 +1,37 @@
+Self-hosted accounts (PocketBase) + per-room host controls + play-money drops
+
+Replaces the dormant Supabase scaffolding with a self-hosted PocketBase backend
+(Google sign-in, SQLite, file storage) in a Docker container behind the existing
+Cloudflare tunnel — no monthly cost, all data on disk.
+
+Accounts / identity (sign-in stays OPTIONAL; anonymous painting unchanged):
+- server/pocketbaseAuth.js validates a signed-in user's PocketBase token via
+  /api/collections/users/auth-refresh (no secrets); the /ws connection carries
+  the token so the server learns who you are.
+- Client auth.js / sync.js / AccountPanel swapped from the Supabase SDK to the
+  PocketBase JS SDK (lazy-loaded, code-split; Google OAuth with a Safari-safe
+  popup). Account deletion is now a true hard delete of the PocketBase record.
+
+Per-room host controls (the "controller"):
+- First signed-in grown-up owns + hosts a room: lock / clear / kick / mute /
+  rename / promote-co-host, all enforced server-side.
+- Hardened per adversarial review: kick now bans the signed-in user from
+  reconnecting + the client tears its socket down; mute is bound to the account
+  and survives reconnect; a locked room auto-unlocks when the last host leaves
+  (no bricked canvases); only the opaque profile id is persisted (no name PII).
+
+Play-money "drops":
+- Earn drops by painting (throttled); real-money rails stay OFF (buy-with-cash
+  catalog emptied, $-equivalence suppressed, owner-only wallet/ledger).
+
+Self-hosting:
+- Dockerfile + pocketbase.Dockerfile + docker-compose.yml (Node + PocketBase +
+  persistent volumes), a one-command backup script, and a DATA_DIR so all server
+  state lives on one mounted volume. POCKETBASE_SETUP.md walks through Google +
+  PocketBase + the tunnel.
+
+Verified: anonymous path unchanged (no regression); ownership / host / kick-ban /
+mute-persistence / auto-unlock pass an end-to-end harness against a mock auth
+endpoint; production build clean.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

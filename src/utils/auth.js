@@ -1,259 +1,151 @@
-// Auth / cloud sync layer — ENV-GATED provider abstraction with a graceful
-// local-only fallback.
+// Auth layer — PocketBase-backed, ENV-GATED, with a graceful local-only fallback.
 //
-// docs/social-backend.md: "Happy Paint should stay useful without an account.
-// Accounts unlock cross-device sync, friend invites, planned sessions, and live
-// painting." and Store Review Notes: "Keep login optional until the user chooses
-// sync or social features." So login is OPTIONAL — the whole app works signed
-// out; auth only gates sync/social.
+// Login is OPTIONAL: the whole app works signed out; an account only unlocks
+// cross-device sync + room ownership/host powers. Mode is decided once at module
+// load from import.meta.env:
+//   - CLOUD: VITE_PB_URL is set → we lazily create a PocketBase client and back
+//     sign-in with Google OAuth (more providers can be added later).
+//   - LOCAL (default): every sign-in call resolves to a clear "saved on this
+//     device" status and NO network call is ever made.
 //
-// Mode is decided once from import.meta.env at module load and never throws:
-//   - CLOUD: both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set. We lazily
-//     create a real @supabase/supabase-js client and back the provider interface
-//     with Supabase Auth (magic link + Apple/Google OAuth).
-//   - LOCAL (default): same interface, every sign-in call resolves to a clear
-//     "Cloud sync not configured — your work is saved on this device." status and
-//     NO network calls are ever made. The Supabase client is never instantiated.
+// The pocketbase SDK is loaded LAZILY via dynamic import() so it is code-split
+// out of the main bundle and never fetched in local-only mode.
 //
-// The @supabase/supabase-js SDK is loaded LAZILY via dynamic import() so it is
-// code-split into its own chunk instead of the main bundle. In local-only mode
-// the chunk is never requested at all; in configured mode it loads right after
-// the app shell (on the first getSession/onAuthStateChange), keeping first paint
-// off the ~145KB-gzip SDK.
+// The exported surface is intentionally the same shape the rest of the app
+// already consumes (getSession/onAuthStateChange/signInWithProvider/…), and a
+// "session" is normalized to { access_token, user:{ id, email, name } } so the
+// multiplayer socket can keep passing session?.access_token unchanged.
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const PB_URL = import.meta.env.VITE_PB_URL || "";
 
-// Cloud sync is configured only when BOTH env vars are present and non-empty.
-export const isCloudConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+export const isCloudConfigured = Boolean(PB_URL);
 
-// Shown anywhere we need to explain the local-only state honestly.
 export const LOCAL_ONLY_MESSAGE =
-  "Cloud sync not configured — your work is saved on this device.";
+  "Cloud accounts not configured — your work is saved on this device.";
 
-// OAuth providers we surface as sign-in affordances. Magic link is the primary
-// path; Apple/Google require the matching provider to be enabled in Supabase.
-export const OAUTH_PROVIDERS = [
-  { id: "apple", label: "Continue with Apple" },
-  { id: "google", label: "Continue with Google" },
-];
+// Sign-in affordances. Google first; Apple can be added once enrolled.
+export const OAUTH_PROVIDERS = [{ id: "google", label: "Continue with Google" }];
 
-// ---- Lazily-loaded + lazily-created Supabase client (configured mode only) ----
-// The dynamic import() is what splits the SDK into its own chunk. Both the
-// module load and the client creation happen on first use, so local-only mode
-// never fetches the chunk or touches the network.
-let sdkPromise = null;
-function loadCreateClient() {
-  if (!sdkPromise) {
-    sdkPromise = import("@supabase/supabase-js").then((m) => m.createClient);
-  }
-  return sdkPromise;
-}
-
-let clientPromise = null;
-
-// Returns a Promise of the active Supabase client, or null when unconfigured /
-// on load failure. Never throws. Cached after the first successful load.
-export async function getSupabaseClient() {
-  if (!isCloudConfigured) {
-    return null;
-  }
-  if (!clientPromise) {
-    clientPromise = (async () => {
-      try {
-        const createClient = await loadCreateClient();
-        return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: true,
-          },
-        });
-      } catch {
-        clientPromise = null; // allow a later call to retry the load
+// ---- Lazily-loaded PocketBase client (configured mode only) ----
+let pbPromise = null;
+function loadPocketBase() {
+  if (!isCloudConfigured) return Promise.resolve(null);
+  if (!pbPromise) {
+    pbPromise = import("pocketbase")
+      .then((mod) => {
+        const PocketBase = mod.default;
+        const pb = new PocketBase(PB_URL);
+        // We fire overlapping requests (pull + push); don't auto-cancel them.
+        pb.autoCancellation(false);
+        return pb;
+      })
+      .catch(() => {
+        pbPromise = null; // allow a later retry
         return null;
-      }
-    })();
-  }
-  return clientPromise;
-}
-
-// The profile id used to key sync rows server-side is the authenticated user's
-// uid (profiles.id === auth.users.id via the handle_new_user trigger). Returns
-// null when signed out / unconfigured. Never throws.
-export async function getProfileId() {
-  const client = await getSupabaseClient();
-  if (!client) {
-    return null;
-  }
-  try {
-    const { data } = await client.auth.getSession();
-    return data?.session?.user?.id || null;
-  } catch {
-    return null;
-  }
-}
-
-// ---- LocalProvider — active provider while cloud sync is unconfigured ----
-// Same interface as the Supabase provider, but never touches the network:
-// there is no session, sign-in reports the local-only status, auth never changes.
-const LocalProvider = {
-  async getSession() {
-    return null;
-  },
-  onAuthStateChange() {
-    return () => {};
-  },
-  async signInWithEmail() {
-    return { ok: false, message: LOCAL_ONLY_MESSAGE };
-  },
-  async signInWithProvider() {
-    return { ok: false, message: LOCAL_ONLY_MESSAGE };
-  },
-  async signOut() {
-    return { ok: true, message: "Signed out (local)." };
-  },
-};
-
-// ---- SupabaseProvider — real auth, active when configured ----
-const SupabaseProvider = {
-  async getSession() {
-    const client = await getSupabaseClient();
-    if (!client) {
-      return null;
-    }
-    const { data } = await client.auth.getSession();
-    return data?.session ?? null;
-  },
-
-  // Subscribe to Supabase auth state. Returns an unsubscribe function. The client
-  // loads asynchronously (dynamic import), so we attach once it's ready and the
-  // returned unsubscribe cancels whether or not the load has resolved yet.
-  onAuthStateChange(handler) {
-    let unsubscribe = () => {};
-    let cancelled = false;
-    (async () => {
-      const client = await getSupabaseClient();
-      if (!client || cancelled) {
-        return;
-      }
-      const { data } = client.auth.onAuthStateChange((_event, session) => {
-        handler(session ?? null);
       });
-      unsubscribe = () => {
-        try {
-          data?.subscription?.unsubscribe?.();
-        } catch {
-          // ignore
-        }
-      };
-    })();
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  },
+  }
+  return pbPromise;
+}
 
-  // Email magic link (passwordless). The link returns the user to this origin,
-  // where detectSessionInUrl completes the sign-in.
-  async signInWithEmail(email) {
-    const client = await getSupabaseClient();
-    if (!client) {
-      return { ok: false, message: LOCAL_ONLY_MESSAGE };
-    }
-    const { error } = await client.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    });
-    if (error) {
-      return { ok: false, message: error.message || "Couldn't send magic link." };
-    }
-    return { ok: true, message: `Magic link sent to ${email}. Check your inbox.` };
-  },
+export async function getPocketBase() {
+  return loadPocketBase();
+}
 
-  // OAuth (Apple/Google). Redirects the browser to the provider; on return,
-  // detectSessionInUrl completes the sign-in. The provider must be enabled in
-  // the Supabase dashboard.
-  async signInWithProvider(provider) {
-    const client = await getSupabaseClient();
-    if (!client) {
-      return { ok: false, message: LOCAL_ONLY_MESSAGE };
-    }
-    const { error } = await client.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: window.location.origin },
-    });
-    if (error) {
-      return { ok: false, message: error.message || `Couldn't start ${provider} sign-in.` };
-    }
-    // On success the browser navigates away to the provider.
-    return { ok: true, message: `Redirecting to ${provider}…` };
-  },
+// Normalize PocketBase's authStore into the session shape the app expects.
+function sessionFromPb(pb) {
+  if (!pb || !pb.authStore.isValid || !pb.authStore.record) return null;
+  const r = pb.authStore.record;
+  return { access_token: pb.authStore.token, user: { id: r.id, email: r.email, name: r.name } };
+}
 
-  async signOut() {
-    const client = await getSupabaseClient();
-    if (!client) {
-      return { ok: true, message: "Signed out (local)." };
-    }
-    const { error } = await client.auth.signOut();
-    if (error) {
-      return { ok: false, message: error.message || "Couldn't sign out." };
-    }
-    return { ok: true, message: "Signed out." };
-  },
-};
-
-// The single active provider, chosen once from env.
-const provider = isCloudConfigured ? SupabaseProvider : LocalProvider;
-
-// ---- Public interface (identical across providers) ----
-
-// Current session, or null. Never throws.
 export async function getSession() {
   try {
-    return await provider.getSession();
+    const pb = await getPocketBase();
+    return sessionFromPb(pb);
   } catch {
     return null;
   }
 }
 
-// Subscribe to auth state changes. Returns an unsubscribe function. In local
-// mode this is a no-op (state never changes), so callers wire it uniformly.
-export function onAuthStateChange(handler) {
+// The authenticated user id (profiles/users record id) — the owner key for
+// gallery rows / room ownership. null when signed out / unconfigured.
+export async function getProfileId() {
   try {
-    return provider.onAuthStateChange(handler) || (() => {});
+    const pb = await getPocketBase();
+    return pb && pb.authStore.isValid ? pb.authStore.record?.id || null : null;
   } catch {
-    return () => {};
+    return null;
   }
 }
 
-// Send an email magic link. Returns { ok, message }.
-export async function signInWithEmail(email) {
-  const trimmed = String(email || "").trim();
-  if (!trimmed) {
-    return { ok: false, message: "Enter an email address." };
+// Subscribe to auth changes; returns an unsubscribe. No-op in local mode.
+export function onAuthStateChange(handler) {
+  let unsubscribe = () => {};
+  let cancelled = false;
+  (async () => {
+    const pb = await getPocketBase();
+    if (!pb || cancelled) return;
+    unsubscribe = pb.authStore.onChange(() => handler(sessionFromPb(pb)));
+  })();
+  return () => {
+    cancelled = true;
+    try {
+      unsubscribe();
+    } catch {
+      // ignore
+    }
+  };
+}
+
+// OAuth sign-in (Google). `popup` is an already-opened window handed in by the
+// caller's CLICK handler — opening it synchronously on tap is what keeps Safari
+// (the iPad/iPhone audience) from blocking it, since the SDK loads async first.
+export async function signInWithProvider(providerId, popup) {
+  const pb = await getPocketBase();
+  if (!pb) {
+    if (popup) popup.close();
+    return { ok: false, message: LOCAL_ONLY_MESSAGE };
   }
-  return provider.signInWithEmail(trimmed);
+  try {
+    await pb.collection("users").authWithOAuth2({
+      provider: providerId,
+      urlCallback: (url) => {
+        if (popup) popup.location.href = url;
+        else window.location.href = url;
+      },
+    });
+    return { ok: true, message: "Signed in!" };
+  } catch (error) {
+    if (popup) {
+      try {
+        popup.close();
+      } catch {
+        // ignore
+      }
+    }
+    return { ok: false, message: error?.message || `Couldn't sign in with ${providerId}.` };
+  }
 }
 
-// Start an OAuth flow (Apple/Google). Returns { ok, message }.
-export async function signInWithProvider(providerId) {
-  return provider.signInWithProvider(providerId);
+// Email sign-in isn't wired for the first pass (Google only). Kept so the
+// AccountPanel interface is unchanged.
+export async function signInWithEmail() {
+  return { ok: false, message: "Email sign-in isn't set up yet — use Continue with Google." };
 }
 
-// Sign out (best-effort). Safe to call when signed out or in local mode.
+// Sign out — PocketBase has no logout endpoint; you just clear the local store.
 export async function signOut() {
   try {
-    return await provider.signOut();
+    const pb = await getPocketBase();
+    if (pb) pb.authStore.clear();
+    return { ok: true, message: "Signed out." };
   } catch (error) {
     return { ok: false, message: error?.message || "Couldn't sign out." };
   }
 }
 
-// Short, human-readable identity label for a session (email, else uid prefix).
+// Short, human-readable identity label for a session.
 export function sessionLabel(session) {
-  if (!session) {
-    return null;
-  }
-  return session.user?.email || session.user?.id?.slice(0, 8) || "Signed in";
+  if (!session) return null;
+  return session.user?.name || session.user?.email || session.user?.id?.slice(0, 8) || "Signed in";
 }

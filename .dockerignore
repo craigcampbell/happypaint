@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.github
+pb_data
+app_data
+backups
+.rooms
+.artworks
+.murals
+.env
+.session-secret
+*.log
+*.md
+mobile
+backend

@@ -1,43 +1,28 @@
 // Local-first cloud sync — activates ONLY when signed in to a configured
-// Supabase project. The local IndexedDB / localStorage stores remain the source
-// of truth: the app works fully offline and signed out, and sync is a best-effort
+// PocketBase instance. The local IndexedDB / localStorage stays the source of
+// truth: the app works fully offline and signed out, and sync is a best-effort
 // mirror layered on top.
 //
-// SCOPE (intentionally narrow for now):
-//   - Drawings / gallery pieces  -> `project_snapshots`  (UPSERT on (profile_id, client_id))
-//   - Paint Space locker assets  -> `space_assets`       (UPSERT on (owner_profile_id, client_id))
-// Economy / events / replay / brush packs sync is DEFERRED (not synced here).
-//
-// MERGE STRATEGY: last-write-wins by `updated_at`. On pull we only overwrite a
-// local record when the server copy is strictly newer; we never clobber a newer
-// local edit. Local rows missing an `updated_at` fall back to `createdAt`.
+// SCOPE (first pass): gallery drawings <-> a PocketBase `snapshots` collection,
+// UPSERTed per item keyed by (owner, client_id). Paint Space / economy sync is
+// deferred. MERGE: last-write-wins by `client_updated` (fallback createdAt).
 //
 // RESILIENCE: every network op is wrapped in try/catch and is best-effort. A
 // failure never throws to the UI and never blocks offline use; it just flips the
-// status to "paused" so the AccountPanel can surface it.
+// status to "paused" so the AccountPanel can surface it. If the `snapshots`
+// collection doesn't exist yet, sync simply stays paused — the app is unaffected.
 
-import { getSupabaseClient, getProfileId } from "./auth";
+import { getPocketBase, getProfileId } from "./auth";
 import { idbGetKV, idbSetKV, isIdbAvailable } from "./idb";
-import { PAINT_SPACE_IDB_KEY, PAINT_SPACE_STORAGE_KEY } from "./paintSpace";
 
 const GALLERY_IDB_KEY = "gallery:v2";
 const GALLERY_LS_KEY = "happypaint:gallery:v2";
+const COLLECTION = "snapshots";
 
 // Debounce window for change-driven pushes so a burst of edits coalesces.
 const PUSH_DEBOUNCE_MS = 1500;
 
-// A stable-ish identifier for the device a write came from (audit only).
-function deviceLabel() {
-  try {
-    return (navigator.userAgent || "web").slice(0, 120);
-  } catch {
-    return "web";
-  }
-}
-
 // ---- Sync status (observable) ----
-// One of: "signed-out" (sign in to sync), "synced", "paused" (offline / error),
-// "syncing". Subscribers (e.g. AccountPanel) get the latest value immediately.
 const STATUS_LABELS = {
   "signed-out": "Sign in to sync",
   synced: "Synced",
@@ -73,15 +58,13 @@ export function onSyncStatus(listener) {
   return () => statusListeners.delete(listener);
 }
 
-// ---- Local store access (read/write the same stores App.jsx uses) ----
+// ---- Local gallery store access (same store App.jsx uses) ----
 
 async function readGalleryLocal() {
   if (isIdbAvailable()) {
     try {
       const stored = await idbGetKV(GALLERY_IDB_KEY);
-      if (Array.isArray(stored)) {
-        return stored;
-      }
+      if (Array.isArray(stored)) return stored;
     } catch {
       // fall through to localStorage
     }
@@ -103,129 +86,73 @@ async function writeGalleryLocal(items) {
   window.localStorage.setItem(GALLERY_LS_KEY, JSON.stringify(items));
 }
 
-async function readPaintSpaceLocal() {
-  if (isIdbAvailable()) {
-    try {
-      const stored = await idbGetKV(PAINT_SPACE_IDB_KEY);
-      if (Array.isArray(stored)) {
-        return stored;
-      }
-    } catch {
-      // fall through to localStorage
-    }
-  }
-  try {
-    const raw = window.localStorage.getItem(PAINT_SPACE_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    const assets = parsed?.space_assets;
-    return Array.isArray(assets) ? assets : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writePaintSpaceLocal(assets) {
-  if (isIdbAvailable()) {
-    await idbSetKV(PAINT_SPACE_IDB_KEY, assets);
-    return;
-  }
-  window.localStorage.setItem(
-    PAINT_SPACE_STORAGE_KEY,
-    JSON.stringify({ version: 1, space_assets: assets }),
-  );
-}
-
 // ---- Timestamp helpers (last-write-wins) ----
 
 function localStamp(record) {
-  // Prefer an explicit updated_at; fall back to createdAt; else 0 (oldest).
-  // Works for both local records and server rows mapped to the local shape
-  // (snapshotToGallery / spaceRowToAsset both carry `updated_at`).
   const value = record?.updated_at || record?.updatedAt || record?.createdAt;
   const ms = value ? Date.parse(value) : NaN;
   return Number.isFinite(ms) ? ms : 0;
 }
 
 // ---- Row <-> local mappers ----
+// Note: `created`/`updated` are PocketBase system fields, so our own timestamp
+// is stored as `client_updated` to avoid the name collision.
 
-// Gallery piece -> project_snapshots row. A gallery item is a single flattened
-// layer; we store it as one entry in `layers` and keep `frames` empty.
-function galleryToSnapshot(item, profileId, nowIso) {
+function galleryToFields(item, profileId, nowIso) {
   return {
-    profile_id: profileId,
+    owner: profileId,
     client_id: item.id,
-    title: item.name || "Happy Paint",
-    layers: [{ image: item.layer, textureId: item.textureId ?? null, preview: item.preview ?? null }],
-    frames: [],
-    frame_count: 1,
-    updated_at: item.updated_at || nowIso,
-    updated_device: deviceLabel(),
+    title: item.name || "Drawesome",
+    image: item.layer || "",
+    texture_id: item.textureId ?? "",
+    preview: item.preview ?? "",
+    client_updated: item.updated_at || nowIso,
   };
 }
 
-function snapshotToGallery(row) {
-  const layer = Array.isArray(row.layers) ? row.layers[0] : null;
+function snapshotRowToGallery(row) {
   return {
     id: row.client_id,
-    name: row.title || "Happy Paint",
-    layer: layer?.image || "",
-    textureId: layer?.textureId ?? null,
-    preview: layer?.preview || layer?.image || "",
-    createdAt: row.created_at || row.updated_at || new Date().toISOString(),
-    updated_at: row.updated_at,
-  };
-}
-
-// Paint Space asset -> space_assets row.
-function assetToSpaceRow(asset, profileId, nowIso) {
-  return {
-    owner_profile_id: profileId,
-    client_id: asset.id,
-    kind: asset.kind,
-    title: asset.title || "Asset",
-    payload: asset.payload || {},
-    visibility: asset.visibility || "private",
-    moderation_status: asset.moderation_status || "approved",
-    brush_recipe: asset.brush_recipe ?? null,
-    updated_at: asset.updated_at || nowIso,
-  };
-}
-
-function spaceRowToAsset(row) {
-  return {
-    id: row.client_id,
-    kind: row.kind,
-    title: row.title || "Asset",
-    payload: row.payload || {},
-    thumbnail: row.payload?.thumbnail || "",
-    createdAt: row.created_at || row.updated_at || new Date().toISOString(),
-    updated_at: row.updated_at,
-    visibility: row.visibility,
-    moderation_status: row.moderation_status,
-    ...(row.brush_recipe ? { brush_recipe: row.brush_recipe } : {}),
+    name: row.title || "Drawesome",
+    layer: row.image || "",
+    textureId: row.texture_id || null,
+    preview: row.preview || row.image || "",
+    createdAt: row.created || row.client_updated || new Date().toISOString(),
+    updated_at: row.client_updated,
   };
 }
 
 // ---- Generic last-write-wins merge ----
-// Returns the merged array keyed by `id`, taking whichever side is newer.
 function mergeByStamp(localList, remoteList) {
   const byId = new Map();
   for (const item of localList) {
-    if (item?.id) {
-      byId.set(item.id, item);
-    }
+    if (item?.id) byId.set(item.id, item);
   }
   for (const remote of remoteList) {
-    if (!remote?.id) {
-      continue;
-    }
+    if (!remote?.id) continue;
     const local = byId.get(remote.id);
     if (!local || localStamp(remote) > localStamp(local)) {
       byId.set(remote.id, remote);
     }
-    // else: local is newer-or-equal — keep it (don't clobber a newer local edit).
   }
   return Array.from(byId.values());
+}
+
+// ---- PocketBase upsert (no native upsert; find-then-create/update) ----
+
+async function upsertSnapshot(pb, item, profileId, nowIso) {
+  const data = galleryToFields(item, profileId, nowIso);
+  let existing = null;
+  try {
+    existing = await pb
+      .collection(COLLECTION)
+      .getFirstListItem(`owner="${profileId}" && client_id="${item.id}"`);
+  } catch (error) {
+    if (error?.status && error.status !== 404) throw error; // a real failure
+    existing = null; // 404 = doesn't exist yet
+  }
+  if (existing) await pb.collection(COLLECTION).update(existing.id, data);
+  else await pb.collection(COLLECTION).create(data);
 }
 
 // ---- Push (debounced) ----
@@ -233,58 +160,32 @@ function mergeByStamp(localList, remoteList) {
 let pushTimer = null;
 let activeProfileId = null;
 
-// Upsert all local gallery + paint-space records to the server. Best-effort.
 async function pushNow() {
-  const client = await getSupabaseClient();
-  if (!client || !activeProfileId) {
-    return;
-  }
+  const pb = await getPocketBase();
+  if (!pb || !activeProfileId) return;
   setStatus("syncing");
   const nowIso = new Date().toISOString();
   let ok = true;
-
   try {
     const gallery = await readGalleryLocal();
-    if (gallery.length > 0) {
-      const rows = gallery.map((item) => galleryToSnapshot(item, activeProfileId, nowIso));
-      const { error } = await client
-        .from("project_snapshots")
-        .upsert(rows, { onConflict: "profile_id,client_id" });
-      if (error) {
+    for (const item of gallery) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await upsertSnapshot(pb, item, activeProfileId, nowIso);
+      } catch {
         ok = false;
       }
     }
   } catch {
     ok = false;
   }
-
-  try {
-    const assets = await readPaintSpaceLocal();
-    if (assets.length > 0) {
-      const rows = assets.map((asset) => assetToSpaceRow(asset, activeProfileId, nowIso));
-      const { error } = await client
-        .from("space_assets")
-        .upsert(rows, { onConflict: "owner_profile_id,client_id" });
-      if (error) {
-        ok = false;
-      }
-    }
-  } catch {
-    ok = false;
-  }
-
   setStatus(ok ? "synced" : "paused");
 }
 
-// Schedule a debounced push. Call this from the same places local saves happen
-// (gallery save, paint-space persist) — it no-ops when signed out.
+// Schedule a debounced push from the same places local saves happen.
 export function schedulePush() {
-  if (!activeProfileId) {
-    return;
-  }
-  if (pushTimer) {
-    clearTimeout(pushTimer);
-  }
+  if (!activeProfileId) return;
+  if (pushTimer) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     pushTimer = null;
     pushNow().catch(() => setStatus("paused"));
@@ -292,57 +193,25 @@ export function schedulePush() {
 }
 
 // ---- Pull (on sign-in / on demand) ----
-// Fetch the user's rows and merge into local stores with last-write-wins.
-// Returns true when local stores were (potentially) updated so callers can
-// refresh their in-memory state.
 export async function pull() {
-  const client = await getSupabaseClient();
-  if (!client || !activeProfileId) {
-    return false;
-  }
+  const pb = await getPocketBase();
+  if (!pb || !activeProfileId) return false;
   setStatus("syncing");
   let ok = true;
-
   try {
-    const { data, error } = await client
-      .from("project_snapshots")
-      .select("*")
-      .eq("profile_id", activeProfileId);
-    if (error) {
-      ok = false;
-    } else if (Array.isArray(data)) {
-      const local = await readGalleryLocal();
-      const merged = mergeByStamp(local, data.map(snapshotToGallery));
-      await writeGalleryLocal(merged);
-    }
+    const rows = await pb.collection(COLLECTION).getFullList({ filter: `owner="${activeProfileId}"` });
+    const local = await readGalleryLocal();
+    const merged = mergeByStamp(local, rows.map(snapshotRowToGallery));
+    await writeGalleryLocal(merged);
   } catch {
     ok = false;
   }
-
-  try {
-    const { data, error } = await client
-      .from("space_assets")
-      .select("*")
-      .eq("owner_profile_id", activeProfileId);
-    if (error) {
-      ok = false;
-    } else if (Array.isArray(data)) {
-      const local = await readPaintSpaceLocal();
-      const merged = mergeByStamp(local, data.map(spaceRowToAsset));
-      await writePaintSpaceLocal(merged);
-    }
-  } catch {
-    ok = false;
-  }
-
   setStatus(ok ? "synced" : "paused");
   return ok;
 }
 
-// ---- Lifecycle: start on sign-in, stop on sign-out ----
+// ---- Lifecycle ----
 
-// Begin syncing for a signed-in session. Resolves the profile id, pulls remote
-// state (merge), then pushes local state. Best-effort; never throws.
 export async function startSync(session) {
   try {
     if (!session) {
@@ -356,16 +225,13 @@ export async function startSync(session) {
     }
     activeProfileId = profileId;
     setStatus("syncing");
-    // Pull first so we don't immediately re-push stale local rows over newer
-    // server rows; then push local-only / newer-local rows up.
-    await pull();
+    await pull(); // pull first so we don't re-push stale rows over newer server ones
     await pushNow();
   } catch {
     setStatus("paused");
   }
 }
 
-// Stop syncing (sign-out). Clears the active profile + any pending push.
 export function stopSync() {
   activeProfileId = null;
   if (pushTimer) {

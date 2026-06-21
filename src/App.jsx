@@ -44,6 +44,7 @@ import {
 import {
   TIP_PRESETS,
   creditDrops,
+  earnDropsForPainting,
   hasEntitlement,
   loadEconomy,
   migrateLegacyStudioPass,
@@ -79,6 +80,7 @@ import MarketingSite from "./components/MarketingSite";
 import TogetherPanel from "./components/TogetherPanel";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
+import HostControlPanel from "./components/HostControlPanel";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
 
@@ -387,6 +389,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // async from IndexedDB. The studio brush/paper tier now unlocks via the
   // "studio" entitlement (owning the Creator Brushes pack) instead of a boolean.
   const [economy, setEconomy] = useState(null);
+  const economyRef = useRef(null); // latest economy, for the earn-by-painting hook
+  const earnPaintDropsRef = useRef(null); // set below; called from deep in endStroke
+  const lastPaintEarnRef = useRef(0); // throttle: at most one earned Drop / few seconds
   const [showWallet, setShowWallet] = useState(false);
   const [showStore, setShowStore] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
@@ -401,6 +406,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showBrushStudio, setShowBrushStudio] = useState(false);
   const [showPublishPack, setShowPublishPack] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+
+  // Supabase session (null when signed out / cloud unconfigured), lifted to state
+  // so the access token can ride the multiplayer socket and the host UI can read
+  // identity. Room ownership/host flags are learned live from the WS server.
+  const [session, setSession] = useState(null);
+  const [isRoomHost, setIsRoomHost] = useState(false);
+  const [isRoomOwner, setIsRoomOwner] = useState(false);
+  const [roomLocked, setRoomLocked] = useState(false);
+  const [roomTitle, setRoomTitle] = useState(null);
+  const [mutedSelf, setMutedSelf] = useState(false);
+  const [showHostPanel, setShowHostPanel] = useState(false);
+  const [kicked, setKicked] = useState(false);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
   const savedBrushAssets = useMemo(
@@ -1664,6 +1681,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return false;
       }
 
+      // A host locked the room: nobody but a host may draw. (The server also
+      // drops these ops — this is just immediate feedback so strokes don't appear
+      // and then vanish on the next history replay.)
+      if (roomLocked && !isRoomHost) {
+        setStatus("🔒 A host locked the canvas");
+        return false;
+      }
+
       const active = getActiveLayer();
       if (!active) {
         return false;
@@ -1685,7 +1710,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
       return true;
     },
-    [getActiveLayer],
+    [getActiveLayer, roomLocked, isRoomHost],
   );
 
   // Decide whether to ignore a pointerdown for palm rejection / pen priority
@@ -1933,6 +1958,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       refreshActiveThumbnail();
       // Stroke-batch end: mark the recorder dirty so a timed keyframe is taken.
       recordReplay(false);
+      // Play-money reward: a finished stroke earns a Drop (throttled internally).
+      earnPaintDropsRef.current?.();
     },
     [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
@@ -3162,8 +3189,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (saved?.name && saved.name !== data.userName) {
             mpRef.current?.sendRename?.(saved.name, saved.color);
           }
+          // Learn our ownership/host standing for this room from the server.
+          setIsRoomHost(!!data.isHost);
+          setIsRoomOwner(!!data.isOwner);
+          setRoomLocked(!!data.locked);
+          setRoomTitle(data.roomTitle || null);
+          // Mute is re-applied by the server on (re)connect for signed-in users,
+          // so trust the handshake rather than optimistically clearing it.
+          setMutedSelf(!!data.muted);
           break;
         }
+        case "room_state":
+          setRoomLocked(!!data.locked);
+          setStatus(data.locked ? "🔒 A host locked the canvas" : "🔓 Canvas unlocked");
+          break;
+        case "room_renamed":
+          setRoomTitle(data.title || null);
+          break;
+        case "role_changed":
+          setIsRoomHost(!!data.isHost);
+          if (data.isHost) setStatus("⭐ You're a co-host now");
+          break;
+        case "muted":
+          setMutedSelf(!!data.muted);
+          setStatus(data.muted ? "🔇 A host muted you in chat" : "🔈 You can chat again");
+          break;
+        case "kicked":
+          // Tear the socket down for good so the auto-reconnect can't slip us
+          // back into the room a second later.
+          mpRef.current?.disconnect?.();
+          setKicked(true);
+          break;
         case "history":
           // Rebuild the shared mural from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
@@ -3220,7 +3276,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner],
   );
 
-  const mp = useMultiplayer(roomId, handleMpMessage);
+  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
 
   // The imperative draw handlers (defined earlier) reach the senders via a ref.
   useEffect(() => {
@@ -3231,8 +3287,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendRestore: mp.sendRestore,
       sendRename: mp.sendRename,
       sendSheet: mp.sendSheet,
+      disconnect: mp.disconnect,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect]);
 
   // Re-render when the over/under mode flips, and keep the ref in sync.
   useEffect(() => {
@@ -3493,6 +3550,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setPaintSpaceAssets(assets);
     };
     const handleSession = async (session) => {
+      // Lift the session so the access token can ride the multiplayer socket and
+      // the host UI can read identity. Re-running the socket connect on token
+      // change reconnects us with our verified identity.
+      if (active) setSession(session || null);
       if (session) {
         await startSync(session);
         await refreshFromLocal();
@@ -3501,7 +3562,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
     };
     getSession().then((session) => {
-      if (active && session) {
+      if (active) {
         handleSession(session);
       }
     });
@@ -3633,9 +3694,28 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // state, persists to IndexedDB, and surfaces an honest status. All flows are
   // mock: no real payment or network.
   const persistEconomy = useCallback((next) => {
+    economyRef.current = next;
     setEconomy(next);
     saveEconomy(next).catch(() => setStatus("Couldn't save wallet"));
   }, []);
+
+  // Earn-by-painting (play-money): a completed stroke earns a Drop, throttled so
+  // the reward stays gentle and the ledger small. Exposed via a ref so the deep
+  // endStroke handler can call it without a forward dependency.
+  const earnPaintDrops = useCallback(() => {
+    const current = economyRef.current;
+    if (!current) return;
+    const now = Date.now();
+    if (now - lastPaintEarnRef.current < 4000) return;
+    lastPaintEarnRef.current = now;
+    persistEconomy(earnDropsForPainting(current, 1));
+  }, [persistEconomy]);
+  earnPaintDropsRef.current = earnPaintDrops;
+
+  // Keep the economy ref authoritative even for the async initial load.
+  useEffect(() => {
+    economyRef.current = economy;
+  }, [economy]);
 
   const handleBuyDrops = useCallback(
     (product) => {
@@ -3857,6 +3937,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           >
             Invite a friend
           </button>
+
+          {isRoomHost ? (
+            <button type="button" className="mp-host-btn" onClick={() => setShowHostPanel(true)}>
+              ⭐ Host{roomLocked ? " · 🔒" : ""}
+            </button>
+          ) : roomLocked ? (
+            <span className="mp-lock-chip" title="A host locked the canvas">🔒 Locked</span>
+          ) : null}
 
           <div className="mp-you">
             <button
@@ -4119,6 +4207,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               <button type="button" className="mp-chat-iconbtn" onClick={() => setShowReport(true)} title="Report something">
                 ⚠️
               </button>
+              {isRoomHost ? (
+                <button type="button" className="mp-chat-iconbtn" onClick={() => setShowHostPanel(true)} title="Host controls">
+                  ⭐
+                </button>
+              ) : null}
             </div>
             <div className="mp-chat-log">
               {mp.chat.length === 0 ? (
@@ -4148,10 +4241,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 type="text"
                 value={chatDraft}
                 maxLength={300}
+                disabled={mutedSelf}
                 onChange={(event) => setChatDraft(event.target.value)}
-                placeholder="Type a message…"
+                placeholder={mutedSelf ? "You're muted by a host" : "Type a message…"}
               />
-              <button type="submit">Send</button>
+              <button type="submit" disabled={mutedSelf}>Send</button>
             </form>
           </div>
         ) : (
@@ -4655,6 +4749,44 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             window.setTimeout(() => window.location.reload(), 2500);
           }}
         />
+      ) : null}
+
+      {showHostPanel && isRoomHost ? (
+        <HostControlPanel
+          roomId={roomId}
+          roomTitle={roomTitle}
+          locked={roomLocked}
+          isOwner={isRoomOwner}
+          users={mp.users}
+          selfId={mp.self?.id}
+          onLock={mp.sendLock}
+          onUnlock={mp.sendUnlock}
+          onRenameRoom={(name) => mp.sendRenameRoom(name)}
+          onClear={() => {
+            if (window.confirm("Clear the whole canvas for everyone in this room?")) mp.sendClear();
+          }}
+          onMute={(id, muted) => mp.sendMute(id, muted)}
+          onKick={(id) => {
+            if (window.confirm("Remove this painter from the room?")) mp.sendKick(id);
+          }}
+          onPromote={(id) => mp.sendPromote(id)}
+          onDemote={(id) => mp.sendDemote(id)}
+          onClose={() => setShowHostPanel(false)}
+        />
+      ) : null}
+
+      {kicked ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="studio-modal" role="dialog" aria-modal="true">
+            <h2>You were removed</h2>
+            <p className="account-note">A host removed you from this room.</p>
+            <div className="account-actions">
+              <button type="button" className="primary-action" onClick={() => { window.location.href = "/"; }}>
+                Back to home
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {showWallet && economy ? (
