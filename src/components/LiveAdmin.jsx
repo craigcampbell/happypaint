@@ -27,9 +27,13 @@ export default function LiveAdmin({ onNavigate }) {
   const [sheets, setSheets] = useState([]);
   const [uploading, setUploading] = useState(false);
 
+  // A unique query string per request defeats any stale service-worker / proxy
+  // cache (a cached 401 would otherwise lock you out no matter the key).
+  const bust = (path) => `${path}${path.includes("?") ? "&" : "?"}_=${Date.now()}`;
+
   const checkKey = useCallback(async (key) => {
     try {
-      const res = await fetch("/api/admin/check", { headers: { "x-admin-key": key }, cache: "no-store" });
+      const res = await fetch(bust("/api/admin/check"), { headers: { "x-admin-key": key }, cache: "no-store" });
       return res.ok;
     } catch {
       return false;
@@ -40,8 +44,8 @@ export default function LiveAdmin({ onNavigate }) {
     if (!adminKey) return;
     try {
       const [r1, r2] = await Promise.all([
-        fetch("/api/admin/rooms", { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
-        fetch("/api/admin/reports", { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
       if (r1.status === 401 || r2.status === 401) {
         setAuthed(false);
@@ -52,7 +56,7 @@ export default function LiveAdmin({ onNavigate }) {
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       setAuthed(true);
-      const s = await fetch("/api/sheets", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
     } catch {
       // leave as-is on a transient error
@@ -123,7 +127,7 @@ export default function LiveAdmin({ onNavigate }) {
       setAuthed(true);
       setError("");
     } else {
-      setError("That key didn't work — check .admin-key on the server.");
+      setError("That key didn't work. Double-check it and try again.");
     }
   };
 
@@ -156,7 +160,7 @@ export default function LiveAdmin({ onNavigate }) {
       <main className="admin-login">
         <div className="admin-login-card">
           <h1>🛡️ Drawesome Admin</h1>
-          <p>Enter the admin key (printed on the server console and saved in <code>.admin-key</code>).</p>
+          <p>Enter your admin key to continue.</p>
           <input
             type="password"
             value={keyInput}

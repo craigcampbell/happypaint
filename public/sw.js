@@ -1,4 +1,4 @@
-const CACHE_NAME = "happypaint-static-v4";
+const CACHE_NAME = "happypaint-static-v5";
 const STATIC_ASSETS = ["/linen.png", "/canvas.png", "/vite.svg"];
 
 self.addEventListener("install", (event) => {
