@@ -24,6 +24,8 @@ export default function LiveAdmin({ onNavigate }) {
   const [error, setError] = useState("");
   const [rooms, setRooms] = useState([]);
   const [reports, setReports] = useState([]);
+  const [sheets, setSheets] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
   const checkKey = useCallback(async (key) => {
     try {
@@ -50,10 +52,50 @@ export default function LiveAdmin({ onNavigate }) {
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       setAuthed(true);
+      const s = await fetch("/api/sheets", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
     } catch {
       // leave as-is on a transient error
     }
   }, [adminKey]);
+
+  const uploadSheet = (file) => {
+    if (!file) return;
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = String(reader.result || "");
+      const img = new Image();
+      img.onload = async () => {
+        const tw = 240;
+        const th = Math.max(1, Math.round((240 * img.height) / img.width));
+        const tc = document.createElement("canvas");
+        tc.width = tw;
+        tc.height = th;
+        const ctx = tc.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, tw, th);
+        ctx.drawImage(img, 0, 0, tw, th);
+        const thumb = tc.toDataURL("image/png");
+        await fetch("/api/admin/sheets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-key": adminKey },
+          body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, ""), image, thumb }),
+        }).catch(() => {});
+        setUploading(false);
+        refresh();
+      };
+      img.onerror = () => setUploading(false);
+      img.src = image;
+    };
+    reader.onerror = () => setUploading(false);
+    reader.readAsDataURL(file);
+  };
+
+  const deleteSheet = async (id) => {
+    await fetch(`/api/admin/sheets/${id}`, { method: "DELETE", headers: { "x-admin-key": adminKey } });
+    refresh();
+  };
 
   useEffect(() => {
     if (adminKey) {
@@ -196,6 +238,42 @@ export default function LiveAdmin({ onNavigate }) {
                   <button type="button" onClick={() => openRoom(room.id)}>View</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(room.id)}>Clear</button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="admin-section">
+        <h2>
+          Coloring sheets <span className="admin-badge">{sheets.length}</span>
+        </h2>
+        <label className="admin-upload">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              uploadSheet(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          <span>{uploading ? "Uploading…" : "⬆️ Upload a coloring sheet (PNG line art works best)"}</span>
+        </label>
+        <p className="admin-muted" style={{ margin: "6px 0 12px" }}>
+          Tip: use transparent-background black-line PNGs so kids can color underneath. Generate them with any
+          coloring-page maker or AI image tool, then upload here.
+        </p>
+        {sheets.length === 0 ? (
+          <p className="admin-empty">No sheets yet.</p>
+        ) : (
+          <div className="admin-sheet-grid">
+            {sheets.map((sheet) => (
+              <div key={sheet.id} className="admin-sheet">
+                {sheet.thumb ? <img src={sheet.thumb} alt={sheet.name} /> : <span className="sheet-noimg">🎨</span>}
+                <span className="admin-sheet-name">{sheet.name}</span>
+                <button type="button" className="admin-danger" onClick={() => deleteSheet(sheet.id)}>
+                  Delete
+                </button>
               </div>
             ))}
           </div>

@@ -29,3 +29,4 @@ server.err.log
 .rooms/
 .admin-key
 .reports.json
+.sheets.json

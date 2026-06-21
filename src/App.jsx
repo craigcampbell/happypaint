@@ -343,6 +343,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
   const [showReport, setShowReport] = useState(false);
   const [reportReason, setReportReason] = useState("");
+  // Coloring sheet: a shared, locked line-art overlay artists colour under/over.
+  const sheetImageRef = useRef(null);
+  const sheetRectRef = useRef(null);
+  const sheetModeRef = useRef("over"); // 'over' = lines on top (colour under)
+  const [sheetId, setSheetId] = useState(null);
+  const [sheetMode, setSheetMode] = useState("over");
+  const [sheets, setSheets] = useState([]);
   const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
   const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
@@ -555,6 +562,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     syncZoomLabel();
   };
 
+  // The first view people see: zoomed in past "fit" and centred, so there's a
+  // comfortable drawing area instead of the whole tiny mural.
+  const startView = () => {
+    const { w, h } = getViewportSize();
+    const scale = fitScaleFor(w, h) * 1.9;
+    viewRef.current = {
+      scale,
+      tx: w / 2 - (CANVAS_WIDTH / 2) * scale,
+      ty: h / 2 - (CANVAS_HEIGHT / 2) * scale,
+    };
+    clampView(viewRef.current);
+    syncZoomLabel();
+  };
+
   // Blit the document through the current view: a neutral backdrop (the "table"),
   // a white mural page, then the composited drawing, with a soft page border.
   const blitToDisplay = useCallback(() => {
@@ -636,6 +657,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // canvas, then blit to the display. Used on stroke-end and on any structural /
   // opacity / visibility / frame change. Invalidates the per-stroke caches since
   // the layer stack they were built from may have changed.
+  // Draw the room's coloring sheet (a locked line-art overlay) at the given size.
+  const drawSheet = useCallback((context, width = CANVAS_WIDTH, height = CANVAS_HEIGHT) => {
+    const img = sheetImageRef.current;
+    const rect = sheetRectRef.current;
+    if (!img || !rect) {
+      return;
+    }
+    const sx = width / CANVAS_WIDTH;
+    const sy = height / CANVAS_HEIGHT;
+    context.globalAlpha = 1;
+    context.drawImage(img, rect.x * sx, rect.y * sy, rect.w * sx, rect.h * sy);
+  }, []);
+
   const renderDisplay = useCallback(() => {
     const context = docContextRef.current;
     if (!context) {
@@ -643,10 +677,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     paintOnionSkin(context);
+    if (sheetModeRef.current === "under") {
+      drawSheet(context);
+    }
     compositeLayers(context, layersRef.current);
+    if (sheetModeRef.current !== "under") {
+      drawSheet(context);
+    }
     compositeCacheValidRef.current = false;
     blitToDisplay();
-  }, [blitToDisplay, paintOnionSkin]);
+  }, [blitToDisplay, drawSheet, paintOnionSkin]);
 
   // Drop the cached below/above composites so the next stroke rebuilds them.
   const invalidateCompositeCache = useCallback(() => {
@@ -706,6 +746,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     context.globalAlpha = 1;
+    if (sheetModeRef.current === "under") {
+      drawSheet(context);
+    }
     context.drawImage(belowCacheRef.current, 0, 0);
     if (active.visible && active.opacity > 0) {
       context.globalAlpha = active.opacity;
@@ -713,8 +756,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       context.globalAlpha = 1;
     }
     context.drawImage(aboveCacheRef.current, 0, 0);
+    if (sheetModeRef.current !== "under") {
+      drawSheet(context);
+    }
     blitToDisplay();
-  }, [blitToDisplay, renderDisplay]);
+  }, [blitToDisplay, drawSheet, renderDisplay]);
 
   // Schedule a single per-move composite per painted frame (W5). Coalesces
   // bursts of pointermove handlers into at most one composite per rAF.
@@ -761,7 +807,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     displayDprRef.current = dpr;
     if (!viewInitRef.current) {
       viewInitRef.current = true;
-      fitView();
+      startView();
     } else {
       clampView(viewRef.current);
       syncZoomLabel();
@@ -921,10 +967,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         await renderPaper(context, { width, height, textureId });
       }
 
+      if (sheetModeRef.current === "under") {
+        drawSheet(context, width, height);
+      }
       compositeLayers(context, layersRef.current, { width, height });
+      if (sheetModeRef.current !== "under") {
+        drawSheet(context, width, height);
+      }
       return canvas;
     },
-    [renderPaper, selectedTexture],
+    [drawSheet, renderPaper, selectedTexture],
   );
 
   // ---- Replay snapshot recorder (snapshot-based, NOT per-stroke) ----
@@ -3027,6 +3079,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // solo session never allocates it.
   // Friends' strokes land on the SAME shared canvas everyone paints on (the base
   // layer), so strokes stack in arrival order and anyone can paint over anyone.
+  // Load (or clear) the room's coloring sheet image and re-render.
+  const loadSheetImage = useCallback(
+    (id) => {
+      if (!id) {
+        sheetImageRef.current = null;
+        sheetRectRef.current = null;
+        renderDisplay();
+        return;
+      }
+      fetch(`/api/sheets/${id}`, { cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data?.image) {
+            return;
+          }
+          const img = new Image();
+          img.onload = () => {
+            const scale = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
+            const w = img.width * scale;
+            const h = img.height * scale;
+            sheetRectRef.current = { x: (CANVAS_WIDTH - w) / 2, y: (CANVAS_HEIGHT - h) / 2, w, h };
+            sheetImageRef.current = img;
+            renderDisplay();
+          };
+          img.src = data.image;
+        })
+        .catch(() => {});
+    },
+    [renderDisplay],
+  );
+
   const getRemoteCtx = useCallback(() => {
     const layer = layersRef.current[0];
     return layer ? layer.canvas.getContext("2d") : null;
@@ -3110,6 +3193,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           refreshActiveThumbnail();
           showClearBanner(data.name || "Someone");
           break;
+        case "sheet":
+          setSheetId(data.sheetId || null);
+          loadSheetImage(data.sheetId || null);
+          break;
         case "cursor":
           remoteCursorsRef.current.set(data.userId, {
             x: data.x,
@@ -3130,7 +3217,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner],
+    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage);
@@ -3143,8 +3230,34 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendClear: mp.sendClear,
       sendRestore: mp.sendRestore,
       sendRename: mp.sendRename,
+      sendSheet: mp.sendSheet,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet]);
+
+  // Re-render when the over/under mode flips, and keep the ref in sync.
+  useEffect(() => {
+    sheetModeRef.current = sheetMode;
+    renderDisplay();
+  }, [sheetMode, renderDisplay]);
+
+  // Load available coloring sheets for the picker.
+  const loadSheets = useCallback(async () => {
+    try {
+      const res = await fetch("/api/sheets", { cache: "no-store" });
+      const data = await res.json();
+      setSheets(Array.isArray(data.sheets) ? data.sheets : []);
+    } catch {
+      // offline — leave list as-is
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSheets();
+  }, [loadSheets]);
+
+  const applySheet = useCallback((id) => {
+    mpRef.current?.sendSheet?.(id || null);
+  }, []);
 
   // Load any saved profile (name/colour) once.
   useEffect(() => {
@@ -4253,7 +4366,46 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section" ref={brushSectionRef}>
+        <section className="tool-section rail-top rail-top-0">
+          <div className="section-title-row">
+            <h2>Coloring sheet</h2>
+            {sheetId ? (
+              <button type="button" onClick={() => applySheet(null)}>
+                Remove
+              </button>
+            ) : null}
+          </div>
+          {sheets.length === 0 ? (
+            <p className="economy-note">No coloring sheets yet — a grown-up can add them in the admin.</p>
+          ) : (
+            <div className="sheet-grid">
+              {sheets.map((sheet) => (
+                <button
+                  type="button"
+                  key={sheet.id}
+                  className={sheetId === sheet.id ? "sheet-chip is-active" : "sheet-chip"}
+                  onClick={() => applySheet(sheet.id)}
+                  title={sheet.name}
+                >
+                  {sheet.thumb ? <img src={sheet.thumb} alt={sheet.name} /> : <span className="sheet-noimg">🎨</span>}
+                  <span className="sheet-name">{sheet.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {sheetId ? (
+            <label className="color-picker sheet-toggle">
+              <span>Lines on top (colour under)</span>
+              <input
+                type="checkbox"
+                checked={sheetMode === "over"}
+                onChange={(event) => setSheetMode(event.target.checked ? "over" : "under")}
+              />
+            </label>
+          ) : null}
+        </section>
+
+        <section className="tool-section rail-top rail-top-1" ref={brushSectionRef}>
           <h2>Brushes</h2>
           <div className="brush-grid">
             {brushCatalog.map((brush) => {
@@ -4274,7 +4426,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section">
+        <section className="tool-section rail-top rail-top-2">
           <h2>Color</h2>
           <div className="palette-grid">
             {activePalette.colors.map((color) => (
@@ -4343,7 +4495,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section sliders">
+        <section className="tool-section sliders rail-top rail-top-3">
           <h2>Stroke</h2>
           <label>
             <span>Size</span>

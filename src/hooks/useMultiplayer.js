@@ -126,6 +126,7 @@ export function useMultiplayer(roomId, onMessage) {
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
   const sendClear = useCallback(() => send({ type: "clear" }), [send]);
   const sendRestore = useCallback(() => send({ type: "undo_clear" }), [send]);
+  const sendSheet = useCallback((sheetId) => send({ type: "set_sheet", sheetId }), [send]);
   const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
   const sendRename = useCallback(
     (name, color) => {
@@ -136,5 +137,5 @@ export function useMultiplayer(roomId, onMessage) {
     [send],
   );
 
-  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendRename, sendChat };
+  return { connected, users, self, chat, sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat };
 }

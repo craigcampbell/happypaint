@@ -41,12 +41,12 @@ const persistTimers = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
-function loadRoomHistory(roomId) {
+function loadRoom(roomId) {
   try {
     const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
-    return Array.isArray(data.history) ? data.history : [];
+    return { history: Array.isArray(data.history) ? data.history : [], sheetId: data.sheetId || null };
   } catch {
-    return [];
+    return { history: [], sheetId: null };
   }
 }
 function persistRoom(roomId) {
@@ -61,7 +61,7 @@ function persistRoom(roomId) {
     }
     try {
       mkdirSync(ROOM_DIR, { recursive: true });
-      writeFileSync(roomFile(roomId), JSON.stringify({ history: room.history, savedAt: Date.now() }));
+      writeFileSync(roomFile(roomId), JSON.stringify({ history: room.history, sheetId: room.sheetId || null, savedAt: Date.now() }));
     } catch {
       // Non-fatal — persistence is best-effort.
     }
@@ -70,7 +70,8 @@ function persistRoom(roomId) {
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { users: new Map(), history: loadRoomHistory(roomId), lastCleared: null });
+    const saved = loadRoom(roomId);
+    rooms.set(roomId, { users: new Map(), history: saved.history, lastCleared: null, sheetId: saved.sheetId });
   }
   return rooms.get(roomId);
 }
@@ -133,6 +134,9 @@ wss.on('connection', (ws, req) => {
   if (room.history.length > 0) {
     ws.send(JSON.stringify({ type: 'history', ops: room.history }));
   }
+  if (room.sheetId) {
+    ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
+  }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
 
   ws.on('message', (raw) => {
@@ -161,6 +165,12 @@ wss.on('connection', (ws, req) => {
           type: 'cursor', userId: id, name: user.name, color: user.color,
           x: data.x, y: data.y, drawing: !!data.drawing,
         }, id);
+        break;
+      case 'set_sheet':
+        // Set (or clear) the room's coloring sheet for everyone.
+        room.sheetId = data.sheetId ? String(data.sheetId).slice(0, 64) : null;
+        broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
+        persistRoom(roomId);
         break;
       case 'rename': {
         if (typeof data.name === 'string' && data.name.trim()) {
@@ -389,6 +399,60 @@ app.post('/api/admin/reports/:id/resolve', (req, res) => {
     report.status = 'resolved';
     persistReports();
   }
+  res.json({ ok: true });
+});
+
+// ---- Coloring sheets ------------------------------------------------------
+// Admin uploads line-art images; anyone can list them and apply one to a room.
+const SHEETS_FILE = join(__dirname, '.sheets.json');
+let sheets = [];
+try {
+  const parsed = JSON.parse(readFileSync(SHEETS_FILE, 'utf8'));
+  sheets = Array.isArray(parsed) ? parsed : [];
+} catch {
+  sheets = [];
+}
+function persistSheets() {
+  try { writeFileSync(SHEETS_FILE, JSON.stringify(sheets)); } catch { /* ignore */ }
+}
+
+app.get('/api/sheets', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ sheets: sheets.map((s) => ({ id: s.id, name: s.name, thumb: s.thumb })) });
+});
+
+app.get('/api/sheets/:id', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const sheet = sheets.find((s) => s.id === req.params.id);
+  if (!sheet) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  res.json({ id: sheet.id, name: sheet.name, image: sheet.image });
+});
+
+app.post('/api/admin/sheets', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const { name, image, thumb } = req.body || {};
+  if (typeof image !== 'string' || !image.startsWith('data:image')) {
+    return res.status(400).json({ error: 'image required' });
+  }
+  const item = {
+    id: 'sheet_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: String(name || 'Coloring sheet').slice(0, 60),
+    thumb: typeof thumb === 'string' ? thumb : '',
+    image,
+    createdAt: Date.now(),
+  };
+  sheets.unshift(item);
+  if (sheets.length > 200) sheets.length = 200;
+  persistSheets();
+  res.json({ ok: true, id: item.id });
+});
+
+app.delete('/api/admin/sheets/:id', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  sheets = sheets.filter((s) => s.id !== req.params.id);
+  persistSheets();
   res.json({ ok: true });
 });
 
