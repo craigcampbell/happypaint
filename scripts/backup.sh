@@ -13,13 +13,16 @@ cd "$(dirname "$0")/.."
 DEST="${1:-./backups}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$DEST"
+# Mutable data + config. NOT coloring-library (static ~1.2GB — copy that once).
 TARGETS=""
 [ -d pb_data ] && TARGETS="$TARGETS pb_data"
 [ -d app_data ] && TARGETS="$TARGETS app_data"
+[ -f .env ] && TARGETS="$TARGETS .env"
 if [ -z "$TARGETS" ]; then
-  echo "Nothing to back up (no pb_data/app_data found). Run from the repo root after the stack has started."
+  echo "Nothing to back up (no pb_data/app_data/.env). Run from the repo root after the stack has started."
   exit 1
 fi
 OUT="$DEST/drawesome-backup-$STAMP.tgz"
 tar -czf "$OUT" $TARGETS
-echo "Backup written: $OUT"
+echo "Backup written: $OUT  (contains:$TARGETS)"
+echo "Note: this bundle includes .env (your tunnel token) — keep it private."

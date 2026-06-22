@@ -41,6 +41,8 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./app_data:/data
+      # The 6k+ coloring-sheet library (full PNGs + thumbnails), served read-only.
+      - ./coloring-library:/app/coloring-library:ro
 
   # The Cloudflare tunnel, in the stack. Only starts with `--profile tunnel`, so
   # a plain `docker compose up` (local testing) doesn't need a token. Because it
