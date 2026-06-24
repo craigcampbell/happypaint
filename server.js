@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
+import { scan } from './server/moderation/textFilter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +49,10 @@ const PORT = Number(process.env.PORT || 8787);
 const MAX_HISTORY = Number(process.env.MAX_HISTORY || 6000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
+const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
+const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min ms between watcher samples
+const WATCH_MAX_DIM = Number(process.env.WATCH_MAX_DIM || 256); // longest snapshot edge the watcher downscales to
+const FLAG_WINDOW_MS = Number(process.env.FLAG_WINDOW_MS || 30_000); // corroboration window for moderation flags
 
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
 // lives under one directory so a single Docker volume persists everything. Defaults
@@ -127,9 +132,14 @@ function loadRoom(roomId) {
       mutedProfileIds: Array.isArray(data.mutedProfileIds) ? data.mutedProfileIds : [],
       locked: !!data.locked,
       title: typeof data.title === 'string' ? data.title : null,
+      // Audience gate + discovery flag + moderation-hidden op ids. Null audience
+      // means "not yet decided" — getRoom applies a per-room default.
+      audience: typeof data.audience === 'string' ? data.audience : null,
+      listed: typeof data.listed === 'boolean' ? data.listed : null,
+      hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [] };
   }
 }
 function persistRoom(roomId) {
@@ -153,6 +163,9 @@ function persistRoom(roomId) {
         mutedProfileIds: Array.from(room.mutedProfileIds || []),
         locked: !!room.locked,
         title: room.title || null,
+        audience: room.audience || null,
+        listed: typeof room.listed === 'boolean' ? room.listed : null,
+        hiddenOpIds: Array.from(room.hiddenOpIds || []),
         savedAt: Date.now(),
       }));
     } catch {
@@ -161,10 +174,26 @@ function persistRoom(roomId) {
   }, 2500));
 }
 
+// The one legacy room that is public by default; everything else reached by an
+// invite code is a private ("friends") room unless explicitly created public.
+const DEFAULT_PUBLIC_ROOM = 'MAIN';
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     const saved = loadRoom(roomId);
+    // Audience default: the legacy MAIN room is the public hall (kid_safe); a
+    // room first reached by an invite code is private (friends). A room created
+    // via POST /api/rooms persists its audience, which wins here.
+    const audience = saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
+    const listed = saved.listed != null ? saved.listed : audience === 'kid_safe';
+    // Recover the op-id counter from persisted history so ids stay monotonic
+    // across restarts (selective moderation hides/restores by opId).
+    let opSeq = 0;
+    for (const op of saved.history) {
+      if (op && typeof op.opId === 'number' && op.opId > opSeq) opSeq = op.opId;
+    }
     rooms.set(roomId, {
+      code: roomId,
       users: new Map(),
       history: saved.history,
       lastCleared: null,
@@ -175,10 +204,69 @@ function getRoom(roomId) {
       kickedProfiles: new Map(), // profileId -> expiry ts; in-memory short ban
       locked: saved.locked,
       title: saved.title,
+      audience,
+      listed,
+      opSeq,
+      hiddenOpIds: new Set(saved.hiddenOpIds), // moderation: reversibly hidden ops
+      flags: [], // recent moderation flags (in-memory, for corroboration)
+      flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
+      watchers: new Set(), // elected client ids running the in-browser watcher
+      modLog: [], // recent moderation actions (in-memory, capped)
       lastActivity: Date.now(),
     });
   }
   return rooms.get(roomId);
+}
+
+// The op history minus moderation-hidden ops — what late joiners and post-hide
+// rebuilds actually receive. Cheap no-op when nothing is hidden (the common case).
+function visibleHistory(room) {
+  if (!room.hiddenOpIds || room.hiddenOpIds.size === 0) return room.history;
+  return room.history.filter((op) => !room.hiddenOpIds.has(op.opId));
+}
+
+// Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
+// lewd" that an image flag implicates.
+function opIdsInRange(room, sinceOpId, toOpId) {
+  const ids = [];
+  for (const op of room.history) {
+    if (op.opId > sinceOpId && op.opId <= toOpId) ids.push(op.opId);
+  }
+  return ids;
+}
+
+// Elect up to MAX_WATCHERS capable clients to run the in-browser NSFW watcher in
+// a public room (prefer signed-in, then earliest joined). Only the elected few
+// scan, so the cost never multiplies across everyone painting. Idempotent — only
+// emits watcher_role when a client's status actually changes.
+function electWatchers(room) {
+  if (!room) return;
+  for (const wid of Array.from(room.watchers)) {
+    if (!room.users.has(wid)) room.watchers.delete(wid);
+  }
+  if (room.audience !== 'kid_safe') {
+    room.watchers.forEach((wid) => {
+      const u = room.users.get(wid);
+      if (u && u.ws.readyState === 1) u.ws.send(JSON.stringify({ type: 'watcher_role', active: false }));
+    });
+    room.watchers.clear();
+    return;
+  }
+  const candidates = Array.from(room.users.values()).filter((u) => u.watcherCapable);
+  candidates.sort((a, b) => (Number(Boolean(b.profileId)) - Number(Boolean(a.profileId))) || (a.connectedAt - b.connectedAt));
+  const chosen = new Set(candidates.slice(0, MAX_WATCHERS).map((u) => u.id));
+  room.users.forEach((u) => {
+    const isWatcher = room.watchers.has(u.id);
+    if (chosen.has(u.id) && !isWatcher) {
+      room.watchers.add(u.id);
+      if (u.ws.readyState === 1) {
+        u.ws.send(JSON.stringify({ type: 'watcher_role', active: true, intervalMs: WATCH_INTERVAL_MS, maxDim: WATCH_MAX_DIM }));
+      }
+    } else if (!chosen.has(u.id) && isWatcher) {
+      room.watchers.delete(u.id);
+      if (u.ws.readyState === 1) u.ws.send(JSON.stringify({ type: 'watcher_role', active: false }));
+    }
+  });
 }
 
 const ANIMAL_NAMES = [
@@ -234,6 +322,15 @@ wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
   const room = getRoom(roomId);
+
+  // adult_18 is a defined-but-disabled audience: real adult verification doesn't
+  // exist in this stack, so no normal user can create one (POST /api/rooms 403s)
+  // and nobody can join one. The gate exists so the model is complete + safe.
+  if (room.audience === 'adult_18') {
+    ws.send(JSON.stringify({ type: 'room_blocked', reason: 'adult_disabled' }));
+    ws.close(1008, 'adult disabled');
+    return;
+  }
 
   if (room.users.size >= MAX_ROOM_USERS) {
     ws.send(JSON.stringify({ type: 'room_full', max: MAX_ROOM_USERS }));
@@ -302,10 +399,14 @@ wss.on('connection', async (ws, req) => {
     locked: !!room.locked,
     muted: !!user.muted,
     roomTitle: room.title || null,
+    audience: room.audience,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
+  // Always sync a history frame for any room that has ever had ops, so a joiner
+  // sees the exact current (post-moderation) mural — even when everything visible
+  // was just hidden. Truly-empty rooms still send nothing.
   if (room.history.length > 0) {
-    ws.send(JSON.stringify({ type: 'history', ops: room.history }));
+    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
   }
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
@@ -328,8 +429,19 @@ wss.on('connection', async (ws, req) => {
         // When a host locks the room, only hosts may keep drawing. This is the
         // real boundary — clients also disable the canvas, but this enforces it.
         if (room.locked && !isHost(room, user)) break;
-        // Tag with the author so replay/cursors can attribute it.
-        const op = { ...data.op, userId: id };
+        // Public-room text moderation: block severe drawn text before it lands on
+        // the shared mural. Imagery is handled by the watcher/flag path. O(small),
+        // synchronous — adds no latency to the normal draw-op relay below.
+        if (room.audience === 'kid_safe' && data.op.kind === 'text' && typeof data.op.text === 'string') {
+          const verdict = scan(data.op.text);
+          if (verdict.severity === 'severe') {
+            autoModerate(room, user, `drawn text: ${verdict.terms.join(', ')}`);
+            break;
+          }
+        }
+        // Tag with the author so replay/cursors can attribute it, plus a stable
+        // monotonic opId so moderation can hide/restore individual ops later.
+        const op = { ...data.op, userId: id, opId: (room.opSeq = (room.opSeq || 0) + 1) };
         room.history.push(op);
         if (room.history.length > MAX_HISTORY) {
           room.history.splice(0, room.history.length - MAX_HISTORY);
@@ -383,15 +495,27 @@ wss.on('connection', async (ws, req) => {
           persistRoom(roomId);
         }
         break;
-      case 'chat':
+      case 'chat': {
         if (user.muted) break; // a host muted this user
-        if (typeof data.message === 'string' && data.message.trim()) {
-          broadcast(roomId, {
-            type: 'chat', user: { id, name: user.name, color: user.color },
-            message: String(data.message).slice(0, 300), ts: Date.now(),
-          });
+        if (typeof data.message !== 'string' || !data.message.trim()) break;
+        let message = String(data.message).slice(0, 300);
+        // Public-room chat moderation: drop severe messages (and alert hosts),
+        // soft-mask milder profanity. Private rooms are unfiltered.
+        if (room.audience === 'kid_safe') {
+          const verdict = scan(message);
+          if (verdict.severity === 'severe') {
+            autoModerate(room, user, `chat: ${verdict.terms.join(', ')}`);
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked' }));
+            break;
+          }
+          if (verdict.hit) message = maskMessage(message);
         }
+        broadcast(roomId, {
+          type: 'chat', user: { id, name: user.name, color: user.color },
+          message, ts: Date.now(),
+        });
         break;
+      }
 
       // ---- Host-only room controls (require a verified host) ----------------
       case 'lock':
@@ -462,6 +586,99 @@ wss.on('connection', async (ws, req) => {
         break;
       }
 
+      // ---- Moderation: reversible hide / restore / permanent remove --------
+      // Operate on stable op ids. Hiding is reversible (op stays in history but
+      // is filtered out of replay); removing is permanent. Reuses the existing
+      // `history` rebuild on clients, so no extra client canvas logic is needed.
+      case 'mod_hide': {
+        if (!isHost(room, user)) break;
+        const ids = Array.isArray(data.opIds) ? data.opIds : [];
+        if (!ids.length) break;
+        ids.forEach((opId) => room.hiddenOpIds.add(opId));
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+        persistRoom(roomId);
+        break;
+      }
+      case 'mod_restore': {
+        if (!isHost(room, user)) break;
+        const ids = Array.isArray(data.opIds) ? data.opIds : [];
+        if (!ids.length) break;
+        ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room), restored: true });
+        persistRoom(roomId);
+        break;
+      }
+      case 'mod_remove': {
+        if (!isHost(room, user)) break;
+        const ids = new Set(Array.isArray(data.opIds) ? data.opIds : []);
+        if (!ids.size) break;
+        room.history = room.history.filter((op) => !ids.has(op.opId));
+        ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+        persistRoom(roomId);
+        break;
+      }
+
+      // ---- Image moderation: watcher election + flag corroboration ---------
+      case 'watcher_ack': {
+        // A client self-reports whether it can run the in-browser watcher; the
+        // server decides who actually scans (election keeps it to a capable few).
+        user.watcherCapable = data.capable !== false;
+        electWatchers(room);
+        break;
+      }
+      case 'flag': {
+        // A watcher (or any client) flags a region as possibly lewd. Acted on
+        // only in public rooms. Conservative ladder: a lone flag is Tier-1 (alert
+        // the hosts, destroy nothing); corroboration is required before the
+        // reversible auto-hide; a kick is NEVER automatic.
+        if (room.audience !== 'kid_safe') break;
+        const kind = data.kind === 'text' ? 'text' : 'image';
+        const score = Number(data.score) || 0;
+        const sinceOpId = Math.max(0, Number(data.sinceOpId) || 0);
+        const toOpId = Number(data.toOpId) || 0;
+        if (toOpId <= sinceOpId) break;
+        const now = Date.now();
+        room.flags = room.flags.filter((f) => now - f.ts < FLAG_WINDOW_MS);
+        room.flags.push({ clientId: id, kind, sinceOpId, toOpId, ts: now });
+
+        const implicated = opIdsInRange(room, sinceOpId, toOpId);
+        if (!implicated.length) break;
+        const culpritOp = room.history.find((op) => implicated.includes(op.opId));
+        const offender = culpritOp ? room.users.get(culpritOp.userId) : null;
+
+        // Tier 1: alert hosts once per implicated op (non-destructive).
+        const firstAlert = implicated.some((opId) => !room.flaggedOps.has(opId));
+        implicated.forEach((opId) => room.flaggedOps.add(opId));
+        if (firstAlert) {
+          autoModerate(room, offender, `possible lewd image (score ${score.toFixed(2)})`, implicated);
+        }
+
+        // Tier 2: corroborated (>=2 independent flaggers, or 1 flag + 1 human
+        // report) -> reversible auto-hide of the implicated ops + mute author.
+        const overlapping = room.flags.filter((f) => f.kind === kind && f.sinceOpId < toOpId && sinceOpId < f.toOpId);
+        const flaggers = new Set(overlapping.map((f) => f.clientId));
+        const humanReports = reports.filter(
+          (r) => r.room === roomId && r.source === 'user' && r.status === 'open' && now - r.ts < FLAG_WINDOW_MS,
+        ).length;
+        const corroborated = flaggers.size >= 2 || (flaggers.size >= 1 && humanReports >= 1);
+        if (corroborated) {
+          const toHide = implicated.filter((opId) => !room.hiddenOpIds.has(opId));
+          if (toHide.length) {
+            toHide.forEach((opId) => room.hiddenOpIds.add(opId));
+            const authorIds = new Set(room.history.filter((op) => toHide.includes(op.opId)).map((op) => op.userId));
+            authorIds.forEach((uid) => { const au = room.users.get(uid); if (au) au.muted = true; });
+            broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+            alertHosts(room, {
+              level: 'warn', reason: 'auto-hidden pending review', opIds: toHide,
+              author: offender ? offender.name : null, source: 'auto', hidden: true,
+            });
+            persistRoom(roomId);
+          }
+        }
+        break;
+      }
+
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong' }));
         break;
@@ -474,6 +691,11 @@ wss.on('connection', async (ws, req) => {
     room.users.delete(id);
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
+    // If a watcher left, promote another capable client so coverage continues.
+    if (room.watchers.has(id) || room.watchers.size < MAX_WATCHERS) {
+      room.watchers.delete(id);
+      electWatchers(room);
+    }
     // Never leave a room locked with no host present — otherwise an owner who
     // leaves (or deletes their account) could brick the canvas for everyone.
     if (room.locked && !Array.from(room.users.values()).some((u) => isHost(room, u))) {
@@ -590,6 +812,52 @@ function persistReports() {
   try { writeFileSync(REPORTS_FILE, JSON.stringify(reports.slice(0, 500))); } catch { /* ignore */ }
 }
 
+// Single entry point for the reports store so both human reports (/api/report)
+// and auto-moderation share one shape. `source` distinguishes them in /admin.
+function fileReport({ room, reason, reporterName, source }) {
+  const report = {
+    id: 'rep_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    room: String(room || '').toUpperCase().slice(0, 16),
+    reason: String(reason || '').slice(0, 300),
+    reporterName: String(reporterName || 'anonymous').slice(0, 20),
+    source: source === 'auto' ? 'auto' : 'user',
+    ts: Date.now(),
+    status: 'open',
+  };
+  reports.unshift(report);
+  if (reports.length > 500) reports.length = 500;
+  persistReports();
+  return report;
+}
+
+// Notify just the room's hosts (and nobody else) about a moderation event — a
+// host/admin decides whether to hide/restore/remove. Never broadcast to kids.
+function alertHosts(room, payload) {
+  room.users.forEach((u) => {
+    if (isHost(room, u) && u.ws.readyState === 1) {
+      u.ws.send(JSON.stringify({ type: 'mod_alert', ...payload }));
+    }
+  });
+}
+
+// Tier-1 auto action (non-destructive): file an auto-report + alert the hosts +
+// jot it in the room's moderation log. Used by the text filter and the image
+// flag path. Destructive actions (hide/kick) stay a human decision.
+function autoModerate(room, offender, reason, opIds) {
+  fileReport({ room: room.code, reason: `auto: ${reason}`, reporterName: 'auto-mod', source: 'auto' });
+  alertHosts(room, { level: 'warn', reason, author: offender ? offender.name : null, opIds: opIds || null, source: 'auto' });
+  room.modLog.unshift({ ts: Date.now(), reason, author: offender ? offender.profileId : null });
+  if (room.modLog.length > 100) room.modLog.length = 100;
+}
+
+// Mask individual profane tokens (mild hits) while leaving the rest readable.
+function maskMessage(message) {
+  return message
+    .split(/(\s+)/)
+    .map((tok) => (/^\s+$/.test(tok) ? tok : scan(tok).hit ? '*'.repeat(Math.max(3, tok.length)) : tok))
+    .join('');
+}
+
 function isAdmin(req) {
   const key = req.get('x-admin-key') || req.query.key;
   return Boolean(key) && key === ADMIN_KEY;
@@ -609,16 +877,7 @@ app.post('/api/report', (req, res) => {
   if (!room) {
     return res.status(400).json({ error: 'room required' });
   }
-  reports.unshift({
-    id: 'rep_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    room: String(room).toUpperCase().slice(0, 16),
-    reason: String(reason || '').slice(0, 300),
-    reporterName: String(reporterName || 'anonymous').slice(0, 20),
-    ts: Date.now(),
-    status: 'open',
-  });
-  if (reports.length > 500) reports.length = 500;
-  persistReports();
+  fileReport({ room, reason, reporterName, source: 'user' });
   res.json({ ok: true });
 });
 
@@ -661,6 +920,97 @@ app.post('/api/admin/reports/:id/resolve', (req, res) => {
     persistReports();
   }
   res.json({ ok: true });
+});
+
+// ---- Rooms: audience + discovery ------------------------------------------
+// A signed-in grown-up creates a public (kid_safe) room that shows up in the
+// discovery lobby; invite-code rooms stay private ("friends") and are created
+// lazily on first WS connect, exactly as before.
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function genRoomCode() {
+  let code;
+  do {
+    code = '';
+    for (let i = 0; i < 6; i += 1) {
+      code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
+    }
+  } while (code === DEFAULT_PUBLIC_ROOM || rooms.has(code) || existsSync(roomFile(code)));
+  return code;
+}
+
+// Tiny in-memory rate limiter (per profile/IP) so room creation can't be spammed.
+const createHits = new Map();
+function rateOk(key, max = 8, windowMs = 60_000) {
+  const now = Date.now();
+  const arr = (createHits.get(key) || []).filter((t) => now - t < windowMs);
+  if (arr.length >= max) {
+    createHits.set(key, arr);
+    return false;
+  }
+  arr.push(now);
+  createHits.set(key, arr);
+  return true;
+}
+
+function bearerToken(req) {
+  const auth = req.get('authorization') || '';
+  return /^bearer\s+/i.test(auth) ? auth.replace(/^bearer\s+/i, '').trim() : '';
+}
+
+// Create a room with an explicit audience. Public (kid_safe) rooms require a
+// signed-in owner; adult_18 is disabled; friends rooms don't need this (an
+// invite code lazily creates a private room on connect).
+app.post('/api/rooms', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const body = req.body || {};
+  const audience = typeof body.audience === 'string' ? body.audience : 'kid_safe';
+  if (!['kid_safe', 'friends', 'adult_18'].includes(audience)) {
+    return res.status(400).json({ error: 'bad_audience' });
+  }
+  if (audience === 'adult_18') {
+    return res.status(403).json({ error: 'adult_disabled' });
+  }
+  const token = bearerToken(req);
+  const identity = token ? await verifyAccessToken(token) : null;
+  // A public room needs a grown-up owner who can moderate it.
+  if (audience === 'kid_safe' && !identity) {
+    return res.status(401).json({ error: 'signin_required' });
+  }
+  const rlKey = (identity && identity.profileId) || req.ip || 'anon';
+  if (!rateOk(`room:${rlKey}`)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
+  const code = genRoomCode();
+  const room = getRoom(code); // materializes with default audience; we override
+  room.audience = audience;
+  room.listed = audience === 'kid_safe' ? body.listed !== false : false;
+  room.title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 40) : null;
+  if (identity) room.ownerProfileId = identity.profileId;
+  persistRoom(code);
+  res.json({ code, audience: room.audience, listed: room.listed, title: room.title });
+});
+
+// The discovery lobby source: live, listed, kid_safe rooms only. Sanitized —
+// never participant names, chat, raw strokes, owner ids, or private rooms.
+app.get('/api/rooms/public', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  getRoom(DEFAULT_PUBLIC_ROOM); // always surface the main hall, even when empty
+  const list = [];
+  rooms.forEach((room, code) => {
+    if (room.audience !== 'kid_safe' || !room.listed) return;
+    const users = room.users.size;
+    if (users === 0 && code !== DEFAULT_PUBLIC_ROOM) return;
+    list.push({
+      code,
+      title: room.title || null,
+      users,
+      sheetId: room.sheetId || null,
+      lastActivity: room.lastActivity || 0,
+      hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
+    });
+  });
+  list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity);
+  res.json({ rooms: list.slice(0, 60) });
 });
 
 // ---- Coloring sheets ------------------------------------------------------

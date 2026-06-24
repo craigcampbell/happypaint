@@ -18,4 +18,12 @@ module.exports = {
       { allowConstantExport: true },
     ],
   },
+  overrides: [
+    {
+      // Server-side code (the realtime server + moderation modules) runs in
+      // Node, not the browser, so it uses Node globals like `process`.
+      files: ['server.js', 'server/**/*.js'],
+      env: { node: true, browser: false },
+    },
+  ],
 }

@@ -3538,6 +3538,60 @@ button:disabled {
   resize: vertical;
 }
 
+/* ---- Room lobby (browse + create public/private rooms) ------------------ */
+.lobby-modal { width: min(520px, 100%); }
+.lobby-section { margin-top: 14px; }
+.lobby-room-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.lobby-room {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #cdd7e0;
+  border-radius: 12px;
+  background: #fff;
+}
+.lobby-room-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lobby-room-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-room-meta { font-size: 13px; color: #64748b; }
+.lobby-room button { min-height: 36px; padding: 0 16px; border-radius: 999px; }
+.lobby-room button:disabled { opacity: 0.5; }
+.lobby-refresh { background: none; border: none; color: #2563eb; font-weight: 600; padding: 4px; }
+.lobby-audience { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.lobby-audience button {
+  flex: 1 1 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 2px solid #cdd7e0;
+  border-radius: 12px;
+  background: #fff;
+}
+.lobby-audience button small { color: #64748b; font-weight: 400; }
+.lobby-audience .lobby-aud-on { border-color: #2563eb; background: #eff6ff; }
+
+/* ---- Host moderation / safety alerts ------------------------------------ */
+.host-alert-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+.host-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #fcd34d;
+  border-radius: 12px;
+  background: #fffbeb;
+}
+.host-alert-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.host-alert-reason { font-weight: 700; }
+.host-alert-meta { font-size: 12px; color: #92732e; }
+.host-alert-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.host-alert-actions button { min-height: 32px; padding: 0 10px; border-radius: 8px; }
+
 /* ---- Admin portal ------------------------------------------------------- */
 .admin-login {
   min-height: 100vh;

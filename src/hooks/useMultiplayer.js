@@ -162,9 +162,18 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendPromote = useCallback((targetId) => send({ type: "promote", targetId }), [send]);
   const sendDemote = useCallback((targetId) => send({ type: "demote", targetId }), [send]);
 
+  // Moderation: report whether we can run the in-browser watcher, flag a region,
+  // and (host-only, enforced server-side) reversibly hide / restore / remove ops.
+  const sendWatcherAck = useCallback((capable) => send({ type: "watcher_ack", capable }), [send]);
+  const sendFlag = useCallback((payload) => send({ type: "flag", ...payload }), [send]);
+  const sendModHide = useCallback((opIds) => send({ type: "mod_hide", opIds }), [send]);
+  const sendModRestore = useCallback((opIds) => send({ type: "mod_restore", opIds }), [send]);
+  const sendModRemove = useCallback((opIds) => send({ type: "mod_remove", opIds }), [send]);
+
   return {
     connected, users, self, chat, disconnect,
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
+    sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

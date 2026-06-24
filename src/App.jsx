@@ -81,6 +81,8 @@ import TogetherPanel from "./components/TogetherPanel";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
+import RoomLobby from "./components/RoomLobby";
+import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
@@ -316,6 +318,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [chatDraft, setChatDraft] = useState("");
   const [showChat, setShowChat] = useState(true);
 
+  // --- Content moderation (public rooms only) ---
+  const nsfwWatcherRef = useRef(null); // in-browser NSFW watcher controller
+  const lastOpIdRef = useRef(0); // latest server-assigned opId seen (flag ranges)
+  const roomAudienceRef = useRef(null); // 'kid_safe' | 'friends' | 'adult_18'
+  const [modAlerts, setModAlerts] = useState([]); // host-only moderation alerts
+
   // --- Viewport: pan / zoom across the large mural ---
   // World coords are the CANVAS_WIDTH x CANVAS_HEIGHT document. The view maps
   // world -> CSS px in the display box: cssX = worldX * scale + tx.
@@ -345,6 +353,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
   const [showReport, setShowReport] = useState(false);
+  const [showLobby, setShowLobby] = useState(false);
   const [reportReason, setReportReason] = useState("");
   // Coloring sheet: a shared, locked line-art overlay artists colour under/over.
   const sheetImageRef = useRef(null);
@@ -537,6 +546,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const markChanged = useCallback((message = "Saved locally") => {
     dirtyRef.current = true;
+    // Commit-level signal (never per-frame) — lets the NSFW watcher know the
+    // mural changed so it can schedule an idle re-scan. O(1), no-op when inactive.
+    nsfwWatcherRef.current?.markDirty();
     setStatus(message);
   }, []);
 
@@ -3206,6 +3218,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Mute is re-applied by the server on (re)connect for signed-in users,
           // so trust the handshake rather than optimistically clearing it.
           setMutedSelf(!!data.muted);
+          // Moderation runs only in public (kid_safe) rooms. Offer to be a watcher
+          // if this device is capable; the server decides who actually scans.
+          roomAudienceRef.current = data.audience || null;
+          if (data.audience === "kid_safe" && isWatcherCapable()) {
+            mpRef.current?.sendWatcherAck?.(true);
+          }
           break;
         }
         case "room_state":
@@ -3234,7 +3252,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // restoring a cleared mural), so always start from a clean slate.
           layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
           remoteStrokeLastRef.current.clear();
-          (data.ops || []).forEach(applyRemoteOp);
+          (data.ops || []).forEach((op) => {
+            applyRemoteOp(op);
+            if (typeof op?.opId === "number" && op.opId > lastOpIdRef.current) lastOpIdRef.current = op.opId;
+          });
+          nsfwWatcherRef.current?.markDirty();
           renderDisplay();
           refreshActiveThumbnail();
           if (data.restored) {
@@ -3244,6 +3266,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "op":
           applyRemoteOp(data.op);
+          if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
+            lastOpIdRef.current = data.op.opId;
+          }
+          nsfwWatcherRef.current?.markDirty();
           // Mid-local-stroke, reuse the cheap stroke compositor; otherwise full.
           if (activePointerRef.current != null) {
             scheduleStrokeFrame();
@@ -3278,11 +3304,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             remoteCursorsRef.current.delete(data.userId);
           }
           break;
+        case "watcher_role":
+          // The server elected (or stood down) this client as an NSFW watcher.
+          nsfwWatcherRef.current?.setActive(!!data.active);
+          break;
+        case "mod_alert":
+          // Host-only — the server only sends these to a room's hosts.
+          setModAlerts((list) => [{ ...data, id: `ma_${Date.now()}_${list.length}`, ts: Date.now() }, ...list].slice(0, 50));
+          showToast(data.hidden ? "🛡️ Auto-hid a flagged drawing — see Host controls" : "🛡️ A drawing was flagged — see Host controls");
+          break;
+        case "chat_blocked":
+          showToast("That message was blocked by the room's safety filter.");
+          break;
+        case "room_blocked":
+          setStatus("This room isn't available.");
+          break;
         default:
           break;
       }
     },
-    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner],
+    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner, showToast],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -3297,8 +3338,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendRename: mp.sendRename,
       sendSheet: mp.sendSheet,
       disconnect: mp.disconnect,
+      sendWatcherAck: mp.sendWatcherAck,
+      sendFlag: mp.sendFlag,
+      sendModHide: mp.sendModHide,
+      sendModRestore: mp.sendModRestore,
+      sendModRemove: mp.sendModRemove,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove]);
+
+  // Create the in-browser NSFW watcher once. It is completely inert until the
+  // server elects this client (watcher_role) and never touches the drawing path:
+  // it samples the composited canvas on idle, off the main thread, in a Worker.
+  useEffect(() => {
+    const watcher = createNsfwWatcher({
+      getCanvas: () => docContextRef.current?.canvas || null,
+      isDrawing: () => activePointerRef.current != null,
+      getLastOpId: () => lastOpIdRef.current,
+      onFlag: (flag) => mpRef.current?.sendFlag?.(flag),
+    });
+    nsfwWatcherRef.current = watcher;
+    return () => {
+      watcher.destroy();
+      nsfwWatcherRef.current = null;
+    };
+  }, []);
 
   // Re-render when the over/under mode flips, and keep the ref in sync.
   useEffect(() => {
@@ -4171,6 +4234,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         ) : null}
 
+        {showLobby ? (
+          <RoomLobby
+            token={session?.access_token}
+            signedIn={Boolean(session)}
+            currentRoom={roomId}
+            onJoin={(code) => {
+              window.location.href = `/join/${code}`;
+            }}
+            onToast={showToast}
+            onClose={() => setShowLobby(false)}
+          />
+        ) : null}
+
         {showReport ? (
           <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="report-title">
             <div className="confirm-card">
@@ -4226,6 +4302,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 }}
               >
                 Invite
+              </button>
+              <button type="button" className="mp-chat-iconbtn" onClick={() => setShowLobby(true)} title="Browse & create rooms">
+                🌐
               </button>
               <button type="button" className="mp-chat-iconbtn" onClick={createPrivateRoom} title="Create a private room">
                 🔒
@@ -4782,6 +4861,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }}
           onPromote={(id) => mp.sendPromote(id)}
           onDemote={(id) => mp.sendDemote(id)}
+          alerts={modAlerts}
+          onHide={(opIds) => mp.sendModHide(opIds)}
+          onRestore={(opIds) => mp.sendModRestore(opIds)}
+          onRemove={(opIds) => mp.sendModRemove(opIds)}
+          onDismissAlert={(id) => setModAlerts((list) => list.filter((a) => a.id !== id))}
           onClose={() => setShowHostPanel(false)}
         />
       ) : null}

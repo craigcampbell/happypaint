@@ -19,6 +19,11 @@ export default function HostControlPanel({
   onKick,
   onPromote,
   onDemote,
+  alerts = [],
+  onHide,
+  onRestore,
+  onRemove,
+  onDismissAlert,
   onClose,
 }) {
   const [titleDraft, setTitleDraft] = useState(roomTitle || "");
@@ -44,6 +49,50 @@ export default function HostControlPanel({
           You {isOwner ? "own" : "co-host"} room <strong>{roomTitle || roomId}</strong>. These controls
           affect everyone painting here.
         </p>
+
+        {alerts.length ? (
+          <div className="ps-group host-section">
+            <h3>🛡️ Safety alerts ({alerts.length})</h3>
+            <ul className="host-alert-list">
+              {alerts.map((a) => (
+                <li key={a.id} className="host-alert">
+                  <span className="host-alert-main">
+                    <span className="host-alert-reason">{a.reason || "Flagged content"}</span>
+                    <span className="host-alert-meta">
+                      {a.hidden ? "hidden" : "flagged"}
+                      {a.author ? ` · ${a.author}` : ""}
+                      {a.source === "auto" ? " · auto" : ""}
+                    </span>
+                  </span>
+                  <span className="host-alert-actions">
+                    {a.opIds && a.opIds.length ? (
+                      a.hidden ? (
+                        <>
+                          <button type="button" onClick={() => onRestore?.(a.opIds)}>
+                            Restore
+                          </button>
+                          <button type="button" className="host-danger" onClick={() => onRemove?.(a.opIds)}>
+                            Delete
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" onClick={() => onHide?.(a.opIds)}>
+                          Hide
+                        </button>
+                      )
+                    ) : null}
+                    <button type="button" onClick={() => onDismissAlert?.(a.id)}>
+                      Dismiss
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="account-note">
+              Flagged drawings in this public room. Hiding is reversible — Restore brings it back; Delete is permanent.
+            </p>
+          </div>
+        ) : null}
 
         <div className="ps-group host-section">
           <h3>Room</h3>
