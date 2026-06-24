@@ -7,15 +7,15 @@
 //   App.jsx never sees a getImageData call, a pixel loop, or a model. The bitmap is
 //   closed after each scan to keep memory flat.
 //
-// DETECTOR SEAM
-//   `detect(imageData)` is the ONE async boundary you swap to upgrade accuracy. The
-//   shipped default (`heuristicDetect`) is dependency-free: skin-tone ratio + the
-//   size of the largest contiguous flesh region, combined into a 0..1 score. To plug
-//   in NSFWJS / TF.js or a cloud-escalation POST, replace the body of `loadDetector()`
-//   so it resolves to an async (imageData) => number. It is lazy-loaded on the first
-//   real scan (after first idle on the main thread), NEVER at startup, so page load
-//   and the first strokes stay cheap. Until the detector resolves we fall back to the
-//   heuristic, so a slow/failed model load can never stall moderation or the canvas.
+// DETECTOR
+//   The shipped detector is NSFWJS (MobileNetV2), lazy-loaded via dynamic import
+//   the FIRST time an elected watcher scans — NEVER at startup and NEVER for
+//   non-watchers, so page load, the bundle, and the drawing path stay untouched
+//   for everyone else. The model weights are bundled with nsfwjs (no network
+//   fetch, no third-party call — fits the self-hosted / offline / kid-privacy
+//   posture). If the model can't load (old browser, backend init failure) we fall
+//   back to the dependency-free `heuristicDetect`, so a failed load can never
+//   stall moderation or touch the canvas.
 
 let canvas = null;
 let ctx = null;
@@ -23,25 +23,92 @@ let ctx = null;
 // Lazy detector promise — created on first scan, reused thereafter.
 let detectorPromise = null;
 
-/**
- * The pluggable detector loader. This is the seam: return an async function
- * (imageData: ImageData) => number in [0,1]. The default resolves immediately to
- * the heuristic. To upgrade, swap the body for an NSFWJS/TF.js import or a fetch()
- * to a cloud-escalation endpoint, e.g.:
- *
- *   const tf = await import("https://.../tfjs");
- *   const nsfwjs = await import("https://.../nsfwjs");
- *   const model = await nsfwjs.load();
- *   return async (imageData) => {
- *     const preds = await model.classify(imageData);
- *     return scoreFromPredictions(preds);
- *   };
- */
+// Load NSFWJS once, on the first real scan. Returns an async (imageData)=>score.
 function loadDetector() {
   if (!detectorPromise) {
-    detectorPromise = Promise.resolve(heuristicDetect);
+    detectorPromise = buildNsfwDetector().catch(() => heuristicDetect);
   }
   return detectorPromise;
+}
+
+async function buildNsfwDetector() {
+  // Dynamic imports → Vite code-splits TF.js + NSFWJS into their own chunks that
+  // only download for an elected watcher, the first time it scans.
+  const [{ load }, { MobileNetV2Model }, tf] = await Promise.all([
+    import("nsfwjs/core"),
+    import("nsfwjs/models/mobilenet_v2"),
+    import("@tensorflow/tfjs"),
+  ]);
+
+  // Pick a worker-safe backend: prefer WebGL (fast, via OffscreenCanvas), fall
+  // back to the pure-JS CPU backend, which always works in a Worker.
+  try {
+    await tf.setBackend("webgl");
+    await tf.ready();
+  } catch {
+    await tf.setBackend("cpu");
+    await tf.ready();
+  }
+
+  // Bundled MobileNetV2 — no fetch. load() runs a warmup predict; if the chosen
+  // backend is broken this throws and we retry on CPU before giving up.
+  let model;
+  try {
+    model = await load("MobileNetV2", { modelDefinitions: [MobileNetV2Model], size: 224 });
+  } catch (err) {
+    if (tf.getBackend() !== "cpu") {
+      await tf.setBackend("cpu");
+      await tf.ready();
+      model = await load("MobileNetV2", { modelDefinitions: [MobileNetV2Model], size: 224 });
+    } else {
+      throw err;
+    }
+  }
+
+  return async (imageData) => {
+    // Build the input tensor by hand (RGB, transparent->white "paper") so we never
+    // touch tf.browser.fromPixels — that path can need a DOM canvas and is flaky
+    // in Workers. This works identically on the CPU and WebGL backends.
+    const input = imageDataToTensor(tf, imageData);
+    try {
+      const preds = await model.classify(input); // resizes to 224 internally
+      return scoreFromPredictions(preds);
+    } finally {
+      input.dispose();
+    }
+  };
+}
+
+// Collapse NSFWJS's five classes into one 0..1 "lewd" score for a kids' drawing
+// app: Porn/Hentai (explicit photos & drawings) count fully, Sexy (suggestive but
+// not explicit) at half weight; Drawing (safe sketches/anime) and Neutral are safe.
+function scoreFromPredictions(preds) {
+  let score = 0;
+  for (const p of preds || []) {
+    if (p.className === "Porn" || p.className === "Hentai") score += p.probability;
+    else if (p.className === "Sexy") score += 0.5 * p.probability;
+  }
+  return clamp01(score);
+}
+
+// RGBA ImageData -> an int32 [h,w,3] tensor. Transparent pixels become white so
+// the classifier sees art on paper rather than on black.
+function imageDataToTensor(tf, imageData) {
+  const { data, width, height } = imageData;
+  const px = width * height;
+  const rgb = new Uint8Array(px * 3);
+  for (let p = 0, s = 0, d = 0; p < px; p += 1, s += 4, d += 3) {
+    if (data[s + 3] < 32) {
+      rgb[d] = 255;
+      rgb[d + 1] = 255;
+      rgb[d + 2] = 255;
+    } else {
+      rgb[d] = data[s];
+      rgb[d + 1] = data[s + 1];
+      rgb[d + 2] = data[s + 2];
+    }
+  }
+  return tf.tensor3d(rgb, [height, width, 3], "int32");
 }
 
 /**

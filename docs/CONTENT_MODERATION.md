@@ -2,9 +2,11 @@
 
 Status: **built + verified** on branch `content-moderation` (server: 6/6 in
 `test/harness/run.mjs`; text filter: 40/40 in `server/moderation/textFilter.test.mjs`;
-SPA build + studio smoke green). The one remaining piece is swapping the watcher's
-**placeholder heuristic detector** for a real model (NSFWJS/TF.js or an admin-opt-in
-cloud-escalation tier) — the whole pipeline around it is real and tested.
+SPA build + studio smoke green). The image detector is **NSFWJS (MobileNetV2)**,
+bundled (no external fetch) and lazy-loaded in the worker only for elected
+watchers — verified loading + scoring in a real browser worker. The heuristic
+remains as an automatic fallback if the model can't load. An admin-opt-in
+cloud-escalation tier is still a possible future add-on.
 This is the single source of truth for the feature. Server code, client code, the
 test harness, and every subagent build against the names and rules below. If an
 implementation disagrees with this doc, the doc wins (or the doc is updated first).
@@ -231,8 +233,9 @@ store gains a `source` field. Reversible by design end-to-end.
 0. Room audience model + opId (server). 1. Public rooms + discovery (REST + UI).
 2. Text moderation. 3. Reversible hide / selective undo + host/admin surfaces.
 4. In-browser NSFW watcher + corroboration. Phases 0–3 are deterministic and
-independent of the image-model choice; Phase 4 is the only one with model unknowns
-and ships with a pluggable detector (heuristic default + NSFWJS/cloud seam).
+independent of the image-model choice; Phase 4 ships **NSFWJS (MobileNetV2)**,
+bundled + lazy-loaded in the worker for elected watchers only, with the
+dependency-free heuristic as an automatic fallback.
 
 ## 9. Verification
 
