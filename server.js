@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
@@ -53,6 +53,16 @@ const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browse
 const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min ms between watcher samples
 const WATCH_MAX_DIM = Number(process.env.WATCH_MAX_DIM || 256); // longest snapshot edge the watcher downscales to
 const FLAG_WINDOW_MS = Number(process.env.FLAG_WINDOW_MS || 30_000); // corroboration window for moderation flags
+
+// Auto-close idle rooms. The allowed idle time scales with the room's complexity
+// (op count) and engagement (cumulative user-seconds), so a rich, well-loved mural
+// lingers far longer than a quick scribble before it's cleaned up. MAIN never closes.
+const AUTO_CLOSE_ENABLED = process.env.AUTO_CLOSE !== 'off';
+const AUTO_CLOSE_BASE_MS = Number(process.env.AUTO_CLOSE_BASE_MS || 12 * 60 * 60 * 1000); // 12h idle floor
+const AUTO_CLOSE_MAX_MS = Number(process.env.AUTO_CLOSE_MAX_MS || 30 * 24 * 60 * 60 * 1000); // 30d ceiling
+const AUTO_CLOSE_PER_OP_MS = Number(process.env.AUTO_CLOSE_PER_OP_MS || 20 * 1000); // +20s of life per op drawn
+const AUTO_CLOSE_PER_USER_SEC_MS = Number(process.env.AUTO_CLOSE_PER_USER_SEC_MS || 2000); // +2s of life per user-second
+const AUTO_CLOSE_SWEEP_MS = Number(process.env.AUTO_CLOSE_SWEEP_MS || 30 * 60 * 1000); // sweep cadence
 
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
 // lives under one directory so a single Docker volume persists everything. Defaults
@@ -137,9 +147,10 @@ function loadRoom(roomId) {
       audience: typeof data.audience === 'string' ? data.audience : null,
       listed: typeof data.listed === 'boolean' ? data.listed : null,
       hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
+      userSeconds: Number(data.userSeconds) || 0,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [] };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0 };
   }
 }
 function persistRoom(roomId) {
@@ -166,6 +177,7 @@ function persistRoom(roomId) {
         audience: room.audience || null,
         listed: typeof room.listed === 'boolean' ? room.listed : null,
         hiddenOpIds: Array.from(room.hiddenOpIds || []),
+        userSeconds: room.userSeconds || 0,
         savedAt: Date.now(),
       }));
     } catch {
@@ -212,6 +224,7 @@ function getRoom(roomId) {
       flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
       watchers: new Set(), // elected client ids running the in-browser watcher
       modLog: [], // recent moderation actions (in-memory, capped)
+      userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       lastActivity: Date.now(),
     });
   }
@@ -223,6 +236,66 @@ function getRoom(roomId) {
 function visibleHistory(room) {
   if (!room.hiddenOpIds || room.hiddenOpIds.size === 0) return room.history;
   return room.history.filter((op) => !room.hiddenOpIds.has(op.opId));
+}
+
+// Allowed idle time before an EMPTY room is auto-closed. Scales with complexity
+// (op count) and engagement (cumulative user-seconds), capped — so a rich, busy
+// mural lingers much longer than a quick scribble. Works on a live room or a
+// plain {history,userSeconds} read from disk.
+function allowedIdleMs(room) {
+  const ops = Array.isArray(room.history) ? room.history.length : 0;
+  const userSeconds = room.userSeconds || 0;
+  const bonus = ops * AUTO_CLOSE_PER_OP_MS + userSeconds * AUTO_CLOSE_PER_USER_SEC_MS;
+  return Math.min(AUTO_CLOSE_MAX_MS, AUTO_CLOSE_BASE_MS + bonus);
+}
+
+// Tear a room down: disconnect anyone in it, drop it from memory, delete its file.
+// Used by the admin "delete room" action and the idle auto-close sweep.
+function closeRoom(roomId, reason) {
+  const room = rooms.get(roomId);
+  if (room) {
+    room.users.forEach((u) => {
+      try {
+        if (u.ws.readyState === 1) {
+          u.ws.send(JSON.stringify({ type: 'room_closed', reason: reason || 'closed' }));
+          u.ws.close(1000, 'room closed');
+        }
+      } catch { /* ignore */ }
+    });
+    const t = persistTimers.get(roomId);
+    if (t) { clearTimeout(t); persistTimers.delete(roomId); }
+    rooms.delete(roomId);
+  }
+  try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
+}
+
+// Periodic cleanup of idle rooms: in-memory empties + abandoned files on disk.
+// MAIN is never closed; disable entirely with AUTO_CLOSE=off.
+function autoCloseSweep() {
+  const now = Date.now();
+  rooms.forEach((room, id) => {
+    if (id === DEFAULT_PUBLIC_ROOM || room.users.size > 0) return;
+    if (now - (room.lastActivity || now) > allowedIdleMs(room)) {
+      closeRoom(id, 'inactive');
+    }
+  });
+  let files = [];
+  try { files = readdirSync(ROOM_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
+  for (const f of files) {
+    const id = f.replace(/\.json$/, '');
+    if (id === DEFAULT_PUBLIC_ROOM || rooms.has(id)) continue;
+    try {
+      const data = JSON.parse(readFileSync(join(ROOM_DIR, f), 'utf8'));
+      const pseudo = { history: data.history || [], userSeconds: Number(data.userSeconds) || 0 };
+      if (now - (data.savedAt || 0) > allowedIdleMs(pseudo)) {
+        unlinkSync(join(ROOM_DIR, f));
+      }
+    } catch { /* ignore unreadable file */ }
+  }
+}
+if (AUTO_CLOSE_ENABLED) {
+  const sweepTimer = setInterval(autoCloseSweep, AUTO_CLOSE_SWEEP_MS);
+  if (sweepTimer.unref) sweepTimer.unref();
 }
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
@@ -688,9 +761,12 @@ wss.on('connection', async (ws, req) => {
   });
 
   ws.on('close', () => {
+    // Accrue this user's time in the room — engagement extends the auto-close TTL.
+    room.userSeconds = (room.userSeconds || 0) + Math.max(0, (Date.now() - user.connectedAt) / 1000);
     room.users.delete(id);
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
+    persistRoom(roomId); // persist engagement once they leave
     // If a watcher left, promote another capable client so coverage continues.
     if (room.watchers.has(id) || room.watchers.size < MAX_WATCHERS) {
       room.watchers.delete(id);
@@ -888,8 +964,19 @@ app.get('/api/admin/check', (req, res) => {
 
 app.get('/api/admin/rooms', (req, res) => {
   if (!adminGuard(req, res)) return;
+  const now = Date.now();
   const list = [];
-  rooms.forEach((room, id) => list.push({ id, users: room.users.size, strokes: room.history.length, lastActivity: room.lastActivity || 0 }));
+  rooms.forEach((room, id) => list.push({
+    id,
+    users: room.users.size,
+    strokes: room.history.length,
+    lastActivity: room.lastActivity || 0,
+    audience: room.audience || null,
+    // null while occupied or for MAIN (never auto-closes); else ms until cleanup.
+    expiresInMs: room.users.size > 0 || id === DEFAULT_PUBLIC_ROOM
+      ? null
+      : Math.max(0, allowedIdleMs(room) - (now - (room.lastActivity || now))),
+  }));
   list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity || b.strokes - a.strokes);
   res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
 });
@@ -904,6 +991,17 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
     broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
     persistRoom(id);
   }
+  res.json({ ok: true });
+});
+
+// Permanently delete a room: disconnect everyone, drop it from memory + disk.
+app.post('/api/admin/rooms/:id/delete', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().slice(0, 16);
+  if (id === DEFAULT_PUBLIC_ROOM) {
+    return res.status(400).json({ error: 'cannot_delete_main' });
+  }
+  closeRoom(id, 'a moderator closed this room');
   res.json({ ok: true });
 });
 

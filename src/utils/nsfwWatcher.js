@@ -35,6 +35,30 @@ export function isWatcherCapable() {
   if (typeof navigator === "undefined") {
     return false;
   }
+  // NEVER run heavy on-device ML (TF.js + the model) on a touch-first device.
+  // Phones and tablets are usually the very device someone is drawing on, and
+  // inference contends with the canvas for CPU/GPU/memory — which on iOS Safari
+  // shows up as dropped touches and stutter. Require a desktop-class device with
+  // a fine (mouse/trackpad) primary pointer.
+  if (typeof matchMedia === "function") {
+    if (matchMedia("(pointer: coarse)").matches) {
+      return false; // touch-primary (phone/tablet)
+    }
+    if (!matchMedia("(pointer: fine)").matches) {
+      return false;
+    }
+  } else if (typeof navigator.maxTouchPoints === "number" && navigator.maxTouchPoints > 1) {
+    return false; // no matchMedia — treat multi-touch as a touch device
+  }
+  // iPadOS Safari with a trackpad/keyboard reports a fine pointer and platform
+  // "MacIntel", but it's still a tablet — exclude it explicitly.
+  const platform = navigator.platform || "";
+  if (/iP(hone|ad|od)/.test(platform) || /iP(hone|ad|od)/.test(navigator.userAgent || "")) {
+    return false;
+  }
+  if (/Mac/.test(platform) && (navigator.maxTouchPoints || 0) > 1) {
+    return false; // iPad masquerading as a Mac
+  }
   const cores = navigator.hardwareConcurrency;
   if (typeof cores !== "number" || cores < 4) {
     return false;

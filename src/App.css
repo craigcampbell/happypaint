@@ -4045,3 +4045,31 @@ button:disabled {
   color: #64748b;
   font-size: 0.85rem;
 }
+
+/* ---- Mobile polish: smaller color chips, denser tools drawer (perf audit) -- */
+@media (max-width: 1024px) {
+  /* Color/avatar chips inherited the desktop layout (4–5 cols, aspect-ratio:1, no
+     max-width) so each swatch was ~79px on a phone. Pack more per row and cap the
+     visual size while keeping a comfortable tap target. */
+  .palette-grid { grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .color-swatch { max-width: 46px; max-height: 46px; justify-self: center; border-radius: 10px; }
+  .avatar-colors { grid-template-columns: repeat(8, 1fr); gap: 6px; }
+  .avatar-color { max-width: 38px; max-height: 38px; justify-self: center; }
+
+  /* Tighten the bottom sheet so the color section isn't pushed below the fold,
+     keep momentum scroll inside the sheet, and clear the iOS home indicator. */
+  .tool-rail {
+    padding: 12px 14px calc(78px + env(safe-area-inset-bottom));
+    gap: 12px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .brush-grid,
+  .texture-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .brush-chip,
+  .texture-chip { min-height: 48px; }
+
+  /* Don't float the always-on quick bar over the open drawer; respect the safe area. */
+  .tool-rail.is-open ~ .mobile-quickbar { display: none; }
+  .mobile-quickbar { bottom: calc(10px + env(safe-area-inset-bottom)); }
+}

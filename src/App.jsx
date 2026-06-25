@@ -87,7 +87,13 @@ import ColoringSheetModal from "./components/ColoringSheetModal";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
 
-const MAX_HISTORY = 18;
+// Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
+// 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
+// under iOS WebKit's canvas-memory ceiling — past it, WebKit silently purges
+// backing stores and drawing stops working until a reallocation. Desktops keep
+// the deep stack. (Deeper fix: store history as compressed blobs / dirty rects.)
+const IS_TOUCH_DEVICE = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+const MAX_HISTORY = IS_TOUCH_DEVICE ? 8 : 18;
 const MAX_GALLERY_ITEMS = 10;
 // Cap layers per artist — each is a full-size canvas, so this keeps memory and
 // compositing sane on phones/tablets.
@@ -1985,6 +1991,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const abortActiveStroke = () => {
     if (activePointerRef.current != null) {
+      // Release the first finger's capture so it doesn't stay captured for the
+      // rest of the pinch (which would suppress its later events / leak state).
+      try {
+        overlayCanvasRef.current?.releasePointerCapture?.(activePointerRef.current);
+      } catch {
+        /* already released */
+      }
       flushStrokeFrame();
       strokeNetRef.current = null;
       activePointerRef.current = null;
@@ -1996,10 +2009,34 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   const handleCanvasPointerDown = (event) => {
+    // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
+    // guarantees its pointerup/pointercancel comes back here even if the finger
+    // slides off-canvas or a system gesture interrupts. Without this, a lost
+    // touch-up on iOS strands a stale entry in pointersRef, and the next single
+    // touch is misread as a 2nd pinch finger — so it silently refuses to draw.
+    // Best-effort: a capture failure must never abort the pointerdown.
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* capture unavailable — pointer tracking + the safety nets still apply */
+    }
+    // Defensive prune: a fresh first contact with no live stroke/gesture/pan means
+    // any lingering pointersRef entries are stale (a prior touch's up/cancel was
+    // dropped by iOS). Clear them so this touch isn't misread as a 2nd pinch finger.
+    if (
+      activePointerRef.current == null &&
+      gestureRef.current == null &&
+      panPointerRef.current == null &&
+      pointersRef.current.size > 0
+    ) {
+      pointersRef.current.clear();
+    }
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     viewRectRef.current = event.currentTarget.getBoundingClientRect();
 
-    if (pointersRef.current.size >= 2) {
+    // Only touch contacts form a pinch — a pen (iPad Pencil) with a resting palm
+    // must still draw, not be hijacked into pan/zoom.
+    if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
       abortActiveStroke();
       const pts = [...pointersRef.current.values()];
       gestureRef.current = {
@@ -2065,12 +2102,70 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     finishStroke(event);
   };
 
+  // Final safety net: when capture is released (after up/cancel, or force-released
+  // by the browser during an interrupting gesture) make sure the pointer can never
+  // linger as a stale gesture finger.
+  const handleCanvasLostPointerCapture = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    if (gestureRef.current && pointersRef.current.size < 2) {
+      gestureRef.current = null;
+    }
+    if (panPointerRef.current === event.pointerId) {
+      panPointerRef.current = null;
+    }
+  };
+
   const toggleHandTool = () => {
     setHandTool((on) => {
       handToolRef.current = !on;
       return !on;
     });
   };
+
+  // Mobile safety net: if the tab is backgrounded or the window loses focus (an
+  // app switch, a notification, an interrupting system gesture), iOS may never
+  // deliver the pending pointerup/cancel — stranding stale pointers that break the
+  // next touch. Reset all pointer + gesture state on those signals.
+  useEffect(() => {
+    const reset = () => {
+      pointersRef.current.clear();
+      gestureRef.current = null;
+      panPointerRef.current = null;
+      if (activePointerRef.current != null) {
+        activePointerRef.current = null;
+        strokeNetRef.current = null;
+        lastPointRef.current = null;
+        activeStrokeLayerIdRef.current = null;
+      }
+    };
+    // Window-level backstop: if iOS drops the canvas element's pointerup/cancel
+    // (a re-render or system gesture stole it), still prune that pointer here so
+    // it can never linger as a phantom finger. Idempotent with the element handler.
+    const onWindowPointerEnd = (event) => {
+      pointersRef.current.delete(event.pointerId);
+      if (gestureRef.current && pointersRef.current.size < 2) {
+        gestureRef.current = null;
+      }
+      if (panPointerRef.current === event.pointerId) {
+        panPointerRef.current = null;
+      }
+    };
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        reset();
+      }
+    };
+    window.addEventListener("blur", reset);
+    window.addEventListener("pointerup", onWindowPointerEnd);
+    window.addEventListener("pointercancel", onWindowPointerEnd);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", reset);
+      window.removeEventListener("pointerup", onWindowPointerEnd);
+      window.removeEventListener("pointercancel", onWindowPointerEnd);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
 
@@ -3319,6 +3414,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "room_blocked":
           setStatus("This room isn't available.");
           break;
+        case "room_closed":
+          // A moderator deleted this room (or it auto-closed). Stop reconnecting
+          // and send the painter back to the main hall.
+          mpRef.current?.disconnect?.();
+          showToast("This room was closed. Taking you to the main room…");
+          window.setTimeout(() => {
+            window.location.href = "/studio";
+          }, 1600);
+          break;
         default:
           break;
       }
@@ -4109,6 +4213,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onPointerMove={handleCanvasPointerMove}
               onPointerUp={handleCanvasPointerUp}
               onPointerCancel={handleCanvasPointerUp}
+              onLostPointerCapture={handleCanvasLostPointerCapture}
             />
             <div className="remote-cursor-layer" aria-hidden="true">
               {remoteCursors.map((cursor) => (

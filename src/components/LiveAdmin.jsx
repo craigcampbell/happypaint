@@ -171,6 +171,23 @@ export default function LiveAdmin({ onNavigate }) {
     refresh();
   };
 
+  const deleteRoom = async (id) => {
+    if (!window.confirm(`Permanently delete room "${id}"? Everyone in it is disconnected and the drawing is erased.`)) return;
+    await fetch(`/api/admin/rooms/${id}/delete`, { method: "POST", headers: { "x-admin-key": adminKey } });
+    refresh();
+  };
+
+  // ms -> a short "2d", "5h", "12m", "<1m" for the auto-close countdown.
+  const formatLeft = (ms) => {
+    if (ms == null) return null;
+    const m = Math.round(ms / 60000);
+    if (m < 1) return "<1m";
+    if (m < 60) return `${m}m`;
+    const h = Math.round(m / 60);
+    if (h < 48) return `${h}h`;
+    return `${Math.round(h / 24)}d`;
+  };
+
   const resolveReport = async (id) => {
     await fetch(`/api/admin/reports/${id}/resolve`, { method: "POST", headers: { "x-admin-key": adminKey } });
     refresh();
@@ -333,11 +350,13 @@ export default function LiveAdmin({ onNavigate }) {
                   <strong>Room {room.id}</strong>
                   <span className="admin-muted">
                     · {room.users} painting · {room.strokes} strokes · active {timeAgo(room.lastActivity)}
+                    {room.expiresInMs != null ? ` · auto-closes in ${formatLeft(room.expiresInMs)}` : ""}
                   </span>
                 </div>
                 <div className="admin-actions">
                   <button type="button" onClick={() => openRoom(room.id)}>View</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(room.id)}>Clear</button>
+                  <button type="button" className="admin-danger" onClick={() => deleteRoom(room.id)}>Delete</button>
                 </div>
               </div>
             ))}
