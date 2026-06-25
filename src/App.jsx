@@ -4717,7 +4717,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
         <section className="tool-section rail-top rail-top-2">
           <h2>Color</h2>
-          <div className="palette-grid">
+          <div className={`palette-grid ${selectedTool === "brush" && selectedBrush === "crayon" ? "crayons-mode" : ""}`}>
             {activePalette.colors.map((color) => (
               <button
                 type="button"

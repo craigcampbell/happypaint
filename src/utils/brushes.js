@@ -6,6 +6,12 @@ export const brushCatalog = [
     description: "Clean, bold color for coloring pages and quick sketches.",
   },
   {
+    id: "crayon",
+    name: "Crayon",
+    tier: "free",
+    description: "Waxy, grainy crayon — layer colors and they blend like real wax.",
+  },
+  {
     id: "pencil",
     name: "Pencil",
     tier: "free",
@@ -69,7 +75,14 @@ export const paletteCatalog = [
   {
     id: "starter",
     name: "Starter",
-    colors: ["#111827", "#ffffff", "#ef4444", "#f59e0b", "#facc15", "#22c55e", "#0ea5e9", "#7c3aed"],
+    colors: [
+      "#000000", "#5b6770", "#ffffff", "#8b5a2b",
+      "#e53935", "#ff8a80", "#e67e22", "#f9a825",
+      "#fbd400", "#fff59d", "#2ecc71", "#aed581",
+      "#0e9c7c", "#1abc9c", "#1e88e5", "#74b9ff",
+      "#27406b", "#8e44ad", "#e84393", "#ff9ff3",
+      "#ffd1b3", "#e0a96d", "#a9744f", "#3a2a1a",
+    ],
   },
   {
     id: "soft",
@@ -182,6 +195,37 @@ export function drawBrushSegment(ctx, from, to, settings) {
         opacity,
       );
     }
+    return;
+  }
+
+  if (settings.brush === "crayon") {
+    // Waxy crayon: scatter short, jittered, semi-transparent flecks along the
+    // segment so coverage is uneven. The gaps let the colour underneath show
+    // through, so layering two crayons blends optically — like real wax on paper.
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dist = Math.hypot(dx, dy);
+    const w = baseSize * (0.55 + pressure * 0.5);
+    const steps = clamp(Math.ceil(dist / Math.max(1.4, w * 0.3)), 1, 40);
+    const dl = dist || 1;
+    const nx = -dy / dl; // perpendicular unit (for sideways grain)
+    const ny = dx / dl;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = settings.color;
+    for (let s = 0; s <= steps; s += 1) {
+      const t = steps === 0 ? 0 : s / steps;
+      const px = from.x + dx * t;
+      const py = from.y + dy * t;
+      for (let f = 0; f < 2; f += 1) {
+        const off = (Math.random() * 2 - 1) * w * 0.5;
+        const r = Math.max(0.5, (0.2 + Math.random() * 0.55) * w * 0.5);
+        ctx.globalAlpha = opacity * (0.16 + Math.random() * 0.5);
+        ctx.beginPath();
+        ctx.arc(px + nx * off, py + ny * off, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
     return;
   }
 
