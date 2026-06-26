@@ -60,6 +60,12 @@ export default function MarketingSite({ onNavigate }) {
               Join with a code
             </button>
           </div>
+          <ul className="hero-trust" aria-label="Why parents trust Drawesome">
+            <li>👧 No account needed to draw</li>
+            <li>🛡️ Kid-safe moderation</li>
+            <li>🚫 No ads, no real-money buys</li>
+            <li>🗑️ Delete your data anytime</li>
+          </ul>
           <label className="hero-search" htmlFor="hero-discovery-search">
             <span>Preview rooms before joining</span>
             <input

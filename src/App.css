@@ -4152,3 +4152,22 @@ button:disabled {
   font-size: 1.15rem;
   padding: 14px;
 }
+
+/* ---- Marketing hero parent-trust strip ---------------------------------- */
+.hero-trust {
+  list-style: none;
+  margin: 4px 0 14px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hero-trust li {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #1f5f43;
+  background: rgba(46, 204, 113, 0.14);
+  border: 1px solid rgba(46, 204, 113, 0.35);
+  border-radius: 999px;
+  padding: 5px 12px;
+}
