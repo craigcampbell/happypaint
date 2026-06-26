@@ -4183,3 +4183,61 @@ textarea:focus-visible,
   outline: 3px solid #2d6cdf;
   outline-offset: 2px;
 }
+
+/* ---- Safety / data page -------------------------------------------------- */
+.safety-page {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 20px 18px 60px;
+  color: #1f2933;
+}
+.safety-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.safety-home {
+  border: none;
+  background: none;
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: #174c4d;
+  cursor: pointer;
+}
+.safety-hero {
+  text-align: center;
+  padding: 24px 8px 12px;
+}
+.safety-hero h1 { margin: 0 0 8px; font-size: 2rem; }
+.safety-hero p { margin: 0 auto; max-width: 600px; color: #475569; font-size: 1.05rem; }
+.safety-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+.safety-card {
+  background: #fff;
+  border: 1px solid #e6e9ef;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+}
+.safety-icon { font-size: 1.8rem; }
+.safety-card h2 { margin: 8px 0 6px; font-size: 1.12rem; }
+.safety-card p { margin: 0; color: #475569; line-height: 1.5; }
+.safety-data {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 16px;
+  padding: 20px 22px;
+  margin: 8px 0 24px;
+}
+.safety-data h2 { margin: 0 0 10px; }
+.safety-data ul { margin: 0; padding-left: 18px; display: grid; gap: 10px; }
+.safety-data li { line-height: 1.5; color: #334155; }
+.safety-note { margin: 14px 0 0; color: #475569; font-style: italic; }
+.safety-cta { text-align: center; margin-top: 8px; }
+.safety-cta .primary-action { font-size: 1.15rem; padding: 14px 28px; }

@@ -77,6 +77,7 @@ import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
 import MarketingSite from "./components/MarketingSite";
+import SafetyPage from "./components/SafetyPage";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
@@ -5158,6 +5159,10 @@ export default function App() {
 
   if (path.startsWith("/admin")) {
     return <LiveAdmin onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/safety")) {
+    return <SafetyPage onNavigate={navigate} />;
   }
 
   return <MarketingSite onNavigate={navigate} />;

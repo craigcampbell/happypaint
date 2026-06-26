@@ -37,6 +37,9 @@ export default function MarketingSite({ onNavigate }) {
             <button type="button" onClick={() => onNavigate("/studio")}>
               Browser Studio
             </button>
+            <button type="button" onClick={() => onNavigate("/safety")}>
+              Safety
+            </button>
             <a href="#discover">Discover</a>
             <a href="#together">Paint Together</a>
             <a href="#pricing">Pricing</a>
