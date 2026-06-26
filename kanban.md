@@ -202,14 +202,19 @@ never risk drawing-canvas smoothness.** Legend: 🟥 todo · 🟨 in progress ·
   branded icons/og-image via sharp); Docker `/healthz` healthcheck; first-run welcome
   coachmark for kids (`happypaint:welcomed:v1`, in deletion wipe list); `prefers-reduced-
   motion` a11y guard; marketing-hero **parent-trust strip**.
-- 🟨 Continuing the loop on the remaining NOW/NEXT items (safe, verifiable polish auto-
-  deploys; anything touching the drawing canvas is commit-only, held for device review).
+**Deployed & live (all verified: build + 0 lint errors + headless DOM/console check):**
+SEO+social previews ✅ · installable PWA (manifest + branded icons) ✅ · Docker
+healthcheck ✅ · first-run welcome coachmark ✅ · reduced-motion ✅ · hero parent-trust
+strip ✅ · focus-visible keyboard rings ✅ · slider `aria-label`/`aria-valuetext` ✅ ·
+dedicated **`/safety`** page (+ nav link) ✅.
 
-  **Done so far → mark these NOW items complete:** SEO+social ✅ · PWA manifest ✅ ·
-  Docker healthcheck ✅ · onboarding coachmark ✅ · reduced-motion (part of a11y) ✅ ·
-  hero safety/trust messaging ✅.
-  **Up next (safe):** aria-labels on icon buttons + sliders, focus-visible rings;
-  coloring-sheet discovery boost; friendly empty/feedback states (copy toasts,
-  Connecting/Reconnecting); `/safety` + `/privacy` pages.
-  **Commit-only / device-review (touches drawing):** text-tool modal vs `window.prompt`;
-  multiplayer-presence affordance; undo/redo on the quickbar.
+**Loop paused** here — the clearly-safe, high-value items are shipped. What remains is
+either lower-value, needs design/legal review, or touches the drawing canvas (so it
+needs the user's real device, since the headless preview can't render the canvas):
+- **Device-review (canvas/hot-path) — implement + have user test, do NOT blind-deploy:**
+  text-tool modal vs `window.prompt`; multiplayer-presence affordance; undo/redo on the
+  quickbar; marker/brush multiply-blend; the canvas-memory refactor.
+- **Needs human/legal review:** a full `/privacy` policy (the `/safety` page summarizes
+  data practices, but a binding policy should be lawyer-checked).
+- **Lower-value polish:** coloring-sheet discovery boost; label the loop/layer sliders;
+  AccountPanel "what we store" line; report-success "we'll review" confirmation.
