@@ -30,6 +30,13 @@ services:
         # browser uses to reach PocketBase.
         VITE_PB_URL: ${VITE_PB_URL:-https://pb.drawesome.art}
     restart: unless-stopped
+    # Probe /healthz so a hung (not just exited) app is visible as "unhealthy".
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     depends_on:
       - pocketbase
     environment:
