@@ -4171,3 +4171,15 @@ button:disabled {
   border-radius: 999px;
   padding: 5px 12px;
 }
+
+/* ---- Keyboard focus visibility (a11y) — only for keyboard users --------- */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid #2d6cdf;
+  outline-offset: 2px;
+}

@@ -158,3 +158,58 @@ Audit of the drawing hot path across all platforms. Severity is the auditor's es
 ### 🟩 Low — DONE
 - **W14** ✅ pen-priority + palm (large contact) rejection · **W15** ✅ anchor appended + deferred URL revoke · **W16** ✅ guarded `makeId` everywhere · **W17** ✅ playback uses rAF + timestamp accumulator.
 - **M15** ✅ sticker-apply gated on canvas layout · **M16** ✅ export min-delay aligned to preview (40ms); disposal=2 kept (loops genuinely transparent) · **M17** ✅ snapshot failure reschedules preview only, no redundant save.
+
+---
+
+## UX · Safety · Polish audit (2026-06-26)
+
+From a 4-lens deep audit (kid-UX, parent/safety, web-researched best practices,
+technical/a11y) of the **live** site. Ordered by value vs risk. **Top constraint:
+never risk drawing-canvas smoothness.** Legend: 🟥 todo · 🟨 in progress · 🟩 done.
+
+### NOW — high value, low/med risk
+- 🟩 **eslint errors 8 → 0** (unused vars, unescaped entities, stale disables, dead `paperStyle`/`selectedTextureMeta`).
+- 🟥 **SEO + social share previews** — `index.html` has no OpenGraph/Twitter meta (links render bare). Add title/description/og:image/twitter:card + share image. *Zero risk.*
+- 🟥 **PWA manifest + Add-to-Home-Screen** — service worker is active but there's no `manifest.webmanifest`. Add manifest (icons, theme, `display:standalone`, `start_url:/studio`) + link tag.
+- 🟥 **Docker HEALTHCHECK** — compose `restart:unless-stopped` recovers exits but not hangs; add a node `/healthz` probe. (relates to the recent host crash)
+- 🟥 **Text tool: in-app modal, not `window.prompt`** — inaccessible + clunky on mobile. (`startStroke` text branch)
+- 🟥 **First-run onboarding coachmark** — friendly "pick a color & draw 🎨" + pointers to Tools / Coloring sheets, once (localStorage). *Highest kid ROI.*
+- 🟥 **Accessibility quick wins** — aria-labels on icon buttons + sliders, focus-visible rings, `prefers-reduced-motion` guard. *No hot-path risk.*
+- 🟥 **Coloring-sheet discovery boost** — strong feature, easy to miss; prominent entry + one-time callout.
+- 🟥 **Friendly empty/feedback states** — canvas-empty hint, copy success/failure toasts, clearer Connecting/Reconnecting.
+- 🟥 **Multiplayer presence clarity** — clearer room name + live headcount + "who's here".
+
+### NEXT — valuable, bigger / needs design
+- 🟥 Marketing **hero safety banner + `/privacy` and `/safety` pages** (a parent's 20-second trust scan finds nothing today).
+- 🟥 **AccountPanel data transparency** + visible account-deletion link.
+- 🟥 **Moderation transparency** — why content was hidden, host session summary, reporter "we'll review" confirmation.
+- 🟥 **Undo/redo on the persistent quickbar** (currently drawer-only) — verify it stays off the hot path.
+- 🟥 **Sound + animation delight** (SFX + micro-animations, gated by reduced-motion + a mute toggle).
+- 🟥 **Coloring-sheet grid virtualization** (~240 thumbnails render at once).
+- 🟥 Review the **4 `exhaustive-deps` warnings** → fully green lint.
+
+### LATER — vision / higher-risk (flag before touching the hot path)
+- 🟥 **Canvas-memory refactor** (history as blobs/dirty-rects; free composite caches) → prerequisite for a bigger/higher-res shared canvas. See [[drawesome-deferred-work]].
+- 🟥 **Marker/Brush true multiply-blend** (per-stroke offscreen compositing). Crayon already blends via grain.
+- 🟥 Guardian controls (household PIN / timeout / managed child accounts).
+- 🟥 Server-side watcher election guard + optional cloud-escalation moderation tier.
+- 🟥 Apple sign-in + Expo iOS app · Real economy (NOT without legal review).
+
+### Autonomous session log (2026-06-26)
+- 🟩 Restored service after a Docker **host** crash (auto-recovered by `unless-stopped`); deployed the Crayon batch.
+- 🟩 eslint errors 8 → 0; build green; clean baseline.
+- 🟩 **Deployed:** SEO/OpenGraph + Twitter social previews; installable PWA (manifest +
+  branded icons/og-image via sharp); Docker `/healthz` healthcheck; first-run welcome
+  coachmark for kids (`happypaint:welcomed:v1`, in deletion wipe list); `prefers-reduced-
+  motion` a11y guard; marketing-hero **parent-trust strip**.
+- 🟨 Continuing the loop on the remaining NOW/NEXT items (safe, verifiable polish auto-
+  deploys; anything touching the drawing canvas is commit-only, held for device review).
+
+  **Done so far → mark these NOW items complete:** SEO+social ✅ · PWA manifest ✅ ·
+  Docker healthcheck ✅ · onboarding coachmark ✅ · reduced-motion (part of a11y) ✅ ·
+  hero safety/trust messaging ✅.
+  **Up next (safe):** aria-labels on icon buttons + sliders, focus-visible rings;
+  coloring-sheet discovery boost; friendly empty/feedback states (copy toasts,
+  Connecting/Reconnecting); `/safety` + `/privacy` pages.
+  **Commit-only / device-review (touches drawing):** text-tool modal vs `window.prompt`;
+  multiplayer-presence affordance; undo/redo on the quickbar.

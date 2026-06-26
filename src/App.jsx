@@ -4824,7 +4824,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <h2>Stroke</h2>
           <label>
             <span>Size</span>
-            <input type="range" min="2" max="120" value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} />
+            <input
+              type="range"
+              min="2"
+              max="120"
+              value={brushSize}
+              aria-label="Brush size"
+              aria-valuetext={`${brushSize} pixels`}
+              onChange={(event) => setBrushSize(Number(event.target.value))}
+            />
             <output>{brushSize}</output>
           </label>
           <label>
@@ -4834,6 +4842,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               min="8"
               max="100"
               value={Math.round(brushOpacity * 100)}
+              aria-label="Brush opacity"
+              aria-valuetext={`${Math.round(brushOpacity * 100)} percent`}
               onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)}
             />
             <output>{Math.round(brushOpacity * 100)}%</output>
@@ -4845,6 +4855,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               min="0"
               max="40"
               value={Math.round(brushVariation * 100)}
+              aria-label="Brush variation"
+              aria-valuetext={`${Math.round(brushVariation * 100)} percent`}
               onChange={(event) => setBrushVariation(Number(event.target.value) / 100)}
             />
             <output>{Math.round(brushVariation * 100)}%</output>
@@ -4852,7 +4864,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           {selectedTool === "text" ? (
             <label>
               <span>Text size</span>
-              <input type="range" min="12" max="240" value={textSize} onChange={(event) => setTextSize(Number(event.target.value))} />
+              <input
+                type="range"
+                min="12"
+                max="240"
+                value={textSize}
+                aria-label="Text size"
+                aria-valuetext={`${textSize} pixels`}
+                onChange={(event) => setTextSize(Number(event.target.value))}
+              />
               <output>{textSize}</output>
             </label>
           ) : null}
