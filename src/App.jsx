@@ -358,6 +358,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
   const [showReport, setShowReport] = useState(false);
   const [showLobby, setShowLobby] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return !window.localStorage.getItem("happypaint:welcomed:v1");
+    } catch {
+      return false;
+    }
+  });
+  const dismissWelcome = () => {
+    setShowWelcome(false);
+    try {
+      window.localStorage.setItem("happypaint:welcomed:v1", "1");
+    } catch {
+      /* ignore */
+    }
+  };
   const [reportReason, setReportReason] = useState("");
   // Coloring sheet: a shared, locked line-art overlay artists colour under/over.
   const sheetImageRef = useRef(null);
@@ -4328,6 +4343,35 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               )}
               <p className="myart-note">Saved on the server for this device. Sign-in to sync across devices is coming soon.</p>
             </div>
+          </div>
+        ) : null}
+
+        {showWelcome ? (
+          <div className="modal-backdrop welcome-backdrop" role="presentation" onClick={dismissWelcome}>
+            <section
+              className="studio-modal welcome-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="welcome-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="welcome-art" aria-hidden="true">🖍️ 🎨 ✨</div>
+              <h2 id="welcome-title">Welcome to Drawesome!</h2>
+              <ol className="welcome-steps">
+                <li>
+                  <span>1</span> Pick a fun color
+                </li>
+                <li>
+                  <span>2</span> Draw right on the page
+                </li>
+                <li>
+                  <span>3</span> Try a coloring sheet or invite a friend!
+                </li>
+              </ol>
+              <button type="button" className="primary-action welcome-go" onClick={dismissWelcome}>
+                Let&rsquo;s draw! 🖍️
+              </button>
+            </section>
           </div>
         ) : null}
 

@@ -45,6 +45,7 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:event-votes:v1",
   "happypaint:social-profile:v1",
   "happypaint:social-sessions:v1",
+  "happypaint:welcomed:v1",
 ];
 
 // IndexedDB "drafts" store key (autosaved draft layer Blobs).
