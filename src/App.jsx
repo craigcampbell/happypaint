@@ -77,7 +77,6 @@ import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
 import MarketingSite from "./components/MarketingSite";
-import TogetherPanel from "./components/TogetherPanel";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
@@ -314,7 +313,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // dedicated offscreen "remote" canvas that is blitted on top of the local
   // layer composite, so remote art never touches the local layer/undo system.
   const roomId = (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
-  const remoteCanvasRef = useRef(null); // offscreen 1600x1200: all friends' art, merged
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
@@ -367,7 +365,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const sheetModeRef = useRef("over"); // 'over' = lines on top (colour under)
   const [sheetId, setSheetId] = useState(null);
   const [sheetMode, setSheetMode] = useState("over");
-  const [sheets, setSheets] = useState([]);
+  const [, setSheets] = useState([]);
   const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
   const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
@@ -444,7 +442,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const studioUnlocked = hasEntitlement(economy, "studio");
 
-  const selectedTextureMeta = useMemo(() => getTexture(selectedTexture), [selectedTexture]);
   const activePalette = paletteCatalog[studioUnlocked ? 2 : 0];
 
   // Write the live layer view back into the active frame so frame switches and
@@ -3953,11 +3950,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [economy, persistEconomy],
   );
 
-  const paperStyle = {
-    "--paper-bg": selectedTextureMeta.background,
-    "--paper-texture": selectedTextureMeta.file ? `url("${selectedTextureMeta.file}")` : "none",
-  };
-
   const showShapeFillOption = selectedTool === "rect" || selectedTool === "ellipse";
 
   // Remember the last real brush so flipping back from the eraser restores it.
@@ -4357,8 +4349,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <div className="confirm-card">
               <h2 id="report-title">⚠️ Report this room</h2>
               <p>
-                Tell a moderator what's wrong in <strong>Room {roomId}</strong> (e.g. mean or inappropriate
-                drawings). They'll review it.
+                Tell a moderator what&apos;s wrong in <strong>Room {roomId}</strong> (e.g. mean or inappropriate
+                drawings). They&apos;ll review it.
               </p>
               <textarea
                 className="report-textarea"

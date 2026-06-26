@@ -170,7 +170,6 @@ async function pushNow() {
     const gallery = await readGalleryLocal();
     for (const item of gallery) {
       try {
-        // eslint-disable-next-line no-await-in-loop
         await upsertSnapshot(pb, item, activeProfileId, nowIso);
       } catch {
         ok = false;

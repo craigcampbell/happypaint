@@ -64,7 +64,6 @@ export default function ColoringSheetModal({ onClose, onApply }) {
         <input
           className="sheet-search"
           type="search"
-          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
