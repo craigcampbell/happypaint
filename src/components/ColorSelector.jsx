@@ -1,27 +1,22 @@
-import React from 'react';
-import PropTypes from 'prop-types'; // Import PropTypes
 import './colorSelector.css';
 
 function ColorSelector({ onColorSelect }) {
-    const primaryColors = ['red', 'blue', 'yellow', 'green', 'black', 'white'];
+    const primaryColors = ['#ef4444', '#2563eb', '#facc15', '#22c55e', '#111827', '#ffffff'];
 
     return (
         <div className="color-selector">
             {primaryColors.map(color => (
-                <div 
+                <button
+                    type="button"
                     key={color}
                     className="color-circle"
                     style={{ backgroundColor: color }}
                     onClick={() => onColorSelect(color)}
+                    aria-label={`Use ${color}`}
                 />
             ))}
         </div>
     );
 }
-
-// Define prop types
-ColorSelector.propTypes = {
-    onColorSelect: PropTypes.func.isRequired,
-};
 
 export default ColorSelector;

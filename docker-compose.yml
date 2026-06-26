@@ -1,0 +1,71 @@
+# Drawesome self-hosted stack: the Node realtime server + the Vite SPA on one
+# port, and PocketBase (Google accounts + SQLite + files) as a separate service.
+#
+# Both ports bind to 127.0.0.1 only — they are NOT exposed to your LAN/internet
+# directly. Your existing Cloudflare tunnel (running on the host) provides public
+# access, routing two hostnames:
+#   drawesome.art      -> http://localhost:8787   (this app)
+#   pb.drawesome.art   -> http://localhost:8090   (PocketBase)
+# See POCKETBASE_SETUP.md for the tunnel + Google steps.
+
+services:
+  pocketbase:
+    build:
+      context: .
+      dockerfile: pocketbase.Dockerfile
+    restart: unless-stopped
+    # --origins locks CORS to the SPA origin (PocketBase defaults to "*").
+    command: ["serve", "--http=0.0.0.0:8090", "--origins=https://drawesome.art"]
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./pb_data:/pb/pb_data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Read from a repo-root .env (compose substitutes it). The public URL the
+        # browser uses to reach PocketBase.
+        VITE_PB_URL: ${VITE_PB_URL:-https://pb.drawesome.art}
+    restart: unless-stopped
+    # Probe /healthz so a hung (not just exited) app is visible as "unhealthy".
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      - pocketbase
+    environment:
+      - PORT=8787
+      - DATA_DIR=/data
+      # Server-internal PocketBase URL for token validation (not the public URL).
+      - PB_URL=http://pocketbase:8090
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./app_data:/data
+      # The 6k+ coloring-sheet library (full PNGs + thumbnails), served read-only.
+      - ./coloring-library:/app/coloring-library:ro
+
+  # The Cloudflare tunnel, in the stack. Only starts with `--profile tunnel`, so
+  # a plain `docker compose up` (local testing) doesn't need a token. Because it
+  # runs ON this network, the tunnel's public hostnames point at the SERVICE
+  # names, not localhost:
+  #   drawesome.art     -> http://app:8787
+  #   pb.drawesome.art  -> http://pocketbase:8090
+  # Set TUNNEL_TOKEN in .env (see POCKETBASE_SETUP.md). Stop any host cloudflared
+  # first so the connector lives only here.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+      - pocketbase

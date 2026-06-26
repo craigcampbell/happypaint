@@ -1,0 +1,220 @@
+# Happy Paint — Feature Kanban
+
+Derived from `docs/product-research.md`, `docs/paint-economy.md`, and `docs/social-backend.md` (research pass 2026-06-15).
+
+Cards are ordered by **product-bet impact** (research §"Product Bets"). Every feature card calls out the work needed per platform:
+- **Web** — `src/` (React, immediate-mode 2D `<canvas>`)
+- **Mobile** — `mobile/` (Expo + Skia; one codebase serves **iOS and Android**)
+- **Backend** — `backend/supabase/schema.sql`
+
+Legend: 🟥 Backlog · 🟨 In Progress · 🟩 Done · ⬛ Deferred (needs prior phase / external dependency)
+
+---
+
+## Done (already in product)
+
+🟩 Fast web canvas + Skia-native mobile drawing surface
+🟩 Browser studio + native mobile app shells
+🟩 Invite rooms / share links / planned sessions (`TogetherPanel`, `TogetherScreen`)
+🟩 Discovery hub: topics, tags, events, gallery voting (`DiscoveryHub`, `DiscoverScreen`)
+🟩 Host-configured artist/viewer roles
+🟩 Admin moderation, room monitoring, bans, network controls (`AdminConsole`)
+🟩 Kid-safe / friends / adult room gates
+🟩 Backend schema: sessions, discovery snapshots, events, gallery posts, votes, admin audit
+🟩 Local gallery + autosave draft + PNG export/share (web + mobile)
+🟩 Image import (mobile)
+
+---
+
+## Critical Gaps → Backlog (ordered, biggest first)
+
+### Bet #1 — Paint Spaces (personal asset locker + identity)  🟥
+Product's "center of gravity." Personal creative locker for stickers, palettes, templates, loops, brushes.
+- **Backend**: `space_profiles`, `space_assets`, `asset_packs`, `asset_uses`, `remix_lineage` tables + RLS.
+- **Web**: "Save to Paint Space" from canvas; locker view; reuse asset on canvas; personal palettes.
+- **Mobile**: same locker + asset picker, AsyncStorage-backed offline + sync-ready shape.
+
+### Bet #2 — Tiny Animation Loops  🟥
+2/4/8-frame loops, onion skin, duplicate-frame, per-frame duration, GIF/APNG export.
+- **Web**: frame model on canvas, onion-skin overlay, GIF encode + download.
+- **Mobile**: frames as stroke-list array, onion skin via Skia opacity, GIF export via frame snapshots.
+- **Backend**: loop persistence columns on project/asset (frame count, durations).
+
+### Bet #3 — Layer Lite  🟥 (FOUNDATION — table stakes)
+MVP layers: Background / Sketch / Color / Detail / Sticker-import. Rename, hide/show, opacity, lock, reorder, merge-down, duplicate.
+- **Web**: refactor single canvas → stacked layer canvases; layer panel UI; composite on export.
+- **Mobile**: add `layerId` to strokes + `layers[]` on project; layer panel; render grouped by layer.
+- **Backend**: per-layer autosave format (layer metadata on session/asset).
+
+### Foundation drawing tools (Priority 0)  🟥
+Required for "drawing credibility." Bundle with Layer Lite where files overlap.
+- Fill / bucket
+- Shape / line tool (rect, ellipse, line)
+- Text tool
+- Rectangle selection + move/scale/rotate selected content
+- **Transparent PNG export** (web composite currently forces a paper background)
+- Import image into a *movable* layer (web; mobile has static import today)
+
+### Bet #4 — Community Brush Packs  🟥
+Brush Studio Lite + brush cards (name, thumbnail, tags, age rating, remix permission) + packs + admin review.
+- **Backend**: extend asset model with brush-recipe `space_assets` of kind `brush`; moderation queue.
+- **Web/Mobile**: Brush Studio Lite editor; save/share brush recipe; apply community brush.
+
+### Bet #4 — Community Brush Packs  🟩 (create/publish/browse/moderate done)
+- 🟩 Brush Studio Lite (create + live preview + save to locker) — web + mobile.
+- 🟩 Publish: group locker assets into `asset_pack`, submit-for-review (pending + moderation queue) — web + mobile.
+- 🟩 Browse approved public packs (brush cards, remix permission) + "Get" copies into locker (`asset_uses`) — web + mobile.
+- 🟩 Admin review queue (approve/reject/needs-changes + audit) in web AdminConsole; approval propagates to public browse.
+- 🟥 Deferred: creator marketplace/payouts (phased, guardian-gated).
+
+### Bet #5 — Event Engine  🟩
+- 🟩 Lifecycle-aware events (upcoming/live/voting/ended) with countdown + per-phase CTA, daily prompt + weekend challenge cards, one-vote-per-profile, winner — web + mobile. Audience-gated (no adult events surfaced).
+- 🟥 Deferred: real-time event scheduling/backend wiring, anti-brigading server enforcement.
+
+### Bet #6 — Room Replay & Timelapse  🟩 (SNAPSHOT-BASED)
+Implemented as **periodic + event keyframe snapshots with temporal decimation** (NOT per-stroke) — bounded, correct for complex/long/multi-painter sessions, reuses the GIF encoder.
+- 🟩 **Backend**: `replay_snapshots` + `timelapse_assets` records (snapshot model documented).
+- 🟩 **Web**: snapshot recorder (IndexedDB Blobs), replay player (play/scrub/speed/remix-from-here), timelapse GIF via worker.
+- 🟩 **Mobile**: snapshot recorder (files, export-lock-aware), replay screen, timelapse GIF via encoder.
+- 🟥 Deferred: live multi-client room replay sync (needs backend realtime).
+
+### Bet #7 — AI Assist (safety-gated)  🟩 (local v1)
+- 🟩 **Policy**: `docs/ai-policy.md` (consent, allowed/avoided uses, moderation, gating, credits).
+- 🟩 **Backend**: `ai_consent`, `ai_generations` (moderation), `ai_credits` with under-13 guardian-gated consent RLS.
+- 🟩 **Web + mobile v1 (local, deterministic, no external API)**: palette-from-theme, kid-safe prompt cards, brush-recipe-from-text; consent-gated; outputs flagged pending moderation. Admin AI review queue (web).
+- 🟥 Deferred: server-side sketch cleanup / background gen behind credits + the moderation queue (per policy phases v2/v3).
+
+### Economy foundation — Drops & Kudos  🟩 (schema + mock UI done; real IAP deferred)
+Replaced the "Demo Drops" / "premiumPreview" placeholders with a real model.
+- 🟩 **Backend**: `wallets`, `wallet_ledger_entries` (append-only), `drop_products`, `purchase_receipts`, `asset_products`, `tips`, `creator_payout_accounts`, `creator_payouts`, `economy_admin_actions` + entitlement flags.
+- 🟩 **Web**: `utils/economy.js` (ledger-derived balances, IndexedDB), WalletPanel/StorePanel/CreatorDashboard; studio-tier unlock via entitlement; legacy `studio-pass` migrated; compliance copy.
+- 🟩 **Mobile**: `economy.ts` (AsyncStorage), Wallet/Store/CreatorDashboard screens; locked tools route to Store; legacy `premiumPreview` migrated; App Store/Play IAP + parental-gate + no-loot-box copy.
+- 🟥 **Deferred**: real IAP (App Store/Play Billing) + receipt verification + payout flows; admin economy ledger surface; non-`studio` entitlement grants (themes/tokens) not yet consumed by features.
+
+### Bet #8 — Discord Activity Pilot  ⬛ (external surface, late-stage)
+
+---
+
+## Cross-cutting / Compliance
+- 🟩 **Cloud account/sync — Supabase wired**: real `@supabase/supabase-js` client on both platforms (web bundler issue fixed via direct `tslib` dep + dedupe; mobile uses `react-native-url-polyfill` + AsyncStorage auth storage + foreground auto-refresh). Real magic-link + Apple/Google OAuth (mobile deep-link `happypaint://auth-callback`). **Local-first sync** (`sync.js`/`sync.ts`): drawings → `project_snapshots`, paint space → `space_assets`, UPSERT on `(profile_id/owner_profile_id, client_id)`, last-write-wins by `updated_at`, debounced push + pull-on-sign-in, offline source-of-truth preserved. Account deletion calls `request_account_deletion()` RPC. Login OPTIONAL; unset env = local-only (app fully works offline). Backend: `handle_new_user` trigger, sync columns/indexes, RPC, `purge-account` edge function (service-role), storage buckets (`artwork`/`replay`/`previews`) + RLS. DO build-time env vars in `.do/app.yaml`; `.env.example` + `DEPLOY.md` Supabase setup.
+  - 🟩 **Code-split**: web Supabase SDK loads via dynamic `import()` — its own chunk (~201KB raw / ~55KB gzip), never in the eager entry bundle and never fetched at all in local-only mode; loads after the app shell in configured mode. Main bundle has zero Supabase refs.
+  - 🟩 **Beginner hosting guide**: `HOSTING.md` — click-by-click DigitalOcean + Supabase setup for non-experts (launch-with-DO-only path, optional accounts, troubleshooting).
+  - 🟥 Deferred (noted in code): economy/events/replay sync; binary file sync (PNG previews, replay snapshots, GIF) → Storage buckets; runtime E2E needs a live Supabase project.
+- 🟩 **Entitlements/purchase schema** (in backend; mock economy UI on top).
+- 🟩 **AI safety policy + consent model** (`docs/ai-policy.md` + `ai_consent` + in-app consent gate w/ revoke + guardian gating for minors).
+- 🟥 **Creator payout / UGC licensing** (phased, guardian-gated) — deferred.
+- 🟩 **In-app account deletion** (App Review requirement): free, always-available flow that records an `account_deletion_requests` record and wipes ALL local stores (drafts/gallery/paint-space/economy/AI-consent/replay + project & replay files) — web + mobile.
+
+## Reliability & Infra hardening (this session)  🟩
+- 🟩 **Mobile input → react-native-gesture-handler (v2.31.2).** Replaced PanResponder with `Gesture.Pan()` (UI-thread point fidelity) + `Gesture.Tap()` for fill/text; `maxPointers(1)` palm/multitouch rejection; root wrapped in `GestureHandlerRootView`. *(Future: UI-thread worklet rendering needs react-native-reanimated.)*
+- 🟩 **Web gallery + Paint Space → IndexedDB.** Migrated off localStorage (same quota/silent-drop data-loss class as W3) via shared `idb.js` (DB v2 `kv` store); one-time legacy migration; honest failure status; localStorage fallback in private mode.
+- 🟩 **DigitalOcean deploy config.** `.do/app.yaml` (App Platform static site, `catchall_document: index.html`), `deploy/nginx.conf` (Droplet SPA fallback + asset caching + security headers), `DEPLOY.md`. Fixes SPA refresh-404 for `/studio`, `/join/:code`, `/admin`.
+- 🟥 *Remaining storage note:* only `studio-pass:v1` (a tiny boolean flag) still uses localStorage — not a quota risk.
+
+---
+
+## Active Implementation Plan (this session)
+
+**Wave 1 (parallel — no file conflicts):**
+1. 🟨 Backend schema: Economy + Paint Spaces + entitlements + layer/frame persistence → `schema.sql`
+2. 🟨 Web Studio: Layer Lite + fill + shapes/line + text + transparent PNG export
+3. 🟨 Mobile Studio: Layer Lite + fill + shapes/line + text + transparent PNG export
+
+**Wave 2 (builds on Wave 1 layers):**
+4. 🟩 Web: Tiny Animation Loops + Paint Space locker UI
+5. 🟩 Mobile: Tiny Animation Loops + Paint Space locker UI
+
+Biggest-first rationale: Layer Lite + drawing tools are the foundation everything else (loops, paint-space assets, replay) builds on, so they ship first alongside the data schema.
+
+---
+
+## Performance & Bugs (from `performance_audit.md`, 2026-06-15)
+
+Audit of the drawing hot path across all platforms. Severity is the auditor's estimate. Fix order: data-loss → draw hot path → memory → export freeze → visible correctness → rest. See `performance_audit.md` for evidence, locations, and fixes.
+
+**All Critical + High items fixed (2026-06-15).** Web build + lint clean; mobile typecheck clean.
+
+### 🟩 Critical — DONE
+- **W3 — Web autosave silently loses artwork.** ✅ Moved draft autosave to IndexedDB (blobs, large quota); failures now surfaced honestly ("Couldn't autosave — storage full"), dirty flag retained; legacy localStorage draft migrated. *(`src/utils/idb.js`, `App.jsx`)*
+- **M1 — Mobile re-serializes whole project on every stroke.** ✅ 1s trailing debounce + flush on background/unmount/back; per-project files (expo-file-system) + lightweight index; one-time migration from old key. *(`App.tsx`, `storage.ts`)*
+- **M5 — Mobile gallery silently wiped on Android.** ✅ Per-project files avoid the ~2MB CursorWindow; read failures logged & skipped per-entry (never returns `[]` destroying data); raw data preserved; coords quantized.
+- **W1 — Web full multi-layer recomposite per pointer move.** ✅ Cached below/active/above composites at stroke-start → 3 blits/move regardless of layer count; full recomposite only on stroke-end/structural change.
+- **W2 — Web onion skin recomposites neighbor frames every move.** ✅ Onion neighbors precomputed once into the cached "below" composite.
+- **M2 — Mobile every committed stroke is a permanent Skia node.** ✅ Committed items flattened into cached `SkPicture` per run; dropped the 24-circle paint decoration; `LayerItemsNode` memoized.
+
+### 🟩 High — DONE
+- **W4 — Web undo history clones full layer stack/stroke.** ✅ Active-layer-only snapshots for brush/fill/shape/text; full-stack snapshots only for structural ops (~4× less memory/entry).
+- **W6 — Web canvas blurry on HiDPI/tablets.** ✅ Display canvas backing store sized to `css × devicePixelRatio`; recomputed on resize + DPR change; doc stays 1600×1200.
+- **W7 — Web GIF encode froze the tab.** ✅ Encoding moved to a Web Worker (`gif.worker.js`) with transferable ImageData; sync fallback; button disabled + status during encode.
+- **W5 — Web display update not rAF-coalesced.** ✅ Per-move render gated behind a single pending rAF; flushed on stroke-end.
+- **M3 — Mobile live stroke repaints entire scene each rAF.** ✅ Committed content now cached SkPictures; only the live-stroke node is dynamic.
+- **M4 — Mobile unbounded spray growth + path rebuild.** ✅ `MAX_SPRAY_DOTS = 3000` cap; live path bounded; committed spray cached.
+- **M6 — Mobile export race + UI-thread GIF freeze.** ✅ Single in-flight export lock (preview snapshot coordinated); `encodeGif` async with `setTimeout(0)` yields + sample stride 4; per-frame `SkImage.dispose()`.
+
+### 🟩 Medium — DONE
+- **W8** ✅ GIF buffer now growable Uint8Array · **W9** ✅ only affected frame thumbnails regenerated · **W10** ✅ fill writes back only the dirty sub-rect · **W11** ✅ shape preview clears only previous bbox · **W12** ✅ removed `onPointerLeave` (relies on pointer capture) · **W13** ✅ opacity slider rAF-throttled + single undoable snapshot per drag.
+- **M7** ✅ `latestProjectRef` + synchronous `commitProject` so rapid commits chain · **M8** ✅ monotonic counter in shared `ids.ts` (also fixed double `createDefaultLayers` bug) · **M9** ✅ eraser uses `BlendMode.Clear` inside per-layer offscreen groups → truly erases, correct on transparent/sticker/GIF export · **M10** ✅ multitouch/palm guards (`touches.length > 1`); full pen tracking would need gesture-handler · **M11** ✅ all export/preview SkImages + sprite-sheet surface disposed · **M12** ✅ `ColorType.RGBA_8888`/`AlphaType.Unpremul` enums · **M13** ✅ `useImage(null)` guard + shared font cache per size · **M14** ✅ live stroke isolated in `<LiveStrokeLayer>` (parent chrome no longer reconciles per frame).
+
+### 🟩 Low — DONE
+- **W14** ✅ pen-priority + palm (large contact) rejection · **W15** ✅ anchor appended + deferred URL revoke · **W16** ✅ guarded `makeId` everywhere · **W17** ✅ playback uses rAF + timestamp accumulator.
+- **M15** ✅ sticker-apply gated on canvas layout · **M16** ✅ export min-delay aligned to preview (40ms); disposal=2 kept (loops genuinely transparent) · **M17** ✅ snapshot failure reschedules preview only, no redundant save.
+
+---
+
+## UX · Safety · Polish audit (2026-06-26)
+
+From a 4-lens deep audit (kid-UX, parent/safety, web-researched best practices,
+technical/a11y) of the **live** site. Ordered by value vs risk. **Top constraint:
+never risk drawing-canvas smoothness.** Legend: 🟥 todo · 🟨 in progress · 🟩 done.
+
+### NOW — high value, low/med risk
+- 🟩 **eslint errors 8 → 0** (unused vars, unescaped entities, stale disables, dead `paperStyle`/`selectedTextureMeta`).
+- 🟥 **SEO + social share previews** — `index.html` has no OpenGraph/Twitter meta (links render bare). Add title/description/og:image/twitter:card + share image. *Zero risk.*
+- 🟥 **PWA manifest + Add-to-Home-Screen** — service worker is active but there's no `manifest.webmanifest`. Add manifest (icons, theme, `display:standalone`, `start_url:/studio`) + link tag.
+- 🟥 **Docker HEALTHCHECK** — compose `restart:unless-stopped` recovers exits but not hangs; add a node `/healthz` probe. (relates to the recent host crash)
+- 🟥 **Text tool: in-app modal, not `window.prompt`** — inaccessible + clunky on mobile. (`startStroke` text branch)
+- 🟥 **First-run onboarding coachmark** — friendly "pick a color & draw 🎨" + pointers to Tools / Coloring sheets, once (localStorage). *Highest kid ROI.*
+- 🟥 **Accessibility quick wins** — aria-labels on icon buttons + sliders, focus-visible rings, `prefers-reduced-motion` guard. *No hot-path risk.*
+- 🟥 **Coloring-sheet discovery boost** — strong feature, easy to miss; prominent entry + one-time callout.
+- 🟥 **Friendly empty/feedback states** — canvas-empty hint, copy success/failure toasts, clearer Connecting/Reconnecting.
+- 🟥 **Multiplayer presence clarity** — clearer room name + live headcount + "who's here".
+
+### NEXT — valuable, bigger / needs design
+- 🟥 Marketing **hero safety banner + `/privacy` and `/safety` pages** (a parent's 20-second trust scan finds nothing today).
+- 🟥 **AccountPanel data transparency** + visible account-deletion link.
+- 🟥 **Moderation transparency** — why content was hidden, host session summary, reporter "we'll review" confirmation.
+- 🟥 **Undo/redo on the persistent quickbar** (currently drawer-only) — verify it stays off the hot path.
+- 🟥 **Sound + animation delight** (SFX + micro-animations, gated by reduced-motion + a mute toggle).
+- 🟥 **Coloring-sheet grid virtualization** (~240 thumbnails render at once).
+- 🟥 Review the **4 `exhaustive-deps` warnings** → fully green lint.
+
+### LATER — vision / higher-risk (flag before touching the hot path)
+- 🟥 **Canvas-memory refactor** (history as blobs/dirty-rects; free composite caches) → prerequisite for a bigger/higher-res shared canvas. See [[drawesome-deferred-work]].
+- 🟥 **Marker/Brush true multiply-blend** (per-stroke offscreen compositing). Crayon already blends via grain.
+- 🟥 Guardian controls (household PIN / timeout / managed child accounts).
+- 🟥 Server-side watcher election guard + optional cloud-escalation moderation tier.
+- 🟥 Apple sign-in + Expo iOS app · Real economy (NOT without legal review).
+
+### Autonomous session log (2026-06-26)
+- 🟩 Restored service after a Docker **host** crash (auto-recovered by `unless-stopped`); deployed the Crayon batch.
+- 🟩 eslint errors 8 → 0; build green; clean baseline.
+- 🟩 **Deployed:** SEO/OpenGraph + Twitter social previews; installable PWA (manifest +
+  branded icons/og-image via sharp); Docker `/healthz` healthcheck; first-run welcome
+  coachmark for kids (`happypaint:welcomed:v1`, in deletion wipe list); `prefers-reduced-
+  motion` a11y guard; marketing-hero **parent-trust strip**.
+**Deployed & live (all verified: build + 0 lint errors + headless DOM/console check):**
+SEO+social previews ✅ · installable PWA (manifest + branded icons) ✅ · Docker
+healthcheck ✅ · first-run welcome coachmark ✅ · reduced-motion ✅ · hero parent-trust
+strip ✅ · focus-visible keyboard rings ✅ · slider `aria-label`/`aria-valuetext` ✅ ·
+dedicated **`/safety`** page (+ nav link) ✅.
+
+**Loop paused** here — the clearly-safe, high-value items are shipped. What remains is
+either lower-value, needs design/legal review, or touches the drawing canvas (so it
+needs the user's real device, since the headless preview can't render the canvas):
+- **Device-review (canvas/hot-path) — implement + have user test, do NOT blind-deploy:**
+  text-tool modal vs `window.prompt`; multiplayer-presence affordance; undo/redo on the
+  quickbar; marker/brush multiply-blend; the canvas-memory refactor.
+- **Needs human/legal review:** a full `/privacy` policy (the `/safety` page summarizes
+  data practices, but a binding policy should be lawyer-checked).
+- **Lower-value polish:** coloring-sheet discovery boost; label the loop/layer sliders;
+  AccountPanel "what we store" line; report-success "we'll review" confirmation.

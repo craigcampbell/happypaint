@@ -22,3 +22,28 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+server.out.log
+server.err.log
+.murals/
+.artworks/
+.rooms/
+.admin-key
+.reports.json
+.sheets.json
+.metrics.json
+
+# Local secrets / config — never commit
+.env
+.session-secret
+
+# Docker / self-hosted data volumes
+pb_data/
+app_data/
+backups/
+
+# Coloring-sheet library (1GB+ of images — served from a volume, never committed)
+coloring-library/
+src/coloring-sheets/
+
+# Temp commit-message scratch file
+.commitmsg.txt

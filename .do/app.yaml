@@ -1,0 +1,41 @@
+# DigitalOcean App Platform spec for the Happy Paint web app (static site).
+#
+# The web studio uses client-side routing (history.pushState) for /studio,
+# /join/:code, and /admin. `catchall_document` serves index.html for any
+# unmatched path so those routes resolve on hard refresh / direct link.
+#
+# Deploy:  doctl apps create --spec .do/app.yaml
+# Update:  doctl apps update <APP_ID> --spec .do/app.yaml
+# (Or paste this spec in the App Platform UI.)
+name: happypaint
+region: nyc
+static_sites:
+  - name: web
+    # Point this at your GitHub repo + default branch.
+    github:
+      repo: your-org/happypaint
+      branch: main
+      deploy_on_push: true
+    # Vite build -> dist/
+    build_command: npm ci && npm run build
+    output_dir: dist
+    environment_slug: node-js
+    # SPA fallback: serve index.html for unknown paths (client-side routes).
+    catchall_document: index.html
+    # Supabase wiring (optional — leave unset to ship a local-only build with no
+    # sync/auth). The anon key is PUBLIC and safe to embed in the client bundle;
+    # row-level security in backend/supabase/schema.sql is the real boundary.
+    # Vite inlines VITE_* vars at build time, so scope must be BUILD_TIME.
+    # Fill both values in (or via `doctl`/the App Platform UI) to enable Supabase.
+    envs:
+      - key: VITE_SUPABASE_URL
+        scope: BUILD_TIME
+        type: GENERAL
+        value: ""        # https://<project-ref>.supabase.co  (required to enable sync)
+      - key: VITE_SUPABASE_ANON_KEY
+        scope: BUILD_TIME
+        type: GENERAL
+        value: ""        # public anon key (required to enable sync)
+    # Optional explicit routing (App Platform serves the site at "/").
+    routes:
+      - path: /
