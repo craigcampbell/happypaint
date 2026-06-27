@@ -342,24 +342,61 @@ button:disabled {
   gap: 8px;
 }
 
+/* Fun icon-cards: a big emoji on top, the name underneath, centred — reads like
+   a kids' art box instead of a row of text buttons. Applies on desktop + mobile. */
 .brush-chip,
 .texture-chip {
+  position: relative;
   min-width: 0;
-  min-height: 54px;
+  min-height: 70px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 8px 10px;
-  text-align: left;
+  gap: 4px;
+  padding: 8px 6px;
+  text-align: center;
+  border-radius: 16px;
+  background: #fbfdff;
 }
 
+.chip-ico {
+  font-size: 1.7rem;
+  line-height: 1;
+  filter: drop-shadow(0 1px 1px rgba(23, 45, 53, 0.18));
+}
+
+.chip-name {
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.05;
+  color: #2b3742;
+}
+
+/* Active chip pops with a soft tinted fill + a gentle lift of its icon. */
+.brush-chip.is-active,
+.texture-chip.is-active {
+  background: #eaf3ff;
+}
+.brush-chip.is-active .chip-ico,
+.texture-chip.is-active .chip-ico {
+  transform: scale(1.12);
+}
+
+/* "Studio" lock badge as a small pill so it stays legible over the centred icon
+   (the emoji's corner is transparent) without overlapping it awkwardly. */
 .brush-chip small,
 .texture-chip small {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ffedcc;
   color: #7a4a0d;
-  font-size: 0.7rem;
+  font-size: 0.55rem;
   font-weight: 900;
+  line-height: 1.5;
 }
 
 .is-active {
@@ -374,10 +411,29 @@ button:disabled {
 }
 
 .color-swatch {
+  position: relative;
   min-height: 0;
   aspect-ratio: 1;
   padding: 0;
+  border-radius: 12px;
   border-color: rgba(23, 33, 43, 0.22);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.color-swatch:hover:not(:disabled) {
+  transform: scale(1.08);
+  box-shadow: none;
+}
+
+/* The chosen colour pops out with a white + brand ring so kids can see what's
+   selected at a glance (overrides the generic inset .is-active ring). The
+   :hover variant below has to repeat it — otherwise hovering the selected
+   swatch (higher-specificity hover rule) would wipe its ring. */
+.color-swatch.is-active,
+.color-swatch.is-active:hover:not(:disabled) {
+  transform: scale(1.16);
+  box-shadow: 0 0 0 3px #ffffff, 0 0 0 6px #174c4d;
+  z-index: 2;
 }
 
 /* Crayon picker mode: when the crayon tool is active, swatches become little
@@ -3301,10 +3357,117 @@ button:disabled {
   border: 1px solid #e3e9ef;
 }
 .myart-note {
-  margin: 14px 0 0;
+  margin: 0;
   font-size: 0.76rem;
   color: #8a98a6;
   text-align: center;
+}
+
+/* Signed-out gallery: a friendly "sign up or lose it" prompt above the saves. */
+.gallery-gate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid #ffe0a6;
+  background: linear-gradient(135deg, #fff7e6, #fff1f6);
+}
+.gallery-gate-emoji {
+  font-size: 1.7rem;
+  line-height: 1;
+}
+.gallery-gate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.gallery-gate-body strong {
+  font-size: 0.98rem;
+  color: #243140;
+}
+.gallery-gate-body span {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #5a6675;
+}
+.gallery-gate-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Signed-in confirmation that the gallery is account-tied. */
+.myart-synced {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #eafaf1;
+  border: 1px solid #b6ebcc;
+  color: #1f6b43;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+/* Local quick-saves (Ctrl/Cmd+S snapshots) folded under the server gallery. */
+.myart-quicksaves {
+  margin-top: 18px;
+}
+.myart-subhead {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #5a6b7b;
+}
+.myart-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.myart-quick-item {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  text-align: left;
+}
+.myart-quick-item img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #f6f1e7;
+}
+.myart-quick-item span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #35424d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.myart-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.myart-foot .myart-note {
+  flex: 1 1 160px;
+  text-align: right;
+}
+
+.avatar-signin {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e3e9ef;
+}
+.avatar-signin button {
+  width: 100%;
 }
 
 /* Reveal the saved-art access on mobile via the toolbar button + modal. */
@@ -3517,9 +3680,14 @@ button:disabled {
     font-weight: 800;
   }
   .qb-btn:hover:not(:disabled) { box-shadow: none; }
-  .qb-ico { font-size: 20px; line-height: 1; }
-  .qb-label { font-size: 10px; }
-  .qb-btn.is-active { background: #2d6cdf; color: #fff; }
+  .qb-ico { font-size: 23px; line-height: 1; }
+  .qb-label { font-size: 10px; font-weight: 800; }
+  .qb-btn.is-active {
+    background: linear-gradient(180deg, #4f86ff, #2d6cdf);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(45, 108, 223, 0.4);
+  }
+  .qb-btn.is-active .qb-ico { transform: scale(1.08); }
 
   /* Zoom → top-right, out of the way; drop the redundant hand button */
   .zoom-controls {
@@ -4097,14 +4265,27 @@ button:disabled {
 
 /* ---- Mobile polish: smaller color chips, denser tools drawer (perf audit) -- */
 @media (max-width: 1024px) {
-  /* Color/avatar chips inherited the desktop layout (4–5 cols, aspect-ratio:1, no
-     max-width) so each swatch was ~79px on a phone. Pack more per row and cap the
-     visual size while keeping a comfortable tap target. */
-  .palette-grid { grid-template-columns: repeat(8, 1fr); gap: 6px; }
-  .color-swatch { max-width: 38px; max-height: 38px; justify-self: center; border-radius: 9px; }
-  .palette-grid.crayons-mode { grid-template-columns: repeat(6, 1fr); }
-  .avatar-colors { grid-template-columns: repeat(8, 1fr); gap: 6px; }
-  .avatar-color { max-width: 38px; max-height: 38px; justify-self: center; }
+  /* Chunky, tappable colours. The OLD rule capped width with max-width +
+     justify-self:center, which actually collapsed each swatch to its ~2px content
+     width inside the column (that's why the colours looked "super small"). Size
+     them by the COLUMN instead — auto-fill tracks of ~48px that the swatch fills —
+     so they stay a fat, finger-friendly ~48–54px on phones and tablets alike. */
+  .palette-grid { grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 10px; }
+  .color-swatch {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    justify-self: stretch;
+    border-radius: 14px;
+  }
+  .palette-grid.crayons-mode { grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); }
+  .avatar-colors { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 10px; }
+  .avatar-color {
+    width: auto;
+    max-width: none;
+    max-height: none;
+    justify-self: stretch;
+  }
 
   /* Tighten the bottom sheet so the color section isn't pushed below the fold,
      keep momentum scroll inside the sheet, and clear the iOS home indicator. */
@@ -4115,9 +4296,10 @@ button:disabled {
     -webkit-overflow-scrolling: touch;
   }
   .brush-grid,
-  .texture-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .texture-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
   .brush-chip,
-  .texture-chip { min-height: 48px; }
+  .texture-chip { min-height: 66px; }
+  .chip-ico { font-size: 1.55rem; }
 
   /* Don't float the always-on quick bar over the open drawer; respect the safe area. */
   .tool-rail.is-open ~ .mobile-quickbar { display: none; }

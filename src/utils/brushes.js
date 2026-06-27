@@ -1,43 +1,52 @@
+// Each brush carries an `icon` (emoji) so the picker reads as a fun, kid-friendly
+// art box rather than a list of text chips.
 export const brushCatalog = [
   {
     id: "marker",
     name: "Marker",
+    icon: "🖊️",
     tier: "free",
     description: "Clean, bold color for coloring pages and quick sketches.",
   },
   {
     id: "crayon",
     name: "Crayon",
+    icon: "🖍️",
     tier: "free",
     description: "Waxy, grainy crayon — layer colors and they blend like real wax.",
   },
   {
     id: "pencil",
     name: "Pencil",
+    icon: "✏️",
     tier: "free",
     description: "Light sketching with pressure-aware texture.",
   },
   {
     id: "paint",
     name: "Paint",
+    icon: "🎨",
     tier: "free",
     description: "Soft opaque strokes with rounded edges.",
   },
   {
     id: "spray",
     name: "Spray",
+    icon: "💨",
     tier: "free",
     description: "Airbrush dots for shading and backgrounds.",
   },
   {
     id: "eraser",
     name: "Eraser",
+    icon: "🧽",
     tier: "free",
     description: "Removes paint while keeping the paper texture.",
   },
   {
     id: "glow",
     name: "Glow",
+    icon: "✨",
     tier: "studio",
     description: "A premium neon brush pack hook for store unlocks.",
   },
@@ -47,24 +56,28 @@ export const paperTextures = [
   {
     id: "linen",
     name: "Linen",
+    icon: "🧵",
     file: "/linen.png",
     background: "#f7f1e5",
   },
   {
     id: "canvas",
     name: "Canvas",
+    icon: "🖼️",
     file: "/canvas.png",
     background: "#f6f4ed",
   },
   {
     id: "smooth",
     name: "Smooth",
+    icon: "⬜",
     file: "",
     background: "#ffffff",
   },
   {
     id: "night",
     name: "Night",
+    icon: "🌙",
     file: "",
     background: "#171a22",
     tier: "studio",

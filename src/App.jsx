@@ -136,12 +136,12 @@ const FRAME_THUMB_HEIGHT = 72;
 const MAX_PALETTE_COLORS = 10;
 
 const TOOLS = [
-  { id: "brush", name: "Brush" },
-  { id: "fill", name: "Fill" },
-  { id: "rect", name: "Rectangle" },
-  { id: "ellipse", name: "Ellipse" },
-  { id: "line", name: "Line" },
-  { id: "text", name: "Text" },
+  { id: "brush", name: "Brush", icon: "🖌️" },
+  { id: "fill", name: "Fill", icon: "🪣" },
+  { id: "rect", name: "Rectangle", icon: "🟦" },
+  { id: "ellipse", name: "Ellipse", icon: "🔵" },
+  { id: "line", name: "Line", icon: "📏" },
+  { id: "text", name: "Text", icon: "🔤" },
 ];
 
 function readJson(key, fallback) {
@@ -350,8 +350,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [nameDraft, setNameDraft] = useState("");
   const profileRef = useRef(null); // persisted { name, color }, applied on connect
 
-  // Saved-to-server artwork ("My Art"), keyed by an anonymous per-device id.
+  // Saved-to-server artwork (the gallery). `userKeyRef` is the ACTIVE key the
+  // /api/artworks calls use: the account id when signed in (so the gallery
+  // follows you across devices) or the anonymous device key when signed out.
+  // `deviceKeyRef` always holds the anonymous fallback.
   const userKeyRef = useRef(null);
+  const deviceKeyRef = useRef(null);
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
@@ -1400,14 +1404,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       });
       if (res.status === 409) {
         const data = await res.json().catch(() => ({ max: savesMax }));
-        showToast(`You've saved the max (${data.max}). Open 📁 My Art and delete one first.`);
+        showToast(`You've saved the max (${data.max}). Open 🖼️ Gallery and delete one first.`);
         return;
       }
       if (!res.ok) {
         throw new Error("save failed");
       }
       const data = await res.json();
-      showToast(`Saved! 🎉 (${data.count}/${data.max}) — find it in 📁 My Art`);
+      showToast(`Saved! 🎉 (${data.count}/${data.max}) — find it in 🖼️ Gallery`);
       await loadMyDrawings();
     } catch {
       showToast("Couldn't save — please try again");
@@ -3532,6 +3536,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, []);
 
   // Ensure an anonymous per-device user key, then load this user's saved art.
+  // Establish the anonymous device key once (the signed-out fallback).
   useEffect(() => {
     let key = null;
     try {
@@ -3547,9 +3552,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         // ephemeral key if storage is blocked
       }
     }
+    deviceKeyRef.current = key;
+  }, []);
+
+  // Pick the active gallery key from auth state and (re)load that gallery. Runs
+  // after the device-key effect on mount, then again whenever sign-in changes:
+  // signed in → "pb_<profileId>" (account-tied, syncs everywhere); signed out →
+  // the device key (local only — the reason we nudge people to sign in).
+  useEffect(() => {
+    const profileId = session?.user?.id;
+    const key = profileId ? `pb_${profileId}` : deviceKeyRef.current;
+    if (!key) {
+      return;
+    }
     userKeyRef.current = key;
     loadMyDrawings();
-  }, [loadMyDrawings]);
+  }, [session, loadMyDrawings]);
 
   // Save the profile and push it to the room.
   const saveProfile = useCallback(
@@ -4095,7 +4113,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 setShowMyArt(true);
               }}
             >
-              📁 My Art
+              🖼️ Gallery
             </button>
             <button type="button" onClick={sharePng}>
               Share
@@ -4204,7 +4222,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                     Save
                   </button>
                 </div>
-                <p className="avatar-note">Sign in &amp; saved profiles coming soon 🔒</p>
+                <div className="avatar-signin">
+                  {session ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAvatarMenu(false);
+                        setShowAccount(true);
+                      }}
+                    >
+                      ✅ Signed in · Account
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => {
+                        setShowAvatarMenu(false);
+                        setShowAccount(true);
+                      }}
+                    >
+                      🔑 Sign in to save your gallery
+                    </button>
+                  )}
+                </div>
               </div>
             ) : null}
           </div>
@@ -4309,7 +4350,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="myart-title">
             <div className="myart-card">
               <div className="myart-head">
-                <h2 id="myart-title">📁 My Art</h2>
+                <h2 id="myart-title">
+                  🖼️{" "}
+                  {session && (session.user?.name || session.user?.email)
+                    ? `${session.user.name || session.user.email.split("@")[0]}’s gallery`
+                    : "My gallery"}
+                </h2>
                 <span className="myart-count">
                   {myDrawings.length}/{savesMax} saved
                 </span>
@@ -4317,10 +4363,39 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   ✕
                 </button>
               </div>
+
+              {session ? (
+                <p className="myart-synced">
+                  ✅ Signed in — new art you save is kept in your account gallery, so you can sign in
+                  on another device to find it.
+                </p>
+              ) : (
+                <div className="gallery-gate">
+                  <span className="gallery-gate-emoji" aria-hidden="true">🔒</span>
+                  <div className="gallery-gate-body">
+                    <strong>Sign up to save your gallery — or it could be lost!</strong>
+                    <span>
+                      Right now your art only lives on this device. Make a free account so the art you
+                      save is kept in your own gallery.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-action gallery-gate-btn"
+                    onClick={() => {
+                      setShowMyArt(false);
+                      setShowAccount(true);
+                    }}
+                  >
+                    Sign up to save →
+                  </button>
+                </div>
+              )}
+
               {myDrawings.length === 0 ? (
                 <p className="myart-empty">
                   No saved drawings yet. Tap <strong>💾 Save</strong> to keep one here — you can come back
-                  and open it anytime on this device.
+                  and open it anytime{session ? ", on any device" : " on this device"}.
                 </p>
               ) : (
                 <div className="myart-grid">
@@ -4342,7 +4417,47 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   ))}
                 </div>
               )}
-              <p className="myart-note">Saved on the server for this device. Sign-in to sync across devices is coming soon.</p>
+
+              {gallery.length > 0 ? (
+                <div className="myart-quicksaves">
+                  <p className="myart-subhead">Quick saves on this device</p>
+                  <div className="myart-quick-grid">
+                    {gallery.map((item) => (
+                      <button
+                        type="button"
+                        className="myart-quick-item"
+                        key={item.id}
+                        onClick={() => {
+                          restoreGalleryItem(item);
+                          setShowMyArt(false);
+                        }}
+                        title={`Open ${item.name}`}
+                      >
+                        <img src={item.preview} alt="" />
+                        <span>{item.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="myart-foot">
+                <button
+                  type="button"
+                  onClick={() => {
+                    restoreDraft();
+                    setShowMyArt(false);
+                  }}
+                  title="Bring back your last unsaved drawing"
+                >
+                  ↩︎ Restore last draft
+                </button>
+                <p className="myart-note">
+                  {session
+                    ? "New saves are kept in your account gallery."
+                    : "Saved on this device only — sign up to keep your gallery safe."}
+                </p>
+              </div>
             </div>
           </div>
         ) : null}
@@ -4500,31 +4615,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             💬 Chat{mp.chat.length ? ` (${mp.chat.length})` : ""}
           </button>
         )}
-
-        <div className="gallery-strip" aria-label="Saved artwork">
-          <div className="gallery-heading">
-            <span>Gallery</span>
-            <button type="button" onClick={restoreDraft}>
-              Restore Draft
-            </button>
-          </div>
-          {gallery.length === 0 ? (
-            <div className="empty-gallery">No saved pieces yet</div>
-          ) : (
-            gallery.map((item) => (
-              <button
-                type="button"
-                className="gallery-item"
-                key={item.id}
-                onClick={() => restoreGalleryItem(item)}
-                aria-label={`Open ${item.name}`}
-              >
-                <img src={item.preview} alt="" />
-                <span>{item.name}</span>
-              </button>
-            ))
-          )}
-        </div>
       </section>
 
       <aside className={toolsOpen ? "tool-rail is-open" : "tool-rail"} aria-label="Drawing tools">
@@ -4561,7 +4651,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 setShowMyArt(true);
               }}
             >
-              📁 My Art
+              🖼️ Gallery
             </button>
             <button type="button" onClick={sharePng}>
               Share
@@ -4616,7 +4706,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 }}
                 aria-pressed={selectedTool === tool.id}
               >
-                <span>{tool.name}</span>
+                <span className="chip-ico" aria-hidden="true">{tool.icon}</span>
+                <span className="chip-name">{tool.name}</span>
               </button>
             ))}
           </div>
@@ -4744,7 +4835,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   onClick={() => chooseBrush(brush.id)}
                   aria-pressed={selectedTool === "brush" && selectedBrush === brush.id}
                 >
-                  <span>{brush.name}</span>
+                  <span className="chip-ico" aria-hidden="true">{brush.icon}</span>
+                  <span className="chip-name">{brush.name}</span>
                   {locked ? <small>Studio</small> : null}
                 </button>
               );
@@ -4813,7 +4905,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   onClick={() => chooseTexture(texture.id)}
                   aria-pressed={selectedTexture === texture.id}
                 >
-                  <span>{texture.name}</span>
+                  <span className="chip-ico" aria-hidden="true">{texture.icon}</span>
+                  <span className="chip-name">{texture.name}</span>
                   {locked ? <small>Studio</small> : null}
                 </button>
               );
