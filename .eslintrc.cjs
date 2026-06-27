@@ -20,9 +20,10 @@ module.exports = {
   },
   overrides: [
     {
-      // Server-side code (the realtime server + moderation modules) runs in
-      // Node, not the browser, so it uses Node globals like `process`.
-      files: ['server.js', 'server/**/*.js'],
+      // Server-side and build/prep code (the realtime server, moderation
+      // modules, and scripts/) runs in Node, not the browser, so it uses Node
+      // globals like `process`.
+      files: ['server.js', 'server/**/*.js', 'scripts/**/*.{js,mjs}'],
       env: { node: true, browser: false },
     },
   ],

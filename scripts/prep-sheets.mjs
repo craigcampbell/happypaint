@@ -57,6 +57,33 @@ function titleOf(words) {
   return t.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Coloring sheet';
 }
 
+// ---- Auto-classifier ------------------------------------------------------
+// Each sheet is tagged with one or more kid-friendly categories, derived from
+// the descriptive filename words (no AI needed). A sheet can belong to several
+// categories (e.g. "4th of july cupcake" -> holidays + food) for better filter
+// recall. Keys here must match the CATEGORIES list in ColoringSheetModal.jsx.
+const CATEGORY_KEYWORDS = {
+  animals: ['animal', 'pet', 'zoo', 'farm', 'dog', 'puppy', 'cat', 'kitten', 'kitty', 'cow', 'horse', 'pony', 'pig', 'piglet', 'sheep', 'lamb', 'goat', 'lion', 'tiger', 'bear', 'panda', 'koala', 'elephant', 'monkey', 'gorilla', 'fox', 'rabbit', 'bunny', 'hamster', 'squirrel', 'mouse', 'bird', 'owl', 'duck', 'chick', 'chicken', 'rooster', 'eagle', 'parrot', 'peacock', 'flamingo', 'penguin', 'swan', 'goose', 'fish', 'shark', 'whale', 'dolphin', 'octopus', 'crab', 'lobster', 'seahorse', 'jellyfish', 'starfish', 'turtle', 'tortoise', 'frog', 'snake', 'lizard', 'gecko', 'dinosaur', 'dino', 'dragonfly', 'butterfly', 'bee', 'ladybug', 'snail', 'spider', 'ant', 'caterpillar', 'giraffe', 'zebra', 'deer', 'moose', 'wolf', 'bat', 'hedgehog', 'raccoon', 'seal', 'walrus', 'otter', 'crocodile', 'alligator', 'hippo', 'rhino', 'kangaroo', 'camel', 'llama', 'alpaca', 'sloth'],
+  fantasy: ['princess', 'prince', 'queen', 'king', 'dragon', 'unicorn', 'fairy', 'mermaid', 'superhero', 'hero', 'robot', 'monster', 'wizard', 'magic', 'magical', 'castle', 'knight', 'alien', 'ufo', 'rocket', 'spaceship', 'astronaut', 'space', 'genie', 'troll', 'elf', 'gnome', 'pirate', 'ninja', 'brainrot', 'tralalero', 'phantom', 'portal'],
+  vehicles: ['car', 'truck', 'bus', 'train', 'plane', 'airplane', 'jet', 'boat', 'ship', 'sailboat', 'tractor', 'ambulance', 'helicopter', 'bike', 'bicycle', 'scooter', 'motorcycle', 'digger', 'excavator', 'bulldozer', 'crane', 'van', 'taxi', 'submarine', 'wagon', 'sled', 'forklift', 'tank', 'rover', 'vehicle'],
+  sports: ['soccer', 'ball', 'basketball', 'baseball', 'football', 'tennis', 'volleyball', 'hockey', 'golf', 'swim', 'swimming', 'skate', 'skateboard', 'surf', 'ski', 'snowboard', 'kite', 'playground', 'slide', 'swing', 'gymnast', 'karate', 'dance', 'dancing', 'dancer', 'bowling', 'race', 'racing', 'champion', 'runner', 'jump', 'cycling', 'fishing'],
+  food: ['cake', 'cupcake', 'cookie', 'candy', 'donut', 'doughnut', 'pizza', 'fruit', 'apple', 'banana', 'grape', 'strawberry', 'watermelon', 'melon', 'carrot', 'corn', 'popsicle', 'lollipop', 'bakery', 'pie', 'burger', 'hamburger', 'sandwich', 'taco', 'sushi', 'bread', 'cheese', 'pretzel', 'pancake', 'waffle', 'muffin', 'bagel', 'sundae', 'smoothie', 'snack', 'popcorn', 'cherry', 'peach', 'pear', 'lemon', 'mango', 'pineapple', 'coconut', 'cream'],
+  nature: ['flower', 'tree', 'garden', 'rainbow', 'sun', 'sunshine', 'cloud', 'rain', 'rainy', 'snow', 'snowflake', 'snowman', 'beach', 'ocean', 'sea', 'wave', 'mountain', 'forest', 'jungle', 'leaf', 'plant', 'moon', 'weather', 'river', 'lake', 'waterfall', 'island', 'volcano', 'cactus', 'mushroom', 'tulip', 'rose', 'daisy', 'sunflower', 'nature', 'outdoor', 'park', 'field', 'meadow', 'pond', 'hill', 'sky', 'season', 'autumn', 'spring', 'summer', 'winter', 'camping'],
+  people: ['boy', 'girl', 'baby', 'kid', 'child', 'children', 'toddler', 'mom', 'mum', 'mother', 'dad', 'father', 'family', 'grandma', 'grandpa', 'teacher', 'doctor', 'nurse', 'firefighter', 'fireman', 'policeman', 'officer', 'chef', 'cook', 'cashier', 'farmer', 'pilot', 'dentist', 'mailman', 'friend', 'people', 'person', 'lady', 'graduate', 'diploma', 'student', 'school', 'baker', 'builder', 'artist'],
+  learning: ['letter', 'alphabet', 'abc', 'number', 'count', 'counting', 'math', 'shape', 'spelling', 'word'],
+  birthday: ['birthday', 'party', 'balloon'],
+  holidays: ['christmas', 'santa', 'xmas', 'reindeer', 'halloween', 'pumpkin', 'spooky', 'ghost', 'witch', 'skeleton', 'easter', 'valentine', 'cupid', 'thanksgiving', 'turkey', 'july', 'fireworks', 'firework', 'patriotic', 'leprechaun', 'patrick', 'shamrock', 'clover', 'hanukkah', 'menorah', 'diwali', 'mardi', 'gras', 'holiday', 'festive', 'lunar', 'ramadan', 'kwanzaa', 'carnival'],
+};
+function categorize(qWords) {
+  const set = new Set(qWords);
+  const has = (kw) => set.has(kw) || set.has(`${kw}s`) || set.has(`${kw}es`);
+  const cats = [];
+  for (const [cat, kws] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (kws.some(has)) cats.push(cat);
+  }
+  return cats.length ? cats : ['other'];
+}
+
 const index = [];
 let done = 0;
 let made = 0;
@@ -65,8 +92,9 @@ let failed = 0;
 async function processOne(file) {
   const id = file.replace(/\.png$/i, '');
   const words = wordsOf(file);
-  const q = words.filter((w) => !STOP.has(w)).join(' ');
-  index.push({ id, title: titleOf(words), q });
+  const qWords = words.filter((w) => !STOP.has(w));
+  const q = qWords.join(' ');
+  index.push({ id, title: titleOf(words), q, cats: categorize(qWords) });
 
   const thumbPath = join(THUMBS, `${id}.webp`);
   if (!existsSync(thumbPath)) {

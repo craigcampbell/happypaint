@@ -1,15 +1,46 @@
 // Coloring-sheet picker modal. Fetches the filename-derived search index once
-// (cached across opens), searches in-browser over 6k+ sheets, shows a thumbnail
-// grid + a preview, and applies the chosen sheet via onApply({id, title}).
+// (cached across opens), then lets kids browse by CATEGORY chips and/or search
+// in-browser over 6k+ sheets. Shows a thumbnail grid + preview, and applies the
+// chosen sheet via onApply({id, title}).
 
 import { useEffect, useMemo, useState } from "react";
 
 let cachedSheets = null; // module-level cache so reopening is instant
 
+// Keys match scripts/prep-sheets.mjs CATEGORY_KEYWORDS. "all" is the default.
+const CATEGORIES = [
+  { key: "all", label: "All", emoji: "✨" },
+  { key: "animals", label: "Animals", emoji: "🐾" },
+  { key: "fantasy", label: "Fantasy", emoji: "🦄" },
+  { key: "holidays", label: "Holidays", emoji: "🎉" },
+  { key: "nature", label: "Nature", emoji: "🌳" },
+  { key: "food", label: "Food", emoji: "🍰" },
+  { key: "vehicles", label: "Vehicles", emoji: "🚗" },
+  { key: "sports", label: "Sports", emoji: "⚽" },
+  { key: "people", label: "People", emoji: "👧" },
+  { key: "birthday", label: "Birthday", emoji: "🎂" },
+  { key: "learning", label: "ABC & 123", emoji: "🔤" },
+  { key: "other", label: "More", emoji: "🎨" },
+];
+
+// Deterministic shuffle so the default browse view is varied (not a wall of
+// alphabetical birthdays) but stable within a session.
+function shuffled(arr) {
+  const a = arr.slice();
+  let seed = 1337;
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    seed = (seed * 9301 + 49297) % 233280;
+    const j = Math.floor((seed / 233280) * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 export default function ColoringSheetModal({ onClose, onApply }) {
   const [all, setAll] = useState(cachedSheets || []);
   const [loading, setLoading] = useState(!cachedSheets);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
   const [selected, setSelected] = useState(null);
 
   useEffect(() => {
@@ -29,21 +60,31 @@ export default function ColoringSheetModal({ onClose, onApply }) {
     };
   }, []);
 
-  // Token-AND search over the searchable text + title; cap the rendered set.
+  // Shuffle once so the default + category views feel varied.
+  const browseOrder = useMemo(() => shuffled(all), [all]);
+
+  // How many sheets fall in each category (to hide empty chips + show counts).
+  const catCounts = useMemo(() => {
+    const m = { all: all.length };
+    for (const s of all) for (const c of s.cats || []) m[c] = (m[c] || 0) + 1;
+    return m;
+  }, [all]);
+
+  // Filter by category AND token-AND search; cap the rendered set.
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return all.slice(0, 120);
-    const tokens = q.split(/\s+/);
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const out = [];
-    for (const s of all) {
-      const hay = `${s.q} ${s.title.toLowerCase()}`;
-      if (tokens.every((t) => hay.includes(t))) {
-        out.push(s);
-        if (out.length >= 240) break;
+    for (const s of browseOrder) {
+      if (category !== "all" && !(s.cats || []).includes(category)) continue;
+      if (tokens.length) {
+        const hay = `${s.q} ${s.title.toLowerCase()}`;
+        if (!tokens.every((t) => hay.includes(t))) continue;
       }
+      out.push(s);
+      if (out.length >= 240) break;
     }
     return out;
-  }, [query, all]);
+  }, [query, category, browseOrder]);
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -64,15 +105,30 @@ export default function ColoringSheetModal({ onClose, onApply }) {
         <input
           className="sheet-search"
           type="search"
-          autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets — try “dinosaur”, “butterfly”, “birthday”…`}
+          placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets — try “dinosaur”, “butterfly”…`}
         />
+
+        <div className="sheet-cats" role="tablist" aria-label="Categories">
+          {CATEGORIES.filter((c) => c.key === "all" || (catCounts[c.key] || 0) > 0).map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              role="tab"
+              aria-selected={category === c.key}
+              className={`sheet-cat ${category === c.key ? "is-active" : ""}`}
+              onClick={() => setCategory(c.key)}
+            >
+              <span aria-hidden="true">{c.emoji}</span> {c.label}
+            </button>
+          ))}
+        </div>
+
         <p className="sheet-count">
           {loading
             ? "Loading…"
-            : `${results.length}${results.length >= 240 ? "+" : ""} ${results.length === 1 ? "sheet" : "sheets"}${query ? "" : " — type to search"}`}
+            : `${results.length}${results.length >= 240 ? "+" : ""} ${results.length === 1 ? "sheet" : "sheets"}`}
         </p>
 
         <div className="sheet-grid">
@@ -84,16 +140,12 @@ export default function ColoringSheetModal({ onClose, onApply }) {
               onClick={() => setSelected(s)}
               title={s.title}
             >
-              <img
-                src={`/coloring-sheets/thumbs/${encodeURIComponent(s.id)}.webp`}
-                alt={s.title}
-                loading="lazy"
-              />
+              <img src={`/coloring-sheets/thumbs/${encodeURIComponent(s.id)}.webp`} alt={s.title} loading="lazy" />
               <span>{s.title}</span>
             </button>
           ))}
           {!loading && results.length === 0 ? (
-            <p className="sheet-empty">No sheets match “{query}”. Try another word.</p>
+            <p className="sheet-empty">No sheets here. Try another category or search word.</p>
           ) : null}
         </div>
 
@@ -114,7 +166,7 @@ export default function ColoringSheetModal({ onClose, onApply }) {
               </div>
             </>
           ) : (
-            <span className="sheet-hint">Tap a sheet to preview it, then add it to your canvas.</span>
+            <span className="sheet-hint">Pick a category or search, tap a sheet to preview, then add it.</span>
           )}
         </div>
       </section>
