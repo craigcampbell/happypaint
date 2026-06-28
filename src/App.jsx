@@ -135,6 +135,50 @@ const FRAME_THUMB_WIDTH = 96;
 const FRAME_THUMB_HEIGHT = 72;
 const MAX_PALETTE_COLORS = 10;
 
+// --- View transform math (pure, so it's testable + closure-safe) -----------
+// The view maps WORLD coords (the CANVAS_WIDTH x CANVAS_HEIGHT document) to CSS
+// px in the display box as a similarity transform: rotate by `rot`, scale by
+// `scale`, then translate by (tx, ty). Rotation is per-user (local view state),
+// so a tablet kid can spin the page like a sheet of paper.
+//   screen = scale * R(rot) * world + t
+function worldToScreen(v, wx, wy) {
+  const c = Math.cos(v.rot || 0);
+  const s = Math.sin(v.rot || 0);
+  return {
+    x: v.scale * (c * wx - s * wy) + v.tx,
+    y: v.scale * (s * wx + c * wy) + v.ty,
+  };
+}
+function screenToWorld(v, cx, cy) {
+  const c = Math.cos(v.rot || 0);
+  const s = Math.sin(v.rot || 0);
+  const dx = (cx - v.tx) / v.scale;
+  const dy = (cy - v.ty) / v.scale;
+  // inverse rotation (R(-rot))
+  return { x: c * dx + s * dy, y: -s * dx + c * dy };
+}
+
+// Centroid + (for 2 fingers) the spread distance and angle of the active touch
+// points — the raw signal for pinch-zoom, twist-rotate, and multi-finger pan.
+function gestureMetrics(pts) {
+  const n = pts.length;
+  let cx = 0;
+  let cy = 0;
+  for (const p of pts) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= n || 1;
+  cy /= n || 1;
+  let dist = 1;
+  let angle = 0;
+  if (n >= 2) {
+    dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+    angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
+  }
+  return { cx, cy, dist, angle, n };
+}
+
 const TOOLS = [
   { id: "brush", name: "Brush", icon: "🖌️" },
   { id: "fill", name: "Fill", icon: "🪣" },
@@ -319,6 +363,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
   const remoteCursorsRef = useRef(new Map()); // userId -> { x, y, name, color, drawing, ts }
   const cursorSentAtRef = useRef(0);
+  // Last-known position per user (normalized), kept longer than the 4s cursor
+  // visibility window so "find this friend" still works after they pause.
+  const userPosRef = useRef(new Map()); // userId -> { x, y, name, ts }
+  const focusedUserIdRef = useRef(null); // a friend we just jumped the canvas to (pulses)
+  const focusTimerRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
   const [showChat, setShowChat] = useState(true);
@@ -332,7 +381,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // --- Viewport: pan / zoom across the large mural ---
   // World coords are the CANVAS_WIDTH x CANVAS_HEIGHT document. The view maps
   // world -> CSS px in the display box: cssX = worldX * scale + tx.
-  const viewRef = useRef({ scale: 1, tx: 0, ty: 0 });
+  const viewRef = useRef({ scale: 1, tx: 0, ty: 0, rot: 0 });
   const viewInitRef = useRef(false);
   const pointersRef = useRef(new Map()); // active pointers (gesture detection)
   const gestureRef = useRef(null); // two-finger pan/zoom state
@@ -586,16 +635,64 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const fitScaleFor = (w, h) => Math.min(w / CANVAS_WIDTH, h / CANVAS_HEIGHT);
 
-  // Keep scale within [≈fit, 8x] and keep the page framed: centered when it is
-  // smaller than the viewport, otherwise pinned so it always covers the box.
-  const clampView = (v) => {
+  // The page's four corners in screen space under view `v` (rotation-aware).
+  const pageCornersScreen = (v) => {
+    return [
+      [0, 0],
+      [CANVAS_WIDTH, 0],
+      [CANVAS_WIDTH, CANVAS_HEIGHT],
+      [0, CANVAS_HEIGHT],
+    ].map(([x, y]) => worldToScreen(v, x, y));
+  };
+
+  const clampScale = (v) => {
     const { w, h } = getViewportSize();
     const fit = fitScaleFor(w, h);
     v.scale = Math.max(fit * 0.9, Math.min(8, v.scale));
-    const worldW = CANVAS_WIDTH * v.scale;
-    const worldH = CANVAS_HEIGHT * v.scale;
-    v.tx = worldW <= w ? (w - worldW) / 2 : Math.min(0, Math.max(w - worldW, v.tx));
-    v.ty = worldH <= h ? (h - worldH) / 2 : Math.min(0, Math.max(h - worldH, v.ty));
+    return v;
+  };
+
+  // Keep the page framed using its screen-space bounding box (so it works at any
+  // rotation): centred on an axis when the page is smaller than the viewport,
+  // otherwise pinned so it always covers that axis. tx/ty are a pure screen-space
+  // translation, so we can correct by shifting them by a screen delta.
+  const clampPan = (v) => {
+    const { w, h } = getViewportSize();
+    const pts = pageCornersScreen(v);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const bw = maxX - minX;
+    const bh = maxY - minY;
+    if (bw <= w) {
+      v.tx += (w - bw) / 2 - minX; // centre horizontally
+    } else if (minX > 0) {
+      v.tx -= minX; // pull left edge back to the viewport edge
+    } else if (maxX < w) {
+      v.tx += w - maxX; // pull right edge back
+    }
+    if (bh <= h) {
+      v.ty += (h - bh) / 2 - minY;
+    } else if (minY > 0) {
+      v.ty -= minY;
+    } else if (maxY < h) {
+      v.ty += h - maxY;
+    }
+    return v;
+  };
+
+  // Keep scale in range AND the page framed. (rot is free — it's the user's own
+  // orientation.) Split helpers above let zoomAt/rotateAt anchor before reframing.
+  const clampView = (v) => {
+    clampScale(v);
+    clampPan(v);
     return v;
   };
 
@@ -608,10 +705,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const fitView = () => {
     const { w, h } = getViewportSize();
     const fit = fitScaleFor(w, h);
+    // "Fit whole canvas" also resets the orientation to upright.
     viewRef.current = {
       scale: fit,
       tx: (w - CANVAS_WIDTH * fit) / 2,
       ty: (h - CANVAS_HEIGHT * fit) / 2,
+      rot: 0,
     };
     syncZoomLabel();
   };
@@ -625,6 +724,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       scale,
       tx: w / 2 - (CANVAS_WIDTH / 2) * scale,
       ty: h / 2 - (CANVAS_HEIGHT / 2) * scale,
+      rot: 0,
     };
     clampView(viewRef.current);
     syncZoomLabel();
@@ -640,20 +740,39 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
     const dpr = displayDprRef.current || 1;
-    const { scale, tx, ty } = viewRef.current;
+    const v = viewRef.current;
+    const { scale, tx, ty } = v;
+    const rot = v.rot || 0;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, display.width, display.height);
     context.fillStyle = "#e9eef4";
     context.fillRect(0, 0, display.width, display.height);
-    context.setTransform(scale * dpr, 0, 0, scale * dpr, tx * dpr, ty * dpr);
+    // screen(device px) = scale * R(rot) * world + t, all * dpr.
+    context.setTransform(scale * cos * dpr, scale * sin * dpr, -scale * sin * dpr, scale * cos * dpr, tx * dpr, ty * dpr);
     context.imageSmoothingEnabled = scale < 2.5;
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     context.drawImage(doc, 0, 0);
+    // Page border: stroke the (possibly rotated) page quad in device px so it
+    // stays a crisp ~1px line regardless of zoom/rotation.
     context.setTransform(1, 0, 0, 1, 0, 0);
+    const corners = [
+      [0, 0],
+      [CANVAS_WIDTH, 0],
+      [CANVAS_WIDTH, CANVAS_HEIGHT],
+      [0, CANVAS_HEIGHT],
+    ].map(([x, y]) => worldToScreen(v, x, y));
     context.strokeStyle = "rgba(45,108,223,0.35)";
     context.lineWidth = Math.max(1, dpr);
-    context.strokeRect(tx * dpr, ty * dpr, CANVAS_WIDTH * scale * dpr, CANVAS_HEIGHT * scale * dpr);
+    context.beginPath();
+    context.moveTo(corners[0].x * dpr, corners[0].y * dpr);
+    for (let i = 1; i < corners.length; i += 1) {
+      context.lineTo(corners[i].x * dpr, corners[i].y * dpr);
+    }
+    context.closePath();
+    context.stroke();
   }, []);
 
   const applyView = () => {
@@ -662,15 +781,36 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     blitToDisplay();
   };
 
+  // Reposition tx/ty so the WORLD point `wp` lands at screen px (fx, fy) under
+  // the current scale + rotation. Shared by zoom + rotate so both anchor cleanly.
+  const anchorWorldToScreen = (v, wp, fx, fy) => {
+    const c = Math.cos(v.rot || 0);
+    const s = Math.sin(v.rot || 0);
+    v.tx = fx - v.scale * (c * wp.x - s * wp.y);
+    v.ty = fy - v.scale * (s * wp.x + c * wp.y);
+  };
+
+  // In-place cores (mutate the view, no clamp/blit) so a multi-touch frame can
+  // compose pan + zoom + rotate and repaint the canvas exactly ONCE — repainting
+  // blits the full mural, so doing it per sub-step would jank the gesture.
+  const zoomCore = (v, factor, fx, fy) => {
+    const wp = screenToWorld(v, fx, fy); // world point under the focal point
+    v.scale = v.scale * factor;
+    clampScale(v);
+    anchorWorldToScreen(v, wp, fx, fy); // keep that world point under the finger
+  };
+  const rotateCore = (v, angleDelta, fx, fy) => {
+    if (!angleDelta) {
+      return;
+    }
+    const wp = screenToWorld(v, fx, fy);
+    v.rot = (v.rot || 0) + angleDelta;
+    anchorWorldToScreen(v, wp, fx, fy);
+  };
+
   // Zoom by `factor` about a focal point given in CSS px within the display box.
   const zoomAt = (factor, fx, fy) => {
-    const v = viewRef.current;
-    const worldX = (fx - v.tx) / v.scale;
-    const worldY = (fy - v.ty) / v.scale;
-    v.scale = v.scale * factor;
-    clampView(v);
-    v.tx = fx - worldX * v.scale;
-    v.ty = fy - worldY * v.scale;
+    zoomCore(viewRef.current, factor, fx, fy);
     applyView();
   };
 
@@ -1368,6 +1508,40 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
   }, []);
 
+  // Jump OUR canvas to a friend's last cursor position and pulse it for a moment.
+  // Wired to the tappable participant chips in chat. Each person keeps their own
+  // orientation/zoom — we only move our own view to find them.
+  const focusUser = (userId) => {
+    if (!userId) {
+      return;
+    }
+    const pos = userPosRef.current.get(userId);
+    if (!pos) {
+      showToast("Can't see them on the canvas yet — ask them to draw! ✏️");
+      return;
+    }
+    const { w, h } = getViewportSize();
+    const v = viewRef.current;
+    const wx = pos.x * CANVAS_WIDTH;
+    const wy = pos.y * CANVAS_HEIGHT;
+    const c = Math.cos(v.rot || 0);
+    const s = Math.sin(v.rot || 0);
+    // Centre their world point in our viewport (keeping our own scale + rotation).
+    v.tx = w / 2 - v.scale * (c * wx - s * wy);
+    v.ty = h / 2 - v.scale * (s * wx + c * wy);
+    clampPan(v);
+    syncZoomLabel();
+    blitToDisplay();
+    focusedUserIdRef.current = userId;
+    if (focusTimerRef.current) {
+      window.clearTimeout(focusTimerRef.current);
+    }
+    focusTimerRef.current = window.setTimeout(() => {
+      focusedUserIdRef.current = null;
+    }, 2600);
+    showToast(`Found ${pos.name || "your friend"} ✨`);
+  };
+
   const loadMyDrawings = useCallback(async () => {
     const key = userKeyRef.current;
     if (!key) {
@@ -1505,12 +1679,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const ratio = Math.min(maxW / image.width, maxH / image.height, 1);
       const w = Math.max(1, Math.round(image.width * ratio));
       const h = Math.max(1, Math.round(image.height * ratio));
-      const { scale, tx, ty } = viewRef.current;
       const vs = getViewportSize();
-      const cx = (vs.w / 2 - tx) / scale;
-      const cy = (vs.h / 2 - ty) / scale;
-      const x = Math.round(cx - w / 2);
-      const y = Math.round(cy - h / 2);
+      const center = screenToWorld(viewRef.current, vs.w / 2, vs.h / 2);
+      const x = Math.round(center.x - w / 2);
+      const y = Math.round(center.y - h / 2);
       pushHistory();
       active.canvas.getContext("2d").drawImage(image, x, y, w, h);
       renderDisplay();
@@ -1622,17 +1794,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const getPoint = useCallback((event) => {
     const canvas = displayCanvasRef.current;
     const rect = activeCanvasRectRef.current || canvas.getBoundingClientRect();
-    const { scale, tx, ty } = viewRef.current;
     const cssX = event.clientX - rect.left;
     const cssY = event.clientY - rect.top;
     const pressure = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "mouse" ? 0.62 : 0.72;
 
-    // Screen (CSS px) -> world coords through the current view.
-    return {
-      x: (cssX - tx) / scale,
-      y: (cssY - ty) / scale,
-      pressure,
-    };
+    // Screen (CSS px) -> world coords through the current view (incl. rotation).
+    const world = screenToWorld(viewRef.current, cssX, cssY);
+    return { x: world.x, y: world.y, pressure };
   }, []);
 
   // Send the buffered points of the in-progress stroke to the room. Throttled
@@ -1742,7 +1910,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       event.preventDefault();
-      event.currentTarget.setPointerCapture?.(event.pointerId);
+      try {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      } catch {
+        /* capture is best-effort (synthetic / already-released pointer) */
+      }
       activePointerRef.current = event.pointerId;
       activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
       return true;
@@ -2051,22 +2223,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     viewRectRef.current = event.currentTarget.getBoundingClientRect();
 
-    // Only touch contacts form a pinch — a pen (iPad Pencil) with a resting palm
-    // must still draw, not be hijacked into pan/zoom.
+    // Only touch contacts form a gesture — a pen (iPad Pencil) with a resting palm
+    // must still draw, not be hijacked into pan/zoom/rotate. Two fingers pinch +
+    // twist + pan; three or more pan. Baselined here and on every finger change.
     if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
       abortActiveStroke();
-      const pts = [...pointersRef.current.values()];
-      gestureRef.current = {
-        lastDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
-        lastMid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
-      };
+      const m = gestureMetrics([...pointersRef.current.values()]);
+      gestureRef.current = { lastMid: { x: m.cx, y: m.cy }, lastDist: m.dist, lastAngle: m.angle, count: m.n };
       return;
     }
 
     if (handToolRef.current) {
       panPointerRef.current = event.pointerId;
       panLastRef.current = { x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
+      try {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
       return;
     }
 
@@ -2084,13 +2258,36 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       const rect = viewRectRef.current || event.currentTarget.getBoundingClientRect();
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
-      const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      const m = gestureMetrics(pts);
       const g = gestureRef.current;
-      panBy(mid.x - g.lastMid.x, mid.y - g.lastMid.y);
-      zoomAt(dist / g.lastDist, mid.x - rect.left, mid.y - rect.top);
-      g.lastDist = dist;
-      g.lastMid = mid;
+      // Finger count changed (e.g. 2->3): rebaseline and skip a frame so the view
+      // doesn't jump from the new centroid/spread.
+      if (m.n !== g.count) {
+        g.lastMid = { x: m.cx, y: m.cy };
+        g.lastDist = m.dist;
+        g.lastAngle = m.angle;
+        g.count = m.n;
+        return;
+      }
+      // Compose pan (+ for 2 fingers, zoom + rotate about the pinch centre) into
+      // the view, then repaint ONCE via applyView.
+      const v = viewRef.current;
+      v.tx += m.cx - g.lastMid.x; // pan follows the centroid for any finger count
+      v.ty += m.cy - g.lastMid.y;
+      if (m.n === 2) {
+        const fx = m.cx - rect.left;
+        const fy = m.cy - rect.top;
+        zoomCore(v, m.dist / g.lastDist, fx, fy);
+        let dA = m.angle - g.lastAngle;
+        if (dA > Math.PI) dA -= 2 * Math.PI;
+        else if (dA < -Math.PI) dA += 2 * Math.PI;
+        rotateCore(v, dA, fx, fy);
+      }
+      applyView();
+      g.lastMid = { x: m.cx, y: m.cy };
+      g.lastDist = m.dist;
+      g.lastAngle = m.angle;
+      g.count = m.n;
       return;
     }
 
@@ -3409,11 +3606,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             drawing: data.drawing,
             ts: Date.now(),
           });
+          userPosRef.current.set(data.userId, { x: data.x, y: data.y, name: data.name, ts: Date.now() });
           break;
         case "cursor_leave":
         case "userLeft":
           if (data.userId) {
             remoteCursorsRef.current.delete(data.userId);
+            userPosRef.current.delete(data.userId); // bound growth: drop their saved position too
           }
           break;
         case "watcher_role":
@@ -3591,25 +3790,35 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
-      const { scale, tx, ty } = viewRef.current;
+      const v = viewRef.current;
       const live = [];
       remoteCursorsRef.current.forEach((cursor, userId) => {
         if (now - cursor.ts > 4000) {
           remoteCursorsRef.current.delete(userId);
         } else {
+          // normalized 0..1 -> world -> screen (rotation-aware).
+          const p = worldToScreen(v, cursor.x * CANVAS_WIDTH, cursor.y * CANVAS_HEIGHT);
           live.push({
             userId,
             name: cursor.name,
             color: cursor.color,
             drawing: cursor.drawing,
-            leftPx: cursor.x * CANVAS_WIDTH * scale + tx,
-            topPx: cursor.y * CANVAS_HEIGHT * scale + ty,
+            focused: userId === focusedUserIdRef.current,
+            leftPx: p.x,
+            topPx: p.y,
           });
         }
       });
       setRemoteCursors(live);
     }, 120);
     return () => window.clearInterval(timer);
+  }, []);
+
+  // Clear any pending "focused friend" highlight timer on unmount.
+  useEffect(() => () => {
+    if (focusTimerRef.current) {
+      window.clearTimeout(focusTimerRef.current);
+    }
   }, []);
 
   // Non-passive wheel listener so zoom can preventDefault page scroll.
@@ -4268,7 +4477,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               {remoteCursors.map((cursor) => (
                 <div
                   key={cursor.userId}
-                  className={cursor.drawing ? "remote-cursor is-drawing" : "remote-cursor"}
+                  className={`remote-cursor${cursor.drawing ? " is-drawing" : ""}${cursor.focused ? " is-focused" : ""}`}
                   style={{ transform: `translate(${cursor.leftPx}px, ${cursor.topPx}px)` }}
                 >
                   <span className="remote-cursor-dot" style={{ background: cursor.color }} />
@@ -4575,13 +4784,48 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 </button>
               ) : null}
             </div>
+            {mp.users.length > 0 ? (
+              <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
+                {mp.users.map((u) => {
+                  const isSelf = u.id === mp.self?.id;
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      className={`mp-participant${isSelf ? " is-self" : ""}`}
+                      onClick={() => focusUser(u.id)}
+                      disabled={isSelf}
+                      title={isSelf ? "That's you" : `Find ${u.name} on the canvas`}
+                    >
+                      <span className="mp-participant-dot" style={{ background: u.color }}>
+                        {(u.name || "?").slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="mp-participant-name">{isSelf ? "You" : u.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <div className="mp-chat-log">
               {mp.chat.length === 0 ? (
                 <p className="mp-chat-empty">Say hi to your friends! 👋</p>
               ) : (
                 mp.chat.map((line, index) => (
                   <p key={index} className="mp-chat-line">
-                    <strong style={{ color: line.user?.color }}>{line.user?.name}:</strong> {line.message}
+                    {line.user?.id ? (
+                      <button
+                        type="button"
+                        className="mp-chat-name"
+                        style={{ color: line.user?.color }}
+                        onClick={() => focusUser(line.user.id)}
+                        title={`Find ${line.user?.name} on the canvas`}
+                      >
+                        {line.user?.name}:
+                      </button>
+                    ) : (
+                      <strong style={{ color: line.user?.color }}>{line.user?.name}:</strong>
+                    )}{" "}
+                    {line.message}
                   </p>
                 ))
               )}
