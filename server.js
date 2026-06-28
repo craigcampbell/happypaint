@@ -190,6 +190,32 @@ function persistRoom(roomId) {
 // invite code is a private ("friends") room unless explicitly created public.
 const DEFAULT_PUBLIC_ROOM = 'MAIN';
 
+// Always-open, always-listed public "prompt rooms" that anchor the lobby so it
+// never looks empty: each is a kid-safe themed room anyone can drop into, shown
+// in /api/rooms/public even at 0 users and never auto-closed (like MAIN). Each
+// carries a small pool of kid-friendly prompts; the one shown rotates daily so
+// the lobby feels fresh. Codes MUST be <=8 uppercase-alnum chars (the /join path
+// normalizer uppercases + strips + slices to 8).
+const FEATURED_ROOMS = [
+  { code: 'MAIN', title: 'Open Studio', emoji: '🎨', prompts: ['Draw anything you like!', 'Free draw — make something awesome', 'Your canvas, your rules'] },
+  { code: 'DOODLE', title: 'Doodle Jam', emoji: '✏️', prompts: ['Fill the page with doodles', 'Squiggles, swirls & shapes', 'One big group scribble'] },
+  { code: 'DINOS', title: 'Dino World', emoji: '🦕', prompts: ['Draw your wildest dinosaur', 'A dino having a picnic', 'T-rex vs triceratops!'] },
+  { code: 'SPACE', title: 'Outer Space', emoji: '🚀', prompts: ['Rockets, planets & friendly aliens', 'Build a space station', 'Your own little galaxy'] },
+  { code: 'OCEAN', title: 'Under the Sea', emoji: '🐙', prompts: ['Fish, mermaids & sea monsters', 'A coral reef party', 'Deep-sea treasure hunt'] },
+  { code: 'PETS', title: 'Pet Parade', emoji: '🐶', prompts: ['Draw the cutest pet', 'A puppy and a kitten', 'Your dream pet'] },
+  { code: 'RAINBOW', title: 'Rainbow Lab', emoji: '🌈', prompts: ['Make the brightest rainbow', 'An explosion of color', 'Rainbow everything!'] },
+  { code: 'CASTLE', title: 'Castles & Dragons', emoji: '🏰', prompts: ['Knights, castles & dragons', 'A magic kingdom', 'Build the tallest tower'] },
+];
+const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
+const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
+
+// The prompt shown today for a featured room (deterministic daily rotation, UTC).
+function dailyPromptFor(featured) {
+  if (!featured || !featured.prompts || !featured.prompts.length) return null;
+  const day = Math.floor(Date.now() / 86400000);
+  return featured.prompts[day % featured.prompts.length];
+}
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     const saved = loadRoom(roomId);
@@ -230,6 +256,19 @@ function getRoom(roomId) {
   }
   return rooms.get(roomId);
 }
+
+// Materialize the featured prompt rooms so they always exist, stay kid_safe +
+// listed, and carry their canonical title. Re-applied every boot so they can't
+// drift; they're exempt from the idle auto-close sweep below.
+function seedFeaturedRooms() {
+  for (const f of FEATURED_ROOMS) {
+    const room = getRoom(f.code);
+    room.audience = 'kid_safe';
+    room.listed = true;
+    room.title = f.title;
+  }
+}
+seedFeaturedRooms();
 
 // The op history minus moderation-hidden ops — what late joiners and post-hide
 // rebuilds actually receive. Cheap no-op when nothing is hidden (the common case).
@@ -274,7 +313,7 @@ function closeRoom(roomId, reason) {
 function autoCloseSweep() {
   const now = Date.now();
   rooms.forEach((room, id) => {
-    if (id === DEFAULT_PUBLIC_ROOM || room.users.size > 0) return;
+    if (FEATURED_CODES.has(id) || room.users.size > 0) return;
     if (now - (room.lastActivity || now) > allowedIdleMs(room)) {
       closeRoom(id, 'inactive');
     }
@@ -283,7 +322,7 @@ function autoCloseSweep() {
   try { files = readdirSync(ROOM_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
   for (const f of files) {
     const id = f.replace(/\.json$/, '');
-    if (id === DEFAULT_PUBLIC_ROOM || rooms.has(id)) continue;
+    if (FEATURED_CODES.has(id) || rooms.has(id)) continue;
     try {
       const data = JSON.parse(readFileSync(join(ROOM_DIR, f), 'utf8'));
       const pseudo = { history: data.history || [], userSeconds: Number(data.userSeconds) || 0 };
@@ -972,8 +1011,8 @@ app.get('/api/admin/rooms', (req, res) => {
     strokes: room.history.length,
     lastActivity: room.lastActivity || 0,
     audience: room.audience || null,
-    // null while occupied or for MAIN (never auto-closes); else ms until cleanup.
-    expiresInMs: room.users.size > 0 || id === DEFAULT_PUBLIC_ROOM
+    // null while occupied or for featured rooms (never auto-close); else ms left.
+    expiresInMs: room.users.size > 0 || FEATURED_CODES.has(id)
       ? null
       : Math.max(0, allowedIdleMs(room) - (now - (room.lastActivity || now))),
   }));
@@ -998,8 +1037,8 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
 app.post('/api/admin/rooms/:id/delete', (req, res) => {
   if (!adminGuard(req, res)) return;
   const id = String(req.params.id).toUpperCase().slice(0, 16);
-  if (id === DEFAULT_PUBLIC_ROOM) {
-    return res.status(400).json({ error: 'cannot_delete_main' });
+  if (FEATURED_CODES.has(id)) {
+    return res.status(400).json({ error: 'cannot_delete_featured' });
   }
   closeRoom(id, 'a moderator closed this room');
   res.json({ ok: true });
@@ -1032,7 +1071,7 @@ function genRoomCode() {
     for (let i = 0; i < 6; i += 1) {
       code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
     }
-  } while (code === DEFAULT_PUBLIC_ROOM || rooms.has(code) || existsSync(roomFile(code)));
+  } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)));
   return code;
 }
 
@@ -1092,22 +1131,34 @@ app.post('/api/rooms', async (req, res) => {
 // never participant names, chat, raw strokes, owner ids, or private rooms.
 app.get('/api/rooms/public', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  getRoom(DEFAULT_PUBLIC_ROOM); // always surface the main hall, even when empty
+  FEATURED_ROOMS.forEach((f) => getRoom(f.code)); // always surface the prompt rooms, even empty
   const list = [];
   rooms.forEach((room, code) => {
     if (room.audience !== 'kid_safe' || !room.listed) return;
     const users = room.users.size;
-    if (users === 0 && code !== DEFAULT_PUBLIC_ROOM) return;
+    const featured = FEATURED_CODES.has(code);
+    if (users === 0 && !featured) return; // hide empty ad-hoc rooms; keep the prompt rooms
+    const f = featured ? FEATURED_ROOMS[FEATURED_INDEX.get(code)] : null;
     list.push({
       code,
-      title: room.title || null,
+      title: room.title || (f ? f.title : null),
       users,
       sheetId: room.sheetId || null,
       lastActivity: room.lastActivity || 0,
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
+      featured,
+      emoji: f ? f.emoji : null,
+      prompt: f ? dailyPromptFor(f) : null,
     });
   });
-  list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity);
+  // Featured prompt rooms first (in their defined order), then live ad-hoc rooms
+  // by headcount — so the lobby always leads with the curated, always-open rooms.
+  list.sort((a, b) => {
+    const ai = a.featured ? FEATURED_INDEX.get(a.code) : 999;
+    const bi = b.featured ? FEATURED_INDEX.get(b.code) : 999;
+    if (ai !== bi) return ai - bi;
+    return b.users - a.users || b.lastActivity - a.lastActivity;
+  });
   res.json({ rooms: list.slice(0, 60) });
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import DiscoveryHub from "./DiscoveryHub";
 import { createInviteCode, kidSafetyPrinciples, revenueModels } from "../utils/social";
 import { addAsset, loadPaintSpace, savePaintSpace } from "../utils/paintSpace";
@@ -6,6 +6,22 @@ import { getPackAssets } from "../utils/brushPacks";
 
 export default function MarketingSite({ onNavigate }) {
   const [discoveryQuery, setDiscoveryQuery] = useState("");
+  // Live, always-open prompt rooms anyone can jump into (seeded server-side, so
+  // the lobby never looks dead even when nobody is painting yet).
+  const [rooms, setRooms] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/rooms/public")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && Array.isArray(data?.rooms)) setRooms(data.rooms);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // "Get" a browsed community pack: copy its brushes into the shared Paint Space
   // locker (same localStorage/IndexedDB store the studio reads) and record
@@ -104,6 +120,39 @@ export default function MarketingSite({ onNavigate }) {
           </div>
         </div>
       </section>
+
+      {rooms.length > 0 ? (
+        <section className="open-rooms" id="rooms" aria-label="Open rooms you can join right now">
+          <div className="open-rooms-head">
+            <p className="eyebrow">Jump in — no account needed</p>
+            <h2>Open rooms &amp; today&rsquo;s prompts</h2>
+            <p className="open-rooms-sub">Pick a room and start painting with whoever shows up. New prompts every day.</p>
+          </div>
+          <div className="open-rooms-grid">
+            {rooms.map((room) => (
+              <button
+                type="button"
+                key={room.code}
+                className="open-room-card"
+                onClick={() => onNavigate(`/join/${room.code}`)}
+              >
+                <span className="open-room-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
+                <span className="open-room-title">{room.title || `Room ${room.code}`}</span>
+                {room.prompt ? <span className="open-room-prompt">“{room.prompt}”</span> : null}
+                <span className="open-room-meta">
+                  <span className="open-room-live">
+                    <i className="live-dot" aria-hidden="true" /> Open now
+                  </span>
+                  <span className="open-room-count">
+                    {room.users === 0 ? "Be the first!" : `${room.users} painting now`}
+                  </span>
+                </span>
+                <span className="open-room-go">Paint here →</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <DiscoveryHub
         query={discoveryQuery}
