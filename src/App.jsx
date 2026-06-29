@@ -273,6 +273,54 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// One-time, per-device migration of the anonymous device gallery into a freshly
+// signed-in account. When a signed-out user with `u_…` saves signs in, the
+// active gallery key flips to `pb_<id>` (empty) and their device art disappears
+// from view. We copy each device artwork into the account, capped by the
+// server's MAX_SAVES (stop on HTTP 409), entirely best-effort — it never throws
+// and a localStorage guard ensures it runs at most once per device. `token` is
+// the account access token; the device GET is intentionally unauthenticated so
+// the server resolves the device key, while the account POST carries the token.
+async function migrateDeviceArtToAccount(deviceKey, token) {
+  if (!deviceKey || !token) return;
+  const flag = `drawesome:art-migrated:${deviceKey}`;
+  try {
+    if (window.localStorage.getItem(flag)) return;
+  } catch {
+    // storage blocked → can't dedupe safely; skip migration entirely
+    return;
+  }
+  try {
+    const listRes = await fetch(`/api/artworks?userKey=${encodeURIComponent(deviceKey)}`, { cache: "no-store" });
+    if (!listRes.ok) {
+      return; // leave the flag unset so a future sign-in can retry
+    }
+    const list = await listRes.json();
+    const items = Array.isArray(list?.items) ? list.items : [];
+    // Oldest first so the account order matches the device order after unshift.
+    for (const meta of items.slice().reverse()) {
+      const detailRes = await fetch(`/api/artworks/${meta.id}?userKey=${encodeURIComponent(deviceKey)}`, { cache: "no-store" });
+      if (!detailRes.ok) continue;
+      const detail = await detailRes.json();
+      if (typeof detail?.image !== "string") continue;
+      const postRes = await fetch("/api/artworks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: detail.name, image: detail.image, thumb: meta.thumb }),
+      });
+      if (postRes.status === 409) break; // account hit MAX_SAVES — stop copying
+    }
+  } catch {
+    // network / parse failure — best-effort, leave the flag unset to retry
+    return;
+  }
+  try {
+    window.localStorage.setItem(flag, "1");
+  } catch {
+    // ignore — worst case migration re-runs and re-copies (POST is idempotent-ish)
+  }
+}
+
 function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
@@ -405,12 +453,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [nameDraft, setNameDraft] = useState("");
   const profileRef = useRef(null); // persisted { name, color }, applied on connect
 
-  // Saved-to-server artwork (the gallery). `userKeyRef` is the ACTIVE key the
-  // /api/artworks calls use: the account id when signed in (so the gallery
-  // follows you across devices) or the anonymous device key when signed out.
-  // `deviceKeyRef` always holds the anonymous fallback.
+  // Saved-to-server artwork ("My Art"). Signed out → keyed by an anonymous
+  // per-device id (`u_…`, kept in deviceKeyRef). Signed in → keyed by the
+  // account (`pb_<profileId>`); userKeyRef holds whichever is active. tokenRef
+  // mirrors the current access token so the gallery fetches authenticate
+  // without stale closures.
   const userKeyRef = useRef(null);
   const deviceKeyRef = useRef(null);
+  const tokenRef = useRef(null);
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
@@ -1554,7 +1604,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
     try {
-      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+      const token = tokenRef.current;
+      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, {
+        cache: "no-store",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       const data = await res.json();
       setMyDrawings(Array.isArray(data.items) ? data.items : []);
       if (data.max) {
@@ -1577,9 +1631,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const preview = await composeCanvas({ width: 320, height: 200 });
       const image = await canvasToDataUrl(full);
       const thumb = await canvasToDataUrl(preview);
+      const token = tokenRef.current;
       const res = await fetch("/api/artworks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ userKey: key, name: `Drawing ${todayName()}`, image, thumb }),
       });
       if (res.status === 409) {
@@ -1607,7 +1665,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       try {
-        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+        const token = tokenRef.current;
+        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+          cache: "no-store",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!res.ok) {
           throw new Error("not found");
         }
@@ -1644,7 +1706,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       try {
-        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { method: "DELETE" });
+        const token = tokenRef.current;
+        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+          method: "DELETE",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
       } catch {
         // ignore
       }
@@ -3840,8 +3906,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, []);
 
-  // Ensure an anonymous per-device user key, then load this user's saved art.
-  // Establish the anonymous device key once (the signed-out fallback).
+  // Ensure an anonymous per-device user key exists. This is the signed-out
+  // gallery key and the source for the one-time sign-in migration below; the
+  // session effect picks the active key (device vs. account) and loads.
   useEffect(() => {
     let key = null;
     try {
@@ -3860,18 +3927,36 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     deviceKeyRef.current = key;
   }, []);
 
-  // Pick the active gallery key from auth state and (re)load that gallery. Runs
-  // after the device-key effect on mount, then again whenever sign-in changes:
-  // signed in → "pb_<profileId>" (account-tied, syncs everywhere); signed out →
-  // the device key (local only — the reason we nudge people to sign in).
+  // Flip the active gallery key on sign-in/out and load that user's art.
+  // Signed in → the account key `pb_<profileId>` (server forces this from the
+  // token anyway); signed out → the anonymous device key. The token is mirrored
+  // into tokenRef so the gallery fetches authenticate without stale closures.
+  //
+  // One-time per-device migration: the first time a signed-out user with
+  // device-key art signs in, their device saves would vanish from view (the key
+  // flips to an empty `pb_<id>`). So we copy the device gallery into the account
+  // (best-effort, capped, never throws) and set a localStorage guard so it runs
+  // at most once per device.
   useEffect(() => {
-    const profileId = session?.user?.id;
-    const key = profileId ? `pb_${profileId}` : deviceKeyRef.current;
-    if (!key) {
-      return;
-    }
-    userKeyRef.current = key;
-    loadMyDrawings();
+    const profileId = session?.user?.id || null;
+    const token = session?.access_token || null;
+    tokenRef.current = token;
+    const deviceKey = deviceKeyRef.current;
+    const accountKey = profileId ? `pb_${profileId}` : null;
+    userKeyRef.current = accountKey || deviceKey;
+
+    let cancelled = false;
+    (async () => {
+      if (accountKey && deviceKey && token) {
+        await migrateDeviceArtToAccount(deviceKey, token);
+      }
+      if (!cancelled) {
+        await loadMyDrawings();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [session, loadMyDrawings]);
 
   // Save the profile and push it to the room.
