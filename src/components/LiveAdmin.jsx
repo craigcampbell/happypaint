@@ -326,6 +326,13 @@ export default function LiveAdmin({ onNavigate }) {
                   <strong>Room {r.room}</strong>
                   <span className="admin-muted">· by {r.reporterName} · {timeAgo(r.ts)}</span>
                   <p className="admin-reason">{r.reason || "(no reason given)"}</p>
+                  {r.chatContext?.length ? (
+                    <div className="admin-report-chat" aria-label="Recent chat around this report">
+                      {r.chatContext.slice(-8).map((c, i) => (
+                        <p key={i}><strong>{c.name}:</strong> {c.message}</p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="admin-actions">
                   <button type="button" onClick={() => openRoom(r.room)}>View room</button>

@@ -27,6 +27,7 @@ server.err.log
 .murals/
 .artworks/
 .rooms/
+.chatlog/
 .admin-key
 .reports.json
 .sheets.json

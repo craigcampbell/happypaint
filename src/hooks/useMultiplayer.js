@@ -81,6 +81,10 @@ export function useMultiplayer(roomId, onMessage, token) {
         case "chat":
           setChat((current) => [...current.slice(-49), data]);
           break;
+        case "chat_history":
+          // Server catch-up on join: seed the log with recent messages.
+          setChat(Array.isArray(data.messages) ? data.messages.slice(-50) : []);
+          break;
         default:
           break;
       }

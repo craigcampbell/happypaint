@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, appendFileSync, statSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
@@ -128,6 +128,37 @@ const persistTimers = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
+
+// ---- Chat persistence -----------------------------------------------------
+// Two stores, by purpose:
+//  1) room.chat — a capped in-memory buffer (persisted in the room file) used to
+//     give late joiners context + recent context for reports.
+//  2) An append-only per-room audit log (.chatlog/<CODE>.jsonl) — the durable
+//     moderation/audit trail. Bounded per room so disk can't grow forever.
+// Both store the display name + message + the opaque profileId (when signed in)
+// so a future account-deletion scrub can redact by id.
+const CHAT_BUFFER_MAX = 200; // messages kept in memory + the room file
+const CHAT_LOG_DIR = process.env.CHAT_LOG_DIR || join(DATA_DIR, '.chatlog');
+const CHAT_LOG_CAP_BYTES = 2 * 1024 * 1024; // ~2MB per room; trim oldest half past this
+function chatLogFile(roomId) {
+  return join(CHAT_LOG_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.jsonl`);
+}
+function appendChatAudit(roomId, entry) {
+  try {
+    mkdirSync(CHAT_LOG_DIR, { recursive: true });
+    const file = chatLogFile(roomId);
+    appendFileSync(file, `${JSON.stringify(entry)}\n`);
+    // Bound disk: once a room's log passes the cap, keep only the newer half.
+    let size = 0;
+    try { size = statSync(file).size; } catch { size = 0; }
+    if (size > CHAT_LOG_CAP_BYTES) {
+      const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+      writeFileSync(file, `${lines.slice(Math.floor(lines.length / 2)).join('\n')}\n`);
+    }
+  } catch {
+    // Best-effort — never let audit logging break a chat message.
+  }
+}
 function loadRoom(roomId) {
   try {
     const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
@@ -148,9 +179,10 @@ function loadRoom(roomId) {
       listed: typeof data.listed === 'boolean' ? data.listed : null,
       hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
       userSeconds: Number(data.userSeconds) || 0,
+      chat: Array.isArray(data.chat) ? data.chat.slice(-CHAT_BUFFER_MAX) : [],
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0 };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [] };
   }
 }
 function persistRoom(roomId) {
@@ -178,6 +210,7 @@ function persistRoom(roomId) {
         listed: typeof room.listed === 'boolean' ? room.listed : null,
         hiddenOpIds: Array.from(room.hiddenOpIds || []),
         userSeconds: room.userSeconds || 0,
+        chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
         savedAt: Date.now(),
       }));
     } catch {
@@ -248,6 +281,7 @@ function getRoom(roomId) {
       hiddenOpIds: new Set(saved.hiddenOpIds), // moderation: reversibly hidden ops
       flags: [], // recent moderation flags (in-memory, for corroboration)
       flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
+      chat: saved.chat || [], // recent chat buffer (late-joiner context, persisted)
       watchers: new Set(), // elected client ids running the in-browser watcher
       spectators: new Set(), // read-only homepage viewers (not counted as users)
       modLog: [], // recent moderation actions (in-memory, capped)
@@ -420,6 +454,15 @@ function userListOf(room) {
   }));
 }
 
+// The recent-chat catch-up sent to anyone joining (or spectating) a room, so
+// they see who's been talking. Capped to the last 50 (profileId stays server-side).
+function chatHistoryMsg(room) {
+  return {
+    type: 'chat_history',
+    messages: (room.chat || []).slice(-50).map((c) => ({ user: c.user, message: c.message, ts: c.ts })),
+  };
+}
+
 function broadcast(roomId, message, exceptId = null) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -468,6 +511,9 @@ wss.on('connection', async (ws, req) => {
     }
     if (room.sheetId) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
+    }
+    if (room.chat.length) {
+      ws.send(JSON.stringify(chatHistoryMsg(room)));
     }
     ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
     const dropSpectator = () => room.spectators.delete(ws);
@@ -554,6 +600,9 @@ wss.on('connection', async (ws, req) => {
   }
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
+  }
+  if (room.chat.length) {
+    ws.send(JSON.stringify(chatHistoryMsg(room))); // catch the late joiner up on the conversation
   }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
 
@@ -654,10 +703,15 @@ wss.on('connection', async (ws, req) => {
           }
           if (verdict.hit) message = maskMessage(message);
         }
-        broadcast(roomId, {
-          type: 'chat', user: { id, name: user.name, color: user.color },
-          message, ts: Date.now(),
-        });
+        const chatTs = Date.now();
+        const entry = { user: { id, name: user.name, color: user.color }, message, ts: chatTs };
+        // 1) capped buffer (late-joiner context + report context), persisted with the room
+        room.chat.push(entry);
+        if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
+        // 2) durable append-only audit log (keeps the profileId for deletion scrubs)
+        appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message });
+        broadcast(roomId, { type: 'chat', user: entry.user, message, ts: chatTs });
+        persistRoom(roomId);
         break;
       }
 
@@ -1002,12 +1056,20 @@ function persistReports() {
 // Single entry point for the reports store so both human reports (/api/report)
 // and auto-moderation share one shape. `source` distinguishes them in /admin.
 function fileReport({ room, reason, reporterName, source }) {
+  const roomCode = String(room || '').toUpperCase().slice(0, 16);
+  // Snapshot the room's recent chat so a moderator sees the conversation around
+  // the report (last 20 lines; names + text, no profile ids on the wire).
+  const liveRoom = rooms.get(roomCode);
+  const chatContext = liveRoom
+    ? (liveRoom.chat || []).slice(-20).map((c) => ({ name: c.user.name, message: c.message, ts: c.ts }))
+    : [];
   const report = {
     id: 'rep_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    room: String(room || '').toUpperCase().slice(0, 16),
+    room: roomCode,
     reason: String(reason || '').slice(0, 300),
     reporterName: String(reporterName || 'anonymous').slice(0, 20),
     source: source === 'auto' ? 'auto' : 'user',
+    chatContext,
     ts: Date.now(),
     status: 'open',
   };
@@ -1090,6 +1152,27 @@ app.get('/api/admin/rooms', (req, res) => {
   }));
   list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity || b.strokes - a.strokes);
   res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
+});
+
+// Moderator view of a room's chat audit log (durable, with profile ids).
+app.get('/api/admin/rooms/:id/chat', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().replace(/[^A-Z0-9_-]/gi, '').slice(0, 32);
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+  let lines = [];
+  try {
+    lines = readFileSync(chatLogFile(id), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-limit)
+      .map((l) => {
+        try { return JSON.parse(l); } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch {
+    lines = [];
+  }
+  res.json({ room: id, chat: lines });
 });
 
 app.post('/api/admin/rooms/:id/clear', (req, res) => {

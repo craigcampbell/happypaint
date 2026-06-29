@@ -4150,6 +4150,18 @@ button:disabled {
 .admin-report-main { min-width: 0; }
 .admin-muted { color: #64748b; font-weight: 600; }
 .admin-reason { margin: 6px 0 0; color: #0f172a; }
+.admin-report-chat {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: #334155;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.admin-report-chat p { margin: 2px 0; line-height: 1.35; }
 .admin-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .admin-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
 .admin-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
