@@ -4565,7 +4565,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
             <canvas
               ref={overlayCanvasRef}
-              className={handTool ? "drawing-canvas overlay-canvas is-pan" : "drawing-canvas overlay-canvas"}
+              className={`drawing-canvas overlay-canvas${handTool ? " is-pan" : ""}${
+                !handTool && selectedTool !== "fill" && selectedTool !== "text" ? " ring-active" : ""
+              }`}
               aria-hidden="true"
               onPointerDown={handleCanvasPointerDown}
               onPointerMove={handleCanvasPointerMove}

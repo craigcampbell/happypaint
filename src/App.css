@@ -3030,6 +3030,20 @@ button:disabled {
   border-color: #51606e;
   background: rgba(255, 255, 255, 0.14);
 }
+/* Center dot: marks the exact paint point and keeps tiny brushes visible as a
+   cursor. Dark dot + white halo so it reads on any background. */
+.brush-cursor::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: rgba(17, 24, 39, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+}
 .remote-cursor-name {
   position: absolute;
   left: 14px;
@@ -3206,6 +3220,9 @@ button:disabled {
 
 /* ---- Zoom / pan controls + canvas polish -------------------------------- */
 .overlay-canvas { cursor: crosshair; }
+/* When a painting tool is active we hide the OS cursor so the brush-size ring
+   below IS the cursor (Photoshop-style). Fill/text keep the crosshair. */
+.overlay-canvas.ring-active { cursor: none; }
 .overlay-canvas.is-pan { cursor: grab; }
 .overlay-canvas.is-pan:active { cursor: grabbing; }
 
