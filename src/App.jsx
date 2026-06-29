@@ -368,6 +368,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const userPosRef = useRef(new Map()); // userId -> { x, y, name, ts }
   const focusedUserIdRef = useRef(null); // a friend we just jumped the canvas to (pulses)
   const focusTimerRef = useRef(null);
+  const brushCursorRef = useRef(null); // the brush-size preview ring (DOM-positioned)
+  const brushCursorHideRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
   const [showChat, setShowChat] = useState(true);
@@ -2197,6 +2199,70 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   };
 
+  // ---- Brush-size preview ring --------------------------------------------
+  // A hollow circle sized to the brush (brushSize x current zoom) + tinted with
+  // the colour, so you can see how big/what colour the paint will be BEFORE you
+  // commit. Follows the pointer on hover (desktop) and under the finger while
+  // drawing (touch); also flashed at canvas centre when the size/brush changes.
+  // Positioned by direct style mutation (no React state) to stay off the draw
+  // hot path. Hidden for non-painting tools and while panning/pinching.
+  const hideBrushCursor = () => {
+    brushCursorRef.current?.classList.remove("is-visible");
+  };
+
+  const updateBrushCursor = (clientX, clientY) => {
+    const ring = brushCursorRef.current;
+    const canvas = overlayCanvasRef.current;
+    if (!ring || !canvas) {
+      return;
+    }
+    if (handToolRef.current || selectedTool === "fill" || selectedTool === "text") {
+      hideBrushCursor();
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const scale = viewRef.current.scale || 1;
+    const isEraser = selectedTool === "brush" && selectedBrush === "eraser";
+    const d = Math.max(8, Math.min(brushSize * scale, Math.min(rect.width, rect.height)));
+    ring.style.width = `${d}px`;
+    ring.style.height = `${d}px`;
+    ring.style.setProperty("--bc-color", isEraser ? "#ffffff" : selectedColor);
+    ring.classList.toggle("is-eraser", isEraser);
+    ring.style.transform = `translate(${clientX - rect.left - d / 2}px, ${clientY - rect.top - d / 2}px)`;
+    ring.classList.add("is-visible");
+    if (brushCursorHideRef.current) {
+      window.clearTimeout(brushCursorHideRef.current);
+      brushCursorHideRef.current = null;
+    }
+  };
+
+  // Flash the ring at the canvas centre for a moment — the "before you paint"
+  // size preview that works even on touch (no hover). Re-armed on size changes.
+  const flashBrushCursor = () => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    // Upper-centre, so the mobile tools drawer (bottom sheet) doesn't cover it
+    // while the size slider is being dragged.
+    updateBrushCursor(rect.left + rect.width / 2, rect.top + rect.height * 0.22);
+    if (brushCursorHideRef.current) {
+      window.clearTimeout(brushCursorHideRef.current);
+    }
+    brushCursorHideRef.current = window.setTimeout(() => {
+      hideBrushCursor();
+      brushCursorHideRef.current = null;
+    }, 900);
+  };
+
+  const handleCanvasPointerLeave = (event) => {
+    // Mouse left the canvas → drop the hover ring. (Touch has no hover-leave.)
+    if (event.pointerType !== "touch") {
+      hideBrushCursor();
+    }
+  };
+
   const handleCanvasPointerDown = (event) => {
     // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
@@ -2228,12 +2294,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // twist + pan; three or more pan. Baselined here and on every finger change.
     if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
       abortActiveStroke();
+      hideBrushCursor();
       const m = gestureMetrics([...pointersRef.current.values()]);
       gestureRef.current = { lastMid: { x: m.cx, y: m.cy }, lastDist: m.dist, lastAngle: m.angle, count: m.n };
       return;
     }
 
     if (handToolRef.current) {
+      hideBrushCursor();
       panPointerRef.current = event.pointerId;
       panLastRef.current = { x: event.clientX, y: event.clientY };
       try {
@@ -2244,6 +2312,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
+    updateBrushCursor(event.clientX, event.clientY);
     startStroke(event);
   };
 
@@ -2253,6 +2322,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
 
     if (gestureRef.current) {
+      hideBrushCursor();
       const pts = [...pointersRef.current.values()];
       if (pts.length < 2) {
         return;
@@ -2292,11 +2362,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
 
     if (panPointerRef.current === event.pointerId) {
+      hideBrushCursor();
       panBy(event.clientX - panLastRef.current.x, event.clientY - panLastRef.current.y);
       panLastRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
 
+    updateBrushCursor(event.clientX, event.clientY);
     continueStroke(event);
   };
 
@@ -2312,6 +2384,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (panPointerRef.current === event.pointerId) {
       panPointerRef.current = null;
       return;
+    }
+    // Touch has no hover, so drop the ring when the finger lifts; a mouse keeps
+    // its hover ring (the next move re-positions it).
+    if (event.pointerType === "touch") {
+      hideBrushCursor();
     }
     finishStroke(event);
   };
@@ -2335,6 +2412,29 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return !on;
     });
   };
+
+  // Flash the brush-size preview ring whenever the size or brush changes (skipping
+  // the first render) — the "know how big before you paint" hint that works on
+  // touch where there's no hover. Dragging the size slider re-arms it live.
+  const brushPreviewInitRef = useRef(false);
+  useEffect(() => {
+    if (!brushPreviewInitRef.current) {
+      brushPreviewInitRef.current = true;
+      return;
+    }
+    flashBrushCursor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brushSize, selectedBrush]);
+
+  // Clear any pending brush-ring hide timer on unmount.
+  useEffect(
+    () => () => {
+      if (brushCursorHideRef.current) {
+        window.clearTimeout(brushCursorHideRef.current);
+      }
+    },
+    [],
+  );
 
   // Mobile safety net: if the tab is backgrounded or the window loses focus (an
   // app switch, a notification, an interrupting system gesture), iOS may never
@@ -4471,8 +4571,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onPointerMove={handleCanvasPointerMove}
               onPointerUp={handleCanvasPointerUp}
               onPointerCancel={handleCanvasPointerUp}
+              onPointerLeave={handleCanvasPointerLeave}
               onLostPointerCapture={handleCanvasLostPointerCapture}
             />
+            {/* Brush-size preview ring — sized to brushSize x zoom, tinted with the
+                colour, following the pointer (and flashed when size/brush changes). */}
+            <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true" />
             <div className="remote-cursor-layer" aria-hidden="true">
               {remoteCursors.map((cursor) => (
                 <div

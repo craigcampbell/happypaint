@@ -3006,6 +3006,30 @@ button:disabled {
   70% { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 18px rgba(45, 108, 223, 0); }
   100% { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 0 rgba(45, 108, 223, 0); }
 }
+
+/* Brush-size preview ring: sized to brushSize x zoom, tinted with the colour
+   (--bc-color), DOM-positioned via transform. White inner+outer halos keep the
+   coloured ring legible on white paper AND dark areas. */
+.brush-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--bc-color, #111827);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85), inset 0 0 0 1.5px rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  will-change: transform;
+  z-index: 4;
+}
+.brush-cursor.is-visible { opacity: 0.95; }
+.brush-cursor.is-eraser {
+  border-style: dashed;
+  border-color: #51606e;
+  background: rgba(255, 255, 255, 0.14);
+}
 .remote-cursor-name {
   position: absolute;
   left: 14px;

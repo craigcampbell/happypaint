@@ -47,8 +47,8 @@ export const brushCatalog = [
     id: "glow",
     name: "Glow",
     icon: "✨",
-    tier: "studio",
-    description: "A premium neon brush pack hook for store unlocks.",
+    tier: "free",
+    description: "Soft neon glow — great for sparkles, magic, and night scenes.",
   },
 ];
 
