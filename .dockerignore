@@ -14,3 +14,9 @@ backups
 *.md
 mobile
 backend
+# The ~1.2GB coloring-sheet library is volume-mounted at runtime, not baked into
+# the image — keep it (and other dev artifacts) out of the build context.
+coloring-library
+audit-results
+scripts
+.claude
