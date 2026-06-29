@@ -3025,24 +3025,38 @@ button:disabled {
   z-index: 4;
 }
 .brush-cursor.is-visible { opacity: 0.95; }
-.brush-cursor.is-eraser {
+
+/* Per-brush SHAPE hints (data-brush) so the cursor implies which tool you hold,
+   not just how big it is. */
+.brush-cursor[data-brush="marker"] { border-radius: 22%; } /* chisel marker nib */
+.brush-cursor[data-brush="spray"] { border-style: dotted; border-width: 2px; } /* airbrush spread */
+.brush-cursor[data-brush="pencil"] {
+  border-width: 1px; /* thin, light pencil */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+.brush-cursor[data-brush="glow"] {
+  box-shadow: 0 0 10px 1px var(--bc-color), 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+} /* soft neon glow */
+.brush-cursor[data-brush="eraser"] {
   border-style: dashed;
   border-color: #51606e;
   background: rgba(255, 255, 255, 0.14);
 }
-/* Center dot: marks the exact paint point and keeps tiny brushes visible as a
-   cursor. Dark dot + white halo so it reads on any background. */
+
+/* Inner crosshair: marks the exact paint point for precision, with a white
+   drop-shadow halo so the thin lines read on any background. */
 .brush-cursor::after {
   content: "";
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 3px;
-  height: 3px;
-  margin: -1.5px 0 0 -1.5px;
-  border-radius: 50%;
-  background: rgba(17, 24, 39, 0.9);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+  width: 11px;
+  height: 11px;
+  transform: translate(-50%, -50%);
+  background:
+    linear-gradient(#111827, #111827) center / 100% 1.4px no-repeat,
+    linear-gradient(#111827, #111827) center / 1.4px 100% no-repeat;
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.95));
 }
 .remote-cursor-name {
   position: absolute;

@@ -2222,12 +2222,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     const rect = canvas.getBoundingClientRect();
     const scale = viewRef.current.scale || 1;
-    const isEraser = selectedTool === "brush" && selectedBrush === "eraser";
     const d = Math.max(8, Math.min(brushSize * scale, Math.min(rect.width, rect.height)));
     ring.style.width = `${d}px`;
     ring.style.height = `${d}px`;
-    ring.style.setProperty("--bc-color", isEraser ? "#ffffff" : selectedColor);
-    ring.classList.toggle("is-eraser", isEraser);
+    ring.style.setProperty("--bc-color", selectedColor);
+    // data-brush drives the cursor SHAPE per brush (marker = chisel, spray =
+    // dotted, glow = glowing, pencil = thin, eraser = dashed, …); shape tools
+    // (rect/ellipse/line) just show a plain ring.
+    ring.dataset.brush = selectedTool === "brush" ? selectedBrush : "shape";
     ring.style.transform = `translate(${clientX - rect.left - d / 2}px, ${clientY - rect.top - d / 2}px)`;
     ring.classList.add("is-visible");
     if (brushCursorHideRef.current) {
