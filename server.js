@@ -249,6 +249,7 @@ function getRoom(roomId) {
       flags: [], // recent moderation flags (in-memory, for corroboration)
       flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
       watchers: new Set(), // elected client ids running the in-browser watcher
+      spectators: new Set(), // read-only homepage viewers (not counted as users)
       modLog: [], // recent moderation actions (in-memory, capped)
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       lastActivity: Date.now(),
@@ -428,6 +429,12 @@ function broadcast(roomId, message, exceptId = null) {
       u.ws.send(data);
     }
   });
+  // Read-only homepage viewers see the live mural too, but never draw/count.
+  if (room.spectators) {
+    room.spectators.forEach((sws) => {
+      if (sws.readyState === 1) sws.send(data);
+    });
+  }
 }
 
 wss.on('connection', async (ws, req) => {
@@ -441,6 +448,31 @@ wss.on('connection', async (ws, req) => {
   if (room.audience === 'adult_18') {
     ws.send(JSON.stringify({ type: 'room_blocked', reason: 'adult_disabled' }));
     ws.close(1008, 'adult disabled');
+    return;
+  }
+
+  // Spectator mode: a homepage viewer watches the live mural read-only. They are
+  // NOT added to room.users (no presence, no count, no draw rights, no room-full
+  // limit), just subscribed to broadcasts via room.spectators. Unlimited viewers.
+  if (url.searchParams.get('spectate') === '1') {
+    room.spectators.add(ws);
+    ws.isSpectator = true;
+    ws.roomId = roomId;
+    ws.send(JSON.stringify({
+      type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
+      roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
+    }));
+    ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
+    if (room.history.length > 0) {
+      ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
+    }
+    if (room.sheetId) {
+      ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
+    }
+    ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
+    const dropSpectator = () => room.spectators.delete(ws);
+    ws.on('close', dropSpectator);
+    ws.on('error', dropSpectator);
     return;
   }
 
@@ -1143,6 +1175,7 @@ app.get('/api/rooms/public', (_req, res) => {
       code,
       title: room.title || (f ? f.title : null),
       users,
+      ops: room.history.length, // "things done" — drawn ops, for the join modal
       sheetId: room.sheetId || null,
       lastActivity: room.lastActivity || 0,
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),

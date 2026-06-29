@@ -76,7 +76,11 @@ import PublishPackModal from "./components/PublishPackModal";
 import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
-import MarketingSite from "./components/MarketingSite";
+import HomePage from "./components/HomePage";
+import AboutPage from "./components/AboutPage";
+import PrivacyPage from "./components/PrivacyPage";
+import SignupPage from "./components/SignupPage";
+import RoomFinderPage from "./components/RoomFinderPage";
 import SafetyPage from "./components/SafetyPage";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
@@ -5610,7 +5614,23 @@ export default function App() {
     return <SafetyPage onNavigate={navigate} />;
   }
 
-  return <MarketingSite onNavigate={navigate} />;
+  if (path.startsWith("/about")) {
+    return <AboutPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/privacy")) {
+    return <PrivacyPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/signup")) {
+    return <SignupPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/rooms")) {
+    return <RoomFinderPage onNavigate={navigate} />;
+  }
+
+  return <HomePage onNavigate={navigate} />;
 }
 
 function normalizePathCode(path) {
