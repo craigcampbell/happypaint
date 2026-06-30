@@ -127,10 +127,71 @@ export async function signInWithProvider(providerId, popup) {
   }
 }
 
-// Email sign-in isn't wired for the first pass (Google only). Kept so the
-// AccountPanel interface is unchanged.
-export async function signInWithEmail() {
-  return { ok: false, message: "Email sign-in isn't set up yet — use Continue with Google." };
+// PocketBase native email + password. Sign-in authenticates; sign-up creates the
+// `users` record (public create must be allowed on the collection) then signs in.
+export async function signInWithEmail(email, password) {
+  const pb = await getPocketBase();
+  if (!pb) {
+    return { ok: false, message: LOCAL_ONLY_MESSAGE };
+  }
+  const id = String(email || "").trim();
+  if (!id || !password) {
+    return { ok: false, message: "Enter your email and password." };
+  }
+  try {
+    await pb.collection("users").authWithPassword(id, password);
+    return { ok: true, message: "Signed in!" };
+  } catch {
+    return { ok: false, message: "Wrong email or password." };
+  }
+}
+
+export async function signUpWithEmail(email, password) {
+  const pb = await getPocketBase();
+  if (!pb) {
+    return { ok: false, message: LOCAL_ONLY_MESSAGE };
+  }
+  const id = String(email || "").trim();
+  if (!id || !/.+@.+\..+/.test(id)) {
+    return { ok: false, message: "Enter a valid email address." };
+  }
+  if (!password || password.length < 8) {
+    return { ok: false, message: "Password needs at least 8 characters." };
+  }
+  try {
+    await pb.collection("users").create({
+      email: id,
+      password,
+      passwordConfirm: password,
+      name: id.split("@")[0].slice(0, 20),
+    });
+    await pb.collection("users").authWithPassword(id, password);
+    return { ok: true, message: "Account created — you're signed in!" };
+  } catch (error) {
+    const data = error?.response?.data || {};
+    if (data.email) {
+      return { ok: false, message: "That email is already registered — try logging in." };
+    }
+    if (data.password?.message) {
+      return { ok: false, message: data.password.message };
+    }
+    return { ok: false, message: error?.message || "Couldn't create that account." };
+  }
+}
+
+// Which OAuth providers are actually enabled on the PB users collection, so the
+// UI can show (e.g.) the Google button only once it's configured instead of a
+// button that always errors. Empty when local-only or unreachable.
+export async function getEnabledOAuthProviderIds() {
+  if (!isCloudConfigured) return [];
+  try {
+    const res = await fetch(`${PB_URL}/api/collections/users/auth-methods`, { cache: "no-store" });
+    const data = await res.json();
+    const providers = data?.oauth2?.providers || data?.authProviders || [];
+    return providers.map((p) => p.name).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 // Sign out — PocketBase has no logout endpoint; you just clear the local store.

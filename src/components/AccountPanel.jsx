@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import {
   LOCAL_ONLY_MESSAGE,
   OAUTH_PROVIDERS,
+  getEnabledOAuthProviderIds,
   getSession,
   isCloudConfigured,
   onAuthStateChange,
@@ -17,6 +18,7 @@ import {
   signInWithEmail,
   signInWithProvider,
   signOut,
+  signUpWithEmail,
 } from "../utils/auth";
 import { deleteAccountAndData, getDeletionRequest } from "../utils/accountDeletion";
 import { getSyncStatus, onSyncStatus } from "../utils/sync";
@@ -24,6 +26,9 @@ import { getSyncStatus, onSyncStatus } from "../utils/sync";
 export default function AccountPanel({ onClose, onDeleted }) {
   const [session, setSession] = useState(null);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("login"); // "login" | "signup"
+  const [oauthIds, setOauthIds] = useState([]);
   const [message, setMessage] = useState(isCloudConfigured ? "" : LOCAL_ONLY_MESSAGE);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -38,6 +43,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
       }
     });
     const unsub = onAuthStateChange((value) => setSession(value));
+    getEnabledOAuthProviderIds().then((ids) => active && setOauthIds(ids));
     // Reflect the live cloud-sync status (only meaningful when configured).
     const unsubSync = onSyncStatus((_status, label) => {
       if (active) {
@@ -51,11 +57,14 @@ export default function AccountPanel({ onClose, onDeleted }) {
     };
   }, []);
 
-  const handleEmail = async () => {
+  const handleEmail = async (event) => {
+    event?.preventDefault?.();
     setBusy(true);
-    const result = await signInWithEmail(email);
+    setMessage("");
+    const result = await (mode === "signup" ? signUpWithEmail : signInWithEmail)(email, password);
     setMessage(result.message);
     setBusy(false);
+    // Session updates via onAuthStateChange — the panel flips to the signed-in view.
   };
 
   const handleProvider = async (provider) => {
@@ -129,42 +138,60 @@ export default function AccountPanel({ onClose, onDeleted }) {
           ) : (
             <>
               <p className="account-note">
-                Signing in is <strong>optional</strong> — Happy Paint works fully without an account.
-                {" "}
-                An account only unlocks cross-device sync and social features later.
+                Signing in is <strong>optional</strong> — your work keeps going without an account. An
+                account saves your gallery and follows you to any device.
               </p>
               {!isCloudConfigured ? (
                 <p className="account-note compliance">{LOCAL_ONLY_MESSAGE}</p>
               ) : null}
-              <label className="color-picker">
-                <span>Email magic link</span>
-                <input
-                  type="email"
-                  value={email}
-                  placeholder="you@example.com"
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </label>
-              <div className="account-actions">
-                <button
-                  type="button"
-                  className="primary-action"
-                  onClick={handleEmail}
-                  disabled={busy || !isCloudConfigured}
-                >
-                  Send magic link
+              <form className="signup-form" onSubmit={handleEmail}>
+                <label className="signup-field">
+                  <span>Email</span>
+                  <input
+                    type="email"
+                    value={email}
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                </label>
+                <label className="signup-field">
+                  <span>Password</span>
+                  <input
+                    type="password"
+                    value={password}
+                    autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                    placeholder={mode === "signup" ? "8+ characters" : "Your password"}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                  />
+                </label>
+                <button type="submit" className="primary-action" disabled={busy || !isCloudConfigured}>
+                  {mode === "signup" ? "Create account" : "Log in"}
                 </button>
-                {OAUTH_PROVIDERS.map((provider) => (
-                  <button
-                    key={provider.id}
-                    type="button"
-                    onClick={() => handleProvider(provider.id)}
-                    disabled={busy || !isCloudConfigured}
-                  >
-                    {provider.label}
-                  </button>
-                ))}
-              </div>
+              </form>
+              <button
+                type="button"
+                className="signup-toggle"
+                onClick={() => {
+                  setMode((m) => (m === "signup" ? "login" : "signup"));
+                  setMessage("");
+                }}
+              >
+                {mode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
+              </button>
+              {OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id)).map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  className="signup-google"
+                  onClick={() => handleProvider(provider.id)}
+                  disabled={busy}
+                >
+                  {provider.label}
+                </button>
+              ))}
             </>
           )}
         </div>

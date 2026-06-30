@@ -4893,6 +4893,14 @@ textarea:focus-visible,
 .signup-google { min-height: 50px; font-size: 1rem; }
 .signup-guest { min-height: 44px; border: none; background: none; color: #2d6cdf; font-weight: 800; }
 .signup-guest:hover { box-shadow: none; text-decoration: underline; }
+.signup-form { display: grid; gap: 10px; }
+.signup-field { display: grid; gap: 4px; text-align: left; font-weight: 800; font-size: 0.82rem; color: #44535e; }
+.signup-field input { min-height: 46px; width: 100%; }
+.signup-submit { min-height: 48px; font-size: 1rem; }
+.signup-toggle { min-height: 40px; border: none; background: none; color: #2d6cdf; font-weight: 800; }
+.signup-toggle:hover { box-shadow: none; text-decoration: underline; }
+.signup-or { display: flex; align-items: center; gap: 10px; color: #98a4b0; font-weight: 800; font-size: 0.8rem; }
+.signup-or::before, .signup-or::after { content: ""; flex: 1; height: 1px; background: #e3e9ef; }
 .signup-signedin { font-weight: 800; color: #1f6b43; margin: 0; }
 .signup-perks { list-style: none; padding: 0; display: grid; gap: 8px; color: #3c4a55; font-weight: 700; }
 
