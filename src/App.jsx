@@ -88,6 +88,7 @@ import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import ColoringSheetModal from "./components/ColoringSheetModal";
+import BrushPreview from "./components/BrushPreview";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
 
@@ -5276,7 +5277,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   onClick={() => chooseBrush(brush.id)}
                   aria-pressed={selectedTool === "brush" && selectedBrush === brush.id}
                 >
-                  <span className="chip-ico" aria-hidden="true">{brush.icon}</span>
+                  <BrushPreview brush={brush.id} color={selectedColor} />
                   <span className="chip-name">{brush.name}</span>
                   {locked ? <small>Studio</small> : null}
                 </button>

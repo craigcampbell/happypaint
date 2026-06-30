@@ -169,7 +169,7 @@ function dot(ctx, point, size, color, opacity) {
 }
 
 export function drawBrushSegment(ctx, from, to, settings) {
-  const pressure = clamp(to.pressure || 0.55, 0.18, 1);
+  const pressure = clamp(to.pressure || 0.55, 0.06, 1);
   const sizeJitter = 1 + (Math.random() * 2 - 1) * settings.variation;
   const baseSize = clamp(settings.size * sizeJitter, 1, 160);
   const opacity = clamp(settings.opacity, 0.05, 1);
@@ -185,7 +185,7 @@ export function drawBrushSegment(ctx, from, to, settings) {
       return;
     }
 
-    line(ctx, from, to, baseSize * (0.7 + pressure * 0.7), "#000000", 1, "destination-out");
+    line(ctx, from, to, baseSize * (0.85 + pressure * 0.35), "#000000", 1, "destination-out");
     return;
   }
 
@@ -218,7 +218,7 @@ export function drawBrushSegment(ctx, from, to, settings) {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const dist = Math.hypot(dx, dy);
-    const w = baseSize * (0.55 + pressure * 0.5);
+    const w = baseSize * (0.3 + pressure * 0.9);
     const steps = clamp(Math.ceil(dist / Math.max(1.4, w * 0.3)), 1, 40);
     const dl = dist || 1;
     const nx = -dy / dl; // perpendicular unit (for sideways grain)
@@ -248,7 +248,7 @@ export function drawBrushSegment(ctx, from, to, settings) {
       return;
     }
 
-    line(ctx, from, to, baseSize * (0.28 + pressure * 0.58), settings.color, opacity * 0.72);
+    line(ctx, from, to, baseSize * (0.16 + pressure * 0.92), settings.color, opacity * 0.72);
 
     if (baseSize > 8) {
       line(
@@ -271,7 +271,7 @@ export function drawBrushSegment(ctx, from, to, settings) {
 
     ctx.shadowColor = settings.color;
     ctx.shadowBlur = baseSize * 0.85;
-    line(ctx, from, to, baseSize * (0.44 + pressure * 0.5), settings.color, opacity * 0.78);
+    line(ctx, from, to, baseSize * (0.26 + pressure * 0.92), settings.color, opacity * 0.78);
     line(ctx, from, to, Math.max(1, baseSize * 0.18), "#ffffff", opacity * 0.38);
     ctx.shadowBlur = 0;
     return;
@@ -283,15 +283,15 @@ export function drawBrushSegment(ctx, from, to, settings) {
       return;
     }
 
-    line(ctx, from, to, baseSize * (0.62 + pressure * 0.48), settings.color, opacity * 0.82);
+    line(ctx, from, to, baseSize * (0.34 + pressure * 1.0), settings.color, opacity * 0.82);
     dot(ctx, to, baseSize * 0.42, settings.color, opacity * 0.26);
     return;
   }
 
   if (isTap) {
-    dot(ctx, to, baseSize * (0.5 + pressure * 0.55), settings.color, opacity);
+    dot(ctx, to, baseSize * (0.28 + pressure * 1.05), settings.color, opacity);
     return;
   }
 
-  line(ctx, from, to, baseSize * (0.5 + pressure * 0.55), settings.color, opacity);
+  line(ctx, from, to, baseSize * (0.28 + pressure * 1.05), settings.color, opacity);
 }
