@@ -4054,6 +4054,63 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Painting keyboard shortcuts (when not typing): [ / ] resize the brush,
+  // Backspace = eraser, B = brush, Tab = open the brush menu. (Spacebar = pan is
+  // handled above; Cmd/Ctrl Z/Y/S below.) Uses functional updates + refs so the
+  // listener can be installed once. Tab only acts when focus isn't on a control,
+  // so keyboard focus-navigation through the tool rail still works.
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return; // leave modifier combos to the undo/redo/save handler
+      }
+      const target = event.target;
+      const tag = (target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable) {
+        return;
+      }
+      switch (event.key) {
+        case "[":
+          event.preventDefault();
+          setBrushSize((s) => Math.max(2, Math.min(s - 1, Math.round(s * 0.85))));
+          break;
+        case "]":
+          event.preventDefault();
+          setBrushSize((s) => Math.min(120, Math.max(s + 1, Math.round(s * 1.18))));
+          break;
+        case "Backspace":
+          event.preventDefault();
+          handToolRef.current = false;
+          setHandTool(false);
+          setSelectedTool("brush");
+          setSelectedBrush("eraser");
+          break;
+        case "b":
+        case "B":
+          event.preventDefault();
+          handToolRef.current = false;
+          setHandTool(false);
+          setSelectedTool("brush");
+          setSelectedBrush((prev) => (prev === "eraser" ? lastPaintBrushRef.current || "marker" : prev));
+          break;
+        case "Tab":
+          if (tag !== "button" && tag !== "a") {
+            event.preventDefault();
+            setToolsOpen(true);
+            window.setTimeout(
+              () => brushSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+              80,
+            );
+          }
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   useEffect(() => {
     const overlay = overlayCanvasRef.current;
     overlay.width = CANVAS_WIDTH;
