@@ -100,6 +100,12 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     resetPaper();
     lastMapRef.current = new Map();
 
+    // The room's coloring-sheet line art (loaded on the `sheet` message), drawn
+    // over the strokes so colorings show the page they're colouring.
+    let sheetImg = null;
+    let sheetRect = null;
+    let hasSheet = false;
+
     const sizeVisible = () => {
       const vis = visRef.current;
       if (!vis) return;
@@ -122,8 +128,55 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       const scale = Math.min(W / b.w, H / b.h);
       const dw = b.w * scale;
       const dh = b.h * scale;
+      const ox = (W - dw) / 2;
+      const oy = (H - dh) / 2;
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(off, b.x, b.y, b.w, b.h, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      ctx.drawImage(off, b.x, b.y, b.w, b.h, ox, oy, dw, dh);
+      // Overlay the coloring sheet using the same world→screen mapping as the mural.
+      if (sheetImg && sheetRect) {
+        ctx.drawImage(
+          sheetImg,
+          ox + (sheetRect.x - b.x) * scale,
+          oy + (sheetRect.y - b.y) * scale,
+          sheetRect.w * scale,
+          sheetRect.h * scale,
+        );
+      }
+    };
+
+    // Resolve + load the room's coloring sheet (lib:<file> → static PNG; else the
+    // /api/sheets data URL), then reframe to the whole page so it shows in full.
+    const loadSheet = (id) => {
+      if (!id) {
+        sheetImg = null;
+        sheetRect = null;
+        hasSheet = false;
+        blit();
+        return;
+      }
+      hasSheet = true;
+      boundsRef.current = null;
+      const apply = (src) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          const s = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
+          const w = img.width * s;
+          const h = img.height * s;
+          sheetRect = { x: (CANVAS_WIDTH - w) / 2, y: (CANVAS_HEIGHT - h) / 2, w, h };
+          sheetImg = img;
+          blit();
+        };
+        img.src = src;
+      };
+      if (id.startsWith("lib:")) {
+        apply(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
+        return;
+      }
+      fetch(`/api/sheets/${id}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (d?.image) apply(d.image); })
+        .catch(() => {});
     };
 
     const onResize = () => {
@@ -153,12 +206,15 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           resetPaper();
           lastMapRef.current = new Map();
           for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, blit);
-          boundsRef.current = boundsOf(data.ops || []);
+          // With a sheet, show the whole page; otherwise frame to the drawn content.
+          boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           blit();
           onActivity?.((data.ops || []).length);
         } else if (data.type === "op") {
           applyOp(offCtx, data.op, lastMapRef.current, blit);
           blit();
+        } else if (data.type === "sheet") {
+          loadSheet(data.sheetId);
         } else if (data.type === "clear") {
           resetPaper();
           lastMapRef.current = new Map();

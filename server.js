@@ -46,7 +46,7 @@ const __dirname = dirname(__filename);
 })();
 
 const PORT = Number(process.env.PORT || 8787);
-const MAX_HISTORY = Number(process.env.MAX_HISTORY || 6000);
+const MAX_HISTORY = Number(process.env.MAX_HISTORY || 20000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
 const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
