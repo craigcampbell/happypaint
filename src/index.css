@@ -21,10 +21,35 @@ body,
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  /* iOS Safari: stop the pencil/finger from selecting the whole page and popping
+     the Copy / Look Up / Translate callout. Text fields opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   overscroll-behavior: none;
+  touch-action: manipulation; /* no double-tap-to-zoom on the page chrome */
+}
+
+/* Taps on controls must register instantly (no 300ms double-tap-zoom wait) and
+   never trigger the selection callout. The canvas keeps its own touch-action. */
+button,
+a,
+label,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* People still need to select + edit text where it matters (chat, name fields). */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 input,
