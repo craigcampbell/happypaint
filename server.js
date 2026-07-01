@@ -480,9 +480,78 @@ function broadcast(roomId, message, exceptId = null) {
   }
 }
 
+// Fan a chat message out to cross-room "notifier" sockets watching this room
+// whose display name is @mentioned in the message. Lets a painter get pinged
+// about mentions in OTHER rooms they're in without a heavy full connection.
+function notifyMentions(room, roomId, senderName, message, ts) {
+  if (!room.notifiers || room.notifiers.size === 0) return;
+  const lower = message.toLowerCase();
+  const sender = (senderName || '').toLowerCase();
+  for (const ws of room.notifiers) {
+    const name = (ws.watchName || '').trim().toLowerCase();
+    if (!name || name === sender) continue; // no self-pings
+    if (!lower.includes('@' + name)) continue;
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'mention',
+        room: roomId,
+        roomTitle: room.title || null,
+        from: senderName || 'someone',
+        text: message,
+        ts,
+      }));
+    }
+  }
+}
+
 wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
+
+  // Notify mode: a lightweight cross-room mention watcher. It joins NO room for
+  // drawing/presence — it just subscribes to a set of rooms' chat and receives
+  // 'mention' events when the given name is @mentioned there. The client sends
+  // {type:'watch', rooms:[...], name} to (re)subscribe.
+  if (url.searchParams.get('notify') === '1') {
+    ws.isNotifier = true;
+    ws.watchName = '';
+    ws.watchRooms = [];
+    const unwatchAll = () => {
+      for (const code of ws.watchRooms) {
+        const r = rooms.get(code);
+        if (r && r.notifiers) r.notifiers.delete(ws);
+      }
+      ws.watchRooms = [];
+    };
+    ws.on('message', (raw) => {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (!data || data.type !== 'watch') return; // 'ping' etc. just keep it alive
+      unwatchAll();
+      ws.watchName = String(data.name || '').trim().slice(0, 40);
+      const list = Array.isArray(data.rooms) ? data.rooms.slice(0, 12) : [];
+      for (const rawCode of list) {
+        const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
+        // Attach only to rooms that actually exist (don't resurrect idle-closed
+        // rooms just to watch them); the client re-asserts the watch periodically
+        // so a room that (re)opens later still gets picked up.
+        const r = code ? rooms.get(code) : null;
+        if (!r) continue;
+        if (!r.notifiers) r.notifiers = new Set();
+        r.notifiers.add(ws);
+        ws.watchRooms.push(code);
+      }
+    });
+    ws.on('close', unwatchAll);
+    ws.on('error', unwatchAll);
+    ws.send(JSON.stringify({ type: 'notify_ready' }));
+    return;
+  }
+
   const room = getRoom(roomId);
 
   // adult_18 is a defined-but-disabled audience: real adult verification doesn't
@@ -710,6 +779,8 @@ wss.on('connection', async (ws, req) => {
         // 2) durable append-only audit log (keeps the profileId for deletion scrubs)
         appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message });
         broadcast(roomId, { type: 'chat', user: entry.user, message, ts: chatTs });
+        // Ping cross-room watchers who are @mentioned here (see notifyMentions).
+        notifyMentions(room, roomId, user.name, message, chatTs);
         persistRoom(roomId);
         break;
       }

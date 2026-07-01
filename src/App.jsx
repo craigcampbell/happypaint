@@ -30,8 +30,10 @@ import {
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
-import { getSession, onAuthStateChange } from "./utils/auth";
-import { recordRecentRoom } from "./utils/recentRooms";
+import { getSession, onAuthStateChange, signOut } from "./utils/auth";
+import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
+import { useMentionWatcher } from "./hooks/useMentionWatcher";
+import { addNotification, getNotifications, markAllRead, clearNotifications } from "./utils/notifications";
 import { schedulePush, startSync, stopSync } from "./utils/sync";
 import {
   addAsset,
@@ -420,6 +422,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const offlineDraftRestoredRef = useRef(false); // true once the offline fallback painted a draft
   const legacyDraftPurgedRef = useRef(false); // one-shot cleanup of the migrated legacy blob
   const draftRestoreTimerRef = useRef(null); // grace timer before the offline draft fallback
+  const mobileProfileRef = useRef(null); // scroll target for the mobile notifications/profile
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
@@ -560,6 +563,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // so the access token can ride the multiplayer socket and the host UI can read
   // identity. Room ownership/host flags are learned live from the WS server.
   const [session, setSession] = useState(null);
+  // Cross-room @mention inbox (shown in the profile menu). Persisted in
+  // localStorage so it survives the reload that happens when hopping rooms.
+  const [notifications, setNotifications] = useState(() => getNotifications());
   const [isRoomHost, setIsRoomHost] = useState(false);
   const [isRoomOwner, setIsRoomOwner] = useState(false);
   const [roomLocked, setRoomLocked] = useState(false);
@@ -3868,6 +3874,70 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
 
+  // Watch our OTHER recent rooms for @mentions of us and collect them in the
+  // profile-menu inbox (the current room's chat is already live here, so it's
+  // excluded). Mentions match the display name, case-insensitive.
+  const watchRoomCodes = useMemo(
+    () => getRecentRooms().map((r) => r.code).filter((code) => code && code !== roomId),
+    [roomId],
+  );
+  useMentionWatcher(watchRoomCodes, mp.self?.name || null, (mention) => {
+    setNotifications(addNotification(mention));
+  });
+  const unreadNotifs = notifications.filter((n) => !n.read).length;
+
+  // Sign out from the profile menu without leaving the studio.
+  const handleSignOut = useCallback(async () => {
+    await signOut();
+    setSession(null);
+    setShowAvatarMenu(false);
+    showToast("Signed out.");
+  }, [showToast]);
+
+  // Shared notifications inbox, used in both the desktop profile menu and the
+  // mobile "You" section (the desktop bar is hidden on tablets/phones).
+  const notificationsPanel = (
+    <div className="avatar-notifs">
+      <div className="avatar-notifs-head">
+        <span>🔔 Notifications</span>
+        {notifications.length ? (
+          <button
+            type="button"
+            className="avatar-notifs-clear"
+            onClick={() => setNotifications(clearNotifications())}
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      {notifications.length === 0 ? (
+        <p className="avatar-notifs-empty">
+          No updates yet. When someone @mentions you in another room you&apos;re in, it shows up here.
+        </p>
+      ) : (
+        <ul className="avatar-notifs-list">
+          {notifications.slice(0, 12).map((n) => (
+            <li key={n.id}>
+              <button
+                type="button"
+                className="avatar-notif"
+                onClick={() => {
+                  window.location.href = `/join/${n.room}`;
+                }}
+                title={`Go to ${n.roomTitle || `Room ${n.room}`}`}
+              >
+                <span className="avatar-notif-main">
+                  <strong>{n.from}</strong> · {n.roomTitle || `Room ${n.room}`}
+                </span>
+                <span className="avatar-notif-text">{n.text}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
   // The imperative draw handlers (defined earlier) reach the senders via a ref.
   useEffect(() => {
     mpRef.current = {
@@ -4663,6 +4733,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <button type="button" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
             🚪 Rooms
           </button>
+          <button
+            type="button"
+            className="fab-bell"
+            title="Notifications"
+            onClick={() => {
+              setToolsOpen(true);
+              if (unreadNotifs > 0) setNotifications(markAllRead());
+              window.setTimeout(() => mobileProfileRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 90);
+            }}
+          >
+            🔔
+            {unreadNotifs > 0 ? (
+              <span className="avatar-badge" aria-label={`${unreadNotifs} new`}>
+                {unreadNotifs > 9 ? "9+" : unreadNotifs}
+              </span>
+            ) : null}
+          </button>
         </div>
 
         <div className="mp-bar">
@@ -4724,21 +4811,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               className="avatar-btn"
               onClick={() => {
                 setNameDraft(mp.self?.name || "");
-                setShowAvatarMenu((open) => !open);
+                setShowAvatarMenu((open) => {
+                  const next = !open;
+                  if (next && unreadNotifs > 0) setNotifications(markAllRead());
+                  return next;
+                });
               }}
               aria-haspopup="menu"
               aria-expanded={showAvatarMenu}
-              title="Your profile"
+              title="Your profile & notifications"
             >
               <span className="avatar-dot" style={{ background: mp.self?.color || "#9aa6b2" }}>
                 {(mp.self?.name || "?").slice(0, 1).toUpperCase()}
               </span>
               <span className="avatar-name">{mp.self?.name || "You"}</span>
+              {unreadNotifs > 0 ? (
+                <span className="avatar-badge" aria-label={`${unreadNotifs} new notifications`}>
+                  {unreadNotifs > 9 ? "9+" : unreadNotifs}
+                </span>
+              ) : null}
             </button>
 
             {showAvatarMenu ? (
               <div className="avatar-menu" role="menu">
                 <p className="avatar-menu-title">You</p>
+
+                {notificationsPanel}
+
                 <label className="avatar-field">
                   <span>Display name</span>
                   <input
@@ -4777,15 +4876,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 </div>
                 <div className="avatar-signin">
                   {session ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAvatarMenu(false);
-                        setShowAccount(true);
-                      }}
-                    >
-                      ✅ Signed in · Account
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAvatarMenu(false);
+                          setShowAccount(true);
+                        }}
+                      >
+                        ✅ Signed in · Account
+                      </button>
+                      <button type="button" className="avatar-signout" onClick={handleSignOut}>
+                        🚪 Sign out
+                      </button>
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -5267,8 +5371,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section mobile-profile">
+        <section className="tool-section mobile-profile" ref={mobileProfileRef}>
           <h2>You</h2>
+          {notificationsPanel}
           <label className="avatar-field">
             <span>Display name</span>
             <input
@@ -5294,6 +5399,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <button type="button" className="primary-action" onClick={() => saveProfile(nameDraft, mp.self?.color)}>
             Save name
           </button>
+          {session ? (
+            <button type="button" className="avatar-signout mobile-signout" onClick={handleSignOut}>
+              🚪 Sign out
+            </button>
+          ) : null}
         </section>
 
         <section className="tool-section">

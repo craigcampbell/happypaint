@@ -46,6 +46,8 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:social-profile:v1",
   "happypaint:social-sessions:v1",
   "happypaint:welcomed:v1",
+  "happypaint:recent-rooms:v1",
+  "happypaint:notifications:v1",
 ];
 
 // Drafts are keyed per room (draft:v4:<ROOM>) plus a legacy un-suffixed key, so
