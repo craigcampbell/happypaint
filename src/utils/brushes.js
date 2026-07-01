@@ -122,6 +122,26 @@ export function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+// Small, fast seedable PRNG (standard mulberry32). Used so the SAME stroke
+// renders pixel-identically on every client (local, remote, spectator).
+export function mulberry32(seed) {
+  let state = seed >>> 0;
+  return function next() {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Per-point generator derived from the stroke seed + the point's COORDINATES
+// (not its index): wire batching boundaries and the wire-level duplicate-point
+// dedupe can drop/regroup points, so an index-based sequence would desync the
+// local and remote randomness. Coordinates survive both.
+export function pointRand(seed, x, y) {
+  return mulberry32((seed ^ (Math.round(x) * 73856093) ^ (Math.round(y) * 19349663)) >>> 0);
+}
+
 function line(ctx, from, to, width, color, opacity, composite = "source-over") {
   ctx.globalCompositeOperation = composite;
   ctx.globalAlpha = opacity;
@@ -137,7 +157,7 @@ function line(ctx, from, to, width, color, opacity, composite = "source-over") {
   ctx.globalCompositeOperation = "source-over";
 }
 
-function spray(ctx, point, size, color, opacity) {
+function spray(ctx, point, size, color, opacity, rand) {
   const dots = clamp(Math.round(size * 1.4), 8, 70);
 
   ctx.globalAlpha = opacity * 0.34;
@@ -145,9 +165,9 @@ function spray(ctx, point, size, color, opacity) {
   ctx.beginPath();
 
   for (let index = 0; index < dots; index += 1) {
-    const angle = Math.random() * Math.PI * 2;
-    const distance = Math.random() * size * 0.64;
-    const radius = Math.max(0.7, Math.random() * Math.max(1.4, size * 0.07));
+    const angle = rand() * Math.PI * 2;
+    const distance = rand() * size * 0.64;
+    const radius = Math.max(0.7, rand() * Math.max(1.4, size * 0.07));
     const dotX = point.x + Math.cos(angle) * distance;
     const dotY = point.y + Math.sin(angle) * distance;
 
@@ -168,9 +188,13 @@ function dot(ctx, point, size, color, opacity) {
   ctx.globalAlpha = 1;
 }
 
-export function drawBrushSegment(ctx, from, to, settings) {
+// `rand` is the randomness source for this segment's jitter/scatter. The
+// default keeps legacy (seedless) ops looking exactly like they used to; live
+// strokes pass a pointRand(seed, x, y) generator so every client rolls the
+// same dice for the same point.
+export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
   const pressure = clamp(to.pressure || 0.55, 0.06, 1);
-  const sizeJitter = 1 + (Math.random() * 2 - 1) * settings.variation;
+  const sizeJitter = 1 + (rand() * 2 - 1) * settings.variation;
   const baseSize = clamp(settings.size * sizeJitter, 1, 160);
   const opacity = clamp(settings.opacity, 0.05, 1);
   const isTap = Math.hypot(to.x - from.x, to.y - from.y) < 0.1;
@@ -206,6 +230,7 @@ export function drawBrushSegment(ctx, from, to, settings) {
         baseSize,
         settings.color,
         opacity,
+        rand,
       );
     }
     return;
@@ -230,9 +255,9 @@ export function drawBrushSegment(ctx, from, to, settings) {
       const px = from.x + dx * t;
       const py = from.y + dy * t;
       for (let f = 0; f < 2; f += 1) {
-        const off = (Math.random() * 2 - 1) * w * 0.5;
-        const r = Math.max(0.5, (0.2 + Math.random() * 0.55) * w * 0.5);
-        ctx.globalAlpha = opacity * (0.16 + Math.random() * 0.5);
+        const off = (rand() * 2 - 1) * w * 0.5;
+        const r = Math.max(0.5, (0.2 + rand() * 0.55) * w * 0.5);
+        ctx.globalAlpha = opacity * (0.16 + rand() * 0.5);
         ctx.beginPath();
         ctx.arc(px + nx * off, py + ny * off, r, 0, Math.PI * 2);
         ctx.fill();

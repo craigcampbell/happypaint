@@ -5,22 +5,80 @@
 // framed to the drawn content so visitors immediately see art being made.
 
 import { useEffect, useRef } from "react";
-import { drawBrushSegment } from "../utils/brushes";
+import { drawBrushSegment, pointRand } from "../utils/brushes";
+import { createStrokeBuffer } from "../utils/strokeBuffer";
 import { drawShape, drawText } from "../utils/shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
 
+// Cap on concurrently BUFFERED in-progress strokes (each buffer ≤2048x2048);
+// stroke #5 falls back to the legacy direct per-segment path. Strokes whose
+// end-op never arrives are committed by the idle sweep after this long.
+const MAX_STROKE_BUFFERS = 4;
+const STROKE_IDLE_MS = 8000;
+
 // Apply one op to the full-res offscreen context (mirrors the studio's remote-op
-// renderer). `lastMap` threads each stroke's previous point across op batches.
-function applyOp(ctx, op, lastMap, onImage) {
+// renderer). `lastMap` threads each stroke's previous point across op batches;
+// `strokes` holds the per-strokeId in-progress buffers (Stage 1, #62): non-
+// eraser draw ops build in a bbox-capped buffer at full opacity and land on
+// the paper ONCE, at the stroke's opacity, when their end-op arrives.
+function applyOp(ctx, op, lastMap, strokes, onImage) {
   if (!op) return;
   if (op.kind === "draw") {
     const settings = op.settings || {};
     let last = lastMap.get(op.strokeId);
-    for (const point of op.points || []) {
-      drawBrushSegment(ctx, last || point, point, settings);
-      last = point;
+    if (settings.brush === "eraser") {
+      // Eraser keeps cutting the paper directly (destination-out can't buffer).
+      for (const point of op.points || []) {
+        drawBrushSegment(ctx, last || point, point, settings);
+        last = point;
+      }
+      if (op.end) lastMap.delete(op.strokeId);
+      else lastMap.set(op.strokeId, last);
+      return;
     }
-    lastMap.set(op.strokeId, last);
+    let entry = strokes.get(op.strokeId);
+    if (!entry) {
+      let buffered = 0;
+      for (const open of strokes.values()) if (open.buf) buffered += 1;
+      entry = {
+        buf: buffered < MAX_STROKE_BUFFERS ? createStrokeBuffer() : null, // null → direct fallback
+        drawSettings: { ...settings, opacity: 1 },
+        opacity: Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity)),
+        pad: (settings.size || 24) * 3 + 40, // covers glow shadowBlur + spray scatter
+        lastTouch: 0,
+      };
+      strokes.set(op.strokeId, entry);
+    }
+    entry.lastTouch = Date.now();
+    const seeded = settings.seed != null; // legacy ops carry no seed
+    if (entry.buf) {
+      for (const point of op.points || []) {
+        if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
+          // Outgrew the 2048² cap: bank into the paper and restart (rare,
+          // visually-minor opacity seam on giant strokes).
+          entry.buf.commit(ctx, entry.opacity);
+          entry.buf.reset();
+          entry.buf.ensure(point.x, point.y, entry.pad);
+        }
+        drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+        last = point;
+      }
+    } else {
+      for (const point of op.points || []) {
+        drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+        last = point;
+      }
+    }
+    if (op.end) {
+      if (entry.buf) {
+        entry.buf.commit(ctx, entry.opacity);
+        entry.buf.dispose();
+      }
+      strokes.delete(op.strokeId);
+      lastMap.delete(op.strokeId);
+    } else {
+      lastMap.set(op.strokeId, last);
+    }
   } else if (op.kind === "shape") {
     drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
   } else if (op.kind === "text") {
@@ -100,6 +158,24 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     resetPaper();
     lastMapRef.current = new Map();
 
+    // In-progress stroke buffers (strokeId -> entry), per room connection.
+    const strokes = new Map();
+    const dropStrokes = () => {
+      for (const entry of strokes.values()) entry.buf?.dispose();
+      strokes.clear();
+    };
+    // Commit every still-open stroke to the paper (history replay leaves
+    // legacy strokes — ops with no end marker — open).
+    const commitAllStrokes = () => {
+      for (const [id, entry] of strokes) {
+        if (entry.buf) {
+          entry.buf.commit(offCtx, entry.opacity);
+          entry.buf.dispose();
+        }
+        strokes.delete(id);
+      }
+    };
+
     // The room's coloring-sheet line art (loaded on the `sheet` message), drawn
     // over the strokes so colorings show the page they're colouring.
     let sheetImg = null;
@@ -132,6 +208,23 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       const oy = (H - dh) / 2;
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(off, b.x, b.y, b.w, b.h, ox, oy, dw, dh);
+      // Overlay in-progress buffered strokes (uniform stroke opacity, #62)
+      // with the same world→screen mapping, clipped to the framed page so a
+      // buffer poking outside the crop can't paint over the letterbox.
+      if (strokes.size > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(ox, oy, dw, dh);
+        ctx.clip();
+        for (const entry of strokes.values()) {
+          if (entry.buf && entry.buf.has()) {
+            const s = entry.buf;
+            ctx.globalAlpha = entry.opacity;
+            ctx.drawImage(s.canvas, ox + (s.x0 - b.x) * scale, oy + (s.y0 - b.y) * scale, s.w * scale, s.h * scale);
+          }
+        }
+        ctx.restore();
+      }
       // Overlay the coloring sheet using the same world→screen mapping as the mural.
       if (sheetImg && sheetRect) {
         ctx.drawImage(
@@ -216,19 +309,22 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           reconnectDelay = 2500; // healthy connection — reset the backoff
           resetPaper();
           lastMapRef.current = new Map();
-          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, blit);
+          dropStrokes(); // stale live buffers — the replay re-delivers their points
+          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit);
+          commitAllStrokes(); // legacy / cut-off strokes with no end marker
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           blit();
           onActivity?.((data.ops || []).length);
         } else if (data.type === "op") {
-          applyOp(offCtx, data.op, lastMapRef.current, blit);
+          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit);
           blit();
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);
         } else if (data.type === "clear") {
           resetPaper();
           lastMapRef.current = new Map();
+          dropStrokes(); // in-progress strokes are wiped with the mural
           boundsRef.current = null;
           blit();
         }
@@ -254,8 +350,31 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     };
     document.addEventListener("visibilitychange", onVisibility);
 
+    // Idle sweep: commit strokes whose end-op never arrived (dropped socket /
+    // legacy client) so they don't hover un-inked forever. Cheap size check
+    // when nobody is drawing; cleared with the room connection below.
+    const sweep = window.setInterval(() => {
+      if (strokes.size === 0) return;
+      const now = Date.now();
+      let committed = false;
+      for (const [id, entry] of strokes) {
+        if (now - entry.lastTouch > STROKE_IDLE_MS) {
+          if (entry.buf) {
+            entry.buf.commit(offCtx, entry.opacity);
+            entry.buf.dispose();
+          }
+          strokes.delete(id);
+          lastMapRef.current.delete(id);
+          committed = true;
+        }
+      }
+      if (committed) blit();
+    }, 2000);
+
     return () => {
       closed = true;
+      window.clearInterval(sweep);
+      dropStrokes();
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       try {

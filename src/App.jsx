@@ -5,7 +5,9 @@ import {
   getTexture,
   paletteCatalog,
   paperTextures,
+  pointRand,
 } from "./utils/brushes";
+import { createStrokeBuffer } from "./utils/strokeBuffer";
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
@@ -106,6 +108,12 @@ const MAX_GALLERY_ITEMS = 10;
 // Cap layers per artist — each is a full-size canvas, so this keeps memory and
 // compositing sane on phones/tablets.
 const MAX_LAYERS = 6;
+// Max concurrent buffered remote strokes (each ≤2048x2048). Stroke #5 while
+// four are open falls back to the legacy direct per-segment path.
+const REMOTE_BUFFER_CAP = 4;
+// Remote strokes whose end-op never arrives (dropped socket, legacy client)
+// are committed by the idle sweep after this long without new points.
+const REMOTE_STROKE_IDLE_MS = 8000;
 
 // Avatar colour choices for the profile menu.
 const AVATAR_COLORS = [
@@ -431,6 +439,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
+  // Stage-1 brush engine (#62): the local in-progress NON-eraser stroke paints
+  // into a bbox-capped offscreen buffer and lands on its layer once, at the
+  // stroke's opacity, at pen-up. Null while idle / while erasing.
+  // { buf, layer, settings, drawSettings, seed, pad }
+  const localStrokeRef = useRef(null);
+  // Friends' in-progress strokes get the same treatment: strokeId ->
+  // { buf, settings, drawSettings, opacity, pad, lastTouch }. `buf` is null for
+  // the direct-path fallback once REMOTE_BUFFER_CAP buffers are already open.
+  const remoteStrokesRef = useRef(new Map());
+  const remoteSweepRef = useRef(0); // idle-commit interval id (runs only while strokes are open)
+  // Velocity-synthesized pressure state (#63) for devices with no real pen
+  // pressure (mouse/finger). Reset at every stroke start.
+  const velocityRef = useRef({ lastX: 0, lastY: 0, lastT: null, ema: null, lastP: 0.65 });
   const remoteCursorsRef = useRef(new Map()); // userId -> { x, y, name, color, drawing, ts }
   const cursorSentAtRef = useRef(0);
   const cursorSigRef = useRef(""); // last pumped-cursor signature (skip idle re-renders)
@@ -966,6 +987,35 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     context.drawImage(img, rect.x * sx, rect.y * sy, rect.w * sx, rect.h * sy);
   }, []);
 
+  // Overlay friends' in-progress buffered strokes onto the doc composite, each
+  // at its stroke's uniform opacity (#62). Accepted transient (Stage 1): until
+  // its end-op commits it into the base layer, a remote stroke renders above
+  // the local upper layers. No-op (one size check) when nobody else is drawing.
+  const paintRemoteStrokeOverlays = useCallback((context) => {
+    const strokes = remoteStrokesRef.current;
+    if (strokes.size === 0) {
+      return;
+    }
+    for (const entry of strokes.values()) {
+      if (entry.buf && entry.buf.has()) {
+        context.save();
+        context.globalAlpha = entry.opacity;
+        context.drawImage(entry.buf.canvas, entry.buf.x0, entry.buf.y0);
+        context.restore();
+      }
+    }
+  }, []);
+
+  // Drop all in-progress remote stroke buffers WITHOUT committing (history
+  // rebuilds and clears repaint/wipe the layers, so the buffered pixels are
+  // either re-delivered by the replay or gone with the mural).
+  const dropRemoteStrokes = useCallback(() => {
+    for (const entry of remoteStrokesRef.current.values()) {
+      entry.buf?.dispose();
+    }
+    remoteStrokesRef.current.clear();
+  }, []);
+
   const renderDisplay = useCallback(() => {
     const context = docContextRef.current;
     if (!context) {
@@ -977,12 +1027,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       drawSheet(context);
     }
     compositeLayers(context, layersRef.current);
+    paintRemoteStrokeOverlays(context);
     if (sheetModeRef.current !== "under") {
       drawSheet(context);
     }
     compositeCacheValidRef.current = false;
     blitToDisplay();
-  }, [blitToDisplay, drawSheet, paintOnionSkin]);
+  }, [blitToDisplay, drawSheet, paintOnionSkin, paintRemoteStrokeOverlays]);
 
   // Drop the cached below/above composites so the next stroke rebuilds them.
   const invalidateCompositeCache = useCallback(() => {
@@ -1032,8 +1083,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
     if (!compositeCacheValidRef.current || activeStrokeLayerIdRef.current !== activeLayerIdRef.current) {
-      renderDisplay();
-      return;
+      // Cache invalidated MID-stroke (a remote clear/history rebuild landed
+      // while painting): rebuild the caches once and stay on the cached path.
+      // The renderDisplay fallback can't show the live stroke — its buffer
+      // isn't in the layer stack until the pen-up commit (#62). One-off cost
+      // per invalidation, not per move (the rebuild re-validates the cache).
+      const stroke = localStrokeRef.current;
+      const rebuilt =
+        stroke != null &&
+        activePointerRef.current != null &&
+        stroke.layer.id === activeLayerIdRef.current &&
+        buildCompositeCache();
+      if (!rebuilt) {
+        renderDisplay();
+        return;
+      }
     }
     const active = layersRef.current.find((layer) => layer.id === activeLayerIdRef.current);
     if (!active) {
@@ -1050,13 +1114,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       context.globalAlpha = active.opacity;
       context.drawImage(active.canvas, 0, 0);
       context.globalAlpha = 1;
+      // Live preview of the buffered local stroke (#62): the buffer holds the
+      // stroke at full opacity, so drawing it here at strokeOpacity x layer
+      // opacity matches exactly what the pen-up commit will look like.
+      const stroke = localStrokeRef.current;
+      if (stroke && stroke.buf.has()) {
+        context.save();
+        context.globalAlpha = stroke.settings.opacity * active.opacity;
+        context.drawImage(stroke.buf.canvas, stroke.buf.x0, stroke.buf.y0);
+        context.restore();
+      }
     }
     context.drawImage(aboveCacheRef.current, 0, 0);
+    paintRemoteStrokeOverlays(context);
     if (sheetModeRef.current !== "under") {
       drawSheet(context);
     }
     blitToDisplay();
-  }, [blitToDisplay, drawSheet, renderDisplay]);
+  }, [blitToDisplay, buildCompositeCache, drawSheet, paintRemoteStrokeOverlays, renderDisplay]);
 
   // Schedule a single per-move composite per painted frame (W5). Coalesces
   // bursts of pointermove handlers into at most one composite per rAF.
@@ -1228,12 +1303,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     pushHistory("full");
     layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
     remoteStrokeLastRef.current.clear();
+    dropRemoteStrokes(); // friends' in-progress strokes are wiped with the mural
     mpRef.current?.sendClear();
     renderDisplay();
     refreshActiveThumbnail();
     markChanged("Canvas cleared");
     showClearBanner("You");
-  }, [markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
+  }, [dropRemoteStrokes, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
 
   // Build the paper-texture background as an offscreen canvas at any size.
   const renderPaper = useCallback(async (context, { width, height, textureId }) => {
@@ -1949,31 +2025,86 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const rect = activeCanvasRectRef.current || canvas.getBoundingClientRect();
     const cssX = event.clientX - rect.left;
     const cssY = event.clientY - rect.top;
-    const rawPressure = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "mouse" ? 0.62 : 0.72;
-    // Quantize to 2 decimals: plenty for brush dynamics, smaller op payloads.
-    const pressure = Math.round(rawPressure * 100) / 100;
 
     // Screen (CSS px) -> world coords through the current view (incl. rotation).
     const world = screenToWorld(viewRef.current, cssX, cssY);
+
+    let rawPressure;
+    if (event.pointerType === "pen" && event.pressure > 0) {
+      // Real pen pressure — use it untouched.
+      rawPressure = event.pressure;
+    } else {
+      // No real pressure (mouse reports a UA-constant 0.5/0, fingers a
+      // constant too — the old hardcoded 0.62/0.72 fallbacks): synthesize it
+      // from stroke speed (#63) — slow, deliberate = heavy; fast flicks =
+      // light. EMA-smoothed so width breathes instead of flickering.
+      const vel = velocityRef.current;
+      const t = event.timeStamp || performance.now();
+      if (vel.lastT == null || t > vel.lastT) {
+        if (vel.lastT == null) {
+          vel.lastP = 0.65; // first point of a stroke: neutral baseline
+        } else {
+          const speed = Math.hypot(world.x - vel.lastX, world.y - vel.lastY) / Math.max(1, t - vel.lastT);
+          vel.ema = vel.ema == null ? speed : vel.ema * 0.7 + speed * 0.3;
+          vel.lastP = Math.min(0.9, Math.max(0.3, 0.9 - vel.ema * 0.055));
+        }
+        vel.lastX = world.x;
+        vel.lastY = world.y;
+        vel.lastT = t;
+      }
+      // t <= lastT: the same event seen twice (cursor relay + coalesced draw
+      // replay) or an older coalesced sibling — reuse the last synthesis
+      // rather than poisoning the EMA with zero/negative dt samples.
+      rawPressure = vel.lastP;
+    }
+    // Quantize to 2 decimals: plenty for brush dynamics, smaller op payloads.
+    const pressure = Math.round(rawPressure * 100) / 100;
+
     return { x: world.x, y: world.y, pressure };
   }, []);
 
   // Send the buffered points of the in-progress stroke to the room. Throttled
-  // to ~40ms unless `force` (stroke end) so volume stays sane while feeling live.
-  const flushStrokeNet = useCallback((force) => {
+  // to ~40ms mid-stroke so volume stays sane while feeling live. `end = true`
+  // (pen-up) bypasses the throttle AND always sends — even with zero pending
+  // points — because the end marker is what tells every peer to commit their
+  // buffered copy of this stroke at its uniform opacity (#62).
+  const flushStrokeNet = useCallback((end = false) => {
     const net = strokeNetRef.current;
     const mp = mpRef.current;
-    if (!net || !mp || net.pending.length === 0) {
+    if (!net || !mp) {
       return;
     }
-    const now = Date.now();
-    if (!force && now - net.lastSent < 40) {
-      return;
+    if (!end) {
+      if (net.pending.length === 0) {
+        return;
+      }
+      const now = Date.now();
+      if (now - net.lastSent < 40) {
+        return;
+      }
+      net.lastSent = now;
     }
-    net.lastSent = now;
     const points = net.pending;
     net.pending = [];
-    mp.sendOp({ kind: "draw", strokeId: net.id, settings: net.settings, points });
+    const op = { kind: "draw", strokeId: net.id, settings: net.settings, points };
+    if (end) {
+      op.end = true;
+    }
+    mp.sendOp(op);
+  }, []);
+
+  // Land the local buffered stroke on its layer ONCE at the stroke's opacity
+  // (the #62 fix), then drop the buffer. Safe to call when nothing is open.
+  const commitLocalStroke = useCallback(() => {
+    const stroke = localStrokeRef.current;
+    if (!stroke) {
+      return;
+    }
+    localStrokeRef.current = null;
+    if (stroke.buf.has()) {
+      stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+    }
+    stroke.buf.dispose();
   }, []);
 
   // Relay this pointer's position to the room as a live cursor (throttled to
@@ -2012,10 +2143,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const events = coalescedEvents.length > 0 ? coalescedEvents : [nativeEvent];
 
       const net = strokeNetRef.current;
+      // Non-eraser strokes paint into the offscreen stroke buffer at FULL
+      // opacity with coordinate-seeded randomness (#62); the eraser stays on
+      // the legacy direct destination-out path (stroke === null).
+      const stroke = localStrokeRef.current;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
-        drawBrushSegment(context, lastPoint, point, settings);
+        if (stroke) {
+          if (stroke.buf.ensure(point.x, point.y, stroke.pad).overflow) {
+            // The stroke outgrew the 2048² buffer cap: bank what we have into
+            // the layer and restart the buffer here (a rare, visually-minor
+            // opacity seam on giant strokes — intended).
+            stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+            stroke.buf.reset();
+            stroke.buf.ensure(point.x, point.y, stroke.pad);
+          }
+          drawBrushSegment(stroke.buf.getCtx(), lastPoint, point, stroke.drawSettings, pointRand(stroke.seed, point.x, point.y));
+        } else {
+          drawBrushSegment(context, lastPoint, point, settings);
+        }
         lastPointRef.current = point;
         if (net) {
           // Wire dedupe: a point that rounds to the same pixel as the previous
@@ -2204,9 +2351,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
       // Default: brush / eraser stroke. Pre-render the static below/above
       // composite ONCE here so each move only blits 3 layers (W1/W2).
+      // Safety net: if a dropped pointerup ever orphaned a stroke buffer,
+      // commit it before opening a new one (no-op in the normal flow).
+      commitLocalStroke();
+      // Velocity-pressure synthesis (#63) starts fresh on every stroke.
+      velocityRef.current.lastT = null;
+      velocityRef.current.ema = null;
       lastPointRef.current = getPoint(event.nativeEvent);
       pushHistory();
       buildCompositeCache();
+      // Per-stroke randomness seed: rides the wire so every client renders the
+      // exact same jitter/scatter for this stroke (see pointRand in brushes).
+      const seed = Math.floor(Math.random() * 2 ** 31);
       // Open an outgoing network stroke so each painted point streams to friends.
       strokeNetRef.current = {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -2216,18 +2372,35 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           size: settings.size,
           opacity: settings.opacity,
           variation: settings.variation,
+          seed,
         },
         pending: [],
         lastSent: 0,
         last: null, // last appended net point (wire-level dedupe)
       };
+      // Stage-1 buffered stroke (#62) for everything but the eraser. A buffered
+      // eraser preview would appear to punch holes through LOWER layers
+      // mid-stroke, so erasing keeps the direct destination-out path.
+      if (settings.brush !== "eraser") {
+        const netSettings = strokeNetRef.current.settings;
+        localStrokeRef.current = {
+          buf: createStrokeBuffer(),
+          layer: getActiveLayer(),
+          settings: netSettings,
+          drawSettings: { ...netSettings, opacity: 1 },
+          seed,
+          pad: settings.size * 3 + 40, // covers glow shadowBlur + spray scatter
+        };
+      } else {
+        localStrokeRef.current = null;
+      }
       drawBrushFromEvent(event);
       // Flag the draft dirty WITHOUT the setStatus re-render markChanged does —
       // a full component render mid-pointerdown stalls the first stroke frames.
       // finishStroke's markChanged("Stroke saved") covers the status update.
       dirtyRef.current = true;
     },
-    [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -2317,11 +2490,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         shapeStartRef.current = null;
         shapePreviewRectRef.current = null;
       } else {
-        // Brush/eraser: push the tail of the stroke to the room, then flush any
-        // pending per-move composite and do one full recomposite (this also
-        // invalidates the per-stroke caches).
+        // Brush/eraser: push the tail of the stroke (+ the end marker peers
+        // commit on) to the room, land the buffered stroke on its layer ONCE
+        // at the stroke's opacity (#62 — a single pen-down/up tap commits its
+        // one dab here too), then flush any pending per-move composite and do
+        // one full recomposite (this also invalidates the per-stroke caches).
         flushStrokeNet(true);
         strokeNetRef.current = null;
+        commitLocalStroke();
         flushStrokeFrame();
         renderDisplay();
         markChanged("Stroke saved");
@@ -2339,7 +2515,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Play-money reward: a finished stroke earns a Drop (throttled internally).
       earnPaintDropsRef.current?.();
     },
-    [flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [commitLocalStroke, flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
 
   // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
@@ -2357,7 +2533,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         /* already released */
       }
       flushStrokeFrame();
+      // Termination path: keep what was painted so far (legacy parity — the
+      // direct path had already inked the layer). Send the end marker so
+      // peers commit their copy, then land the local buffer.
+      flushStrokeNet(true);
       strokeNetRef.current = null;
+      commitLocalStroke();
       activePointerRef.current = null;
       lastPointRef.current = null;
       activeStrokeLayerIdRef.current = null;
@@ -2615,10 +2796,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       gestureRef.current = null;
       panPointerRef.current = null;
       if (activePointerRef.current != null) {
+        // Termination path: the pointerup will never arrive, so end the
+        // stroke properly — tell peers to commit (end marker) and land the
+        // local buffer on its layer before dropping the stroke state.
+        flushStrokeNet(true);
+        commitLocalStroke();
         activePointerRef.current = null;
         strokeNetRef.current = null;
         lastPointRef.current = null;
         activeStrokeLayerIdRef.current = null;
+        renderDisplay();
       }
     };
     // Window-level backstop: if iOS drops the canvas element's pointerup/cancel
@@ -2648,7 +2835,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       window.removeEventListener("pointercancel", onWindowPointerEnd);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [commitLocalStroke, flushStrokeNet, renderDisplay]);
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
 
@@ -3741,9 +3928,64 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     return layer ? layer.canvas.getContext("2d") : null;
   }, []);
 
+  // Land a remote in-progress stroke on the shared base layer ONCE at its
+  // stroke opacity (#62) and forget it — including its last-point entry, which
+  // previously leaked one point per stroke forever.
+  const commitRemoteStroke = useCallback(
+    (strokeId, entry) => {
+      if (entry.buf) {
+        const ctx = getRemoteCtx();
+        if (ctx && entry.buf.has()) {
+          entry.buf.commit(ctx, entry.opacity);
+        }
+        entry.buf.dispose();
+      }
+      remoteStrokesRef.current.delete(strokeId);
+      remoteStrokeLastRef.current.delete(strokeId);
+    },
+    [getRemoteCtx],
+  );
+
+  // Idle sweep: while any remote stroke is open, check every 2s and commit
+  // strokes that stopped receiving points (their end-op was lost — a dropped
+  // socket or a legacy client). Clears itself once the map empties.
+  const ensureRemoteSweep = useCallback(() => {
+    if (remoteSweepRef.current) {
+      return;
+    }
+    remoteSweepRef.current = window.setInterval(() => {
+      const strokes = remoteStrokesRef.current;
+      const now = Date.now();
+      let committed = false;
+      for (const [strokeId, entry] of strokes) {
+        if (now - entry.lastTouch > REMOTE_STROKE_IDLE_MS) {
+          commitRemoteStroke(strokeId, entry);
+          committed = true;
+        }
+      }
+      if (strokes.size === 0) {
+        window.clearInterval(remoteSweepRef.current);
+        remoteSweepRef.current = 0;
+      }
+      if (committed) {
+        nsfwWatcherRef.current?.markDirty();
+        scheduleRemoteRender();
+      }
+    }, 2000);
+  }, [commitRemoteStroke, scheduleRemoteRender]);
+
+  // Commit every open remote stroke (history replay leaves legacy strokes —
+  // ops with no end marker — open; deleting entries mid-iteration is safe).
+  const commitAllRemoteStrokes = useCallback(() => {
+    for (const [strokeId, entry] of remoteStrokesRef.current) {
+      commitRemoteStroke(strokeId, entry);
+    }
+  }, [commitRemoteStroke]);
+
   // Apply one remote op onto the shared mural. `draw` ops carry incremental points
   // keyed by strokeId (we connect consecutive points per stroke); `shape` / `text`
-  // / `image` are one-shot.
+  // / `image` are one-shot. Non-eraser draw ops build in a per-stroke buffer and
+  // land on the base layer at their end-op (uniform stroke opacity, #62).
   const applyRemoteOp = useCallback(
     (op) => {
       if (!op) {
@@ -3757,11 +3999,68 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         const settings = op.settings || {};
         const lastMap = remoteStrokeLastRef.current;
         let last = lastMap.get(op.strokeId);
-        for (const point of op.points || []) {
-          drawBrushSegment(ctx, last || point, point, settings);
-          last = point;
+        if (settings.brush === "eraser") {
+          // Erasing must keep cutting the real layer live (a buffered
+          // destination-out can't preview holes through committed art).
+          for (const point of op.points || []) {
+            drawBrushSegment(ctx, last || point, point, settings);
+            last = point;
+          }
+          if (op.end) {
+            lastMap.delete(op.strokeId);
+          } else {
+            lastMap.set(op.strokeId, last);
+          }
+          return;
         }
-        lastMap.set(op.strokeId, last);
+        const strokes = remoteStrokesRef.current;
+        let entry = strokes.get(op.strokeId);
+        if (!entry) {
+          let buffered = 0;
+          for (const open of strokes.values()) {
+            if (open.buf) {
+              buffered += 1;
+            }
+          }
+          const opacity = Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity));
+          // Past the cap, this stroke is flagged (buf: null) onto the legacy
+          // direct per-segment path — its end-op then has nothing to commit.
+          entry = {
+            buf: buffered < REMOTE_BUFFER_CAP ? createStrokeBuffer() : null,
+            settings,
+            drawSettings: { ...settings, opacity: 1 },
+            opacity,
+            pad: (settings.size || 24) * 3 + 40,
+            lastTouch: 0,
+          };
+          strokes.set(op.strokeId, entry);
+          ensureRemoteSweep();
+        }
+        entry.lastTouch = Date.now();
+        const seeded = settings.seed != null; // legacy ops carry no seed
+        if (entry.buf) {
+          for (const point of op.points || []) {
+            if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
+              // Outgrew the 2048² cap: bank the buffer into the layer and
+              // restart it here (rare, visually-minor opacity seam).
+              entry.buf.commit(ctx, entry.opacity);
+              entry.buf.reset();
+              entry.buf.ensure(point.x, point.y, entry.pad);
+            }
+            drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+            last = point;
+          }
+        } else {
+          for (const point of op.points || []) {
+            drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+            last = point;
+          }
+        }
+        if (op.end) {
+          commitRemoteStroke(op.strokeId, entry);
+        } else {
+          lastMap.set(op.strokeId, last);
+        }
       } else if (op.kind === "shape") {
         drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
       } else if (op.kind === "text") {
@@ -3775,7 +4074,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         image.src = op.dataUrl;
       }
     },
-    [getRemoteCtx, renderDisplay],
+    [commitRemoteStroke, ensureRemoteSweep, getRemoteCtx, renderDisplay],
+  );
+
+  // Buffers are transient: drop the idle sweep and every open stroke buffer
+  // (local + remote) when the studio unmounts (room hop / route change).
+  useEffect(
+    () => () => {
+      if (remoteSweepRef.current) {
+        window.clearInterval(remoteSweepRef.current);
+        remoteSweepRef.current = 0;
+      }
+      for (const entry of remoteStrokesRef.current.values()) {
+        entry.buf?.dispose();
+      }
+      remoteStrokesRef.current.clear();
+      localStrokeRef.current?.buf.dispose();
+      localStrokeRef.current = null;
+    },
+    [],
   );
 
   const handleMpMessage = useCallback(
@@ -3844,12 +4161,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           // Rebuild the shared mural from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
+          // Open live buffers are stale — the replay re-delivers their points.
           layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+          dropRemoteStrokes();
           remoteStrokeLastRef.current.clear();
+          // Only a BUFFERED local stroke is skipped below; an in-flight eraser
+          // has no buffer, so the replayed copy is its only restoration.
+          const liveLocalStrokeId = localStrokeRef.current ? strokeNetRef.current?.id : null;
           incomingOps.forEach((op) => {
-            applyRemoteOp(op);
+            // Our OWN in-flight stroke echoes back in the history; skip it —
+            // its single source of truth is the local buffer, which commits at
+            // pen-up (replaying it too would double-composite the overlap).
+            if (!(op?.kind === "draw" && liveLocalStrokeId && op.strokeId === liveLocalStrokeId)) {
+              applyRemoteOp(op);
+            }
             if (typeof op?.opId === "number" && op.opId > lastOpIdRef.current) lastOpIdRef.current = op.opId;
           });
+          // Replayed strokes with no end marker (legacy clients, strokes cut
+          // off by the snapshot) stay open above — commit them all now.
+          commitAllRemoteStrokes();
           offlineDraftRestoredRef.current = false; // server state is now on screen
           nsfwWatcherRef.current?.markDirty();
           renderDisplay();
@@ -3876,6 +4206,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "clear":
           layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+          // In-progress strokes are wiped with the mural (legacy parity: the
+          // direct path's pixels lived on the layers that just got cleared).
+          // A live LOCAL stroke keeps drawing — only its pre-clear part drops.
+          dropRemoteStrokes();
+          localStrokeRef.current?.buf.reset();
           remoteStrokeLastRef.current.clear();
           renderDisplay();
           refreshActiveThumbnail();
@@ -3939,7 +4274,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast],
+    [applyRemoteOp, commitAllRemoteStrokes, dropRemoteStrokes, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
