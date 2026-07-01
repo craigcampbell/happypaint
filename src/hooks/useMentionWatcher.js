@@ -66,7 +66,8 @@ export function useMentionWatcher(rooms, name, onMention) {
       };
       ws.onclose = () => {
         if (pingTimer) window.clearInterval(pingTimer);
-        if (!closed) reconnectTimer = window.setTimeout(connect, 3000);
+        // Jitter so a server restart doesn't make every tab reconnect in lockstep.
+        if (!closed) reconnectTimer = window.setTimeout(connect, 3000 + Math.random() * 3000);
       };
       ws.onerror = () => {
         try {

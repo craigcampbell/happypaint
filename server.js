@@ -483,6 +483,21 @@ function broadcast(roomId, message, exceptId = null) {
 // Fan a chat message out to cross-room "notifier" sockets watching this room
 // whose display name is @mentioned in the message. Lets a painter get pinged
 // about mentions in OTHER rooms they're in without a heavy full connection.
+// Does `message` contain "@name" as a whole token (not a prefix of a longer
+// name, so "@sam" doesn't fire for a watcher named "sa")? Handles multi-word
+// names since the '@name' target includes any spaces.
+function nameMentioned(lower, name) {
+  const target = '@' + name;
+  let from = 0;
+  for (;;) {
+    const idx = lower.indexOf(target, from);
+    if (idx === -1) return false;
+    const after = lower[idx + target.length];
+    if (after === undefined || !/[a-z0-9_]/.test(after)) return true;
+    from = idx + 1;
+  }
+}
+
 function notifyMentions(room, roomId, senderName, message, ts) {
   if (!room.notifiers || room.notifiers.size === 0) return;
   const lower = message.toLowerCase();
@@ -490,7 +505,7 @@ function notifyMentions(room, roomId, senderName, message, ts) {
   for (const ws of room.notifiers) {
     const name = (ws.watchName || '').trim().toLowerCase();
     if (!name || name === sender) continue; // no self-pings
-    if (!lower.includes('@' + name)) continue;
+    if (!nameMentioned(lower, name)) continue;
     if (ws.readyState === 1) {
       ws.send(JSON.stringify({
         type: 'mention',

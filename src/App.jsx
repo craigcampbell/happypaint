@@ -3886,6 +3886,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   });
   const unreadNotifs = notifications.filter((n) => !n.read).length;
 
+  // On mobile the notifications inbox lives in the tools drawer's "You" panel, so
+  // clear the unread badge whenever that drawer opens (desktop clears on menu open).
+  useEffect(() => {
+    if (toolsOpen) {
+      setNotifications((prev) => (prev.some((n) => !n.read) ? markAllRead() : prev));
+    }
+  }, [toolsOpen]);
+
   // Sign out from the profile menu without leaving the studio.
   const handleSignOut = useCallback(async () => {
     await signOut();
@@ -4811,11 +4819,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               className="avatar-btn"
               onClick={() => {
                 setNameDraft(mp.self?.name || "");
-                setShowAvatarMenu((open) => {
-                  const next = !open;
-                  if (next && unreadNotifs > 0) setNotifications(markAllRead());
-                  return next;
-                });
+                const willOpen = !showAvatarMenu;
+                setShowAvatarMenu(willOpen);
+                if (willOpen && unreadNotifs > 0) setNotifications(markAllRead());
               }}
               aria-haspopup="menu"
               aria-expanded={showAvatarMenu}
