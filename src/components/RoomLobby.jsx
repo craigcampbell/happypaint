@@ -5,9 +5,12 @@
 // anyone. Reachable from the studio chat bar.
 
 import { useCallback, useEffect, useState } from "react";
+import { getRecentRooms } from "../utils/recentRooms";
 
-export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onClose, onToast }) {
+export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome, onClose, onToast }) {
   const [rooms, setRooms] = useState(null); // null = loading
+  // Snapshot on open so the list is stable while the modal is up.
+  const [recent] = useState(() => getRecentRooms());
   const [error, setError] = useState(false);
   const [title, setTitle] = useState("");
   const [makePublic, setMakePublic] = useState(Boolean(signedIn));
@@ -86,6 +89,36 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onClos
             Close
           </button>
         </div>
+
+        <button
+          type="button"
+          className="lobby-home"
+          onClick={() => (onHome ? onHome() : onClose())}
+        >
+          🏠 Front page — explore &amp; watch live rooms
+        </button>
+
+        {recent.length ? (
+          <div className="ps-group lobby-section">
+            <h3>Your rooms</h3>
+            <ul className="lobby-room-list">
+              {recent.map((r) => {
+                const here = r.code === currentRoom;
+                return (
+                  <li key={r.code} className="lobby-room">
+                    <span className="lobby-room-main">
+                      <span className="lobby-room-name">{r.title || `Room ${r.code}`}</span>
+                      <span className="lobby-room-meta">{here ? "you're here now" : `Room ${r.code}`}</span>
+                    </span>
+                    <button type="button" disabled={here} onClick={() => onJoin(r.code)}>
+                      {here ? "Here" : "Go →"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="ps-group lobby-section">
           <h3>Public rooms</h3>

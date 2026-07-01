@@ -31,6 +31,7 @@ import {
 import { encodeGif } from "./utils/gif";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange } from "./utils/auth";
+import { recordRecentRoom } from "./utils/recentRooms";
 import { schedulePush, startSync, stopSync } from "./utils/sync";
 import {
   addAsset,
@@ -3727,6 +3728,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
+          // Remember this room (with its friendly title) so it shows up under
+          // "Your rooms" in the switcher for quick hopping back.
+          recordRecentRoom(roomId, data.roomTitle || null, Date.now());
           // Mute is re-applied by the server on (re)connect for signed-in users,
           // so trust the handshake rather than optimistically clearing it.
           setMutedSelf(!!data.muted);
@@ -3859,7 +3863,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, scheduleStrokeFrame, showClearBanner, showToast],
+    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleStrokeFrame, showClearBanner, showToast],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -4645,9 +4649,40 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </div>
 
+        {/* Always visible on mobile (the desktop room bar is hidden there): one
+            tap to leave to the front page or open the room switcher. */}
+        <div className="studio-rooms-fab">
+          <button
+            type="button"
+            onClick={() => { window.location.href = "/"; }}
+            title="Leave this room — back to the front page"
+            aria-label="Home"
+          >
+            🏠
+          </button>
+          <button type="button" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
+            🚪 Rooms
+          </button>
+        </div>
+
         <div className="mp-bar">
+          <button
+            type="button"
+            className="mp-home"
+            onClick={() => { window.location.href = "/"; }}
+            title="Leave this room — back to the front page"
+          >
+            🏠 Home
+          </button>
           <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
-          <strong className="mp-room">Room {roomId}</strong>
+          <button
+            type="button"
+            className="mp-room mp-room-switch"
+            onClick={() => setShowLobby(true)}
+            title="Switch rooms — hop between your rooms, browse, or start a new one"
+          >
+            {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
+          </button>
           <span className="mp-count">{mp.connected ? `${mp.users.length} painting together` : "Connecting…"}</span>
           <div className="mp-avatars">
             {mp.users.slice(0, 8).map((u) => (
@@ -5023,6 +5058,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             onJoin={(code) => {
               window.location.href = `/join/${code}`;
             }}
+            onHome={() => {
+              window.location.href = "/";
+            }}
             onToast={showToast}
             onClose={() => setShowLobby(false)}
           />
@@ -5069,7 +5107,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </div>
             <div className="mp-chat-room">
               <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
-              <strong>Room {roomId}</strong>
+              <button type="button" className="mp-chat-room-switch" onClick={() => setShowLobby(true)} title="Switch rooms">
+                {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
+              </button>
               <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
               <button
                 type="button"
@@ -5188,6 +5228,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         <section className="tool-section mobile-actions">
           <h2>Actions</h2>
           <div className="mobile-actions-grid">
+            <button type="button" onClick={() => { window.location.href = "/"; }}>
+              🏠 Home
+            </button>
+            <button type="button" onClick={() => setShowLobby(true)}>
+              🚪 Rooms
+            </button>
             <button type="button" onClick={undo} disabled={historyCount === 0}>
               ↶ Undo
             </button>

@@ -2944,6 +2944,49 @@ button:disabled {
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+/* Home + room-switcher controls in the room bar so leaving/switching rooms is
+   obvious without touching the URL. */
+.mp-home {
+  padding: 6px 10px;
+  border: 1px solid #cdd7e0;
+  border-radius: 999px;
+  background: #fff;
+  color: #33475b;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mp-home:hover { background: #eef3f9; color: #174c4d; }
+.mp-room-switch {
+  border: 1px solid #cfe0d6;
+  border-radius: 999px;
+  background: #f1faf4;
+  color: #1f7a45;
+  font-weight: 800;
+  padding: 6px 12px;
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-room-switch:hover { background: #e3f5ea; color: #145c33; }
+/* Chat room-name switcher (mobile chat header) */
+.mp-chat-room-switch {
+  border: none;
+  background: none;
+  padding: 0;
+  font-weight: 800;
+  color: #1f7a45;
+  cursor: pointer;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Floating leave/switch control — desktop hides it (the room bar covers it),
+   mobile shows it fixed so there's always an obvious way out of a room. */
+.studio-rooms-fab { display: none; }
 .mp-count {
   color: #4a5b6b;
 }
@@ -3919,6 +3962,25 @@ button:disabled {
   .mobile-profile { display: grid !important; }
   .mp-chat-room { display: flex !important; }
 
+  .studio-rooms-fab {
+    display: flex;
+    gap: 6px;
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 45;
+  }
+  .studio-rooms-fab button {
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid #cdd7e0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #21456f;
+    font-weight: 800;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+  }
+
   .mobile-actions-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -4022,6 +4084,18 @@ button:disabled {
 
 /* ---- Room lobby (browse + create public/private rooms) ------------------ */
 .lobby-modal { width: min(520px, 100%); }
+.lobby-home {
+  width: 100%;
+  margin: 4px 0 4px;
+  padding: 11px 14px;
+  border: 1px solid #cdd7e0;
+  border-radius: 12px;
+  background: #f7faff;
+  color: #21456f;
+  font-weight: 800;
+  cursor: pointer;
+}
+.lobby-home:hover { background: #eaf1fb; }
 .lobby-section { margin-top: 14px; }
 .lobby-room-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
 .lobby-room {
