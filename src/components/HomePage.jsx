@@ -16,7 +16,13 @@ export default function HomePage({ onNavigate }) {
   const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
+  const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
   const liveOpsRef = useRef(0);
+  // Mirrored into refs so timers/callbacks read the latest without being deps.
+  const roomsRef = useRef([]);
+  roomsRef.current = rooms;
+  const showJoinRef = useRef(false);
+  showJoinRef.current = showJoin;
 
   const refresh = useCallback(async () => {
     try {
@@ -25,6 +31,8 @@ export default function HomePage({ onNavigate }) {
       const list = Array.isArray(data?.rooms) ? data.rooms : [];
       setRooms(list);
       setActiveCode((cur) => {
+        // Don't swap the room out from under an open join modal.
+        if (showJoinRef.current && cur) return cur;
         if (cur && list.some((r) => r.code === cur)) return cur;
         // Lead with the liveliest room: most painters, then most art.
         const best = [...list].sort((a, b) => b.users - a.users || b.ops - a.ops)[0];
@@ -40,6 +48,36 @@ export default function HomePage({ onNavigate }) {
     const t = window.setInterval(refresh, 15000); // keep the lobby fresh
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  // Stable so LiveRoomCanvas (which keys its socket effect on onActivity) doesn't
+  // tear down + reopen the spectator WS on every parent re-render.
+  const onLiveActivity = useCallback((n) => {
+    liveOpsRef.current = n;
+  }, []);
+
+  // Auto-tour open rooms: every 30s hop the live viewport to another public room
+  // so the homepage always feels active. Pauses while the join modal or the
+  // browse dropdown is open. Reads rooms via a ref so the 15s refresh() (which
+  // replaces the rooms array every poll) can't restart/starve this 30s timer.
+  useEffect(() => {
+    if (showJoin || browseOpen) return undefined;
+    const t = window.setInterval(() => {
+      const list = roomsRef.current;
+      if (list.length < 2) return;
+      setActiveCode((cur) => {
+        const others = list.filter((r) => r.code !== cur);
+        if (others.length === 0) return cur;
+        // Prefer rooms with painters; fall back to any other room. Pseudo-random
+        // pick so the tour doesn't feel like a fixed loop.
+        const lively = others.filter((r) => r.users > 0);
+        const pool = lively.length ? lively : others;
+        return pool[Math.floor(Math.random() * pool.length)].code;
+      });
+    }, 30000);
+    return () => window.clearInterval(t);
+  }, [showJoin, browseOpen]);
+
+  const touring = rooms.length >= 2 && !showJoin && !browseOpen;
 
   const active = useMemo(() => rooms.find((r) => r.code === activeCode) || null, [rooms, activeCode]);
 
@@ -74,7 +112,8 @@ export default function HomePage({ onNavigate }) {
         <div className="home-stage">
           <div className="home-viewer-head">
             <span className="home-viewing">
-              <span className="live-dot" aria-hidden="true" /> Viewing public room
+              <span className="live-dot" aria-hidden="true" />{" "}
+              {touring ? "Touring open rooms" : "Viewing public room"}
             </span>
             <strong className="home-room-name">
               {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Finding an open room…"}
@@ -88,11 +127,11 @@ export default function HomePage({ onNavigate }) {
           <button
             type="button"
             className="home-viewer"
-            onClick={() => active && setShowJoin(true)}
+            onClick={() => { if (active) { setJoinRoom(active); setShowJoin(true); } }}
             aria-label={active ? `Join ${active.title || active.code}` : "Loading room"}
           >
             {activeCode ? (
-              <LiveRoomCanvas roomCode={activeCode} onActivity={(n) => { liveOpsRef.current = n; }} />
+              <LiveRoomCanvas roomCode={activeCode} onActivity={onLiveActivity} />
             ) : (
               <div className="home-viewer-empty">Loading live artwork…</div>
             )}
@@ -149,7 +188,7 @@ export default function HomePage({ onNavigate }) {
         </div>
       </main>
 
-      {showJoin && active ? (
+      {showJoin && joinRoom ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setShowJoin(false)}>
           <section
             className="studio-modal home-join-modal"
@@ -159,15 +198,15 @@ export default function HomePage({ onNavigate }) {
             onClick={(e) => e.stopPropagation()}
           >
             <button type="button" className="home-join-close" onClick={() => setShowJoin(false)} aria-label="Close">✕</button>
-            <div className="home-join-emoji" aria-hidden="true">{active.emoji || "🎨"}</div>
-            <h2 id="home-join-title">Join “{active.title || active.code}”?</h2>
-            {active.prompt ? <p className="home-join-prompt">Today’s prompt: “{active.prompt}”</p> : null}
+            <div className="home-join-emoji" aria-hidden="true">{joinRoom.emoji || "🎨"}</div>
+            <h2 id="home-join-title">Join “{joinRoom.title || joinRoom.code}”?</h2>
+            {joinRoom.prompt ? <p className="home-join-prompt">Today’s prompt: “{joinRoom.prompt}”</p> : null}
             <p className="home-join-summary">
-              {active.users > 0 ? `${active.users} painting right now` : "Be the first one painting"} ·{" "}
-              {active.ops} brushstrokes so far
+              {joinRoom.users > 0 ? `${joinRoom.users} painting right now` : "Be the first one painting"} ·{" "}
+              {joinRoom.ops} brushstrokes so far
             </p>
             <div className="home-join-actions">
-              <button type="button" className="primary-action" onClick={() => join(active.code)}>
+              <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
                 Continue as guest →
               </button>
               <div className="home-join-auth">

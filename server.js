@@ -506,9 +506,9 @@ wss.on('connection', async (ws, req) => {
       roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
     }));
     ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
-    if (room.history.length > 0) {
-      ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
-    }
+    // Always send history (even empty) so the spectator view resets cleanly when
+    // it hops rooms in the homepage carousel.
+    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
     if (room.sheetId) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
     }
@@ -592,12 +592,11 @@ wss.on('connection', async (ws, req) => {
     audience: room.audience,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
-  // Always sync a history frame for any room that has ever had ops, so a joiner
-  // sees the exact current (post-moderation) mural — even when everything visible
-  // was just hidden. Truly-empty rooms still send nothing.
-  if (room.history.length > 0) {
-    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
-  }
+  // ALWAYS send a history frame on join — even an empty one. The client treats it
+  // as the authoritative shared mural and clears its canvas before applying it, so
+  // joining an empty room reliably shows a blank canvas instead of whatever the
+  // client had locally (a stale per-room draft, or the previous room's art).
+  ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
   }

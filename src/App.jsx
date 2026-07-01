@@ -29,7 +29,7 @@ import {
   createFrame,
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
-import { idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
+import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange } from "./utils/auth";
 import { schedulePush, startSync, stopSync } from "./utils/sync";
 import {
@@ -411,6 +411,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // dedicated offscreen "remote" canvas that is blitted on top of the local
   // layer composite, so remote art never touches the local layer/undo system.
   const roomId = (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
+  // Flips true once the server sends this room's authoritative history (now sent
+  // on every join, even when empty). The mount-time draft auto-restore checks it
+  // so a live room's server state always wins over a stale local per-room draft —
+  // otherwise a draft could linger over a room the server now shows as empty.
+  const roomSyncedRef = useRef(false);
+  const offlineDraftRestoredRef = useRef(false); // true once the offline fallback painted a draft
+  const legacyDraftPurgedRef = useRef(false); // one-shot cleanup of the migrated legacy blob
+  const draftRestoreTimerRef = useRef(null); // grace timer before the offline draft fallback
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
@@ -1310,19 +1318,28 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           });
         }
 
-        await idbSet(DRAFT_IDB_KEY, {
+        await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
           version: 4,
           layers: layerData,
           activeLayerId,
           settings,
           savedAt,
         });
-        // The IndexedDB write is now the source of truth — drop any legacy
-        // localStorage draft so it can't shadow it or hold quota.
+        // The IndexedDB write is now the source of truth. Drop this room's
+        // localStorage fallback (it would only shadow the IDB copy), and for MAIN
+        // also drop the pre-per-room global draft that was migrated forward into
+        // draft:v4:MAIN — so neither the legacy blob nor a stale fallback lingers.
         try {
-          window.localStorage.removeItem(STORAGE_KEYS.draft);
+          window.localStorage.removeItem(`${STORAGE_KEYS.draft}:${roomId}`);
+          if (roomId === "MAIN") {
+            window.localStorage.removeItem(STORAGE_KEYS.draft);
+          }
         } catch {
           // ignore — removing a stale key failing is non-fatal
+        }
+        if (roomId === "MAIN" && !legacyDraftPurgedRef.current) {
+          legacyDraftPurgedRef.current = true;
+          idbDelete(DRAFT_IDB_KEY).catch(() => {}); // drop the migrated legacy blob (once)
         }
       } else {
         // Fallback: localStorage with base64 dataURLs. Throw on quota failure so
@@ -1340,7 +1357,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           });
         }
         window.localStorage.setItem(
-          STORAGE_KEYS.draft,
+          `${STORAGE_KEYS.draft}:${roomId}`,
           JSON.stringify({ layers: layerData, activeLayerId, settings, savedAt }),
         );
       }
@@ -1353,7 +1370,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     } finally {
       saveInFlightRef.current = false;
     }
-  }, []);
+  }, [roomId]);
 
   const applyDraftSettings = useCallback((draftSettings) => {
     if (!draftSettings) {
@@ -1423,18 +1440,31 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // fresh IndexedDB save has actually succeeded.
   const loadDraft = useCallback(async () => {
     if (isIdbAvailable()) {
-      const idbDraft = await idbGet(DRAFT_IDB_KEY).catch(() => null);
+      const idbDraft = await idbGet(`${DRAFT_IDB_KEY}:${roomId}`).catch(() => null);
       if (idbDraft?.layers?.length) {
         return idbDraft;
       }
+      // MAIN (our default room) inherits the pre-per-room global draft once, so
+      // existing users' studio work migrates forward on the next autosave. Other
+      // rooms never read the shared global key — that's what stops one room's
+      // canvas from bleeding into another.
+      if (roomId === "MAIN") {
+        const legacyIdb = await idbGet(DRAFT_IDB_KEY).catch(() => null);
+        if (legacyIdb?.layers?.length) {
+          return { ...legacyIdb, fromLegacy: true };
+        }
+      }
     }
-    // No IndexedDB draft — try the legacy localStorage draft (base64 layers).
-    const legacy = readJson(STORAGE_KEYS.draft, null);
+    // Legacy localStorage draft (base64 layers): the room-scoped key first, then
+    // the old un-suffixed global key for MAIN only (one-time migration).
+    const legacy =
+      readJson(`${STORAGE_KEYS.draft}:${roomId}`, null) ||
+      (roomId === "MAIN" ? readJson(STORAGE_KEYS.draft, null) : null);
     if (legacy?.layers?.length) {
       return { ...legacy, fromLegacy: true };
     }
     return null;
-  }, []);
+  }, [roomId]);
 
   const restoreDraft = useCallback(async () => {
     const draft = await loadDraft();
@@ -3729,15 +3759,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           mpRef.current?.disconnect?.();
           setKicked(true);
           break;
-        case "history":
+        case "history": {
+          // The server's history is the authoritative shared mural — mark the
+          // room synced so the mount-time draft auto-restore stands down.
+          roomSyncedRef.current = true;
+          const incomingOps = data.ops || [];
+          // If we're showing a RESTORED OFFLINE draft and the server has nothing
+          // to add (an empty sync on reconnect), keep the user's on-screen work
+          // instead of wiping it to blank. A non-empty sync is authoritative and
+          // replaces the local draft.
+          if (incomingOps.length === 0 && offlineDraftRestoredRef.current && !data.restored) {
+            break;
+          }
           // Rebuild the shared mural from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
           layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
           remoteStrokeLastRef.current.clear();
-          (data.ops || []).forEach((op) => {
+          incomingOps.forEach((op) => {
             applyRemoteOp(op);
             if (typeof op?.opId === "number" && op.opId > lastOpIdRef.current) lastOpIdRef.current = op.opId;
           });
+          offlineDraftRestoredRef.current = false; // server state is now on screen
           nsfwWatcherRef.current?.markDirty();
           renderDisplay();
           refreshActiveThumbnail();
@@ -3746,6 +3788,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             setStatus("Canvas brought back 🎉");
           }
           break;
+        }
         case "op":
           applyRemoteOp(data.op);
           if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
@@ -4192,25 +4235,42 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setPaintSpaceAssets(assets);
     });
 
-    // Restore a saved draft (IndexedDB first, legacy localStorage second). A
-    // legacy draft is migrated forward to IndexedDB by marking dirty so the
-    // autosave timer rewrites it (W3 back-compat).
-    loadDraft().then((draft) => {
-      if (!draft?.layers?.length) {
-        return;
+    // Restore a saved draft — but only as an OFFLINE fallback. Every live room now
+    // receives an authoritative server 'history' frame on join (even when empty)
+    // that rebuilds the shared mural, so we must NOT paint a stale local per-room
+    // draft over it. Wait a short grace period; if the server hasn't synced this
+    // room by then (offline, or no WS), fall back to the local draft. The manual
+    // "Restore last draft" button is always available regardless.
+    draftRestoreTimerRef.current = window.setTimeout(() => {
+      if (roomSyncedRef.current) {
+        return; // the server already painted the authoritative shared mural
       }
-      restoreLayersFromDraft(draft.layers).then(() => {
-        if (draft.activeLayerId && layersRef.current.some((layer) => layer.id === draft.activeLayerId)) {
-          activeLayerIdRef.current = draft.activeLayerId;
-          syncLayerState();
+      loadDraft().then((draft) => {
+        if (!draft?.layers?.length || roomSyncedRef.current) {
+          return;
         }
-        if (draft.fromLegacy) {
-          dirtyRef.current = true;
-        }
-        setStatus("Draft restored");
+        restoreLayersFromDraft(draft.layers).then(() => {
+          // Mark that on-screen work came from the OFFLINE draft, so a later empty
+          // server sync (reconnect) won't silently wipe it to blank (see the
+          // 'history' handler).
+          offlineDraftRestoredRef.current = true;
+          if (draft.activeLayerId && layersRef.current.some((layer) => layer.id === draft.activeLayerId)) {
+            activeLayerIdRef.current = draft.activeLayerId;
+            syncLayerState();
+          }
+          if (draft.fromLegacy) {
+            dirtyRef.current = true;
+          }
+          setStatus("Draft restored");
+        });
+        applyDraftSettings(draft.settings);
       });
-      applyDraftSettings(draft.settings);
-    });
+    }, 1500);
+    return () => {
+      if (draftRestoreTimerRef.current) {
+        window.clearTimeout(draftRestoreTimerRef.current);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5741,12 +5801,14 @@ export default function App() {
   }, []);
 
   if (path.startsWith("/studio")) {
-    return <StudioApp initialPrompt={readPromptParam()} />;
+    // Key by room so switching rooms always remounts StudioApp with a fresh
+    // canvas/socket instead of reusing the previous room's instance.
+    return <StudioApp key="room-MAIN" initialPrompt={readPromptParam()} />;
   }
 
   if (path.startsWith("/join")) {
-    const code = normalizePathCode(path);
-    return <StudioApp initialJoinCode={code} />;
+    const code = normalizePathCode(path) || "MAIN";
+    return <StudioApp key={`room-${code}`} initialJoinCode={code} />;
   }
 
   if (path.startsWith("/admin")) {

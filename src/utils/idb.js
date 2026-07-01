@@ -133,6 +133,18 @@ export function idbDelete(key) {
   });
 }
 
+// Clear the ENTIRE drafts store. Drafts are now keyed per room (draft:v4:<ROOM>),
+// so account deletion clears the whole store rather than a single key — otherwise
+// per-room autosaves would survive a "delete my data" request.
+export function idbClearDrafts() {
+  return runTransaction("readwrite", (store) => {
+    const request = store.clear();
+    request.onerror = () => {
+      throw request.error || new Error("IndexedDB clear failed");
+    };
+  });
+}
+
 // ---- Generic key/value store (gallery, Paint Space) ----
 // Same honest semantics as the draft helpers: every op rejects on error so the
 // caller can surface a real "couldn't save" status instead of swallowing it.

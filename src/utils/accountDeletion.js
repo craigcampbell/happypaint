@@ -16,7 +16,7 @@
 //
 // Local-only by default (no live backend). Everything here is sync-ready.
 
-import { idbDelete, idbDeleteKV, isIdbAvailable } from "./idb";
+import { idbClearDrafts, idbDeleteKV, isIdbAvailable } from "./idb";
 import { isCloudConfigured, getSession, getPocketBase, signOut } from "./auth";
 
 // Mirror of account_deletion_requests, persisted locally so the UI can show the
@@ -48,8 +48,8 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:welcomed:v1",
 ];
 
-// IndexedDB "drafts" store key (autosaved draft layer Blobs).
-const IDB_DRAFT_KEY = "draft:v4";
+// Drafts are keyed per room (draft:v4:<ROOM>) plus a legacy un-suffixed key, so
+// the wipe clears the ENTIRE "drafts" store rather than one key.
 // IndexedDB "kv" store keys (gallery, paint space, economy, AI consent, replay).
 const IDB_KV_KEYS = [
   "gallery:v2",
@@ -142,10 +142,26 @@ export async function wipeLocalData() {
     }
   }
 
+  // Per-room localStorage draft fallbacks (happypaint:draft:v3:<ROOM>) — sweep by
+  // prefix since the room set is dynamic.
+  try {
+    const draftPrefix = "happypaint:draft:v3";
+    for (let i = window.localStorage.length - 1; i >= 0; i -= 1) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith(draftPrefix)) {
+        window.localStorage.removeItem(key);
+        cleared.push(`localStorage:${key}`);
+      }
+    }
+  } catch {
+    // keep going
+  }
+
   if (isIdbAvailable()) {
     try {
-      await idbDelete(IDB_DRAFT_KEY);
-      cleared.push(`idb:draft:${IDB_DRAFT_KEY}`);
+      // Clears every per-room draft blob (draft:v4:<ROOM>) + any legacy key.
+      await idbClearDrafts();
+      cleared.push("idb:drafts:*");
     } catch {
       // keep going
     }
