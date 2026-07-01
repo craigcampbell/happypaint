@@ -45,7 +45,10 @@ export default function HomePage({ onNavigate }) {
 
   useEffect(() => {
     refresh();
-    const t = window.setInterval(refresh, 15000); // keep the lobby fresh
+    const t = window.setInterval(() => {
+      if (document.hidden) return; // don't poll a backgrounded tab
+      refresh();
+    }, 15000); // keep the lobby fresh
     return () => window.clearInterval(t);
   }, [refresh]);
 
@@ -62,6 +65,7 @@ export default function HomePage({ onNavigate }) {
   useEffect(() => {
     if (showJoin || browseOpen) return undefined;
     const t = window.setInterval(() => {
+      if (document.hidden) return; // no point touring a hidden tab
       const list = roomsRef.current;
       if (list.length < 2) return;
       setActiveCode((cur) => {
@@ -89,6 +93,15 @@ export default function HomePage({ onNavigate }) {
 
   const join = (c) => onNavigate(`/join/${c}`);
 
+  // Fresh 6-char code from an unambiguous alphabet (no I/O/0/1) — joining a
+  // code that doesn't exist yet is how private rooms get created.
+  const startRoom = () => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let c = "";
+    for (let i = 0; i < 6; i += 1) c += alphabet[Math.floor(Math.random() * alphabet.length)];
+    join(c);
+  };
+
   const goByCode = (event) => {
     event.preventDefault();
     const c = normalizeCode(code);
@@ -104,8 +117,8 @@ export default function HomePage({ onNavigate }) {
           <p className="eyebrow">🟢 Live now — no account needed</p>
           <h1>Watch the studio, then jump in.</h1>
           <p className="home-sub">
-            Real kids and friends painting together right now. Tap the canvas to join, search for a room,
-            or punch in a room code.
+            Real people painting together, live. Tap the canvas to jump in — or start a room just for
+            you and your friends.
           </p>
         </div>
 
@@ -139,6 +152,9 @@ export default function HomePage({ onNavigate }) {
           </button>
 
           <div className="home-controls">
+            <button type="button" className="primary-action home-start-room" onClick={startRoom}>
+              🎪 Start a room with friends
+            </button>
             <div className="home-browse">
               <button type="button" className="home-browse-btn" onClick={() => setBrowseOpen((o) => !o)} aria-expanded={browseOpen}>
                 🔍 Browse rooms ({rooms.length})
@@ -210,7 +226,7 @@ export default function HomePage({ onNavigate }) {
                 Continue as guest →
               </button>
               <div className="home-join-auth">
-                <button type="button" onClick={() => onNavigate("/signup")}>Log in</button>
+                <button type="button" onClick={() => onNavigate("/signup?mode=login")}>Log in</button>
                 <button type="button" onClick={() => onNavigate("/signup")}>Sign up free</button>
               </div>
             </div>

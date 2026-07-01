@@ -20,7 +20,9 @@ export default function SignupPage({ onNavigate }) {
   const [session, setSession] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(isCloudConfigured ? "" : LOCAL_ONLY_MESSAGE);
-  const [mode, setMode] = useState("signup"); // "signup" | "login"
+  const [mode, setMode] = useState(() =>
+    new URLSearchParams(window.location.search).get("mode") === "login" ? "login" : "signup",
+  ); // "signup" | "login"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
@@ -55,7 +57,7 @@ export default function SignupPage({ onNavigate }) {
     if (result.ok) onNavigate("/studio");
   };
 
-  const googleProviders = OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id));
+  const oauthProviders = OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id));
 
   return (
     <div className="site-page">
@@ -116,10 +118,10 @@ export default function SignupPage({ onNavigate }) {
                 {mode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
               </button>
 
-              {googleProviders.length ? (
+              {oauthProviders.length ? (
                 <>
                   <div className="signup-or"><span>or</span></div>
-                  {googleProviders.map((p) => (
+                  {oauthProviders.map((p) => (
                     <button
                       key={p.id}
                       type="button"

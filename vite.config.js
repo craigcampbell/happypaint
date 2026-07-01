@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // ES-format workers so the nsfwWatcher worker can code-split its dynamic
+  // imports (tfjs + model) instead of inlining them into one 5.5MB IIFE.
+  worker: {
+    format: 'es',
+  },
   // @supabase/supabase-js (via @supabase/functions-js) imports `tslib`. It is
   // installed as a direct dependency so Rolldown can resolve it; deduping keeps
   // a single copy and guards against hoisting quirks that previously left the

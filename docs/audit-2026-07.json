@@ -1,0 +1,543 @@
+{
+  "summary": "Full performance + teen-usability + brush-engine + integration audit of the Drawesome codebase",
+  "agentCount": 5,
+  "logs": [],
+  "result": [
+    {
+      "lens": "DRAWING/CANVAS RUNTIME PERFORMANCE",
+      "summary": "The stroke pipeline is well-architected at the algorithm level (below/above composite caches, rAF coalescing, coalesced pointer events, no setState in pointermove), but it operates on a 4000x2500 world (10Mpx = 40MB RGBA per canvas), and nearly every hot operation is full-canvas: each stroke rAF recomposites ~40Mpx regardless of viewport or dirty rect, every pen-down synchronously clones a 40MB canvas for undo, and the 2.4s autosave PNG-encodes every full-size layer even mid-stroke. Memory worst case on an iPad (6 layers + 8 frames + 8 undo + 8 redo + doc + overlay + 2 stroke caches) can exceed 1GB of canvas backing stores against iOS's known sensitivity. Two unthrottled re-render sources (a 120ms cursor pump that setStates a fresh array forever, and per-pointermove gesture blits) burn frames continuously. The highest-value fixes are: gate autosave on active stroke, viewport/dirty-rect compositing, dirty-rect undo, and rAF-coalescing the remaining unthrottled paths.",
+      "findings": [
+        {
+          "title": "Autosave PNG-encodes every full-size layer mid-stroke every 2.4s",
+          "impact": "critical",
+          "effort": "quick",
+          "detail": "App.jsx:2169 startStroke calls markChanged(\"Drawing\") which sets dirtyRef=true (App.jsx:692) at pen-DOWN. The autosave interval (App.jsx:4447-4451) fires every 2400ms whenever dirtyRef is true and calls saveDraft (App.jsx:1302-1380), which loops all layers calling canvasToBlob (App.jsx:235-239) — canvas.toBlob on a 4000x2500 canvas (layers.js:10-11) forces a ~40MB GPU->CPU readback plus a 10-megapixel PNG encode PER LAYER, on the very canvas being painted. Any stroke longer than 2.4s (kids coloring do this constantly) is guaranteed a multi-frame stall; on iPad Safari the readback+encode of one layer is easily 100-400ms. setStatus(\"Autosaved\") at App.jsx:1373 then re-renders the 6016-line component mid-stroke too.",
+          "fix": "In the interval callback (App.jsx:4448), skip saveDraft while activePointerRef.current != null (and optionally while gestureRef.current is set); mark a pending flag and save on the next tick after pen-up. Optionally also debounce dirtyRef to stroke END (markChanged in finishStroke already runs) instead of stroke start."
+        },
+        {
+          "title": "Every stroke frame recomposites the full 10Mpx document regardless of viewport/dirty rect",
+          "impact": "critical",
+          "effort": "medium",
+          "detail": "renderStrokeFrame (App.jsx:999-1029) runs per rAF during a stroke: clearRect of 4000x2500 + drawImage of belowCache + active layer + aboveCache (each 10Mpx, layers.js:10-11) + optional sheet, then blitToDisplay (App.jsx:807-848, ~4-8Mpx more on a 2x iPad). That is ~40-45Mpx of raster work per frame -> 2.6Gpx/s at 60fps, 5.3Gpx/s at 120Hz — beyond iPad canvas-2D fill rate, so 120Hz Apple Pencil strokes will drop to ~30-50fps even though input is coalesced. The view transform (viewRef) is known, so typically only ~2-4Mpx of world is visible (startView is 1.9x fit, App.jsx:792-799), yet 100% of the canvas is redrawn.",
+          "fix": "Composite only the visible world rect: compute the view's world-space bbox (screenToWorld of the 4 viewport corners) and use the 9-arg drawImage(src, sx, sy, sw, sh, dx, dy, sw, sh) form for below/active/above + clearRect of that rect only. Alternatively (or additionally) track the stroke segment's dirty rect per frame and recomposite just that union. Replay determinism is unaffected — this only changes display compositing, not layer pixels."
+        },
+        {
+          "title": "Cursor pump setStates a fresh array every 120ms forever — ~8 full re-renders/sec of the 6016-line component",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "App.jsx:4106-4132: a setInterval(…, 120) builds a new `live` array and calls setRemoteCursors(live) unconditionally. Because the array identity always changes (even [] !== []), React re-renders StudioApp ~8.3x/sec permanently — including while a 120Hz Pencil stroke is in flight and even when the room is empty. Each render re-evaluates the entire ~1100-line JSX tree (App.jsx:4900+), competing with stroke rAFs for main-thread time and generating steady GC churn.",
+          "fix": "Bail out when nothing changed: if live.length === 0 && previous.length === 0, skip setState; otherwise compare cheaply (ts/coords) before setting. Better: move the cursor overlay into a small memoized child component that owns this interval and state, so its re-render cost is a handful of divs instead of the whole studio."
+        },
+        {
+          "title": "Pinch/pan/rotate gestures blit the full display per pointermove event, not per frame",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "handleCanvasPointerMove's gesture branch (App.jsx:2434-2472) and panBy (App.jsx:894-899) call applyView() -> blitToDisplay() synchronously per event. With two fingers, EACH finger fires moves (~60Hz each on iOS -> up to 120 events/sec; more on ProMotion), so the full display repaint (clear + fill + 10Mpx-source drawImage + border, App.jsx:820-847) runs up to 2x per frame and is not coalesced like strokes are (scheduleStrokeFrame, App.jsx:1033-1041). This is why pinch-zoom feels heavier than drawing.",
+          "fix": "Mutate viewRef in the event handler but schedule the clamp+blit through a rAF-coalesced scheduleViewFrame() (same pattern as scheduleStrokeFrame), flushing at most one blitToDisplay per painted frame."
+        },
+        {
+          "title": "Undo history is full 40MB canvas clones — up to 320MB history + 320MB redo on iPad, plus a synchronous 40MB clone on every pen-down",
+          "impact": "critical",
+          "effort": "large",
+          "detail": "pushHistory (App.jsx:1088-1104) runs at every stroke start (App.jsx:2153) and calls snapshotActiveLayer (layers.js:118-133) which cloneLayerCanvas()es the active 4000x2500 layer — a 40MB canvas allocation + 10Mpx copy per stroke, INCLUDING single-tap dots. MAX_HISTORY = 8 on touch / 18 on desktop (App.jsx:104) -> up to 320MB (touch) / 720MB (desktop) of history canvases; undo/redo adds captureInverse clones to the other stack (App.jsx:1145-1163), doubling the ceiling. Combined with 6 layers max (App.jsx:108) x 8 frames (frames.js:20) each owning full stacks, doc (40MB), overlay (40MB, App.jsx:4241), below+above caches (80MB, App.jsx:975-980), iOS Safari's canvas-memory limit is realistically breachable — tab reload = lost art for a kid. The pen-down clone is also the main source of first-segment latency.",
+          "fix": "Switch brush/fill/shape undo to dirty-rect snapshots: track the stroke's bounding box (already computable from points), snapshot only that region via a small canvas (or getImageData of the rect) before commit. Falls back to full snapshot for structural ops. This drops per-stroke undo cost from 40MB to typically <2MB and removes the pen-down 10Mpx copy."
+        },
+        {
+          "title": "Pen-down does ~60-100MB of synchronous canvas work plus a full component re-render before the first segment appears",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "startStroke (App.jsx:2150-2169) synchronously runs: pushHistory (40MB clone, see above), buildCompositeCache (App.jsx:966-994 — first stroke allocates two 40MB canvases, then 2x full-canvas clearRect + composites ~20-40Mpx), and markChanged(\"Drawing\") (App.jsx:2169) whose setStatus (App.jsx:696) re-renders the entire 6016-line component during the pointerdown. On iPad this stacks into a visible latency hitch on stroke start, most noticeable in fast scribbles (every pen-down repeats it — the caches are invalidated on every pen-up at App.jsx:2275).",
+          "fix": "Quick wins: drop the setStatus(\"Drawing\") render from the hot path (status text can update from finishStroke only, or via a ref-driven DOM node like the brush cursor). Then: build the composite cache only for the visible viewport rect, and move the undo snapshot to the dirty-rect scheme so pen-down does no 10Mpx copies."
+        },
+        {
+          "title": "Each remote op message triggers a full 10Mpx recomposite when not locally stroking",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "handleMpMessage 'op' (App.jsx:3802-3814): when activePointerRef is null, every WS op calls renderDisplay() (App.jsx:939-955 — full clearRect + compositeLayers over 4000x2500 + blit) synchronously per message. Senders flush every ~40ms (App.jsx:1925), so ONE friend drawing = ~25 full recomposites/sec on your device; three friends = ~75/sec — janking the spectating iPad and any concurrent UI. (The mid-local-stroke path already coalesces via scheduleStrokeFrame.)",
+          "fix": "Always coalesce: replace the direct renderDisplay() with a rAF-scheduled render (reuse scheduleStrokeFrame's pattern with a needsFullRender flag), so N ops per frame cost one recomposite. Combine with the viewport-rect composite fix for another multiplier."
+        },
+        {
+          "title": "Overlay canvas is a permanently-allocated full-size 40MB DOM canvas used only for shape previews",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "App.jsx:4240-4243 sizes the overlay canvas to CANVAS_WIDTH x CANVAS_HEIGHT (4000x2500 = 40MB) at mount, and it lives in the DOM (App.jsx:4921) for the app's lifetime. Its only raster use is rect/ellipse/line previews (App.jsx:2190-2211) — brush strokes never touch it. On iOS this is a standing 40MB against the canvas-memory budget noted in project memory, plus the compositor must scale a 10Mpx texture every frame it's visible.",
+          "fix": "Either size the overlay to the display's backing store (CSS x DPR) and draw previews through the view transform, or keep world-space semantics but allocate it lazily when a shape tool is first selected and free it (width=0) when leaving shape tools."
+        },
+        {
+          "title": "Join/restore replays the room's entire op history synchronously on the main thread",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "handleMpMessage 'history' (App.jsx:3772-3800) clears all layers then incomingOps.forEach(applyRemoteOp) synchronously. applyRemoteOp (App.jsx:3688-3720) draws every point of every stroke; a long-lived public room's history (thousands of ops x dozens of points, each spray point up to 840 arcs via brushes.js:140-160,196-211) can freeze the UI for seconds on an iPad right at join — the first impression of a room. The same path runs on mural restore.",
+          "fix": "Chunk the replay: apply ops in slices (e.g. 200 ops or a 8ms time budget) per rAF/microtask with one renderDisplay at the end (or per chunk for a fun 'fast-forward' effect). Determinism is preserved since op order is unchanged."
+        },
+        {
+          "title": "Flood fill reads back the entire 40MB canvas per tap",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "fill.js:43 does context.getImageData(0, 0, width, height) on the full 4000x2500 layer for every fill tap — a 40MB synchronous GPU readback plus a 10M-pixel scan, even when filling a thumb-sized region at high zoom. It already computes a dirty rect for putImageData (fill.js:135-139) but pays the full-canvas read cost up front. Expect a 100-400ms hitch per tap on iPad; fill-happy kids tap repeatedly. It also follows a pushHistory() 40MB clone (App.jsx:2084).",
+          "fix": "Fill in expanding tiles: start with a getImageData of a modest window around the seed (e.g. 512x512), grow/re-read only when the fill frontier hits the window edge. Same output pixels, so replay/broadcast semantics are unchanged."
+        },
+        {
+          "title": "Onion-skin paint allocates fresh full-size canvases on every recomposite",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "paintOnionSkin (App.jsx:904-920) calls compositeFrameToCanvas(previous/next) which document.createElement's a NEW 4000x2500 canvas per call (frames.js:60-66). With onion skin on, every renderDisplay (each stroke end, each remote op while idle, every buildCompositeCache at pen-down via App.jsx:984) allocates 40-80MB of throwaway canvas — severe allocation/GC churn against the iOS canvas budget while animating.",
+          "fix": "Cache the composited neighbour canvases keyed by frame id + a dirty flag (invalidate in syncFrameState/refreshActiveThumbnail paths), or keep two reusable scratch canvases and composite into them."
+        },
+        {
+          "title": "Brush cursor ring calls getBoundingClientRect on every pointermove at up to 120Hz",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "updateBrushCursor (App.jsx:2321-2347, gBCR at 2331) runs from handleCanvasPointerMove (App.jsx:2481) and pointerdown (App.jsx:2425) on every event, including during strokes. The rect is re-read per move even though the interaction already caches rects (activeCanvasRectRef App.jsx:2029, viewRectRef App.jsx:2400). gBCR forces a style/layout flush whenever layout is dirty — which it periodically is, thanks to the 8/sec cursor-pump renders — turning some 120Hz moves into forced synchronous layouts.",
+          "fix": "Reuse the cached interaction rect (refresh it on resize/scroll and at pointerdown only), and skip updateBrushCursor entirely while activePointerRef is a pen mid-stroke if the ring is hidden under the tip anyway."
+        }
+      ]
+    },
+    {
+      "lens": "Startup + network performance (time-to-first-stroke)",
+      "summary": "Static startup is healthy: no fonts, no eager 5.5MB worker (it is election-gated and desktop-only), and pocketbase is already code-split (10.5KB gz, lazy). The dominant time-to-first-stroke cost is the WS join 'history' frame: the live MAIN room file is 16.5MB of JSON (14,670 draw ops / 278,778 points, ~1129 B/op) sent uncompressed because ws perMessageDeflate is off, then JSON.parsed and replayed synchronously on the main thread — this same payload is re-sent to every homepage spectator and on every 30s carousel hop, all squeezed through a residential Cloudflare tunnel. Secondary costs: express.static serves hashed assets with max-age 0 so Cloudflare cannot edge-cache them (every visitor pulls 363KB JS from the home origin), the service worker's runtime cache grows without bound across deploys, and op JSON wastes ~50% of its bytes on 17-digit pressure floats and duplicate points. The top three fixes (perMessageDeflate, cache headers, point quantization) are each under an hour and compound to roughly a 10-15x cut in join bytes before any snapshotting work.",
+      "findings": [
+        {
+          "title": "WS join history is up to ~16.5MB uncompressed — enable perMessageDeflate",
+          "impact": "critical",
+          "effort": "quick",
+          "detail": "server.js:75 `new WebSocketServer({ server, path: '/ws' })` — ws disables perMessageDeflate by default, so the join frame at server.js:683 (`ws.send(JSON.stringify({type:'history', ops: visibleHistory(room)}))`) ships raw JSON. Measured live data: app_data/.rooms/MAIN.json history = 16,561,035 bytes (14,670 ops), which gzips to 2,049,816 bytes (8x). MAX_HISTORY=20000 (server.js:49) puts the worst case near 22MB. Over the residential-upload Cloudflare tunnel this is easily 5-15s before a joiner can see (or safely make) a stroke — the history handler at src/App.jsx:3786 clears all layers when it lands, so strokes drawn before it arrives are wiped.",
+          "fix": "Pass perMessageDeflate options to the WebSocketServer (e.g. { perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true } }). Browsers negotiate it natively; zero client changes. 16.5MB → ~2MB on the wire immediately."
+        },
+        {
+          "title": "Hashed /assets/* served with max-age 0 — Cloudflare can't edge-cache the app off the home origin",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "server.js:1630 `app.use(express.static(distPath))` uses default maxAge 0, so index-CIpOo3jW.js (363KB raw / 107KB gz), index-DYTz71O6.css and the 5.5MB worker carry no Cache-Control. Cloudflare respects origin cache headers, so every first-time visitor's JS/CSS is fetched from the residential origin through the tunnel instead of an edge PoP, and browsers revalidate per load until the SW takes over. Coloring sheets already do this right (server.js:1536-1537 use maxAge '7d', immutable).",
+          "fix": "Serve dist with immutable caching for hashed files: `express.static(distPath, { maxAge: '1y', immutable: true, index: false, setHeaders: (res, p) => { if (p.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache'); } })` and keep the SPA fallback sending no-cache for index.html. File names are content-hashed so this is safe, and Cloudflare will then edge-cache all static weight."
+        },
+        {
+          "title": "Op JSON wastes ~50%+ of bytes on 17-digit pressure floats and duplicate points",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "src/App.jsx:1909-1913 (getPoint) emits pressure at full double precision — the live MAIN history shows points like {\"x\":2172,\"y\":1022,\"pressure\":0.2962803542613983} (~58 bytes/point) and runs of 3+ consecutive points with identical x,y differing only in the 4th pressure decimal. 278,778 points make up almost all of the 16.5MB. This inflates BOTH the join payload and every live 40ms stroke flush (src/App.jsx:1918-1932), i.e. draw latency on cellular.",
+          "fix": "In getPoint, quantize pressure (Math.round(p*100)/100) and in the stroke point buffer skip a point when x,y match the previous and |Δpressure| < 0.01. Because local rendering and the op stream share the same point objects, replay stays deterministic. Expected ~2x cut in history size and live stroke bandwidth, compounding with deflate (~16.5MB → ~1MB wire)."
+        },
+        {
+          "title": "Homepage spectator gets the full 16.5MB history — and again on every 30s carousel hop",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "server.js:595 sends the complete visibleHistory to every spectate=1 socket, plus chat_history the spectator never uses (server.js:599-601, LiveRoomCanvas ignores it). src/components/HomePage.jsx:62-78 hops rooms every 30s, and src/components/LiveRoomCanvas.jsx:85-249 tears down and reconnects per hop, re-pulling each room's full history; the reconnect loop at LiveRoomCanvas.jsx:225-228 re-pulls it again every 2.5s if the tunnel blips. A phone idling on the homepage can pull hundreds of MB from the home origin. The hero canvas is ~800 CSS px — replaying 14,670 ops (LiveRoomCanvas.jsx:208, synchronous for-loop) into it is wasted work that janks first interaction.",
+          "fix": "For spectator sockets, send a capped tail (e.g. last 1,500-2,000 visible ops) and skip chat_history; when server-side snapshotting lands (see snapshot finding), send snapshot + tail instead. Optionally have LiveRoomCanvas replay in requestAnimationFrame slices."
+        },
+        {
+          "title": "History replay is fully synchronous on the main thread — seconds of jank on iPad joins",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "src/App.jsx:3788 `incomingOps.forEach((op) => applyRemoteOp(op))` replays all 14,670 ops / 278k drawBrushSegment calls in one task right after JSON.parse of a single ~16MB WS frame (the parse alone is 200-500ms on mobile). Same pattern in LiveRoomCanvas.jsx:208. During this block the page is frozen — taps dead, no first stroke possible — precisely at the join moment. Broadcast history rebuilds after moderation hide/restore (server.js:881,890,954) re-trigger the same full-block replay for everyone in the room.",
+          "fix": "Chunk the replay: slice incomingOps into batches (~500 ops) applied across requestAnimationFrame/idle callbacks with a single renderDisplay at the end (op order preserved, so output stays deterministic). Optionally also send history as multiple WS frames (history_start/chunk/end) so the 16MB JSON.parse isn't one task either."
+        },
+        {
+          "title": "No server-side history compaction — join cost grows without bound until the 20k-op cap",
+          "impact": "critical",
+          "effort": "large",
+          "detail": "server.js:49 MAX_HISTORY=20000 with splice-based trimming (server.js:722-724) is the only bound; every joiner replays the room's life story (app_data/.rooms/MAIN.json already at 16.5MB after days of use). All other fixes shrink constants; this is the structural fix. Server has no rasterizer, but the client already has the machinery: watcher election infrastructure (server.js watcher_role, App.jsx:3746) and a keyframe recorder concept in src/utils/replay.js.",
+          "fix": "Snapshot + tail: periodically have one elected client (or the room host) upload a flattened PNG keyframe tagged with lastOpId; server stores it and serves joiners {type:'history', snapshot, sinceOpId, ops: tailAfterSnapshot}. Client paints the PNG then replays only the tail. Constraints: rebuild the snapshot (or fall back to full ops) when moderation hides an op at or before sinceOpId (server.js:873-901), and keep full ops on disk for undo_clear/moderation. Join payload becomes ~200-500KB PNG + a few hundred ops regardless of room age."
+        },
+        {
+          "title": "Service-worker runtime cache grows without bound and strands every old deploy's bundles",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "public/sw.js:45-57 caches every same-origin GET cache-first into a single cache whose name (sw.js:1, 'happypaint-static-v5') only changes on manual bump. Each deploy adds new hashed index-*.js/CSS while the old ones are never evicted; if a desktop watcher ever fetched it, each deploy also strands another 5.5MB nsfwWatcher.worker-*.js copy. Full coloring pages (up to ~700KB each, 6,294 files under /coloring-sheets/full) also accumulate. On iOS, origin storage pressure triggers wholesale eviction — which would also nuke localStorage drafts and offline support.",
+          "fix": "On activate, prune cached /assets/* entries that aren't referenced by the current build (fetch index.html or embed the manifest at build time), or at minimum: separate caches for app-shell vs runtime, an LRU cap (~50 entries) on the runtime cache, and exclude /assets/nsfwWatcher.worker* and /coloring-sheets/full/* from SW caching (they already have 7d immutable HTTP caching)."
+        },
+        {
+          "title": "NSFW worker builds as a single 5.5MB file — Vite's default iife worker format defeats the intended lazy split",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "dist/assets/nsfwWatcher.worker-D8wnRdIe.js = 5,570,015 bytes (2.86MB gz). The worker comment (src/workers/nsfwWatcher.worker.js:34-41) claims the dynamic imports of nsfwjs/tfjs code-split so they 'only download the first time it scans', but vite.config.js has no `worker` config, and Vite's default iife worker format inlines all dynamic imports — so the entire TF.js + base64 model downloads the moment new Worker() runs (src/utils/nsfwWatcher.js:153), before any scan, even if the detector then falls back to heuristicDetect. Mobile is confirmed safe (isWatcherCapable at nsfwWatcher.js:44-71 rejects coarse-pointer/iPad devices, and the worker is only constructed after server election in kid_safe rooms, App.jsx:3746/3846) — this costs elected desktop watchers only, but 5.5MB per deploy also lands in the SW cache.",
+          "fix": "Add `worker: { format: 'es' }` to vite.config.js so the worker entry stays tiny and tfjs/nsfwjs/model split into chunks fetched on first scan as designed. Verify dist afterwards shows a small worker file plus separate tfjs chunks."
+        },
+        {
+          "title": "persistRoom writeFileSync blocks the event loop ~16.5MB at a time during active drawing",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "server.js:201 writes the full room JSON synchronously on a 2.5s debounce (server.js:188-219) while people draw. Serializing + writing 16.5MB blocks Node's single thread long enough (est. 50-200ms on this box) to visibly delay op relay and cursor broadcasts for every room simultaneously — a recurring network-latency spike baked into the hot path. JSON.stringify of the same history also runs per join (server.js:683) and per moderation broadcast.",
+          "fix": "Switch to fs.promises.writeFile with a dirty-flag requeue (write-behind), or write to a temp file + rename. Longer term the snapshot+tail format shrinks the write itself. Cheap insurance until snapshotting lands."
+        },
+        {
+          "title": "Single 363KB index chunk bundles studio + homepage + admin + all marketing pages",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "src/App.jsx:5950-6001 routes between HomePage, StudioApp (~5,900-line file), LiveAdmin, Safety/About/Privacy/Signup/RoomFinder — all statically imported into one chunk: dist/assets/index-CIpOo3jW.js = 363,106 bytes (107KB gz) + 75,900 bytes CSS. A homepage visitor parses the entire studio (brush engine, gif tooling, admin) before the live hero canvas appears; on a mid-range phone that's ~300-600ms of extra parse/execute ahead of first paint.",
+          "fix": "React.lazy + Suspense at the router seams (at minimum LiveAdmin and the static pages; ideally StudioApp vs HomePage). Keep shared utils (brushes/shapes, used by both LiveRoomCanvas and the studio) in a shared chunk. Not the top lever — the WS history dwarfs it — but it compounds with edge caching."
+        },
+        {
+          "title": "Homepage hero traffic multiplies: 15s lobby poll + 30s full-history hop + 2.5s reconnect loop",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "HomePage.jsx:48 polls /api/rooms/public every 15s (cheap — server.js:1386 sends counts only, confirmed no raw ops) and the carousel (HomePage.jsx:62-78) is fine by itself, but combined with full spectator history per hop and the LiveRoomCanvas.jsx:225-228 2.5s reconnect retry, a backgrounded homepage tab keeps hammering the tunnel. There is no document.visibilityState gate anywhere in HomePage/LiveRoomCanvas.",
+          "fix": "Pause the poll, carousel timer, and spectator socket when document.hidden (visibilitychange listener), and back off the reconnect (2.5s → exponential to ~30s). One small effect in each file."
+        },
+        {
+          "title": "Coloring-sheet picker index is 791KB (156KB gz) with only 5-minute caching",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "server.js:1554-1557 serves the full 6,294-sheet search index with Cache-Control max-age=300, and src/components/ColoringSheetModal.jsx:49 fetches it on first modal open (module-level cachedSheets avoids refetch within a session). The library changes rarely (files dated Jun 21), yet every session past 5 minutes re-downloads 156KB through the tunnel. Thumbs themselves are fine (lazy-loaded webp, 240-item render cap at ColoringSheetModal.jsx:84, 7d immutable at server.js:1537).",
+          "fix": "Bump to max-age=86400 with an ETag (Express sets one automatically for send()) so revalidation is a 304, or version the URL (/api/coloring-sheets?v=<index mtime>) with long-lived caching. Purely a picker-open win, not first-stroke — hence low."
+        }
+      ]
+    },
+    {
+      "lens": "Usability + fun for teenagers (and kids): join funnel, social flows, copy tone, mobile ergonomics",
+      "summary": "The core funnel is strong: the homepage is a live spectator canvas (HomePage.jsx) and a returning visitor is 1-2 taps from drawing; a first-timer from home is 3 taps (canvas tap, \"Continue as guest\", welcome-modal dismiss) — one over the 2-tap target, with the blocking welcome modal (App.jsx:5134) as the extra tap. The biggest structural gap is social: there is no \"start a room with friends\" anywhere on the home page — room creation is buried 4+ taps deep inside a studio modal (RoomLobby.jsx:157), invite is clipboard-copy only (App.jsx:4798), and every shared/exported file is branded \"happy-paint.png\" instead of Drawesome (App.jsx:1814). There is one hard dead end: a full room sends `room_full` which the client never handles, leaving kids on an infinite silent \"Connecting…\" loop (server.js:609, useMultiplayer.js:102-108). Tone-wise the product is kid-coded end to end — \"Real kids and friends painting\" hero copy, all 8 featured rooms are Dinos/Pets/Rainbow themes (server.js:232-241), and guest names are bare animals from a 16-word list — a picky 15-year-old would bounce even though the drawing engine (pinch/rotate, layers, timelapse GIFs) is genuinely teen-worthy. The social-juice features that would make teens share (replay timelapse, PNG share) already exist but are buried at the bottom of the tools drawer and download-only.",
+      "findings": [
+        {
+          "title": "Dead end: joining a full room = infinite silent \"Connecting…\" loop",
+          "impact": "critical",
+          "effort": "quick",
+          "detail": "server.js:609-613 sends {type:'room_full'} and closes the socket with 1008, but the client's message switch (App.jsx:3726-3870) has NO case for room_full — grep confirms zero handlers. useMultiplayer.js:102-108 then auto-reconnects with exponential backoff forever, so a kid whose friend's room hit MAX_ROOM_USERS stares at \"Connecting…\" (App.jsx:4781) with no explanation and no way out. Same pattern for room_blocked (App.jsx:3856-3858 only sets a status string that on mobile is hidden inside the closed tools drawer, and never calls disconnect, so it also reconnect-loops).",
+          "fix": "Add case 'room_full' (and harden 'room_blocked') in handleMpMessage: call mpRef.current.disconnect(), then show a friendly full-screen card like the existing kicked modal (App.jsx:575, ~5855): \"This room is packed! 🎨\" with two buttons — \"Find another room\" (open RoomLobby) and \"Start your own\" (createPrivateRoom, App.jsx:4625)."
+        },
+        {
+          "title": "Every shared/exported file says \"Happy Paint\", not Drawesome",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "The #1 organic-growth artifact for teens is the image they AirDrop/post, and it carries the wrong brand: sharePng shares title \"Happy Paint\" with file happy-paint.png (App.jsx:1814-1819), exports are happy-paint-*.png (App.jsx:1581, 1591), GIF loop is happy-paint-loop-*.gif (App.jsx:3108) and timelapse is happy-paint-timelapse-*.gif (App.jsx:3218). Nobody who receives the file can find the site (drawesome.art).",
+          "fix": "Rename all download/share filenames to drawesome-*.png/gif and the share title to \"Made on Drawesome\" — ideally add url: 'https://drawesome.art' plus text with the room code to the navigator.share payload so a received image doubles as an invite."
+        },
+        {
+          "title": "Invite is clipboard-only; no share sheet on the devices teens actually use",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "Both invite buttons (desktop mp-bar App.jsx:4794-4806, mobile chat header App.jsx:5224-5236) only do navigator.clipboard.writeText of the /join link. On iPad/iPhone the natural flow is the OS share sheet → iMessage/WhatsApp/Snap; copy-then-switch-apps-then-paste is 3 extra steps and kids often lose the clipboard. The codebase already uses navigator.share for PNGs (App.jsx:1816-1821) so the pattern exists. Desktop feedback also goes to setStatus (App.jsx:4800), a small status line buried in the right rail rather than the toast used on mobile.",
+          "fix": "In both handlers: if (navigator.share) navigator.share({ title: roomTitle, text: `Come draw with me in ${roomTitle || roomId}!`, url: link }) else clipboard fallback; use showToast for feedback in both places. Rename button to \"Invite friends\"."
+        },
+        {
+          "title": "No \"Start a room with friends\" on the home page; creation is 4+ taps deep in a studio modal",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "The teen killer use-case — \"me and 3 friends, our own canvas\" — has no entry point on HomePage.jsx (controls are only Browse rooms + room-code input, lines 141-187) or RoomFinderPage.jsx. The only paths: (a) enter studio → Rooms FAB → RoomLobby modal → scroll past Recent + Public lists to \"Start a new room\" at the very bottom (RoomLobby.jsx:157-196) → pick Private → Create → then find the separate Invite button; or (b) a completely unlabeled 🔒 icon in the chat header (App.jsx:5240-5242, createPrivateRoom at 4625) that is hidden on desktop (App.css:3983 .mp-chat-room{display:none}). That's ~6 steps for the highest-value flow.",
+          "fix": "Add a second primary CTA on the home hero next to the live viewer: \"🎪 Start a room with friends\" → navigate to /join/<random 6-char code> (exactly what createPrivateRoom does — zero backend work) and auto-open the share-sheet invite on arrival. Also move \"Start a new room\" to the TOP of RoomLobby and add the same card to RoomFinderPage."
+        },
+        {
+          "title": "Welcome modal is a 3rd blocking tap before first stroke, and its copy is kid-toned",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "First-time home funnel: tap live canvas (1) → \"Continue as guest\" (2) → StudioApp mounts and a full-screen modal (App.jsx:5134-5161) blocks the canvas → \"Let's draw!\" (3). Target is ≤2 taps; the user just watched live painting and tapped JOIN twice — they don't need \"1 Pick a fun color / 2 Draw right on the page\". The steps copy (\"Pick a fun color\", crayon emojis) also reads ~7-year-old to a teen.",
+          "fix": "Skip the modal entirely when initialJoinCode is set (they arrived through the deliberate join funnel) — one-line guard in the showWelcome initializer (App.jsx:484-490). Keep it only for cold /studio landings, and neutralize copy: \"Pick a color · Draw · Invite friends\" with \"Start drawing\" as the button."
+        },
+        {
+          "title": "Guest identity: bare 16-animal name pool, duplicate names, no fun, hidden rename",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "server.js:419-422 + 637: anonymous users get pick(ANIMAL_NAMES) — a bare \"Fox\" or \"Newt\" from only 16 options with no uniqueness check, so two \"Fox\"es in one room is common (breaks chat attribution and the tap-name-to-find-friend feature, App.jsx:5285). \"Yak\" isn't an identity a teen keeps. Rename is buried: desktop avatar menu, mobile Tools drawer → \"You\" section (App.jsx:5380-5407) — nothing at join time tells you who you are or that you can change it.",
+          "fix": "Server: compose adjective+animal (\"Neon Fox\", \"Pixel Otter\", \"Turbo Lynx\" — ~30 adjectives x 16 animals) and avoid duplicates within the room. Client: after 'connected', toast \"You're Neon Fox — tap your avatar to change it\" (the toast plumbing exists, App.jsx:510)."
+        },
+        {
+          "title": "All 8 featured rooms are little-kid themed; no room a teen would enter",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "server.js:232-241: Dino World, Pet Parade, Rainbow Lab, Castles & Dragons, Under the Sea… with prompts like \"A puppy and a kitten\". The room list IS the product's tone on the home carousel and Room Finder; a 15-year-old reads it as a preschool app. Meanwhile eventEngine.js:166 already ships a \"Meme remix\" concept, so the appetite exists in the codebase.",
+          "fix": "Add 3-4 teen-coded featured rooms to FEATURED_ROOMS (pure data change): e.g. 🎭 Meme Wall (\"Redraw a meme from memory\"), ✨ Aesthetic Board (\"Draw your current vibe\"), 🐉 OC & Anime Corner (\"Draw your OC — others add friends\"), 🧱 Graffiti Alley (\"Tag the wall — keep it clean\"). Age-neutral prompts, same kid_safe moderation."
+        },
+        {
+          "title": "Hero copy \"Real kids and friends painting\" reads babyish (and slightly off) to teens",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "HomePage.jsx:107: \"Real kids and friends painting together right now.\" — for a teen this labels the product as for-children, and \"watch real kids\" is an awkward framing for an anonymous public viewer. Same register elsewhere on the first-touch surfaces: \"punch in a room code\" (HomePage.jsx:108), AboutPage.jsx:11 \"kid-conscious studio\". (The word \"grown-up\" appears only in code comments, never user-visible — good.)",
+          "fix": "Tone-neutral swaps: hero → \"Real people painting together, live. Tap the canvas to jump in, or start a room with your friends.\"; About lead → \"a fast studio for drawing together in real time — built to be safe for everyone\". Keep \"Built carefully for kids\" on the About/Safety parent-facing cards only."
+        },
+        {
+          "title": "The room's daily prompt disappears the moment you join",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "Rooms are sold on their prompt (\"Draw your wildest dinosaur\") on the home page (HomePage.jsx:121) and Room Finder (RoomFinderPage.jsx:60), but the studio never shows it: the WS 'connected' payload (server.js:664-677) omits the prompt, and StudioApp has no UI for it — the only prompt path is the /studio?prompt= event param (App.jsx:4267). Kids join a themed room and immediately lose the shared creative direction, which is exactly the thing that makes a mural cohere and feel alive.",
+          "fix": "Add prompt: dailyPromptFor(f) to the 'connected' message for featured rooms (server.js ~675), store it in StudioApp state, and render a small dismissible chip under the mp-bar / above the quickbar: \"Today: Draw your wildest dinosaur ✕\"."
+        },
+        {
+          "title": "Zero in-room social juice: no reactions or emotes, and the replay GIF is buried + download-only",
+          "impact": "high",
+          "effort": "large",
+          "detail": "The only social channel is text chat. There are no stroke reactions, no ephemeral emotes, nothing to make a friend's stroke feel witnessed — the op vocabulary is draw/shape/text/image only (LiveRoomCanvas.jsx:14-36). Meanwhile the shareable-moment machinery already exists but is hidden: Replay + timelapse GIF export live at the BOTTOM of the tools drawer (App.jsx:5506-5508, below Layers and FrameStrip) and only downloadBlob (App.jsx:3218) — no share sheet, no room-level \"our mural today\" recap.",
+          "fix": "Phase 1 (medium): ephemeral emote — long-press canvas → 6-emoji picker → broadcast a non-persisted WS message rendered as a 1s floating overlay on the cursor layer (never touches the op history, so replay determinism and canvas perf are untouched). Phase 2 (quick): add \"Share GIF\" next to Share that runs encodeTimelapseBytes → navigator.share({files:[gif]}), and surface Replay in the top action row instead of drawer-bottom."
+        },
+        {
+          "title": "Chat window opens by default over the canvas on phones",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "showChat initializes true (App.jsx:440), and on mobile .mp-chat is a fixed panel up to 320px wide above the quickbar (App.css:4109). A first-run phone user gets: welcome modal + chat panel + quickbar all competing with the canvas — on a 375px screen the chat covers roughly a third of the drawing area before the first stroke. The quickbar already has a Chat toggle with a message count (App.jsx:5778-5786), so nothing is lost by starting closed.",
+          "fix": "Initialize showChat to window.matchMedia('(max-width: 700px)') ? false : true (or pointer:coarse + small viewport), and bump the quickbar Chat label into a proper unread badge so incoming messages still pull kids in."
+        },
+        {
+          "title": "\"Log in\" buttons land on the sign-up form",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "The home join modal has separate \"Log in\" and \"Sign up free\" buttons that both call onNavigate('/signup') (HomePage.jsx:213-214), and SignupPage's mode state defaults to \"signup\" unconditionally (SignupPage.jsx:23). A returning teen tapping \"Log in\" gets \"Sign up — keep your art forever\" and has to find the small toggle — a classic trust wobble at the exact moment they're re-committing.",
+          "fix": "Navigate to /signup?mode=login from the Log in button and initialize mode from the query param in SignupPage (useState(() => new URLSearchParams(location.search).get('mode') === 'login' ? 'login' : 'signup'))."
+        }
+      ]
+    },
+    {
+      "lens": "BRUSH ENGINE — current state vs Procreate-grade, and architecture to get there",
+      "summary": "The engine today is per-segment ctx.lineTo stroking, not stamped dabs: drawBrushSegment (src/utils/brushes.js:171-297) draws one round-capped line per pointer event directly onto the active layer canvas (App.jsx drawBrushFromEvent:1955-1989), which is exactly why opacity accumulates at every segment joint (issue #62). The op format {kind:'draw', strokeId, settings:{brush,color,size,opacity,variation}, points:[{x:int,y:int,pressure}]} is replayed by three near-identical consumers (App.jsx applyRemoteOp:3688, LiveRoomCanvas.applyOp:14, and server history rebuild) — but replay is already NOT pixel-deterministic because brushes.js uses unseeded Math.random for size jitter, spray, and crayon, and points are rounded to ints while local drawing uses floats. Critically for iOS, two full-size 4000x2500 caches (belowCache/aboveCache, ~38MB each) already exist during strokes (App.jsx:975-980), so the opacity fix must use a bbox-capped stroke buffer, not another full-size canvas. A Procreate-grade path is feasible in 3 stages: (1) stroke-buffer opacity fix + velocity-synthesized pressure at capture time (zero protocol change), (2) a shared stamped-dab StrokeRenderer with seeded RNG, spacing, pressure curves, and grain (protocol v2), (3) oil/acrylic/watercolor as bbox-buffer post-processing plus smudge, which is order-deterministic for history replay thanks to server opId sequencing (server.js:719-725) but eventually-consistent for live viewers.",
+      "findings": [
+        {
+          "title": "Root cause of opacity accumulation (#62): per-segment globalAlpha line stroking with overlapping round caps",
+          "impact": "critical",
+          "effort": "medium",
+          "detail": "line() at src/utils/brushes.js:125-138 sets ctx.globalAlpha = opacity and strokes ONE segment with lineCap:'round'. drawBrushFromEvent (src/App.jsx:1970-1978) calls drawBrushSegment once per coalesced pointer event, directly onto the active layer canvas. Every joint between consecutive segments double-composites the two round caps, and slow strokes (many short segments) stack dozens of overlaps — so a 50%-opacity marker reads near-opaque along its own path. The brush-specific multipliers (paint 0.82 at brushes.js:286, pencil 0.72 at :251) only mask it. The same accumulation happens on remote replay (App.jsx:3702) and spectator replay (LiveRoomCanvas.jsx:20) because all three loop drawBrushSegment per point pair.",
+          "fix": "Stroke-buffer pattern: at stroke start allocate an offscreen buffer sized to the stroke's growing bbox (see iOS finding for cap), render all dabs/segments into it at FULL alpha (or 'flow' alpha in stage 2), and composite the buffer ONCE per frame at settings.opacity. Concretely: renderStrokeFrame (App.jsx:999-1029) already composites belowCache + activeLayer + aboveCache per frame — insert `ctx.globalAlpha = strokeOpacity; ctx.drawImage(strokeBuffer, bbox.x, bbox.y)` between the active layer and aboveCache draws. On pen-up (App.jsx:~2261-2268), drawImage the buffer into active.canvas at strokeOpacity once, then discard. Eraser commits with globalCompositeOperation='destination-out'. drawBrushSegment's signature stays; it just receives the buffer ctx with opacity forced to 1."
+        },
+        {
+          "title": "iOS memory: two full-size 38MB caches already live during strokes — the stroke buffer MUST be bbox-capped, not full-size",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "createLayerCanvas is 4000x2500 RGBA ≈ 38MB (src/utils/layers.js:10-29). During any stroke the app already holds: each layer canvas, belowCacheRef + aboveCacheRef (App.jsx:975-980, both full-size), the doc canvas, and the display canvas. The memory note (~40MB iOS canvas sensitivity) means a third full-size stroke buffer is the one thing we cannot add.",
+          "fix": "Track the stroke's bbox as points arrive (pad by brush size). Allocate the stroke buffer lazily at e.g. 512x512, grow by power-of-2 re-allocation when the bbox exceeds it, hard-cap at 2048x2048 (16MB). If a stroke outgrows the cap, commit the current buffer to the layer at stroke opacity and start a fresh buffer — this creates a one-time opacity seam only where a single giant stroke self-overlaps across the split, which is rare and visually minor. Free the buffer on pen-up. Same policy for remote per-strokeId buffers, with a global cap (e.g. 3 concurrent remote buffers; overflow strokes fall back to today's per-segment path)."
+        },
+        {
+          "title": "Op format has no stroke-end marker — blocks remote stroke buffers and already leaks remoteStrokeLastRef entries forever",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "flushStrokeNet (App.jsx:1918-1932) streams point batches keyed by strokeId but never signals stroke end; it also early-returns when net.pending is empty (App.jsx:1921), so pen-up after an already-flushed batch sends nothing at all. applyRemoteOp threads last points via remoteStrokeLastRef (App.jsx:3699-3705) which grows unbounded (entries are only cleared on history/clear). A remote stroke buffer (needed so remote strokes get the same uniform-opacity fix) has no commit trigger without an end signal.",
+          "fix": "At pen-up send `{kind:'draw', strokeId, settings, points:[...pending], end:true}` unconditionally (change flushStrokeNet to accept an `end` flag and skip the empty-pending early-return when end=true). applyRemoteOp and LiveRoomCanvas.applyOp commit + free the per-strokeId buffer and delete the lastMap entry on end:true. Add a 5-10s idle timeout per strokeId as a fallback commit for clients that vanish mid-stroke (their tail ops never arrive anyway). Old ops without end:true are handled by the timeout path, so history replay of pre-migration ops still works."
+        },
+        {
+          "title": "Replay is already non-deterministic: unseeded Math.random in size jitter, spray, and crayon",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "drawBrushSegment applies `sizeJitter = 1 + (Math.random()*2-1)*settings.variation` on EVERY segment (brushes.js:173), spray scatters dots with Math.random (brushes.js:147-156), crayon flecks with Math.random (brushes.js:232-238). So local render, the remote live render on friends' screens, the spectator canvas, and every history rebuild (which happens on join AND on every moderation hide/restore, server.js:881/890) each produce different pixels. Today the differences are cosmetic; under a dab pipeline (per-dab jitter) and especially smudge (state-dependent) they become structural. Also note the moderation NSFW watcher scans replayed pixels — determinism matters there too.",
+          "fix": "Add `settings.seed` (random 32-bit int chosen at stroke start, App.jsx:2156-2167) to the net settings, and replace Math.random in brush rendering with a mulberry32 PRNG seeded from `seed` and advanced per-point-index so mid-stroke batches replay identically regardless of batch boundaries. Local drawing uses the same seed it sends. Ops without seed fall back to Math.random (legacy). This is a prerequisite for stages 2-3 and is a self-contained quick win."
+        },
+        {
+          "title": "Velocity->pressure fallback (#63): synthesize pressure at CAPTURE time in getPoint so the op format and replay need zero changes",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "getPoint (App.jsx:1904-1914) hardcodes pressure to 0.62 (mouse) / 0.72 (finger) when event.pressure is 0 — so the majority audience (kids with fingers) gets constant-width strokes while every brush already scales width by pressure (e.g. brushes.js:251, :274, :286, :296). The key architectural insight: pressure already travels in the op points (App.jsx:1976), so if the synthetic value is computed where points are captured, remote and history replay get identical widths for free.",
+          "fix": "In getPoint, when the device reports no real pressure: compute speed = distance(lastRawPoint, point) / max(1, dt ms), smooth with an EMA (alpha≈0.3, state in a ref reset at stroke start), and map to pressure ≈ clamp(0.9 - speed*0.055, 0.30, 0.90) so slow deliberate strokes are thick and fast flicks taper. Keep a small deadband so hover-jitter doesn't pulse. Also capture event.tiltX/tiltY here (add tx,ty to the point object but only push to net.pending in protocol v2) to prepare stage 2. Only getPoint and a couple of refs change."
+        },
+        {
+          "title": "Stamped-dab pipeline: what it needs, and the op format is ~80% sufficient",
+          "impact": "medium",
+          "effort": "large",
+          "detail": "A Procreate-style core = walk the polyline emitting dabs at `spacing = k * currentSize` intervals (k≈0.08-0.25 per brush) with a residual-distance carry across segments and batches; per-dab: size = baseSize * pressureCurve(p) (gamma ~1.5), flow alpha = flowCurve(p), scatter jitter (seeded PRNG), rotation = stroke tangent angle (atan2 of segment) + jitter, optional tilt-driven elongation. Current op points {x,y,pressure} + settings carry enough for spacing/size/flow/tangent (tangent derives from consecutive points); MISSING: seed (finding above), tilt, and sub-pixel precision — App.jsx:1976 does Math.round(point.x/y) so remote dab placement quantizes to 1 world px and diverges from the local float render. Spray already resembles a crude multi-dab stamp (brushes.js:196-211) proving per-op-batch stamping fits the batching model, BUT the residual-spacing state must live per-strokeId (like remoteStrokeLastRef) so 40ms batch boundaries don't reset dab phase.",
+          "fix": "New module-level `makeStrokeRenderer(settings)` in brushes.js returning {addPoints(points), endStroke()} holding {residual, prng, lastPoint, bbox}, drawing into the stroke buffer. ALL THREE consumers switch to it: drawBrushFromEvent (App.jsx:1955), applyRemoteOp (App.jsx:3688, keyed per strokeId in a Map), LiveRoomCanvas.applyOp (LiveRoomCanvas.jsx:14) — one shared implementation is what keeps local/remote/spectator pixel-identical. Quantize sent coords to quarter-px (Math.round(x*4)/4) instead of ints. Tag new ops settings.v=2; drawBrushSegment stays untouched as the legacy renderer for v-less history ops. Grain: one small (256px) tiled pattern canvas per texture, applied inside the bbox buffer with 'destination-out' at low alpha per dab region (cheap; never a full-canvas pass)."
+        },
+        {
+          "title": "Oil/acrylic design for 2D canvas: all effects are bbox-buffer post-passes, none need a full-size canvas",
+          "impact": "medium",
+          "effort": "large",
+          "detail": "Concrete recipes on top of the dab core: (1) BRISTLES — per dab, 5-12 sub-dabs offset perpendicular to the tangent (offsets/lengths/alphas from the seeded PRNG, stable per bristle index across the stroke so streaks are continuous), each an elongated ellipse via translate/rotate(tangentAngle); per-bristle lightness variation ±8% sells 'loaded brush'. (2) DIRECTIONAL STREAKS — stretch dab ellipses 2-3x along the tangent; acrylic uses higher flow + fewer bristles than oil. (3) WET-EDGE — once per stroke at commit time, in the bbox buffer: draw the buffer onto itself with 'source-atop', a 2px-offset darker duplicate, alpha ~0.15 — darkens only the rim because the interior re-covers itself. (4) CANVAS GRAIN — 'destination-out' tiled noise pattern at alpha 0.1-0.2 inside the buffer before commit (multiplies the paper texture through). (5) IMPASTO — at commit, 'source-atop' draw the buffer's own alpha shifted (-1,-1) tinted white at ~0.12 and (+1,+1) tinted black at ~0.12; a fake top-left light emboss, one-time cost proportional to bbox not canvas. All five run inside the ≤2048² stroke buffer so per-frame cost during the stroke is just dab stamping; heavy passes happen once at pen-up.",
+          "fix": "Ship as brush params in the catalog (brushes.js brushCatalog entries gain {spacing, bristles, streak, wetEdge, grain, impasto} fields consumed by makeStrokeRenderer), so oil vs acrylic vs watercolor are data, not code paths. Watercolor = low flow + high wet-edge + grain + slight dab blur (shadowBlur on dabs, already used by glow at brushes.js:272-273). Replay-safe because everything derives from op data + seed; commit-time passes run identically in applyRemoteOp's end:true handler."
+        },
+        {
+          "title": "Smudge determinism: SAFE for history replay (server total-orders ops onto one layer), DIVERGENT for live views — design for eventual consistency",
+          "impact": "medium",
+          "effort": "large",
+          "detail": "Smudge dab = ctx.drawImage(layerCanvas, srcBbox → destBbox shifted along motion) at strength alpha — canvas-to-self drawImage is legal and fast, no getImageData readback. Determinism analysis: (a) server.js:719-725 assigns a monotonic opId and appends to a single room.history, and history rebuild (App.jsx:3786-3791) clears and replays in that exact order onto layersRef.current[0] — applyRemoteOp forces ALL remote ops to layer 0 (App.jsx:3680-3683). So given seeded RNG (see finding 4), a smudge op's sampled pixels are fully determined by prior history — history replay of smudge IS deterministic. (b) LIVE views are NOT: each client applies its own strokes immediately and remote ops by network arrival, so when a smudge overlaps a concurrent stroke, clients disagree until the next full 'history' frame (join, moderation hide/restore, canvas restore) rewrites everyone to server order. (c) Local multi-layer wrinkle: a local artist smudges their ACTIVE layer, but everyone else replays it against layer 0's composite — results differ whenever local layers ≠ layer 0.",
+          "fix": "Rules: smudge always samples and writes layer 0 (the shared mural layer) even locally, sidestepping (c); document (b) as eventual consistency — divergence is bounded, cosmetic, and self-heals on every history frame; optionally have clients request a lightweight resync after receiving a smudge op that intersects an in-flight local stroke bbox. Smudge cannot use the deferred stroke-buffer commit (it must read committed pixels), so smudge ops apply per-batch directly — which is fine because smudge has no opacity-accumulation problem (it moves paint rather than adding it). Also fix the pre-existing leak: delete remoteStrokeLastRef entries on end:true."
+        },
+        {
+          "title": "STAGE 1 (1-2 weeks): stroke-buffer opacity fix + velocity pressure + end marker + seeded RNG",
+          "impact": "critical",
+          "effort": "medium",
+          "detail": "Scope: bbox stroke buffer for local strokes (drawBrushFromEvent, renderStrokeFrame, pen-up commit in App.jsx), per-strokeId buffers in applyRemoteOp + LiveRoomCanvas.applyOp with end:true + idle-timeout commit, velocity pressure in getPoint, settings.seed + mulberry32 in brushes.js. Closes #62 and #63. Replay risk: LOW — op shape only gains optional fields (seed, end); old history ops render through the unchanged drawBrushSegment path; the one visible change is intentional (uniform stroke opacity), and it applies identically on all three render paths because they share the buffer commit logic. Interleaved concurrent strokes now composite at commit-time order instead of per-batch order — a sub-pixel-visible difference only where two artists paint the same spot within ~1s of each other. iOS risk: LOW-MED — +16MB transient worst case per local stroke, bounded remote buffers; mitigate with the 2048² cap + commit-and-restart. Perf: per-frame cost DROPS (dabs into a small buffer + one extra drawImage in renderStrokeFrame, which already runs per frame).",
+          "fix": "Functions changed: App.jsx getPoint, drawBrushFromEvent, renderStrokeFrame, startStroke (seed + buffer init at :2152-2167), pen-up handler (:2261), flushStrokeNet, applyRemoteOp; LiveRoomCanvas.jsx applyOp; brushes.js gains seededRandom + buffer-commit helper. Ship behind a settings.v check so an old client seeing a v2 op still renders per-segment (slightly wrong opacity, never broken)."
+        },
+        {
+          "title": "STAGE 2 (2-3 weeks): shared stamped-dab StrokeRenderer + grain + quarter-px coords + tilt capture",
+          "impact": "high",
+          "effort": "large",
+          "detail": "Scope: makeStrokeRenderer with spacing/pressure-curves/scatter/tangent-rotation, migrate marker/paint/pencil/crayon/glow to dab params (spray is already dab-like), grain pattern asset, coords *4 quantization, tiltX/tiltY in points. Replay risk: MED — this changes rendered output for new ops, so mixed-version rooms show the SENDER'S engine version via settings.v routing (v2 ops rendered by v2 renderer on updated clients, legacy fallback on stale spectators); server history is version-agnostic. Per-strokeId residual/PRNG state must be batch-boundary-independent (advance PRNG by point index, carry spacing residual in the per-stroke state map) or 40ms batching breaks parity — this is THE correctness trap of stage 2; add a replay-equivalence test that renders a recorded stroke as one batch vs many and image-diffs. iOS risk: LOW — dab stamping into the existing bbox buffer; grain pattern is one 256px canvas. Perf risk to the paramount-jank rule: dab count scales with 1/spacing — clamp dabs-per-frame and fall back to wider spacing above size 80, profile on the oldest target iPad before enabling by default.",
+          "fix": "brushes.js: makeStrokeRenderer + per-brush dab params in brushCatalog; App.jsx: strokeRenderersRef Map<strokeId, renderer> shared by local + remote paths; LiveRoomCanvas.jsx: same via the shared module; BrushPreview.jsx and brushStudio.js preview stroke updated to the new renderer so the picker matches the canvas."
+        },
+        {
+          "title": "STAGE 3 (3-4 weeks): oil / acrylic / watercolor brushes + smudge/blend tool",
+          "impact": "high",
+          "effort": "large",
+          "detail": "Scope: bristle sub-dabs, streak elongation, wet-edge/grain/impasto commit passes (all inside the bbox buffer per the design finding), 2-3 new brushCatalog entries (oil, acrylic; watercolor as a paint upgrade), smudge as a new tool with op kind:'draw' + settings.brush:'smudge' applied per-batch against layer 0. Replay risk: MED for the paint brushes (fully derived from op data + seed → deterministic everywhere), HIGH-BUT-BOUNDED for smudge (live-view divergence on concurrent overlap, self-healing on every history frame — see the smudge finding; ship smudge last and public-room-gated if needed since moderation hide/restore triggers full rebuilds constantly in kid_safe rooms, which actually re-converges everyone frequently). iOS risk: MED — bristle stamping multiplies fill calls 5-12x per dab; budget ≈ (size/spacing) * bristles fills per frame, cap bristles by brush size, and keep commit passes O(bbox). Perf gate: same on-device jank profiling as stage 2; these brushes can ship as 'studio tier' initially to limit blast radius.",
+          "fix": "brushes.js: bristle/streak dab emitters + commit-pass functions (wetEdge(bufferCtx), grain(bufferCtx), impasto(bufferCtx)) invoked from endStroke; App.jsx: smudge tool wiring in startStroke/drawBrushFromEvent (samples active-vs-layer-0 per the smudge rule) and applyRemoteOp smudge branch; brushCatalog + BrushSelector entries. Prerequisites: stages 1-2 complete (buffer, seed, end marker, dab core) — do not attempt smudge before seeded RNG lands or replays will visibly disagree."
+        },
+        {
+          "title": "Coloring-sheet and layer-0 asymmetries the new engine must respect (pre-existing, becomes visible with smudge/wet brushes)",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "The coloring sheet is composited OVER/UNDER at display time only (App.jsx:1015-1027, LiveRoomCanvas.jsx:136-144) and never exists in layer pixels — so smudge/wet blending will never pick up line art (arguably correct, worth stating in the tool copy). Remote ops always land on layer 0 while local artists may paint on layer N (App.jsx:3680-3683): under the stroke-buffer model this is unchanged, but any brush that READS the canvas (smudge, a future wet-mix) must standardize on layer 0 or the same artwork renders differently for author vs room. Also LiveRoomCanvas paints on a white-filled canvas (LiveRoomCanvas.jsx:97-98) while studio layers are transparent — 'multiply'-style grain or wet-edge composites that assume a background will differ; keep all such passes inside the stroke buffer (which is transparent everywhere) and this stays a non-issue.",
+          "fix": "Codify in brushes.js doc comment: (1) all reading brushes sample layer 0; (2) all commit passes operate only on the transparent bbox stroke buffer, never on the destination; (3) sheet pixels are display-only and excluded from paint simulation. Cheap now, expensive to retrofit after stage 3."
+        }
+      ]
+    },
+    {
+      "lens": "Discord / Twitch integration surface",
+      "summary": "The codebase is unusually well-positioned for Discord/Twitch integrations: PocketBase 0.39.4 (pinned in pocketbase.Dockerfile) natively supports discord and twitch OAuth2, and the client already renders provider buttons dynamically from getEnabledOAuthProviderIds() — adding a provider is a one-line client change plus PB admin config. The spectator system (server.js:584-607 + src/components/LiveRoomCanvas.jsx) is a complete, unlimited-viewer, read-only live renderer that only needs a chromeless /watch/:code route in the client router to become a free Twitch/OBS overlay. The weakest surface is share embeds: index.html:26-43 has only static site-wide OG tags and the SPA fallback (server.js:1634-1646) serves that same HTML for every /join/CODE link, so Discord embeds are generic; the server has no canvas lib, so a per-room og:image needs a client-uploaded snapshot. A Discord Activity is the only large build, blocked mainly by the absolute pb.drawesome.art auth origin and the window.open OAuth popup, not by headers — server.js sets no CSP/X-Frame-Options at all.",
+      "findings": [
+        {
+          "title": "/watch/:code chromeless overlay for Twitch/OBS is nearly free — spectator infra is 100% built",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "Server side is done: /ws?room=CODE&spectate=1 (server.js:584-607) admits unlimited read-only viewers who are never counted as users, and always receive history + live ops + sheet + chat. Client side is done: src/components/LiveRoomCanvas.jsx:79-252 is a standalone component that connects (line 197), replays ops deterministically (applyOp, lines 14-36), handles history/op/sheet/clear (lines 205-223), and auto-reconnects (lines 225-228). The client router (src/App.jsx:5950-6001) simply has no /watch branch, and the SPA fallback (server.js:1634-1646) already serves index.html for any GET path, so /watch/CODE needs zero server changes. Two overlay-specific caveats: boundsOf (LiveRoomCanvas.jsx:40-77) crops to drawn content (jumpy for a fixed overlay — passing null bounds at line 127 already renders the full page), and blit paints an opaque white background (lines 125-126), so OBS transparency needs a prop to skip that fill.",
+          "fix": "Add `if (path.startsWith(\"/watch\")) return <WatchPage code={normalizePathCode(path)} />` to App() in src/App.jsx (~line 5971 pattern; normalizePathCode at 6003-6006 already parses the segment). WatchPage = full-viewport LiveRoomCanvas with no nav/chrome, plus two query-param props threaded into LiveRoomCanvas: fit=page (force boundsRef null) and transparent=1 (skip the white fill and clear instead). Document `https://drawesome.art/watch/CODE` as an OBS Browser Source. No blocker."
+        },
+        {
+          "title": "Discord OAuth is a one-line client change — PocketBase 0.39 supports it natively",
+          "impact": "high",
+          "effort": "quick",
+          "detail": "The provider pipeline is already generic. src/utils/auth.js:27 hardcodes `OAUTH_PROVIDERS = [{ id: \"google\", ... }]`; getEnabledOAuthProviderIds (auth.js:185-195) fetches PB's /api/collections/users/auth-methods and returns whatever provider names are enabled server-side; both SignupPage.jsx:58 and AccountPanel.jsx:184 render buttons via `OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id))`; signInWithProvider (auth.js:103-128) passes any providerId straight to pb.authWithOAuth2 with the Safari-safe pre-opened popup (AccountPanel.jsx:74, SignupPage.jsx:50). Server identity is provider-agnostic — verifyAccessToken (server/pocketbaseAuth.js:46) validates the PB users token regardless of how the user authed, so WS ownership/host powers work unchanged. PocketBase is pinned at 0.39.4 (pocketbase.Dockerfile ARG PB_VERSION=0.39.4), which ships discord as a built-in OAuth2 provider.",
+          "fix": "1) Register a Discord app, add redirect `https://pb.drawesome.art/api/oauth2-redirect` (the exact-match rule documented at POCKETBASE_SETUP.md:74-89). 2) Enable Discord in PB Admin (users collection > OAuth2) with client id/secret. 3) Add `{ id: \"discord\", label: \"Continue with Discord\" }` to OAUTH_PROVIDERS at src/utils/auth.js:27. Button appears automatically once PB reports it enabled. Policy caveat (not technical): Discord ToS is 13+, worth a conscious decision for the kids-audience product; also rename SignupPage.jsx:58's now-stale `googleProviders` variable."
+        },
+        {
+          "title": "Every /join/CODE link shared in Discord shows the generic site embed — no per-room OG route exists",
+          "impact": "high",
+          "effort": "medium",
+          "detail": "index.html:26-43 carries static og:title/og:description/og:image (https://drawesome.art/og-image.png) for the whole site, and server.js:1634-1646 serves that identical dist/index.html for every unmatched GET, including /join/CODE (the link format the app itself generates at src/App.jsx:4798 and 5228). Discord/Twitter crawlers don't execute JS, so room title, live user count, and the daily prompt never appear in embeds. All the data for a rich embed is already on the server: room.title (server.js:175/814), FEATURED_ROOMS emoji+title (server.js:232-241), dailyPromptFor (server.js:246-250), users count and lastActivity (getRoom, server.js:266-290).",
+          "fix": "Add `app.get('/join/:code', ...)` BEFORE `app.use(express.static(distPath))` at server.js:1630: read dist/index.html once at boot, string-replace the og:title/og:description/og:url/twitter:* tags with per-room values (e.g. \"Dino World 🦕 — 4 painting now — Draw your wildest dinosaur\"), keep the static og:image as fallback. Normalize the code the same way as the WS path (uppercase, strip, slice — server.js:524). Text-only version is ~40 lines and quick; see next finding for the per-room image."
+        },
+        {
+          "title": "Per-room og:image: server can't render ops (no canvas lib) — use a client-posted snapshot",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "server.js imports no image library (imports at server.js:13-22), so rendering a PNG from op history server-side would add node-canvas/sharp — a heavy new native dep in the lean Docker image. But two client-side snapshot pipelines already exist: (a) elected NSFW watchers already downscale and sample the shared canvas in-browser on a timer (watcher_role election, WATCH_INTERVAL_MS=8s, WATCH_MAX_DIM=256 — server.js:52-54 and 389-417); (b) saveToServer already composes a 1600x1000 PNG + 320x200 thumb dataURL and POSTs it (src/App.jsx:1660-1697, accepted by express.json limit '16mb' at server.js:1052).",
+          "fix": "Add POST /api/rooms/:code/snapshot (accept a small JPEG/PNG dataURL, ~640x400, from any connected room member; throttle per-room with rateOk at server.js:1320 and only accept if newer than N minutes) writing to DATA_DIR/.snapshots/CODE.png, plus GET /api/rooms/:code/og.png serving the cached file with the static og-image.png as fallback. Point the /join/:code OG route's og:image at that absolute URL. Cheapest client hook: piggyback the existing watcher sample (already produces a downscaled canvas at zero extra canvas-memory cost) or fire once from saveToServer's existing composeCanvas call. Note: compose from the visible canvas (already reflects moderation hides, since history rebuilds after mod_hide — server.js:876-884) so hidden content never leaks into embeds."
+        },
+        {
+          "title": "Post-to-Discord-webhook relay: quick server endpoint, no new deps — but must be host-gated for kid safety",
+          "impact": "medium",
+          "effort": "medium",
+          "detail": "No webhook code exists anywhere (repo grep only hits docs/product-research.md and KANBAN.md). The client already produces the finished PNG two ways: sharePng (src/App.jsx:1806-1826, composeCanvas -> blob -> navigator.share, falling back to downloadBlob) and saveToServer (App.jsx:1660-1697, dataURL POST). The server runs Node with global fetch already in use (server/pocketbaseAuth.js, docker-compose healthcheck), and Node 18+ ships FormData/Blob, so relaying multipart to a Discord webhook needs zero dependencies. The .env loader (server.js:31-46) is the natural home for DISCORD_WEBHOOK_URL so the secret never reaches clients. Main risk is not technical: an open endpoint would let any visitor pump arbitrary images into your Discord channel, and it publishes kids' art off-platform.",
+          "fix": "Add POST /api/share/discord accepting { image (dataURL, validated with the same startsWith('data:image') check as server.js:1086), name, room }. Require either adminGuard (server.js:1199) or a verified bearer token via verifyAccessToken + isHost of that room (server.js:440-443) so only signed-in hosts/grown-ups can post; rate-limit with rateOk (server.js:1320). Convert dataURL -> Buffer -> Blob, POST FormData {file, payload_json:{content:`\"${name}\" from room ${room} — https://drawesome.art/join/${room}`}} to process.env.DISCORD_WEBHOOK_URL. Client: add a 'Post to our Discord' button next to the Share buttons (App.jsx:4718, 5371), visible only when a /api/share/discord capability probe says it's configured."
+        },
+        {
+          "title": "Twitch OAuth: identical one-line path as Discord — bundle them",
+          "impact": "low",
+          "effort": "quick",
+          "detail": "Same pipeline as the Discord OAuth finding: PocketBase 0.39.4 (pocketbase.Dockerfile) ships twitch as a built-in OAuth2 provider; the client button appears automatically once `{ id: \"twitch\", label: \"Continue with Twitch\" }` is added to OAUTH_PROVIDERS (src/utils/auth.js:27) and the provider is enabled in PB Admin, because SignupPage.jsx:58 / AccountPanel.jsx:184 filter by getEnabledOAuthProviderIds(). Twitch requires the redirect `https://pb.drawesome.art/api/oauth2-redirect` registered in the Twitch dev console. One Twitch-specific note: Twitch requires email verification on the Twitch account for email release, and PB handles claim mapping natively — no code needed.",
+          "fix": "Do it in the same commit as Discord: add both entries to OAUTH_PROVIDERS, enable both in PB Admin. Value is mainly for the teen/streamer audience alongside the /watch overlay (a streamer signs in with Twitch, hosts a room, points OBS at /watch/CODE). Lower priority than Discord since Discord is where the sharing loop lives."
+        },
+        {
+          "title": "Discord Activity: no header blockers (server sets zero CSP/frame headers), but two real blockers — absolute PB auth origin and popup OAuth",
+          "impact": "high",
+          "effort": "large",
+          "detail": "Current headers: server.js sets NO Content-Security-Policy, X-Frame-Options, or frame-ancestors anywhere (grep across server.js finds nothing; only express.static + JSON APIs), so nothing server-side prevents embedding — and Activities don't iframe your origin anyway, they proxy through <appid>.discordsays.com with URL mappings. The client is proxy-friendly where it matters: all API calls are root-relative (e.g. src/App.jsx:1673) and both WS URLs derive from window.location.host (src/hooks/useMultiplayer.js:24-27, LiveRoomCanvas.jsx:197), so a single '/' -> drawesome.art mapping carries the page, the APIs, and wss. Real blockers: (1) VITE_PB_URL is an absolute external origin (https://pb.drawesome.art, baked at build via docker-compose.yml args -> src/utils/auth.js:19) — blocked by the Activity CSP unless remapped through the /.proxy/ prefix; (2) the OAuth popup flow (window.open at AccountPanel.jsx:74 / SignupPage.jsx:50) cannot work inside the Activity iframe — Discord requires the Embedded App SDK authenticate/authorize commands; (3) the SDK handshake (ready()) must gate first render; (4) the PROD service worker (src/main.jsx:21-27) may misregister under the proxy origin. Mitigating design fact: auth is optional by design (auth.js:3-9 'the whole app works signed out'), so a v1 Activity can ship anonymous-only and skip blockers 1-2 entirely. KANBAN.md:94 already tracks this as Bet #8.",
+          "fix": "Phase the build: v1 = anonymous Activity (no PB at all): add @discord/embedded-app-sdk, detect the discordsays origin in src/main.jsx, await sdk.ready(), skip service-worker registration in that mode, map '/' -> drawesome.art in the dev portal, and derive the room code from the Activity's instanceId so everyone in the voice channel lands in the same room. v2 = identity: exchange the SDK's authorize() code server-side for the Discord user, and mint a PB session via a small server endpoint (or add /.proxy/pb mapping + make PB_URL proxy-aware in auth.js:19). Budget it as its own initiative; everything else in this list ships independently first."
+        },
+        {
+          "title": "Spectate has no audience gate — private 'friends' room codes are watchable by anyone who learns the code (relevant before promoting /watch)",
+          "impact": "medium",
+          "effort": "quick",
+          "detail": "The spectator branch (server.js:584-607) runs after only the adult_18 gate (server.js:575-579); there is no check that room.audience === 'kid_safe' or that the room is listed, so /ws?room=CODE&spectate=1 streams full op history + chat history (chatHistoryMsg at server.js:599-601) for private friends rooms too. Today that's consistent with the code-as-secret model and only reachable by crafting a WS URL, but a public /watch/:code overlay page turns it into a one-click URL that will get shared in Discord servers and stream chat — including for rooms whose members believe they're private.",
+          "fix": "When adding the /watch route, either restrict spectating to kid_safe rooms unless the socket presents a valid member/host token (add `if (room.audience !== 'kid_safe' && !identity) reject` in the spectate branch at server.js:584), or at minimum suppress chat_history for non-listed rooms so a leaked code exposes the mural but not kids' conversation. Decide this before shipping the overlay, not after."
+        }
+      ]
+    }
+  ],
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Audit"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "audit:perf-canvas",
+      "phaseIndex": 1,
+      "phaseTitle": "Audit",
+      "agentId": "ae4a50fe81ca2347a",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1782938502056,
+      "queuedAt": 1782938502039,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "DRAWING/CANVAS RUNTIME PERFORMANCE",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio. Stack: React 18 + Vite, one large src/App.jsx (~5900 lines, StudioApp), Node server.js (Express + ws at /ws, per-room op history relay, PocketBase for accounts), deployed via local Docker behind a Cloudflare tunnel. PRIMARY AUDIENCE: kids AND teenagers on iPads/phones (Apple Penc…",
+      "lastProgressAt": 1782938832474,
+      "tokens": 91953,
+      "toolCalls": 19,
+      "durationMs": 330418,
+      "resultPreview": "{\"lens\":\"DRAWING/CANVAS RUNTIME PERFORMANCE\",\"summary\":\"The stroke pipeline is well-architected at the algorithm level (below/above composite caches, rAF coalescing, coalesced pointer events, no setState in pointermove), but it operates on a 4000x2500 world (10Mpx = 40MB RGBA per canvas), and nearly every hot operation is full-canvas: each stroke rAF recomposites ~40Mpx regardless of viewport or d…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "audit:perf-load",
+      "phaseIndex": 1,
+      "phaseTitle": "Audit",
+      "agentId": "ac46f0d40fc14b3e9",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1782938502057,
+      "queuedAt": 1782938502039,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Startup + network performance (time-to-first-stroke)",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio. Stack: React 18 + Vite, one large src/App.jsx (~5900 lines, StudioApp), Node server.js (Express + ws at /ws, per-room op history relay, PocketBase for accounts), deployed via local Docker behind a Cloudflare tunnel. PRIMARY AUDIENCE: kids AND teenagers on iPads/phones (Apple Penc…",
+      "lastProgressAt": 1782938943646,
+      "tokens": 100949,
+      "toolCalls": 44,
+      "durationMs": 441589,
+      "resultPreview": "{\"lens\":\"Startup + network performance (time-to-first-stroke)\",\"summary\":\"Static startup is healthy: no fonts, no eager 5.5MB worker (it is election-gated and desktop-only), and pocketbase is already code-split (10.5KB gz, lazy). The dominant time-to-first-stroke cost is the WS join 'history' frame: the live MAIN room file is 16.5MB of JSON (14,670 draw ops / 278,778 points, ~1129 B/op) sent uncom…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "audit:ux-teen",
+      "phaseIndex": 1,
+      "phaseTitle": "Audit",
+      "agentId": "ae85c9da15ab92861",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1782938502057,
+      "queuedAt": 1782938502039,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Usability + fun for teenagers (and kids): join funnel, soci…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio. Stack: React 18 + Vite, one large src/App.jsx (~5900 lines, StudioApp), Node server.js (Express + ws at /ws, per-room op history relay, PocketBase for accounts), deployed via local Docker behind a Cloudflare tunnel. PRIMARY AUDIENCE: kids AND teenagers on iPads/phones (Apple Penc…",
+      "lastProgressAt": 1782938864116,
+      "tokens": 105187,
+      "toolCalls": 44,
+      "durationMs": 362059,
+      "resultPreview": "{\"lens\":\"Usability + fun for teenagers (and kids): join funnel, social flows, copy tone, mobile ergonomics\",\"summary\":\"The core funnel is strong: the homepage is a live spectator canvas (HomePage.jsx) and a returning visitor is 1-2 taps from drawing; a first-timer from home is 3 taps (canvas tap, \\\"Continue as guest\\\", welcome-modal dismiss) — one over the 2-tap target, with the blocking welcome m…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "audit:brush-engine",
+      "phaseIndex": 1,
+      "phaseTitle": "Audit",
+      "agentId": "a153fc290d639a902",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1782938502057,
+      "queuedAt": 1782938502040,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "BRUSH ENGINE — current state vs Procreate-grade, and archit…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio. Stack: React 18 + Vite, one large src/App.jsx (~5900 lines, StudioApp), Node server.js (Express + ws at /ws, per-room op history relay, PocketBase for accounts), deployed via local Docker behind a Cloudflare tunnel. PRIMARY AUDIENCE: kids AND teenagers on iPads/phones (Apple Penc…",
+      "lastProgressAt": 1782938771730,
+      "tokens": 62674,
+      "toolCalls": 14,
+      "durationMs": 269673,
+      "resultPreview": "{\"lens\":\"BRUSH ENGINE — current state vs Procreate-grade, and architecture to get there\",\"summary\":\"The engine today is per-segment ctx.lineTo stroking, not stamped dabs: drawBrushSegment (src/utils/brushes.js:171-297) draws one round-capped line per pointer event directly onto the active layer canvas (App.jsx drawBrushFromEvent:1955-1989), which is exactly why opacity accumulates at every segment…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "audit:integrations",
+      "phaseIndex": 1,
+      "phaseTitle": "Audit",
+      "agentId": "a9d50ed188c723ade",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1782938502058,
+      "queuedAt": 1782938502040,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Discord / Twitch integration surface",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio. Stack: React 18 + Vite, one large src/App.jsx (~5900 lines, StudioApp), Node server.js (Express + ws at /ws, per-room op history relay, PocketBase for accounts), deployed via local Docker behind a Cloudflare tunnel. PRIMARY AUDIENCE: kids AND teenagers on iPads/phones (Apple Penc…",
+      "lastProgressAt": 1782938761221,
+      "tokens": 98467,
+      "toolCalls": 26,
+      "durationMs": 259163,
+      "resultPreview": "{\"lens\":\"Discord / Twitch integration surface\",\"summary\":\"The codebase is unusually well-positioned for Discord/Twitch integrations: PocketBase 0.39.4 (pinned in pocketbase.Dockerfile) natively supports discord and twitch OAuth2, and the client already renders provider buttons dynamically from getEnabledOAuthProviderIds() — adding a provider is a one-line client change plus PB admin config. The sp…"
+    }
+  ],
+  "totalTokens": 459230,
+  "totalToolCalls": 147
+}

@@ -351,6 +351,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // rAF coalescing for per-move display updates (W5).
   const rafPendingRef = useRef(0);
 
+  // rAF coalescing for gesture-driven view repaints (pinch/pan) and for
+  // remote-op recomposites — both can otherwise fire several times per frame.
+  const viewRafRef = useRef(0);
+  const remoteRenderRafRef = useRef(0);
+
   // Opacity-slider drag state (W13): a single undo snapshot is taken at
   // drag-start, and the live recomposite during the drag is rAF-throttled
   // instead of running synchronously on every slider tick.
@@ -428,6 +433,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
   const remoteCursorsRef = useRef(new Map()); // userId -> { x, y, name, color, drawing, ts }
   const cursorSentAtRef = useRef(0);
+  const cursorSigRef = useRef(""); // last pumped-cursor signature (skip idle re-renders)
   // Last-known position per user (normalized), kept longer than the 4s cursor
   // visibility window so "find this friend" still works after they pause.
   const userPosRef = useRef(new Map()); // userId -> { x, y, name, ts }
@@ -437,7 +443,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const brushCursorHideRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
   const [chatDraft, setChatDraft] = useState("");
-  const [showChat, setShowChat] = useState(true);
+  // Phones start with the chat closed so the canvas gets the whole screen.
+  const [showChat, setShowChat] = useState(() => !window.matchMedia("(max-width: 700px) and (pointer: coarse)").matches);
 
   // --- Content moderation (public rooms only) ---
   const nsfwWatcherRef = useRef(null); // in-browser NSFW watcher controller
@@ -482,6 +489,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showReport, setShowReport] = useState(false);
   const [showLobby, setShowLobby] = useState(false);
   const [showWelcome, setShowWelcome] = useState(() => {
+    // Arrived through a friend's invite link: skip the tour, go straight in.
+    if (initialJoinCode) {
+      return false;
+    }
     try {
       return !window.localStorage.getItem("happypaint:welcomed:v1");
     } catch {
@@ -573,6 +584,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [mutedSelf, setMutedSelf] = useState(false);
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
+  const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
+  const [roomBlocked, setRoomBlocked] = useState(false); // server refused this room
+  // Today's drawing prompt for this room (sent in the 'connected' payload),
+  // shown as a dismissible chip over the canvas top.
+  const [roomPrompt, setRoomPrompt] = useState(null);
+  const [promptDismissed, setPromptDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
@@ -853,6 +870,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     blitToDisplay();
   };
 
+  // Coalesce gesture-driven repaints (mirrors scheduleStrokeFrame): two moving
+  // fingers can fire two pointermoves per frame, and applyView blits the whole
+  // mural — so pan/pinch schedules at most ONE applyView per rAF instead.
+  const scheduleViewFrame = () => {
+    if (viewRafRef.current) {
+      return;
+    }
+    viewRafRef.current = window.requestAnimationFrame(() => {
+      viewRafRef.current = 0;
+      applyView();
+    });
+  };
+
   // Reposition tx/ty so the WORLD point `wp` lands at screen px (fx, fy) under
   // the current scale + rotation. Shared by zoom + rotate so both anchor cleanly.
   const anchorWorldToScreen = (v, wp, fx, fy) => {
@@ -895,7 +925,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const v = viewRef.current;
     v.tx += dx;
     v.ty += dy;
-    applyView();
+    scheduleViewFrame();
   };
 
   // Paint the onion-skin neighbour frames faintly onto the document context.
@@ -1047,6 +1077,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       rafPendingRef.current = 0;
     }
   }, []);
+
+  // Coalesce remote-op recomposites: N ops arriving in the same frame trigger
+  // ONE full renderDisplay instead of one synchronous recomposite per message.
+  const scheduleRemoteRender = useCallback(() => {
+    if (remoteRenderRafRef.current) {
+      return;
+    }
+    remoteRenderRafRef.current = window.requestAnimationFrame(() => {
+      remoteRenderRafRef.current = 0;
+      renderDisplay();
+    });
+  }, [renderDisplay]);
 
   // Size the visible display canvas backing store to its CSS box * devicePixel-
   // Ratio so the 1600x1200 document blits in crisp on Retina/tablet screens
@@ -1551,7 +1593,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const previewCanvas = await composeCanvas({ width: 400, height: 300 });
     const item = {
       id: makeId("gallery"),
-      name: `Happy Paint ${todayName()}`,
+      name: `Drawesome ${todayName()}`,
       layer: await canvasToDataUrl(fullCanvas),
       textureId: selectedTexture,
       preview: await canvasToDataUrl(previewCanvas),
@@ -1578,7 +1620,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const blob = await canvasToBlob(exportCanvas);
 
     if (blob) {
-      downloadBlob(blob, `happy-paint-${Date.now()}.png`);
+      downloadBlob(blob, `drawesome-${Date.now()}.png`);
       setStatus("PNG exported");
     }
   }, [composeCanvas]);
@@ -1588,7 +1630,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const blob = await canvasToBlob(exportCanvas);
 
     if (blob) {
-      downloadBlob(blob, `happy-paint-transparent-${Date.now()}.png`);
+      downloadBlob(blob, `drawesome-transparent-${Date.now()}.png`);
       setStatus("Transparent PNG exported");
     }
   }, [composeCanvas]);
@@ -1811,16 +1853,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
-    const file = new File([blob], "happy-paint.png", { type: "image/png" });
+    const file = new File([blob], "drawesome.png", { type: "image/png" });
 
     if (navigator.canShare?.({ files: [file] })) {
       await navigator.share({
         files: [file],
-        title: "Happy Paint",
+        title: "Made on Drawesome 🎨",
+        url: "https://drawesome.art",
       });
       setStatus("Shared");
     } else {
-      downloadBlob(blob, `happy-paint-${Date.now()}.png`);
+      downloadBlob(blob, `drawesome-${Date.now()}.png`);
       setStatus("Sharing unavailable, PNG exported");
     }
   }, [composeCanvas]);
@@ -1906,7 +1949,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const rect = activeCanvasRectRef.current || canvas.getBoundingClientRect();
     const cssX = event.clientX - rect.left;
     const cssY = event.clientY - rect.top;
-    const pressure = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "mouse" ? 0.62 : 0.72;
+    const rawPressure = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "mouse" ? 0.62 : 0.72;
+    // Quantize to 2 decimals: plenty for brush dynamics, smaller op payloads.
+    const pressure = Math.round(rawPressure * 100) / 100;
 
     // Screen (CSS px) -> world coords through the current view (incl. rotation).
     const world = screenToWorld(viewRef.current, cssX, cssY);
@@ -1973,7 +2018,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         drawBrushSegment(context, lastPoint, point, settings);
         lastPointRef.current = point;
         if (net) {
-          net.pending.push({ x: Math.round(point.x), y: Math.round(point.y), pressure: point.pressure });
+          // Wire dedupe: a point that rounds to the same pixel as the previous
+          // one with (near-)identical pressure repaints nothing on replay, so
+          // don't spend op bytes on it. Local render keeps the raw point.
+          const nx = Math.round(point.x);
+          const ny = Math.round(point.y);
+          const prev = net.last;
+          if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - point.pressure) >= 0.01) {
+            const netPoint = { x: nx, y: ny, pressure: point.pressure };
+            net.pending.push(netPoint);
+            net.last = netPoint;
+          }
         }
       }
 
@@ -2164,9 +2219,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         },
         pending: [],
         lastSent: 0,
+        last: null, // last appended net point (wire-level dedupe)
       };
       drawBrushFromEvent(event);
-      markChanged("Drawing");
+      // Flag the draft dirty WITHOUT the setStatus re-render markChanged does —
+      // a full component render mid-pointerdown stalls the first stroke frames.
+      // finishStroke's markChanged("Stroke saved") covers the status update.
+      dirtyRef.current = true;
     },
     [beginInteraction, buildCompositeCache, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
   );
@@ -2450,7 +2509,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       // Compose pan (+ for 2 fingers, zoom + rotate about the pinch centre) into
-      // the view, then repaint ONCE via applyView.
+      // the view, then repaint at most once per frame via scheduleViewFrame.
       const v = viewRef.current;
       v.tx += m.cx - g.lastMid.x; // pan follows the centroid for any finger count
       v.ty += m.cy - g.lastMid.y;
@@ -2463,7 +2522,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         else if (dA < -Math.PI) dA += 2 * Math.PI;
         rotateCore(v, dA, fx, fy);
       }
-      applyView();
+      scheduleViewFrame();
       g.lastMid = { x: m.cx, y: m.cy };
       g.lastDist = m.dist;
       g.lastAngle = m.angle;
@@ -3105,7 +3164,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       const blob = new Blob([bytes], { type: "image/gif" });
-      downloadBlob(blob, `happy-paint-loop-${Date.now()}.gif`);
+      downloadBlob(blob, `drawesome-loop-${Date.now()}.gif`);
       setStatus(`GIF exported (${frameCount} frames)`);
     } catch {
       setStatus("GIF export failed");
@@ -3215,7 +3274,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       const blob = new Blob([bytes], { type: "image/gif" });
-      downloadBlob(blob, `happy-paint-timelapse-${Date.now()}.gif`);
+      downloadBlob(blob, `drawesome-timelapse-${Date.now()}.gif`);
       setStatus("Timelapse exported");
     } catch {
       setStatus("Timelapse export failed");
@@ -3734,6 +3793,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
+          // Today's drawing prompt for this room (public prompt rooms).
+          setRoomPrompt(data.prompt || null);
           // Remember this room (with its friendly title) so it shows up under
           // "Your rooms" in the switcher for quick hopping back.
           recordRecentRoom(roomId, data.roomTitle || null, Date.now());
@@ -3805,11 +3866,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             lastOpIdRef.current = data.op.opId;
           }
           nsfwWatcherRef.current?.markDirty();
-          // Mid-local-stroke, reuse the cheap stroke compositor; otherwise full.
+          // Mid-local-stroke, reuse the cheap stroke compositor; otherwise a
+          // rAF-coalesced full recomposite (N ops per frame = one render).
           if (activePointerRef.current != null) {
             scheduleStrokeFrame();
           } else {
-            renderDisplay();
+            scheduleRemoteRender();
           }
           break;
         case "clear":
@@ -3853,7 +3915,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "chat_blocked":
           showToast("That message was blocked by the room's safety filter.");
           break;
+        case "room_full":
+          // The server closes the socket right after this — stop the auto-
+          // reconnect loop and show a way forward instead of "Connecting…".
+          mpRef.current?.disconnect?.();
+          setRoomFull(true);
+          break;
         case "room_blocked":
+          mpRef.current?.disconnect?.();
+          setRoomBlocked(true);
           setStatus("This room isn't available.");
           break;
         case "room_closed":
@@ -3869,7 +3939,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleStrokeFrame, showClearBanner, showToast],
+    [applyRemoteOp, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -4126,6 +4196,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           });
         }
       });
+      // Change-signature bailout: an identical cursor set (including the idle
+      // empty one) means no re-render — without it this interval re-renders
+      // the whole component ~8x/sec forever.
+      const sig = live
+        .map((c) => `${c.userId}:${c.leftPx}:${c.topPx}:${c.drawing ? 1 : 0}:${c.focused ? 1 : 0}`)
+        .join("|");
+      if (sig === cursorSigRef.current) {
+        return;
+      }
+      cursorSigRef.current = sig;
       setRemoteCursors(live);
     }, 120);
     return () => window.clearInterval(timer);
@@ -4445,6 +4525,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   useEffect(() => {
     autosaveTimerRef.current = window.setInterval(() => {
+      // Never snapshot mid-stroke or mid-pinch — saveDraft serializes every
+      // layer and would stall the pointer stream. dirtyRef stays true, so the
+      // next tick retries once the hands are off the canvas.
+      if (activePointerRef.current != null || gestureRef.current != null) {
+        return;
+      }
       if (dirtyRef.current) {
         saveDraft();
       }
@@ -4469,6 +4555,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (opacityRafRef.current) {
         window.cancelAnimationFrame(opacityRafRef.current);
         opacityRafRef.current = 0;
+      }
+      if (viewRafRef.current) {
+        window.cancelAnimationFrame(viewRafRef.current);
+        viewRafRef.current = 0;
+      }
+      if (remoteRenderRafRef.current) {
+        window.cancelAnimationFrame(remoteRenderRafRef.current);
+        remoteRenderRafRef.current = 0;
       }
       if (gifWorkerRef.current) {
         gifWorkerRef.current.terminate();
@@ -4631,6 +4725,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     window.location.href = `/join/${code}`;
   };
 
+  // Invite friends: the native share sheet where it exists (phones/tablets),
+  // clipboard as the fallback for desktop browsers without navigator.share.
+  const inviteFriends = () => {
+    const link = `${window.location.origin}/join/${roomId}`;
+    if (navigator.share) {
+      navigator
+        .share({ title: roomTitle || `Room ${roomId}`, text: "Come draw with me on Drawesome!", url: link })
+        .catch(() => {
+          /* user closed the share sheet */
+        });
+      return;
+    }
+    navigator.clipboard?.writeText(link).then(
+      () => showToast("Invite link copied — send it to a friend!"),
+      () => showToast(link),
+    );
+  };
+
   const submitReport = async () => {
     try {
       await fetch("/api/report", {
@@ -4791,18 +4903,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </span>
             ))}
           </div>
-          <button
-            type="button"
-            className="mp-invite"
-            onClick={() => {
-              const link = `${window.location.origin}/join/${roomId}`;
-              navigator.clipboard?.writeText(link).then(
-                () => setStatus("Invite link copied — send it to a friend!"),
-                () => setStatus(link),
-              );
-            }}
-          >
-            Invite a friend
+          <button type="button" className="mp-invite" onClick={inviteFriends}>
+            Invite friends
           </button>
 
           {isRoomHost ? (
@@ -4968,6 +5070,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 ✋
               </button>
             </div>
+
+            {roomPrompt && !promptDismissed ? (
+              <div className="room-prompt-chip" role="note">
+                <span>🎯 {roomPrompt}</span>
+                <button type="button" onClick={() => setPromptDismissed(true)} aria-label="Dismiss prompt">
+                  ✕
+                </button>
+              </div>
+            ) : null}
 
             {clearBanner ? (
               <div className="clear-banner" role="status">
@@ -5144,17 +5255,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               <h2 id="welcome-title">Welcome to Drawesome!</h2>
               <ol className="welcome-steps">
                 <li>
-                  <span>1</span> Pick a fun color
+                  <span>1</span> Pick a color
                 </li>
                 <li>
-                  <span>2</span> Draw right on the page
+                  <span>2</span> Draw right on the canvas
                 </li>
                 <li>
-                  <span>3</span> Try a coloring sheet or invite a friend!
+                  <span>3</span> Invite friends to draw live
                 </li>
               </ol>
               <button type="button" className="primary-action welcome-go" onClick={dismissWelcome}>
-                Let&rsquo;s draw! 🖍️
+                Start drawing 🎨
               </button>
             </section>
           </div>
@@ -5221,18 +5332,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
               </button>
               <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
-              <button
-                type="button"
-                className="mp-chat-invite"
-                onClick={() => {
-                  const link = `${window.location.origin}/join/${roomId}`;
-                  navigator.clipboard?.writeText(link).then(
-                    () => showToast("Invite link copied — send it to a friend!"),
-                    () => setStatus(link),
-                  );
-                }}
-              >
-                Invite
+              <button type="button" className="mp-chat-invite" onClick={inviteFriends}>
+                Invite friends
               </button>
               <button type="button" className="mp-chat-iconbtn" onClick={() => setShowLobby(true)} title="Browse & create rooms">
                 🌐
@@ -5854,6 +5955,35 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <div className="account-actions">
               <button type="button" className="primary-action" onClick={() => { window.location.href = "/"; }}>
                 Back to home
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {roomFull || roomBlocked ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="studio-modal" role="dialog" aria-modal="true">
+            <h2>{roomFull ? "This room is packed! 🎨" : "This room isn't available"}</h2>
+            <p className="account-note">
+              {roomFull
+                ? "Too many artists are painting in here right now — grab a spot somewhere else."
+                : "This room isn't available. Find another one or start your own."}
+            </p>
+            <div className="account-actions">
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => {
+                  setRoomFull(false);
+                  setRoomBlocked(false);
+                  setShowLobby(true);
+                }}
+              >
+                Find another room
+              </button>
+              <button type="button" onClick={createPrivateRoom}>
+                Start my own room
               </button>
             </div>
           </section>

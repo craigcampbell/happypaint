@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, appendFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
 import { randomBytes } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
@@ -72,7 +72,13 @@ try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  // Compress frames >1KB (the join-history payload shrinks ~8x). No context
+  // takeover keeps per-socket memory flat; browsers negotiate this natively.
+  perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true },
+});
 
 // ---- Rooms ----------------------------------------------------------------
 // Each room keeps its connected users and a capped op history for replay.
@@ -185,37 +191,59 @@ function loadRoom(roomId) {
     return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [] };
   }
 }
+// Write-behind saves: rooms currently mid-write, and rooms whose save fired
+// while a write was in flight (they re-run once the current write settles).
+// Keeps a busy room's ~16MB JSON write off the event loop so op relay never
+// stalls behind disk I/O; loadRoom stays sync (startup only).
+const persistInFlight = new Set();
+const persistDirty = new Set();
+async function saveRoomNow(roomId) {
+  if (persistInFlight.has(roomId)) {
+    persistDirty.add(roomId); // a write is already on the wire — re-queue
+    return;
+  }
+  const room = rooms.get(roomId);
+  if (!room) {
+    return;
+  }
+  persistInFlight.add(roomId);
+  try {
+    mkdirSync(ROOM_DIR, { recursive: true });
+    // Note: room.lastCleared is intentionally in-memory only — never persisted.
+    const json = JSON.stringify({
+      history: room.history,
+      sheetId: room.sheetId || null,
+      ownerProfileId: room.ownerProfileId || null,
+      coHosts: Array.isArray(room.coHosts) ? room.coHosts : [],
+      mutedProfileIds: Array.from(room.mutedProfileIds || []),
+      locked: !!room.locked,
+      title: room.title || null,
+      audience: room.audience || null,
+      listed: typeof room.listed === 'boolean' ? room.listed : null,
+      hiddenOpIds: Array.from(room.hiddenOpIds || []),
+      userSeconds: room.userSeconds || 0,
+      chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
+      savedAt: Date.now(),
+    });
+    // Temp-file + rename so a crash mid-write never leaves a truncated room file.
+    const file = roomFile(roomId);
+    const tmp = `${file}.tmp`;
+    await fsp.writeFile(tmp, json);
+    await fsp.rename(tmp, file);
+  } catch {
+    // Non-fatal — persistence is best-effort.
+  } finally {
+    persistInFlight.delete(roomId);
+    if (persistDirty.delete(roomId)) saveRoomNow(roomId);
+  }
+}
 function persistRoom(roomId) {
   if (persistTimers.has(roomId)) {
     return;
   }
   persistTimers.set(roomId, setTimeout(() => {
     persistTimers.delete(roomId);
-    const room = rooms.get(roomId);
-    if (!room) {
-      return;
-    }
-    try {
-      mkdirSync(ROOM_DIR, { recursive: true });
-      // Note: room.lastCleared is intentionally in-memory only — never persisted.
-      writeFileSync(roomFile(roomId), JSON.stringify({
-        history: room.history,
-        sheetId: room.sheetId || null,
-        ownerProfileId: room.ownerProfileId || null,
-        coHosts: Array.isArray(room.coHosts) ? room.coHosts : [],
-        mutedProfileIds: Array.from(room.mutedProfileIds || []),
-        locked: !!room.locked,
-        title: room.title || null,
-        audience: room.audience || null,
-        listed: typeof room.listed === 'boolean' ? room.listed : null,
-        hiddenOpIds: Array.from(room.hiddenOpIds || []),
-        userSeconds: room.userSeconds || 0,
-        chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
-        savedAt: Date.now(),
-      }));
-    } catch {
-      // Non-fatal — persistence is best-effort.
-    }
+    saveRoomNow(roomId);
   }, 2500));
 }
 
@@ -238,6 +266,10 @@ const FEATURED_ROOMS = [
   { code: 'PETS', title: 'Pet Parade', emoji: '🐶', prompts: ['Draw the cutest pet', 'A puppy and a kitten', 'Your dream pet'] },
   { code: 'RAINBOW', title: 'Rainbow Lab', emoji: '🌈', prompts: ['Make the brightest rainbow', 'An explosion of color', 'Rainbow everything!'] },
   { code: 'CASTLE', title: 'Castles & Dragons', emoji: '🏰', prompts: ['Knights, castles & dragons', 'A magic kingdom', 'Build the tallest tower'] },
+  { code: 'MEMEWALL', title: 'Meme Wall', emoji: '🎭', prompts: ['Redraw a meme from memory', 'Draw a meme-worthy face', 'Your pet as a meme', 'Invent a brand-new meme'] },
+  { code: 'VIBES', title: 'Aesthetic Board', emoji: '✨', prompts: ['Draw your current vibe', 'A moodboard in one color', 'Cozy things only', 'Sunset gradient anything'] },
+  { code: 'OCCORNER', title: 'OC Corner', emoji: '🐲', prompts: ['Draw your OC — friends add theirs', 'Your OC in a new outfit', 'Two OCs team up', 'Give your OC a sidekick'] },
+  { code: 'GRAFFITI', title: 'Graffiti Wall', emoji: '🧱', prompts: ['Tag the wall — keep it kind', 'Bubble-letter your name', 'Sticker-style doodles', 'Paint a mini mural piece'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
@@ -420,6 +452,11 @@ const ANIMAL_NAMES = [
   'Fox', 'Otter', 'Panda', 'Robin', 'Koala', 'Tiger', 'Bunny', 'Whale',
   'Lynx', 'Finch', 'Newt', 'Wren', 'Yak', 'Lark', 'Seal', 'Crow',
 ];
+const GUEST_ADJECTIVES = [
+  'Neon', 'Pixel', 'Turbo', 'Cosmic', 'Mango', 'Disco', 'Ninja', 'Doodle',
+  'Retro', 'Zesty', 'Lucky', 'Shadow', 'Crispy', 'Mellow', 'Rocket', 'Velvet',
+  'Snazzy', 'Breezy', 'Frosty', 'Groovy', 'Sunny', 'Wobbly', 'Zippy', 'Nova',
+];
 const USER_COLORS = [
   '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#F8961E',
   '#DDA0DD', '#118AB2', '#06D6A0', '#EF476F', '#9B5DE5',
@@ -433,6 +470,18 @@ function nextUserId() {
 }
 function pick(list) {
   return list[Math.floor(Math.random() * list.length)];
+}
+
+// Fun "Adjective Animal" guest names ("Neon Fox", "Snazzy Bunny"). Retries a few
+// times to dodge anyone already in the room, then falls back to a digit suffix.
+// Longest combo is 13 chars — comfortably inside the 20-char rename cap.
+function guestNameFor(room) {
+  const taken = new Set(Array.from(room.users.values()).map((u) => u.name));
+  for (let i = 0; i < 10; i += 1) {
+    const name = `${pick(GUEST_ADJECTIVES)} ${pick(ANIMAL_NAMES)}`;
+    if (!taken.has(name)) return name;
+  }
+  return `${pick(GUEST_ADJECTIVES)} ${pick(ANIMAL_NAMES)}${Math.floor(Math.random() * 10)}`;
 }
 
 // A user hosts a room if they're the owner (the first signed-in grown-up to
@@ -569,6 +618,11 @@ wss.on('connection', async (ws, req) => {
 
   const room = getRoom(roomId);
 
+  // The prompt shown in the handshake: featured rooms carry the same daily
+  // rotating prompt the lobby shows; ad-hoc rooms have none.
+  const featured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
+  const roomPrompt = featured ? dailyPromptFor(featured) : null;
+
   // adult_18 is a defined-but-disabled audience: real adult verification doesn't
   // exist in this stack, so no normal user can create one (POST /api/rooms 403s)
   // and nobody can join one. The gate exists so the model is complete + safe.
@@ -588,16 +642,16 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify({
       type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
       roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
+      prompt: roomPrompt,
     }));
     ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
     // Always send history (even empty) so the spectator view resets cleanly when
-    // it hops rooms in the homepage carousel.
-    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
+    // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
+    // ops — plenty for a homepage preview, a fraction of a big room's payload.
+    // (No chat catch-up either: the read-only viewer ignores chat.)
+    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room).slice(-1500) }));
     if (room.sheetId) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
-    }
-    if (room.chat.length) {
-      ws.send(JSON.stringify(chatHistoryMsg(room)));
     }
     ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
     const dropSpectator = () => room.spectators.delete(ws);
@@ -634,7 +688,7 @@ wss.on('connection', async (ws, req) => {
   }
 
   const id = nextUserId();
-  const name = (identity && identity.displayName) || pick(ANIMAL_NAMES);
+  const name = (identity && identity.displayName) || guestNameFor(room);
   const color = pick(USER_COLORS);
   const user = {
     id,
@@ -674,6 +728,7 @@ wss.on('connection', async (ws, req) => {
     muted: !!user.muted,
     roomTitle: room.title || null,
     audience: room.audience,
+    prompt: roomPrompt,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -1627,7 +1682,16 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
 const distPath = join(__dirname, 'dist');
 if (existsSync(distPath)) {
-  app.use(express.static(distPath));
+  // Vite emits content-hashed asset names, so a year of immutable edge/browser
+  // caching is safe; only index.html (the pointer to the hashes) must revalidate.
+  app.use(express.static(distPath, {
+    maxAge: '1y',
+    immutable: true,
+    index: false,
+    setHeaders: (res, p) => {
+      if (p.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
   // SPA fallback (Express 5: use middleware, not an app.get('*') route). Every
   // unmatched GET returns index.html so /studio, /join/CODE and /admin work on
   // direct load / refresh.
@@ -1642,6 +1706,7 @@ if (existsSync(distPath)) {
       res.status(404).json({ error: 'not found' });
       return;
     }
+    res.setHeader('Cache-Control', 'no-cache'); // shell must revalidate so new deploys land
     res.sendFile(join(distPath, 'index.html'));
   });
 } else {

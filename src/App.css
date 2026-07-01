@@ -3423,6 +3423,44 @@ button:disabled {
   font-size: 14px;
 }
 
+/* ---- Room prompt chip ---------------------------------------------------- */
+/* Today's drawing prompt, floating over the canvas top. Absolutely positioned
+   and sized to its content, so canvas touches outside the pill pass through. */
+.room-prompt-chip {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(80%, 480px);
+  padding: 6px 6px 6px 14px;
+  border: 1px solid #cdd7e0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+  color: #21456f;
+  font-weight: 700;
+  font-size: 0.9rem;
+  z-index: 28; /* below .clear-banner (30) and .studio-rooms-fab (45) */
+}
+.room-prompt-chip span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.room-prompt-chip button {
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #6b7a89;
+  font-size: 13px;
+}
+
 .confirm-overlay {
   position: fixed;
   inset: 0;
@@ -4035,6 +4073,8 @@ button:disabled {
     font-weight: 800;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
   }
+  /* Sit the prompt chip below the fixed rooms FAB row. */
+  .room-prompt-chip { top: 56px; }
   .mobile-signout { width: 100%; margin-top: 8px; }
 
   .mobile-actions-grid {

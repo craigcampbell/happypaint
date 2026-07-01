@@ -1,4 +1,4 @@
-const CACHE_NAME = "happypaint-static-v5";
+const CACHE_NAME = "happypaint-static-v6";
 const STATIC_ASSETS = ["/linen.png", "/canvas.png", "/vite.svg"];
 
 self.addEventListener("install", (event) => {
@@ -39,6 +39,12 @@ self.addEventListener("fetch", (event) => {
   // refresh, falling back to cache when offline.
   if (request.mode === "navigate" || url.pathname === "/" || url.pathname.endsWith("/index.html")) {
     event.respondWith(fetch(request).catch(() => caches.match("/index.html")));
+    return;
+  }
+
+  // Big long-lived assets already served with far-future HTTP cache headers —
+  // don't double-store them in the SW cache (the worker alone is multi-MB).
+  if (url.pathname.includes("/assets/nsfwWatcher.worker") || url.pathname.includes("/coloring-sheets/full/")) {
     return;
   }
 

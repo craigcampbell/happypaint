@@ -24,7 +24,10 @@ export const LOCAL_ONLY_MESSAGE =
   "Cloud accounts not configured — your work is saved on this device.";
 
 // Sign-in affordances. Google first; Apple can be added once enrolled.
-export const OAUTH_PROVIDERS = [{ id: "google", label: "Continue with Google" }];
+export const OAUTH_PROVIDERS = [
+  { id: "google", label: "Continue with Google" },
+  { id: "discord", label: "Continue with Discord" },
+];
 
 // ---- Lazily-loaded PocketBase client (configured mode only) ----
 let pbPromise = null;

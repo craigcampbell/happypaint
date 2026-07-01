@@ -190,9 +190,19 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     let ws = null;
     let closed = false;
     let reconnectTimer = null;
+    let reconnectDelay = 2500; // exponential backoff; reset once history arrives
+
+    const scheduleReconnect = () => {
+      if (closed || reconnectTimer) return;
+      // Hidden tab: don't retry at all — visibilitychange reconnects us below.
+      if (document.hidden) return;
+      reconnectTimer = window.setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    };
 
     const connect = () => {
       if (closed) return;
+      reconnectTimer = null;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${window.location.host}/ws?room=${encodeURIComponent(roomCode)}&spectate=1`);
       ws.onmessage = (event) => {
@@ -203,6 +213,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           return;
         }
         if (data.type === "history") {
+          reconnectDelay = 2500; // healthy connection — reset the backoff
           resetPaper();
           lastMapRef.current = new Map();
           for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, blit);
@@ -224,7 +235,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       };
       ws.onclose = () => {
         if (closed) return;
-        reconnectTimer = window.setTimeout(connect, 2500); // homepage keeps watching
+        scheduleReconnect(); // homepage keeps watching
       };
       ws.onerror = () => {
         try {
@@ -236,9 +247,17 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     };
     connect();
 
+    // Coming back to a tab whose socket died while hidden: reconnect right away.
+    const onVisibility = () => {
+      if (closed || document.hidden || reconnectTimer) return;
+      if (!ws || ws.readyState === WebSocket.CLOSED) connect();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       closed = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
       try {
         ws?.close();
       } catch {
