@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import LiveRoomCanvas from "./LiveRoomCanvas";
+import { getSession, onAuthStateChange } from "../utils/auth";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 
@@ -23,6 +24,18 @@ export default function HomePage({ onNavigate }) {
   roomsRef.current = rooms;
   const showJoinRef = useRef(false);
   showJoinRef.current = showJoin;
+  // Signed-in visitors get one "jump in" button in the join modal instead of
+  // the guest/log-in/sign-up spread (same pattern as SiteNav).
+  const [session, setSession] = useState(null);
+  useEffect(() => {
+    let active = true;
+    getSession().then((v) => active && setSession(v));
+    const unsub = onAuthStateChange((v) => active && setSession(v));
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -222,15 +235,25 @@ export default function HomePage({ onNavigate }) {
               {joinRoom.ops} brushstrokes so far
             </p>
             <div className="home-join-actions">
-              <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
-                Continue as guest →
-              </button>
-              <div className="home-join-auth">
-                <button type="button" onClick={() => onNavigate("/signup?mode=login")}>Log in</button>
-                <button type="button" onClick={() => onNavigate("/signup")}>Sign up free</button>
-              </div>
+              {session ? (
+                <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
+                  🎨 Jump in and paint
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
+                    Continue as guest →
+                  </button>
+                  <div className="home-join-auth">
+                    <button type="button" onClick={() => onNavigate("/signup?mode=login")}>Log in</button>
+                    <button type="button" onClick={() => onNavigate("/signup")}>Sign up free</button>
+                  </div>
+                </>
+              )}
             </div>
-            <p className="home-join-note">No account needed to draw — sign up only to save your gallery.</p>
+            {session ? null : (
+              <p className="home-join-note">No account needed to draw — sign up only to save your gallery.</p>
+            )}
           </section>
         </div>
       ) : null}

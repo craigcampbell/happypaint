@@ -430,14 +430,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // dedicated offscreen "remote" canvas that is blitted on top of the local
   // layer composite, so remote art never touches the local layer/undo system.
   const roomId = (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
-  // Flips true once the server sends this room's authoritative history (now sent
-  // on every join, even when empty). The mount-time draft auto-restore checks it
-  // so a live room's server state always wins over a stale local per-room draft —
-  // otherwise a draft could linger over a room the server now shows as empty.
-  const roomSyncedRef = useRef(false);
-  const offlineDraftRestoredRef = useRef(false); // true once the offline fallback painted a draft
   const legacyDraftPurgedRef = useRef(false); // one-shot cleanup of the migrated legacy blob
-  const draftRestoreTimerRef = useRef(null); // grace timer before the offline draft fallback
   const mobileProfileRef = useRef(null); // scroll target for the mobile notifications/profile
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
@@ -605,6 +598,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [isRoomOwner, setIsRoomOwner] = useState(false);
   const [roomLocked, setRoomLocked] = useState(false);
   const [roomTitle, setRoomTitle] = useState(null);
+  // 'kid_safe' = public room (brush-only tools); anything else = private.
+  const [roomAudience, setRoomAudience] = useState(null);
   const [mutedSelf, setMutedSelf] = useState(false);
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
@@ -1504,7 +1499,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (!draftSettings) {
       return;
     }
-    setSelectedTool(draftSettings.tool || "brush");
+    // Public (kid_safe) rooms are brush-only — never restore a hidden tool there.
+    setSelectedTool(roomAudienceRef.current === "kid_safe" ? "brush" : draftSettings.tool || "brush");
     setSelectedBrush(draftSettings.brush || "marker");
     setSelectedColor(draftSettings.color || "#111827");
     setSelectedTexture(draftSettings.texture || "linen");
@@ -4182,6 +4178,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Moderation runs only in public (kid_safe) rooms. Offer to be a watcher
           // if this device is capable; the server decides who actually scans.
           roomAudienceRef.current = data.audience || null;
+          setRoomAudience(data.audience || null);
+          if (data.audience === "kid_safe") {
+            // Public rooms are brush-only (fill/shape/text hidden) — snap back
+            // if one of the hidden tools was selected before the audience arrived.
+            setSelectedTool((prev) => (prev === "brush" ? prev : "brush"));
+          }
           if (data.audience === "kid_safe" && isWatcherCapable()) {
             mpRef.current?.sendWatcherAck?.(true);
           }
@@ -4209,17 +4211,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setKicked(true);
           break;
         case "history": {
-          // The server's history is the authoritative shared mural — mark the
-          // room synced so the mount-time draft auto-restore stands down.
-          roomSyncedRef.current = true;
+          // The server's history (even when empty) is the authoritative shared
+          // mural — local drafts never auto-restore over it.
           const incomingOps = data.ops || [];
-          // If we're showing a RESTORED OFFLINE draft and the server has nothing
-          // to add (an empty sync on reconnect), keep the user's on-screen work
-          // instead of wiping it to blank. A non-empty sync is authoritative and
-          // replaces the local draft.
-          if (incomingOps.length === 0 && offlineDraftRestoredRef.current && !data.restored) {
-            break;
-          }
           // Rebuild the shared mural from scratch (used for join AND for
           // restoring a cleared mural), so always start from a clean slate.
           // Open live buffers are stale — the replay re-delivers their points.
@@ -4241,7 +4235,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Replayed strokes with no end marker (legacy clients, strokes cut
           // off by the snapshot) stay open above — commit them all now.
           commitAllRemoteStrokes();
-          offlineDraftRestoredRef.current = false; // server state is now on screen
           nsfwWatcherRef.current?.markDirty();
           renderDisplay();
           refreshActiveThumbnail();
@@ -4793,42 +4786,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setPaintSpaceAssets(assets);
     });
 
-    // Restore a saved draft — but only as an OFFLINE fallback. Every live room now
-    // receives an authoritative server 'history' frame on join (even when empty)
-    // that rebuilds the shared mural, so we must NOT paint a stale local per-room
-    // draft over it. Wait a short grace period; if the server hasn't synced this
-    // room by then (offline, or no WS), fall back to the local draft. The manual
-    // "Restore last draft" button is always available regardless.
-    draftRestoreTimerRef.current = window.setTimeout(() => {
-      if (roomSyncedRef.current) {
-        return; // the server already painted the authoritative shared mural
-      }
-      loadDraft().then((draft) => {
-        if (!draft?.layers?.length || roomSyncedRef.current) {
-          return;
-        }
-        restoreLayersFromDraft(draft.layers).then(() => {
-          // Mark that on-screen work came from the OFFLINE draft, so a later empty
-          // server sync (reconnect) won't silently wipe it to blank (see the
-          // 'history' handler).
-          offlineDraftRestoredRef.current = true;
-          if (draft.activeLayerId && layersRef.current.some((layer) => layer.id === draft.activeLayerId)) {
-            activeLayerIdRef.current = draft.activeLayerId;
-            syncLayerState();
-          }
-          if (draft.fromLegacy) {
-            dirtyRef.current = true;
-          }
-          setStatus("Draft restored");
-        });
-        applyDraftSettings(draft.settings);
-      });
-    }, 1500);
-    return () => {
-      if (draftRestoreTimerRef.current) {
-        window.clearTimeout(draftRestoreTimerRef.current);
-      }
-    };
+    // NOTE: drafts are never auto-restored. Multiplayer rooms are server-
+    // authoritative — every join receives a 'history' frame (even when empty)
+    // that rebuilds the shared mural, and a stale local draft painted over it
+    // reappeared as ghost drawings. The manual "Restore last draft" button
+    // (restoreDraft) is still available.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5717,7 +5679,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             style={chatPos ? { left: chatPos.left, top: chatPos.top, right: "auto", bottom: "auto" } : undefined}
           >
             <div className="mp-chat-head" onPointerDown={startChatDrag}>
-              <span>💬 Room chat</span>
+              <span>💬 {roomTitle || `Room ${roomId}`}</span>
               <button type="button" onClick={() => setShowChat(false)} aria-label="Hide chat">
                 –
               </button>
@@ -5909,33 +5871,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           ) : null}
         </section>
 
-        <section className="tool-section">
-          <h2>Tool</h2>
-          <div className="brush-grid">
-            {TOOLS.map((tool) => (
-              <button
-                type="button"
-                key={tool.id}
-                className={`brush-chip ${selectedTool === tool.id ? "is-active" : ""}`}
-                onClick={() => {
-                  setSelectedTool(tool.id);
-                  handToolRef.current = false;
-                  setHandTool(false);
-                }}
-                aria-pressed={selectedTool === tool.id}
-              >
-                <span className="chip-ico" aria-hidden="true">{tool.icon}</span>
-                <span className="chip-name">{tool.name}</span>
-              </button>
-            ))}
-          </div>
-          {showShapeFillOption ? (
-            <label className="color-picker">
-              <span>Fill shape</span>
-              <input type="checkbox" checked={fillShape} onChange={(event) => setFillShape(event.target.checked)} />
-            </label>
-          ) : null}
-        </section>
+        {roomAudience === "kid_safe" ? null : (
+          /* Public (kid_safe) rooms are brush-only — with a single forced chip the
+             whole section is pointless, so it's hidden there entirely. */
+          <section className="tool-section">
+            <h2>Tool</h2>
+            <div className="brush-grid">
+              {TOOLS.map((tool) => (
+                <button
+                  type="button"
+                  key={tool.id}
+                  className={`brush-chip ${selectedTool === tool.id ? "is-active" : ""}`}
+                  onClick={() => {
+                    setSelectedTool(tool.id);
+                    handToolRef.current = false;
+                    setHandTool(false);
+                  }}
+                  aria-pressed={selectedTool === tool.id}
+                >
+                  <span className="chip-ico" aria-hidden="true">{tool.icon}</span>
+                  <span className="chip-name">{tool.name}</span>
+                </button>
+              ))}
+            </div>
+            {showShapeFillOption ? (
+              <label className="color-picker">
+                <span>Fill shape</span>
+                <input type="checkbox" checked={fillShape} onChange={(event) => setFillShape(event.target.checked)} />
+              </label>
+            ) : null}
+          </section>
+        )}
 
         <LayerPanel
           layers={layers}

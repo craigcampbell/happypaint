@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
-import { applyGrain, drawBrushSegment, getDab, makeStrokeRenderer } from "../utils/brushes";
+import { mulberry32 } from "../utils/brushes";
 
-// A tiny live preview of a brush's actual mark in the currently-selected colour,
-// shown on the brush chips instead of an emoji — so you see what each brush does
-// (marker = solid, spray = dots, crayon = grainy, glow = glowy…) in your colour.
+// A tiny live preview of a brush's mark in the currently-selected colour, shown
+// on the brush chips instead of an emoji. ONE centered dab per chip (not a
+// stroke) so the picker stays calm and readable: marker/paint = clean solid
+// dot, pencil/crayon = dot with a few paper-tooth flecks, glow = its neon
+// halo, spray = a small cluster of dots, eraser = dashed "removes" nib.
 export default function BrushPreview({ brush, color }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -22,39 +24,52 @@ export default function BrushPreview({ brush, color }) {
       ctx.setLineDash([]);
       return;
     }
-    const settings = {
-      brush,
-      color: color || "#111827",
-      size: brush === "spray" ? 15 : 13,
-      opacity: 0.95,
-      variation: brush === "crayon" ? 0.12 : 0,
-    };
-    // A short S-curve, drawn with rising/falling pressure so the mark reads as a
-    // real stroke (and shows the new pressure taper).
-    const pts = [
-      { x: 8, y: h - 7, pressure: 0.5 },
-      { x: w * 0.36, y: 7, pressure: 0.95 },
-      { x: w * 0.64, y: h - 6, pressure: 0.7 },
-      { x: w - 8, y: 8, pressure: 0.4 },
-    ];
-    const dab = getDab(brush);
-    if (dab) {
-      // Stage-2 brushes: run the REAL dab renderer over the S-curve with a
-      // fixed seed (stable chip across re-renders) so the picker shows the
-      // true dab character — spacing, flecks, ellipse tilt — plus the paper
-      // tooth pencil/crayon get at commit time.
-      const renderer = makeStrokeRenderer({ ...settings, seed: 12345, v: 2 });
-      renderer.addPoints(ctx, pts);
-      renderer.end(ctx);
-      if (dab.grain > 0) {
-        applyGrain(ctx, { x0: 0, y0: 0, w, h }, dab.grain);
+    const cx = w / 2;
+    const cy = h / 2;
+    const fill = color || "#111827";
+    const rand = mulberry32(12345); // fixed seed → stable chip across re-renders
+    ctx.fillStyle = fill;
+    if (brush === "spray") {
+      // Airbrush character: a small cluster of dots instead of one solid dab.
+      for (let i = 0; i < 26; i += 1) {
+        const angle = rand() * Math.PI * 2;
+        const dist = Math.sqrt(rand()) * 10;
+        ctx.globalAlpha = 0.45 + rand() * 0.5;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist, 0.6 + rand() * 0.9, 0, Math.PI * 2);
+        ctx.fill();
       }
+      ctx.globalAlpha = 1;
       return;
     }
-    let last = pts[0];
-    for (const point of pts) {
-      drawBrushSegment(ctx, last, point, settings);
-      last = point;
+    if (brush === "glow") {
+      // The dab under its neon shadow, like the real glow stamp.
+      ctx.shadowColor = fill;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fill(); // second pass deepens the halo
+      ctx.shadowBlur = 0;
+      return;
+    }
+    // One clean centered dab (marker/paint solid; pencil/crayon textured below).
+    ctx.beginPath();
+    ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+    ctx.fill();
+    if (brush === "pencil" || brush === "crayon") {
+      // A few paper-tooth flecks so the graphite/waxy character still reads.
+      ctx.globalCompositeOperation = "destination-out";
+      for (let i = 0; i < 3; i += 1) {
+        const angle = rand() * Math.PI * 2;
+        const dist = 2 + rand() * 5;
+        ctx.globalAlpha = 0.45 + rand() * 0.35;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist, 1 + rand(), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
     }
   }, [brush, color]);
 
