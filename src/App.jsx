@@ -1967,27 +1967,53 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   );
 
   const sharePng = useCallback(async () => {
+    setStatus("Getting your art ready…");
     const exportCanvas = await composeCanvas();
     const blob = await canvasToBlob(exportCanvas);
-
     if (!blob) {
+      showToast("Couldn't prepare the image");
       return;
     }
-
+    // The image doubles as an invite: a "come paint with me" link back to THIS
+    // room, so whoever receives the art is one tap from joining.
+    const joinUrl = `${window.location.origin}/join/${roomId}`;
+    const text = `Come paint with me on Drawesome! 🎨 Room ${roomTitle || roomId}`;
     const file = new File([blob], "drawesome.png", { type: "image/png" });
 
+    // 1) Native share sheet (phones/tablets → iMessage / WhatsApp / Snap …).
     if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({
-        files: [file],
-        title: "Made on Drawesome 🎨",
-        url: "https://drawesome.art",
-      });
-      setStatus("Shared");
-    } else {
-      downloadBlob(blob, `drawesome-${Date.now()}.png`);
-      setStatus("Sharing unavailable, PNG exported");
+      try {
+        await navigator.share({ files: [file], title: "Made on Drawesome 🎨", text, url: joinUrl });
+        showToast("Shared! 🎨");
+      } catch (err) {
+        if (err?.name !== "AbortError") showToast("Share was cancelled");
+      }
+      return;
     }
-  }, [composeCanvas]);
+    // 2) Older mobile browsers without file-share: share the invite link at least.
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Made on Drawesome 🎨", text, url: joinUrl });
+        showToast("Shared!");
+        return;
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+      }
+    }
+    // 3) Desktop: copy the image to the clipboard (paste into any chat) + save a
+    // copy, so it's still one action to get the art out.
+    let note = "Saved as a PNG";
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+        note = "Copied! Paste it anywhere — also saved as a PNG.";
+      } catch {
+        // clipboard image copy not allowed — the download below still works
+      }
+    }
+    downloadBlob(blob, `drawesome-${Date.now()}.png`);
+    showToast(note);
+  }, [composeCanvas, roomId, roomTitle, showToast]);
 
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
@@ -5409,8 +5435,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             >
               🖼️ Gallery
             </button>
-            <button type="button" onClick={sharePng}>
-              Share
+            <button type="button" onClick={sharePng} title="Share your art + an invite link">
+              📤 Share
             </button>
             <button type="button" onClick={exportPng}>
               Export
@@ -6179,8 +6205,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             >
               🖼️ Gallery
             </button>
-            <button type="button" onClick={sharePng}>
-              Share
+            <button type="button" onClick={sharePng} title="Share your art + an invite link">
+              📤 Share
             </button>
             <button type="button" onClick={exportPng}>
               Export
