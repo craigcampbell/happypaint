@@ -169,6 +169,8 @@ export function useMultiplayer(roomId, onMessage, token) {
   // Wet-canvas toggle + theme voting (permissions enforced server-side:
   // host-only in public rooms, any member in private rooms).
   const sendSetWet = useCallback((wet) => send({ type: "set_wet", wet }), [send]);
+  // Ephemeral emoji reaction dropped at a world point (never persisted).
+  const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
   const sendVote = useCallback((choice) => send({ type: "vote", choice }), [send]);
 
@@ -184,7 +186,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     connected, users, self, chat, disconnect,
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
-    sendSetWet, sendVoteStart, sendVote,
+    sendSetWet, sendVoteStart, sendVote, sendReaction,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

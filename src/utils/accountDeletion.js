@@ -121,6 +121,17 @@ async function fileServerDeletion(request) {
     // a true hard delete, not a scheduled request. Best-effort — the local wipe
     // is the source of truth on this device regardless of result.
     const id = pb.authStore.record?.id;
+    // Scrub this user's chat from the durable server audit logs FIRST, while the
+    // token is still valid — otherwise a "deleted" child's name + messages would
+    // persist in plaintext on the server (COPPA/GDPR erasure).
+    try {
+      await fetch("/api/account/scrub-chat", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${pb.authStore.token}` },
+      });
+    } catch {
+      // best-effort — never block the account deletion on the chat scrub
+    }
     if (id) {
       await pb.collection("users").delete(id);
     }

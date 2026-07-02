@@ -22,6 +22,7 @@ export default function SiteNav({ onNavigate, current }) {
   const links = [
     { href: "/rooms", label: "Rooms" },
     { href: "/about", label: "About" },
+    { href: "/faq", label: "Safety & FAQ" },
     { href: "/privacy", label: "Privacy" },
   ];
   return (

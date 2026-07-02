@@ -93,6 +93,7 @@ import PrivacyPage from "./components/PrivacyPage";
 import SignupPage from "./components/SignupPage";
 import RoomFinderPage from "./components/RoomFinderPage";
 import SafetyPage from "./components/SafetyPage";
+import FaqPage from "./components/FaqPage";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
@@ -469,6 +470,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const brushCursorRef = useRef(null); // the brush-size preview ring (DOM-positioned)
   const brushCursorHideRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
+  const [reactions, setReactions] = useState([]); // transient floating emoji
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const reactionIdRef = useRef(0);
   const [chatDraft, setChatDraft] = useState("");
   // Phones start with the chat closed so the canvas gets the whole screen.
   const [showChat, setShowChat] = useState(() => !window.matchMedia("(max-width: 700px) and (pointer: coarse)").matches);
@@ -4442,6 +4446,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             userPosRef.current.delete(data.userId); // bound growth: drop their saved position too
           }
           break;
+        case "reaction": {
+          // Ephemeral floating emoji from someone (or our own echo). Placed at the
+          // world point, mapped to screen once; it floats up + fades via CSS.
+          const p = worldToScreen(viewRef.current, (data.x || 0) * CANVAS_WIDTH, (data.y || 0) * CANVAS_HEIGHT);
+          const rid = `rx${Date.now()}_${(reactionIdRef.current += 1)}`;
+          setReactions((list) => [
+            ...list.slice(-29),
+            { id: rid, emoji: data.emoji, name: data.name, leftPx: p.x, topPx: p.y },
+          ]);
+          window.setTimeout(() => setReactions((list) => list.filter((r) => r.id !== rid)), 1500);
+          break;
+        }
         case "wet_state":
           // The room's wet toggle flipped. Strokes already in flight keep the
           // wetness captured in their op settings (replay determinism).
@@ -4597,8 +4613,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendSetWet: mp.sendSetWet,
       sendVoteStart: mp.sendVoteStart,
       sendVote: mp.sendVote,
+      sendReaction: mp.sendReaction,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction]);
+
+  // Drop an ephemeral emoji reaction at the center of the current view. The
+  // server echoes it to everyone (including us) so it renders exactly once.
+  // Plain function (only used from an onClick) so it never churns hook deps.
+  const dropReaction = (emoji) => {
+    const vs = getViewportSize();
+    const c = screenToWorld(viewRef.current, vs.w / 2, vs.h / 2);
+    mpRef.current?.sendReaction?.(emoji, c.x / CANVAS_WIDTH, c.y / CANVAS_HEIGHT);
+    setReactionPickerOpen(false);
+  };
 
   // Live countdown for the open theme vote. Ticks twice a second while a vote
   // card is showing; the server's vote_result is what actually closes it.
@@ -5620,6 +5647,41 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   </span>
                 </div>
               ))}
+            </div>
+
+            {/* Ephemeral floating emoji reactions (never touch the canvas). */}
+            <div className="reaction-layer" aria-hidden="true">
+              {reactions.map((r) => (
+                <span
+                  key={r.id}
+                  className="reaction-float"
+                  style={{ transform: `translate(${r.leftPx}px, ${r.topPx}px)` }}
+                >
+                  {r.emoji}
+                </span>
+              ))}
+            </div>
+
+            {/* Reaction picker — cheer on your friends. */}
+            <div className="reaction-picker">
+              <button
+                type="button"
+                className="reaction-toggle"
+                onClick={() => setReactionPickerOpen((o) => !o)}
+                aria-label="Send a reaction"
+                title="Send a reaction"
+              >
+                😀
+              </button>
+              {reactionPickerOpen ? (
+                <div className="reaction-menu" role="menu">
+                  {["👍", "🔥", "❤️", "😂", "🎨", "⭐", "👏", "🌈"].map((e) => (
+                    <button key={e} type="button" onClick={() => dropReaction(e)} aria-label={`React ${e}`}>
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="zoom-controls" role="group" aria-label="Zoom and pan">
@@ -6770,6 +6832,10 @@ export default function App() {
 
   if (path.startsWith("/safety")) {
     return <SafetyPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/faq")) {
+    return <FaqPage onNavigate={navigate} />;
   }
 
   if (path.startsWith("/about")) {
