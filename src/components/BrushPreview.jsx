@@ -42,6 +42,34 @@ export default function BrushPreview({ brush, color }) {
       ctx.globalAlpha = 1;
       return;
     }
+    if (brush === "oil" || brush === "acrylic") {
+      // Streaky bristle character: a few stacked elongated ribbons, like one
+      // dab of the real bristle stamp.
+      const lanes = brush === "oil" ? 5 : 4;
+      for (let i = 0; i < lanes; i += 1) {
+        const offsetY = (i - (lanes - 1) / 2) * 3.4;
+        ctx.globalAlpha = 0.55 + rand() * 0.45;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + offsetY, 12 + rand() * 5, 1.5 + rand(), 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+    if (brush === "watercolor") {
+      // Translucent wash: faint full dab under a denser core, like the real
+      // water stamp — reads as a soft wet pool.
+      ctx.globalAlpha = 0.32;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      return;
+    }
     if (brush === "glow") {
       // The dab under its neon shadow, like the real glow stamp.
       ctx.shadowColor = fill;

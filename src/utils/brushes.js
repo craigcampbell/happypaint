@@ -11,9 +11,17 @@
 //   minSize  — dab size at zero pressure, as a fraction of settings.size
 //   flow     — per-dab base alpha (stroke opacity is applied ONCE at commit)
 //   shape    — stamp: "round" | "pencil" | "crayon" | "ellipse" | "glow"
+//              | "bristle" (oil/acrylic) | "water" (watercolor)
 //   scatter  — perpendicular jitter as a fraction of dab size
 //   rotJitter— random rotation range (radians) around the stroke tangent
 //   grain    — paper-tooth strength etched at commit time (0 = none)
+//   bristles — sub-dab count for shape "bristle" (seed-stable per stroke)
+//   stretch  — bristle-dab elongation along the stroke tangent
+//   wetEdge  — commit-pass darkened-rim strength (0 = none)
+//   impasto  — commit-pass top-left emboss strength (0 = none)
+//
+// minSize values are tuned for a ≥3x thin-to-thick pressure range (Stage 3):
+// with the 1.35 gamma, full press is 3-6x the lightest touch per brush.
 export const brushCatalog = [
   {
     id: "marker",
@@ -21,7 +29,7 @@ export const brushCatalog = [
     icon: "🖊️",
     tier: "free",
     description: "Clean, bold color for coloring pages and quick sketches.",
-    dab: { spacing: 0.1, minSize: 0.55, flow: 1, shape: "round" },
+    dab: { spacing: 0.1, minSize: 0.22, flow: 1, shape: "round" },
   },
   {
     id: "crayon",
@@ -29,7 +37,7 @@ export const brushCatalog = [
     icon: "🖍️",
     tier: "free",
     description: "Waxy, grainy crayon — layer colors and they blend like real wax.",
-    dab: { spacing: 0.14, minSize: 0.45, flow: 0.8, shape: "crayon", scatter: 0.08, grain: 0.22 },
+    dab: { spacing: 0.14, minSize: 0.25, flow: 0.8, shape: "crayon", scatter: 0.08, grain: 0.22 },
   },
   {
     id: "pencil",
@@ -37,7 +45,7 @@ export const brushCatalog = [
     icon: "✏️",
     tier: "free",
     description: "Light sketching with pressure-aware texture.",
-    dab: { spacing: 0.16, minSize: 0.3, flow: 0.72, shape: "pencil", scatter: 0.05, grain: 0.14 },
+    dab: { spacing: 0.16, minSize: 0.12, flow: 0.72, shape: "pencil", scatter: 0.05, grain: 0.14 },
   },
   {
     id: "paint",
@@ -45,7 +53,31 @@ export const brushCatalog = [
     icon: "🎨",
     tier: "free",
     description: "Soft opaque strokes with rounded edges.",
-    dab: { spacing: 0.12, minSize: 0.5, flow: 0.9, shape: "ellipse", rotJitter: 0.3 },
+    dab: { spacing: 0.12, minSize: 0.2, flow: 0.9, shape: "ellipse", rotJitter: 0.3 },
+  },
+  {
+    id: "oil",
+    name: "Oil",
+    icon: "🛢️",
+    tier: "free",
+    description: "Thick streaky oil paint — bristles, wet edges, and a buttery emboss.",
+    dab: { spacing: 0.08, minSize: 0.3, flow: 0.85, shape: "bristle", bristles: 8, stretch: 2.2, wetEdge: 0.18, impasto: 0.14 },
+  },
+  {
+    id: "acrylic",
+    name: "Acrylic",
+    icon: "🎨",
+    tier: "free",
+    description: "Bold fast-drying paint with visible brush bristles.",
+    dab: { spacing: 0.1, minSize: 0.25, flow: 0.95, shape: "bristle", bristles: 5, stretch: 1.7, impasto: 0.1 },
+  },
+  {
+    id: "watercolor",
+    name: "Watercolor",
+    icon: "💧",
+    tier: "free",
+    description: "Translucent washes that pool darker at the edges.",
+    dab: { spacing: 0.14, minSize: 0.32, flow: 0.3, shape: "water", wetEdge: 0.25, grain: 0.18 },
   },
   {
     // No `dab`: spray is already a scatter stamp — it stays on the legacy path
@@ -70,7 +102,7 @@ export const brushCatalog = [
     icon: "✨",
     tier: "free",
     description: "Soft neon glow — great for sparkles, magic, and night scenes.",
-    dab: { spacing: 0.22, minSize: 0.5, flow: 0.85, shape: "glow" },
+    dab: { spacing: 0.22, minSize: 0.3, flow: 0.85, shape: "glow" },
   },
 ];
 
@@ -162,6 +194,26 @@ export function mulberry32(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// Shift a hex colour's lightness by `amount` (-1..1): positive blends toward
+// white, negative toward black. Integer channels + a fixed output format keep
+// the tinted string byte-identical on every client (bristle parity).
+export function shiftLightness(hex, amount) {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || "");
+  if (!match) {
+    return hex;
+  }
+  let digits = match[1];
+  if (digits.length === 3) {
+    digits = digits[0] + digits[0] + digits[1] + digits[1] + digits[2] + digits[2];
+  }
+  const out = [0, 2, 4].map((i) => {
+    const channel = parseInt(digits.slice(i, i + 2), 16);
+    const shifted = amount >= 0 ? channel + (255 - channel) * amount : channel * (1 + amount);
+    return Math.max(0, Math.min(255, Math.round(shifted)));
+  });
+  return `rgb(${out[0]},${out[1]},${out[2]})`;
 }
 
 // Per-point generator derived from the stroke seed + the point's COORDINATES
@@ -379,14 +431,37 @@ export function makeStrokeRenderer(settings) {
   const scatterK = dab.scatter || 0;
   const rotJitter = dab.rotJitter || 0;
   const shape = dab.shape || "round";
+  const stretchK = dab.stretch || 1;
+
+  // Oil/acrylic bristle table: each bristle's lane / length / width / alpha /
+  // tint is rolled ONCE here from the stroke seed (mulberry32(seed ^ index)),
+  // NOT from the per-dab dice — so a bristle holds its exact character along
+  // the whole stroke instead of shimmering dab to dab. Deterministic across
+  // clients because it depends only on settings.seed + the catalog count.
+  let bristleTable = null;
+  if (shape === "bristle") {
+    const count = dab.bristles || 6;
+    bristleTable = [];
+    for (let i = 0; i < count; i += 1) {
+      const roll = mulberry32(((seed == null ? 0 : seed) ^ Math.imul(i, 2654435761)) >>> 0);
+      bristleTable.push({
+        offset: (roll() * 2 - 1) * 0.85, // perpendicular lane, fraction of radius
+        length: 0.55 + roll() * 0.45, // along-tangent elongation variance
+        width: 0.6 + roll() * 0.6, // ribbon thickness variance
+        alpha: 0.55 + roll() * 0.45, // per-bristle paint load
+        color: shiftLightness(color, (roll() * 2 - 1) * 0.08), // ±8% lightness
+      });
+    }
+  }
 
   // --- Per-stroke walk state (the whole point of the instance) ---
   let lastPoint = null; // { x, y, pressure }
   let residual = 0; // distance already consumed past the last emitted dab
   let started = false;
 
-  // pressure^1.5 taper: light touches thin out faster than linear.
-  const dabSizeAt = (pressure) => size * (minSize + (1 - minSize) * pressure * Math.sqrt(pressure));
+  // pressure^1.35 taper: light touches thin out faster than linear, and the
+  // widened minSize band gives every brush a ≥3x thin-to-thick range.
+  const dabSizeAt = (pressure) => size * (minSize + (1 - minSize) * Math.pow(pressure, 1.35));
 
   // One stamp. `rand` consumption order is FIXED per brush (scatter → rot →
   // shape flecks), so the same seed + dab coordinate rolls the same dice on
@@ -394,7 +469,7 @@ export function makeStrokeRenderer(settings) {
   const emitDab = (ctx, x, y, pressure, angle) => {
     const rand = seed != null ? pointRand(seed, x, y) : Math.random;
     const sizePx = dabSizeAt(pressure);
-    const flowAlpha = flowBase * (0.65 + 0.35 * pressure);
+    const flowAlpha = flowBase * (0.5 + 0.5 * pressure);
     let dx = x;
     let dy = y;
     if (scatterK > 0) {
@@ -449,6 +524,43 @@ export function makeStrokeRenderer(settings) {
         ctx.arc(dx + Math.cos(fa) * fd, dy + Math.sin(fa) * fd, fr, 0, TWO_PI);
         ctx.fill();
       }
+    } else if (shape === "bristle") {
+      // Oil/acrylic: N elongated sub-dab ribbons fanned perpendicular to the
+      // tangent, stretched `stretchK` along it. All per-bristle variation
+      // comes from the construction-time bristleTable (seed-stable), so the
+      // streaks track the stroke instead of shimmering.
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(rot);
+      const ribbonHalf = (radius * 1.7) / bristleTable.length;
+      for (const bristle of bristleTable) {
+        ctx.fillStyle = bristle.color;
+        ctx.globalAlpha = flowAlpha * bristle.alpha;
+        ctx.beginPath();
+        ctx.ellipse(
+          0,
+          bristle.offset * radius,
+          Math.max(0.5, radius * stretchK * bristle.length),
+          Math.max(0.35, ribbonHalf * bristle.width),
+          0,
+          0,
+          TWO_PI,
+        );
+        ctx.fill();
+      }
+      ctx.restore();
+    } else if (shape === "water") {
+      // Watercolor: a faint full-size wash under a denser core — a soft-edged
+      // round dab without shadowBlur cost. Low flow means each pass lays a
+      // translucent film that pools where dabs overlap.
+      ctx.globalAlpha = flowAlpha * 0.5;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius, 0, TWO_PI);
+      ctx.fill();
+      ctx.globalAlpha = flowAlpha;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius * 0.68, 0, TWO_PI);
+      ctx.fill();
     } else if (shape === "glow") {
       // Round dab under the existing neon shadow styling. shadowBlur is
       // expensive — glow's wider spacing (0.22) pays for it.
@@ -582,19 +694,94 @@ export function applyGrain(bufferCtx, bounds, strength) {
   bufferCtx.restore();
 }
 
+// ---------------------------------------------------------------------------
+// Stage 3 commit passes: wet edge + impasto. Each draws the stroke buffer
+// ONTO ITSELF (source-atop, so nothing escapes the stroke's alpha) with a
+// small offset and a brightness() filter — pure functions of the buffer's
+// already-deterministic pixels, so three-way replay parity holds. On clients
+// without canvas ctx.filter (ancient browsers) the pass no-ops entirely:
+// skipping is the parity-safe fallback (an unfiltered stamp would still
+// change pixels, differently).
+
+let canvasFilterOk = null;
+function supportsCanvasFilter() {
+  if (canvasFilterOk == null) {
+    try {
+      const probe = document.createElement("canvas").getContext("2d");
+      canvasFilterOk = typeof probe.filter === "string";
+    } catch {
+      canvasFilterOk = false;
+    }
+  }
+  return canvasFilterOk;
+}
+
+// Darkened copy of the stroke stamped at (+1.5, +1.5) inside its own alpha:
+// the offset leaves a lighter crescent on one rim and a pigment-pool shadow
+// on the other — the watercolor/oil "wet edge".
+function applyWetEdge(ctx, canvas, bounds, strength) {
+  if (!supportsCanvasFilter()) {
+    return;
+  }
+  ctx.save();
+  try {
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.globalAlpha = strength;
+    ctx.filter = "brightness(0.55)";
+    ctx.drawImage(canvas, bounds.x0 + 1.5, bounds.y0 + 1.5);
+  } catch {
+    /* filter unsupported mid-flight: leave the buffer untouched */
+  }
+  ctx.restore();
+}
+
+// Top-left light emboss: a brightened copy at (-1, -1) plus a darkened copy
+// at (+1, +1), both clipped to the stroke — reads as raised paint ridges.
+function applyImpasto(ctx, canvas, bounds, strength) {
+  if (!supportsCanvasFilter()) {
+    return;
+  }
+  ctx.save();
+  try {
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.globalAlpha = strength;
+    ctx.filter = "brightness(1.6)";
+    ctx.drawImage(canvas, bounds.x0 - 1, bounds.y0 - 1);
+    ctx.filter = "brightness(0.45)";
+    ctx.drawImage(canvas, bounds.x0 + 1, bounds.y0 + 1);
+  } catch {
+    /* filter unsupported mid-flight: leave the buffer untouched */
+  }
+  ctx.restore();
+}
+
 // One-stop pre-commit hook for a v2 stroke buffer: flush the dab renderer,
-// then etch the brush's paper grain — inside the buffer, before the single
-// opacity-stamped commit. No-op for legacy strokes (renderer null, grain 0).
+// then run the brush's commit passes (wet edge → impasto → paper grain) —
+// inside the buffer, before the single opacity-stamped commit. `fx` is the
+// brush's dab params object (or null for legacy strokes — full no-op). All
+// consumers (local, remote, spectator, history replay, and every OVERFLOW
+// commit) share this helper, so the passes can never diverge per consumer.
 // Pass renderer = null on OVERFLOW commits: the renderer's residual/lastPoint
 // walk state must survive the buffer restart untouched.
-export function prepareStrokeCommit(buf, renderer, grain) {
+export function prepareStrokeCommit(buf, renderer, fx) {
   if (!buf || !buf.has()) {
     return;
   }
   if (renderer) {
     renderer.end(buf.getCtx());
   }
-  if (grain > 0) {
-    applyGrain(buf.getCtx(), buf.bounds(), grain);
+  if (!fx) {
+    return;
+  }
+  const ctx = buf.getCtx();
+  const bounds = buf.bounds();
+  if (fx.wetEdge > 0) {
+    applyWetEdge(ctx, buf.canvas, bounds, fx.wetEdge);
+  }
+  if (fx.impasto > 0) {
+    applyImpasto(ctx, buf.canvas, bounds, fx.impasto);
+  }
+  if (fx.grain > 0) {
+    applyGrain(ctx, bounds, fx.grain);
   }
 }

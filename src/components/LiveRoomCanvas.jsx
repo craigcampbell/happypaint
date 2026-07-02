@@ -54,7 +54,7 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
         lastTouch: 0,
         // Per-stroke dab walk state → wire batching can't move dabs.
         renderer: dab && buf ? makeStrokeRenderer(settings) : null,
-        grain: dab && buf ? dab.grain || 0 : 0,
+        fx: dab && buf ? dab : null, // commit passes: wet edge / impasto / grain
       };
       strokes.set(op.strokeId, entry);
     }
@@ -64,9 +64,10 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
       for (const point of op.points || []) {
         if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
           // Outgrew the 2048² cap: bank into the paper and restart (rare,
-          // visually-minor opacity seam on giant strokes). Grain per chunk;
-          // renderer = null keeps the dab walk state across the restart.
-          prepareStrokeCommit(entry.buf, null, entry.grain);
+          // visually-minor opacity seam on giant strokes). Commit passes run
+          // per chunk; renderer = null keeps the dab walk state across the
+          // restart.
+          prepareStrokeCommit(entry.buf, null, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
           entry.buf.reset();
           entry.buf.ensure(point.x, point.y, entry.pad);
@@ -87,9 +88,9 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
     }
     if (op.end) {
       if (entry.buf) {
-        // Flush the dab renderer + etch paper grain, then the single
-        // opacity-stamped commit (legacy strokes: no-op).
-        prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
+        // Flush the dab renderer + run the commit passes (wet edge / impasto
+        // / grain), then the single opacity-stamped commit (legacy: no-op).
+        prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
         entry.buf.commit(ctx, entry.opacity);
         entry.buf.dispose();
       }
@@ -188,7 +189,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     const commitAllStrokes = () => {
       for (const [id, entry] of strokes) {
         if (entry.buf) {
-          prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(offCtx, entry.opacity);
           entry.buf.dispose();
         }
@@ -380,7 +381,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       for (const [id, entry] of strokes) {
         if (now - entry.lastTouch > STROKE_IDLE_MS) {
           if (entry.buf) {
-            prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
+            prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
             entry.buf.commit(offCtx, entry.opacity);
             entry.buf.dispose();
           }

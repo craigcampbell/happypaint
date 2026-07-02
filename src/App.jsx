@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   brushCatalog,
+  clamp,
   drawBrushSegment,
   getDab,
   getTexture,
@@ -2030,8 +2031,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
     let rawPressure;
     if (event.pointerType === "pen" && event.pressure > 0) {
-      // Real pen pressure — use it untouched.
-      rawPressure = event.pressure;
+      // Real pen pressure, stretched to the band styluses actually report:
+      // Apple Pencil rarely exceeds ~0.75 in normal drawing and floors near
+      // ~0.03, so map 0.03..0.75 → 0.02..1. Without this, a hard press only
+      // reached ~3/4 of the brush's size range and strokes felt dead.
+      rawPressure = clamp((event.pressure - 0.03) / 0.72, 0.02, 1);
     } else {
       // No real pressure (mouse reports a UA-constant 0.5/0, fingers a
       // constant too — the old hardcoded 0.62/0.72 fallbacks): synthesize it
@@ -2101,9 +2105,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     localStrokeRef.current = null;
     if (stroke.buf.has()) {
-      // Stage-2: flush the dab renderer + etch paper grain INSIDE the buffer,
-      // then stamp once at the stroke's opacity (legacy strokes: no-op).
-      prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.grain);
+      // Stage-2/3: flush the dab renderer + run the brush's commit passes
+      // (wet edge / impasto / paper grain) INSIDE the buffer, then stamp once
+      // at the stroke's opacity (legacy strokes: no-op).
+      prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.fx);
       stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
     }
     stroke.buf.dispose();
@@ -2156,10 +2161,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (stroke.buf.ensure(point.x, point.y, stroke.pad).overflow) {
             // The stroke outgrew the 2048² buffer cap: bank what we have into
             // the layer and restart the buffer here (a rare, visually-minor
-            // opacity seam on giant strokes — intended). Grain is etched into
-            // each committed chunk; renderer = null keeps the dab walk state
-            // (residual/lastPoint) alive across the restart.
-            prepareStrokeCommit(stroke.buf, null, stroke.grain);
+            // opacity seam on giant strokes — intended). Commit passes (wet
+            // edge / impasto / grain) run per committed chunk; renderer = null
+            // keeps the dab walk state (residual/lastPoint) alive across the
+            // restart.
+            prepareStrokeCommit(stroke.buf, null, stroke.fx);
             stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
             stroke.buf.reset();
             stroke.buf.ensure(point.x, point.y, stroke.pad);
@@ -2426,7 +2432,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Stage-2 dab renderer: holds lastPoint/residual PER STROKE so wire
           // batching can't move dabs. Null → legacy segment path.
           renderer: dab ? makeStrokeRenderer(netSettings) : null,
-          grain: (dab && dab.grain) || 0, // paper tooth etched at commit
+          fx: dab || null, // commit passes: wet edge / impasto / paper grain
         };
       } else {
         localStrokeRef.current = null;
@@ -3973,9 +3979,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (entry.buf) {
         const ctx = getRemoteCtx();
         if (ctx && entry.buf.has()) {
-          // Stage-2: flush the dab renderer + etch paper grain, then the
-          // single opacity-stamped commit (legacy strokes: no-op).
-          prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
+          // Stage-2/3: flush the dab renderer + run the commit passes (wet
+          // edge / impasto / paper grain), then the single opacity-stamped
+          // commit (legacy strokes: no-op).
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
         }
         entry.buf.dispose();
@@ -4080,7 +4087,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             pad: (settings.size || 24) * 3 + 40,
             lastTouch: 0,
             renderer: dab && buf ? makeStrokeRenderer(settings) : null,
-            grain: dab && buf ? dab.grain || 0 : 0,
+            fx: dab && buf ? dab : null, // commit passes need the buffer
           };
           strokes.set(op.strokeId, entry);
           ensureRemoteSweep();
@@ -4091,10 +4098,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           for (const point of op.points || []) {
             if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
               // Outgrew the 2048² cap: bank the buffer into the layer and
-              // restart it here (rare, visually-minor opacity seam). Grain is
-              // etched per chunk; renderer = null keeps the dab walk state
-              // alive across the restart.
-              prepareStrokeCommit(entry.buf, null, entry.grain);
+              // restart it here (rare, visually-minor opacity seam). Commit
+              // passes run per chunk; renderer = null keeps the dab walk
+              // state alive across the restart.
+              prepareStrokeCommit(entry.buf, null, entry.fx);
               entry.buf.commit(ctx, entry.opacity);
               entry.buf.reset();
               entry.buf.ensure(point.x, point.y, entry.pad);
