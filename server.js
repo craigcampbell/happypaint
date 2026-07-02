@@ -434,7 +434,9 @@ function electWatchers(room) {
   for (const wid of Array.from(room.watchers)) {
     if (!room.users.has(wid)) room.watchers.delete(wid);
   }
-  if (room.audience !== 'kid_safe') {
+  // Only the disabled adult tier skips image scanning. Public AND private rooms
+  // elect a capable client to watch the canvas when one is present.
+  if (room.audience === 'adult_18') {
     room.watchers.forEach((wid) => {
       const u = room.users.get(wid);
       if (u && u.ws.readyState === 1) u.ws.send(JSON.stringify({ type: 'watcher_role', active: false }));
@@ -457,6 +459,13 @@ function electWatchers(room) {
       if (u.ws.readyState === 1) u.ws.send(JSON.stringify({ type: 'watcher_role', active: false }));
     }
   });
+  // Tell the room whether a watcher is currently active (drives the client's
+  // "a grown-up watcher isn't active right now" safety note), only on change.
+  const watched = room.watchers.size > 0;
+  if (room._watched !== watched) {
+    room._watched = watched;
+    broadcast(room.code, { type: 'room_watch_state', watched });
+  }
 }
 
 const ANIMAL_NAMES = [
@@ -498,7 +507,11 @@ function guestNameFor(room) {
 // A user hosts a room if they're the owner (the first signed-in grown-up to
 // claim it) or a promoted co-host. Anonymous users (no profileId) never host.
 function isHost(room, user) {
-  if (!user || !user.profileId) return false;
+  if (!user) return false;
+  // Guest host: the first person in an ownerless PRIVATE room moderates it, so a
+  // private room is never left with nobody able to mute/kick/hide/lock.
+  if (!room.ownerProfileId && room.hostUserId && room.hostUserId === user.id) return true;
+  if (!user.profileId) return false;
   return user.profileId === room.ownerProfileId || (room.coHosts || []).includes(user.profileId);
 }
 
@@ -749,8 +762,12 @@ wss.on('connection', async (ws, req) => {
       roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
       prompt: roomPrompt,
       wetCanvas: !!room.wetCanvas,
+      moderated: room.audience === 'kid_safe',
+      watched: room.watchers.size > 0,
     }));
-    ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
+    // Spectators (homepage viewers) get a headcount only — never painter names,
+    // so a leaked/guessed room code can't be used to harvest who's in a room.
+    ws.send(JSON.stringify({ type: 'userList', count: room.users.size }));
     // Always send history (even empty) so the spectator view resets cleanly when
     // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
     // ops — plenty for a homepage preview, a fraction of a big room's payload.
@@ -820,6 +837,12 @@ wss.on('connection', async (ws, req) => {
     room.ownerProfileId = user.profileId;
     persistRoom(roomId);
   }
+  // Private rooms don't require a signed-in owner, but SOMEONE must be able to
+  // moderate — the first person in an ownerless, non-public room becomes its
+  // (session-scoped) guest host; reassigned to a present user if the host left.
+  if (!room.ownerProfileId && room.audience !== 'kid_safe' && (!room.hostUserId || !room.users.has(room.hostUserId))) {
+    room.hostUserId = id;
+  }
 
   ws.send(JSON.stringify({
     type: 'connected',
@@ -836,6 +859,8 @@ wss.on('connection', async (ws, req) => {
     audience: room.audience,
     prompt: roomPrompt,
     wetCanvas: !!room.wetCanvas,
+    moderated: room.audience === 'kid_safe',
+    watched: room.watchers.size > 0,
     // Any vote already running rides the handshake so late joiners can vote.
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
   }));
@@ -939,6 +964,20 @@ wss.on('connection', async (ws, req) => {
           user.color = data.color;
         }
         broadcast(roomId, { type: 'userList', users: userListOf(room) });
+        break;
+      }
+      case 'reaction': {
+        // Ephemeral emoji reactions floated over the canvas. Never persisted, never
+        // in history — just relayed so friends can cheer each other on.
+        const REACTS = ['👍', '🔥', '❤️', '😂', '🎨', '⭐', '👏', '🌈'];
+        if (!REACTS.includes(data.emoji)) break;
+        if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) break;
+        const nowR = Date.now();
+        const times = user.reactionTimes || (user.reactionTimes = []);
+        while (times.length && nowR - times[0] > 1000) times.shift();
+        if (times.length >= 5) break; // ~5/sec per user
+        times.push(nowR);
+        broadcast(roomId, { type: 'reaction', emoji: data.emoji, x: data.x, y: data.y, userId: id, name: user.name });
         break;
       }
       case 'clear':
@@ -1458,6 +1497,58 @@ app.post('/api/report', (req, res) => {
   const report = fileReport({ room, reason, reporterName, source: 'user' });
   // Give the reporter a real receipt so a kid knows it went through.
   res.json({ ok: true, received: true, urgent: !!report.urgent });
+});
+
+// Erasure: scrub a user's chat from the durable audit logs (COPPA/GDPR "delete
+// my data"). Called by the client during account deletion while the token is
+// still valid. Redacts by the opaque profileId — the only stable identifier the
+// audit log keeps — replacing name + message with '[deleted]'.
+app.post('/api/account/scrub-chat', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const identity = token ? await verifyAccessToken(token) : null;
+  if (!identity || !identity.profileId) return res.status(401).json({ error: 'unauthorized' });
+  const pid = identity.profileId;
+  let scrubbed = 0;
+  // 1) durable audit logs
+  let files = [];
+  try { files = readdirSync(CHAT_LOG_DIR).filter((f) => f.endsWith('.jsonl')); } catch { files = []; }
+  for (const f of files) {
+    const path = join(CHAT_LOG_DIR, f);
+    let lines;
+    try { lines = readFileSync(path, 'utf8').split('\n'); } catch { continue; }
+    let changed = false;
+    const out = lines.map((line) => {
+      if (!line.trim()) return line;
+      let e;
+      try { e = JSON.parse(line); } catch { return line; }
+      if (e && e.profileId === pid && e.message !== '[deleted]') {
+        e.name = '[deleted]';
+        e.message = '[deleted]';
+        changed = true;
+        scrubbed += 1;
+        return JSON.stringify(e);
+      }
+      return line;
+    });
+    if (changed) {
+      try { writeFileSync(path, out.join('\n')); } catch { /* best effort */ }
+    }
+  }
+  // 2) in-memory chat buffers of any live room where this profile is connected
+  for (const room of rooms.values()) {
+    const sessionIds = new Set(
+      Array.from(room.users.values()).filter((u) => u.profileId === pid).map((u) => u.id),
+    );
+    if (!sessionIds.size) continue;
+    for (const c of room.chat || []) {
+      if (c.user && sessionIds.has(c.user.id)) {
+        c.user.name = '[deleted]';
+        c.message = '[deleted]';
+      }
+    }
+  }
+  res.json({ ok: true, scrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
