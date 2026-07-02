@@ -5,7 +5,7 @@
 // framed to the drawn content so visitors immediately see art being made.
 
 import { useEffect, useRef } from "react";
-import { drawBrushSegment, pointRand } from "../utils/brushes";
+import { drawBrushSegment, getDab, makeStrokeRenderer, pointRand, prepareStrokeCommit } from "../utils/brushes";
 import { createStrokeBuffer } from "../utils/strokeBuffer";
 import { drawShape, drawText } from "../utils/shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
@@ -40,12 +40,21 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
     if (!entry) {
       let buffered = 0;
       for (const open of strokes.values()) if (open.buf) buffered += 1;
+      // Stage-2 routing (identical to the studio's local + remote branch):
+      // v >= 2 AND the brush has dab params → makeStrokeRenderer. The renderer
+      // needs the full-alpha buffer, so the past-the-cap (buf: null) fallback
+      // stays on legacy segments.
+      const dab = settings.v >= 2 ? getDab(settings.brush) : null;
+      const buf = buffered < MAX_STROKE_BUFFERS ? createStrokeBuffer() : null; // null → direct fallback
       entry = {
-        buf: buffered < MAX_STROKE_BUFFERS ? createStrokeBuffer() : null, // null → direct fallback
+        buf,
         drawSettings: { ...settings, opacity: 1 },
         opacity: Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity)),
         pad: (settings.size || 24) * 3 + 40, // covers glow shadowBlur + spray scatter
         lastTouch: 0,
+        // Per-stroke dab walk state → wire batching can't move dabs.
+        renderer: dab && buf ? makeStrokeRenderer(settings) : null,
+        grain: dab && buf ? dab.grain || 0 : 0,
       };
       strokes.set(op.strokeId, entry);
     }
@@ -55,12 +64,19 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
       for (const point of op.points || []) {
         if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
           // Outgrew the 2048² cap: bank into the paper and restart (rare,
-          // visually-minor opacity seam on giant strokes).
+          // visually-minor opacity seam on giant strokes). Grain per chunk;
+          // renderer = null keeps the dab walk state across the restart.
+          prepareStrokeCommit(entry.buf, null, entry.grain);
           entry.buf.commit(ctx, entry.opacity);
           entry.buf.reset();
           entry.buf.ensure(point.x, point.y, entry.pad);
         }
-        drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+        if (entry.renderer) {
+          // One point at a time so batch boundaries can never matter.
+          entry.renderer.addPoints(entry.buf.getCtx(), [point]);
+        } else {
+          drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+        }
         last = point;
       }
     } else {
@@ -71,6 +87,9 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
     }
     if (op.end) {
       if (entry.buf) {
+        // Flush the dab renderer + etch paper grain, then the single
+        // opacity-stamped commit (legacy strokes: no-op).
+        prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
         entry.buf.commit(ctx, entry.opacity);
         entry.buf.dispose();
       }
@@ -169,6 +188,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
     const commitAllStrokes = () => {
       for (const [id, entry] of strokes) {
         if (entry.buf) {
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
           entry.buf.commit(offCtx, entry.opacity);
           entry.buf.dispose();
         }
@@ -360,6 +380,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       for (const [id, entry] of strokes) {
         if (now - entry.lastTouch > STROKE_IDLE_MS) {
           if (entry.buf) {
+            prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
             entry.buf.commit(offCtx, entry.opacity);
             entry.buf.dispose();
           }

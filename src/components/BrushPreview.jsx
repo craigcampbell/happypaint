@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { drawBrushSegment } from "../utils/brushes";
+import { applyGrain, drawBrushSegment, getDab, makeStrokeRenderer } from "../utils/brushes";
 
 // A tiny live preview of a brush's actual mark in the currently-selected colour,
 // shown on the brush chips instead of an emoji — so you see what each brush does
@@ -37,6 +37,20 @@ export default function BrushPreview({ brush, color }) {
       { x: w * 0.64, y: h - 6, pressure: 0.7 },
       { x: w - 8, y: 8, pressure: 0.4 },
     ];
+    const dab = getDab(brush);
+    if (dab) {
+      // Stage-2 brushes: run the REAL dab renderer over the S-curve with a
+      // fixed seed (stable chip across re-renders) so the picker shows the
+      // true dab character — spacing, flecks, ellipse tilt — plus the paper
+      // tooth pencil/crayon get at commit time.
+      const renderer = makeStrokeRenderer({ ...settings, seed: 12345, v: 2 });
+      renderer.addPoints(ctx, pts);
+      renderer.end(ctx);
+      if (dab.grain > 0) {
+        applyGrain(ctx, { x0: 0, y0: 0, w, h }, dab.grain);
+      }
+      return;
+    }
     let last = pts[0];
     for (const point of pts) {
       drawBrushSegment(ctx, last, point, settings);

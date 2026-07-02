@@ -1,5 +1,19 @@
 // Each brush carries an `icon` (emoji) so the picker reads as a fun, kid-friendly
 // art box rather than a list of text chips.
+//
+// `dab` (Brush Engine Stage 2): brushes with a dab object render through
+// makeStrokeRenderer — spaced stamps walked along the stroke — instead of the
+// legacy drawBrushSegment lines. Ops from these brushes carry settings.v = 2 so
+// every consumer (local / remote / spectator / history replay) routes the same
+// way; brushes WITHOUT a dab entry (spray, eraser, anything custom) stay on the
+// legacy path forever, keeping old history pixel-stable.
+//   spacing  — dab step as a fraction of the dab's current size
+//   minSize  — dab size at zero pressure, as a fraction of settings.size
+//   flow     — per-dab base alpha (stroke opacity is applied ONCE at commit)
+//   shape    — stamp: "round" | "pencil" | "crayon" | "ellipse" | "glow"
+//   scatter  — perpendicular jitter as a fraction of dab size
+//   rotJitter— random rotation range (radians) around the stroke tangent
+//   grain    — paper-tooth strength etched at commit time (0 = none)
 export const brushCatalog = [
   {
     id: "marker",
@@ -7,6 +21,7 @@ export const brushCatalog = [
     icon: "🖊️",
     tier: "free",
     description: "Clean, bold color for coloring pages and quick sketches.",
+    dab: { spacing: 0.1, minSize: 0.55, flow: 1, shape: "round" },
   },
   {
     id: "crayon",
@@ -14,6 +29,7 @@ export const brushCatalog = [
     icon: "🖍️",
     tier: "free",
     description: "Waxy, grainy crayon — layer colors and they blend like real wax.",
+    dab: { spacing: 0.14, minSize: 0.45, flow: 0.8, shape: "crayon", scatter: 0.08, grain: 0.22 },
   },
   {
     id: "pencil",
@@ -21,6 +37,7 @@ export const brushCatalog = [
     icon: "✏️",
     tier: "free",
     description: "Light sketching with pressure-aware texture.",
+    dab: { spacing: 0.16, minSize: 0.3, flow: 0.72, shape: "pencil", scatter: 0.05, grain: 0.14 },
   },
   {
     id: "paint",
@@ -28,8 +45,11 @@ export const brushCatalog = [
     icon: "🎨",
     tier: "free",
     description: "Soft opaque strokes with rounded edges.",
+    dab: { spacing: 0.12, minSize: 0.5, flow: 0.9, shape: "ellipse", rotJitter: 0.3 },
   },
   {
+    // No `dab`: spray is already a scatter stamp — it stays on the legacy path
+    // (Stage 2 intentionally excludes it from v2 routing).
     id: "spray",
     name: "Spray",
     icon: "💨",
@@ -37,6 +57,7 @@ export const brushCatalog = [
     description: "Airbrush dots for shading and backgrounds.",
   },
   {
+    // No `dab`: erasing keeps the legacy direct destination-out path.
     id: "eraser",
     name: "Eraser",
     icon: "🧽",
@@ -49,8 +70,17 @@ export const brushCatalog = [
     icon: "✨",
     tier: "free",
     description: "Soft neon glow — great for sparkles, magic, and night scenes.",
+    dab: { spacing: 0.22, minSize: 0.5, flow: 0.85, shape: "glow" },
   },
 ];
+
+// The Stage-2 dab params for a brush id, or null for legacy-path brushes
+// (spray, eraser, unknown/custom ids). The single routing predicate every
+// consumer shares: `settings.v >= 2 && getDab(settings.brush)`.
+export function getDab(brushId) {
+  const brush = brushCatalog.find((entry) => entry.id === brushId);
+  return (brush && brush.dab) || null;
+}
 
 export const paperTextures = [
   {
@@ -319,4 +349,252 @@ export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
   }
 
   line(ctx, from, to, baseSize * (0.28 + pressure * 1.05), settings.color, opacity);
+}
+
+// ---------------------------------------------------------------------------
+// Brush Engine Stage 2: the dab core.
+//
+// A v2 stroke is a walk of spaced stamps ("dabs") along the pointer path. The
+// renderer instance holds ALL walk state (lastPoint, residual spacing
+// distance, started flag) and lives in the per-stroke entry next to the
+// Stage-1 buffer, so the 40ms wire batching CANNOT change output: the
+// residual carries across addPoints calls, and per-dab randomness is
+// coordinate-derived (pointRand(seed, dabX, dabY)) — already batching-proof.
+// Dabs draw into the Stage-1 stroke buffer at their flow alpha, NEVER at
+// settings.opacity (the buffer commits once at the stroke's opacity).
+
+const TWO_PI = Math.PI * 2;
+const DAB_MIN_STEP = 1.5; // world px — absolute spacing floor (perf guardrail)
+const DAB_CAP = 600; // dabs per addPoints call before the step doubles
+
+export function makeStrokeRenderer(settings) {
+  const dab = getDab(settings.brush) || {};
+  const color = settings.color;
+  const seed = settings.seed;
+  const size = clamp(settings.size || 24, 1, 160);
+  const minSize = dab.minSize == null ? 0.5 : dab.minSize;
+  const flowBase = dab.flow == null ? 1 : dab.flow;
+  // Big brushes stamp fewer, larger dabs — blur/fleck cost scales with area.
+  const spacingK = (dab.spacing == null ? 0.14 : dab.spacing) * (size > 80 ? 1.5 : 1);
+  const scatterK = dab.scatter || 0;
+  const rotJitter = dab.rotJitter || 0;
+  const shape = dab.shape || "round";
+
+  // --- Per-stroke walk state (the whole point of the instance) ---
+  let lastPoint = null; // { x, y, pressure }
+  let residual = 0; // distance already consumed past the last emitted dab
+  let started = false;
+
+  // pressure^1.5 taper: light touches thin out faster than linear.
+  const dabSizeAt = (pressure) => size * (minSize + (1 - minSize) * pressure * Math.sqrt(pressure));
+
+  // One stamp. `rand` consumption order is FIXED per brush (scatter → rot →
+  // shape flecks), so the same seed + dab coordinate rolls the same dice on
+  // every client.
+  const emitDab = (ctx, x, y, pressure, angle) => {
+    const rand = seed != null ? pointRand(seed, x, y) : Math.random;
+    const sizePx = dabSizeAt(pressure);
+    const flowAlpha = flowBase * (0.65 + 0.35 * pressure);
+    let dx = x;
+    let dy = y;
+    if (scatterK > 0) {
+      const off = (rand() * 2 - 1) * scatterK * sizePx;
+      dx += -Math.sin(angle) * off; // perpendicular to the tangent
+      dy += Math.cos(angle) * off;
+    }
+    const rot = rotJitter > 0 ? angle + (rand() - 0.5) * rotJitter : angle;
+    const radius = sizePx / 2;
+    ctx.fillStyle = color;
+    if (shape === "ellipse") {
+      // Loaded-brush paint: elongated 1.6x along the stroke tangent.
+      ctx.globalAlpha = flowAlpha;
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(rot);
+      ctx.scale(1.6, 1);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, TWO_PI);
+      ctx.fill();
+      ctx.restore();
+    } else if (shape === "pencil") {
+      // Small graphite core + 2-3 tiny flecks of tooth around it.
+      ctx.globalAlpha = flowAlpha;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius, 0, TWO_PI);
+      ctx.fill();
+      const flecks = rand() < 0.5 ? 2 : 3;
+      for (let i = 0; i < flecks; i += 1) {
+        const fa = rand() * TWO_PI;
+        const fd = (0.3 + rand() * 0.7) * sizePx * 0.8;
+        const fr = Math.max(0.35, sizePx * (0.05 + rand() * 0.09));
+        ctx.globalAlpha = flowAlpha * (0.22 + rand() * 0.3);
+        ctx.beginPath();
+        ctx.arc(dx + Math.cos(fa) * fd, dy + Math.sin(fa) * fd, fr, 0, TWO_PI);
+        ctx.fill();
+      }
+    } else if (shape === "crayon") {
+      // Waxy base + 3-5 flecks at random alpha — the legacy crayon fleck look
+      // (uneven coverage that blends optically when layered) in per-dab form.
+      ctx.globalAlpha = flowAlpha * 0.4;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius, 0, TWO_PI);
+      ctx.fill();
+      const flecks = 3 + Math.floor(rand() * 3);
+      for (let i = 0; i < flecks; i += 1) {
+        const fa = rand() * TWO_PI;
+        const fd = rand() * sizePx * 0.55;
+        const fr = Math.max(0.5, (0.2 + rand() * 0.55) * radius);
+        ctx.globalAlpha = flowAlpha * (0.16 + rand() * 0.5);
+        ctx.beginPath();
+        ctx.arc(dx + Math.cos(fa) * fd, dy + Math.sin(fa) * fd, fr, 0, TWO_PI);
+        ctx.fill();
+      }
+    } else if (shape === "glow") {
+      // Round dab under the existing neon shadow styling. shadowBlur is
+      // expensive — glow's wider spacing (0.22) pays for it.
+      ctx.globalAlpha = flowAlpha;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = sizePx * 0.85;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius, 0, TWO_PI);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = flowAlpha * 0.4;
+      ctx.beginPath();
+      ctx.arc(dx, dy, Math.max(0.5, radius * 0.35), 0, TWO_PI);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      // "round": crisp solid circle (marker).
+      ctx.globalAlpha = flowAlpha;
+      ctx.beginPath();
+      ctx.arc(dx, dy, radius, 0, TWO_PI);
+      ctx.fill();
+    }
+  };
+
+  // Walk dabs from lastPoint through each incoming point. All consumers feed
+  // this the same point sequence (wire consumers literally so; local feeds the
+  // raw pre-quantize points), so with per-stroke residual + coordinate-seeded
+  // dice the dab layout is batching-independent.
+  const addPoints = (ctx, points) => {
+    let emitted = 0;
+    ctx.globalCompositeOperation = "source-over";
+    for (const raw of points) {
+      const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
+      if (!started) {
+        // First point of a stroke stamps immediately (taps leave a mark).
+        started = true;
+        emitDab(ctx, raw.x, raw.y, pressure, 0);
+        emitted += 1;
+        residual = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(pressure));
+        lastPoint = { x: raw.x, y: raw.y, pressure };
+        continue;
+      }
+      const sdx = raw.x - lastPoint.x;
+      const sdy = raw.y - lastPoint.y;
+      const d = Math.hypot(sdx, sdy);
+      if (d < 1e-6) {
+        // Stationary pressure-only update: skip WITHOUT touching walk state.
+        // The wire dedup can drop such points, so consuming them here would
+        // desync local vs remote dab placement.
+        continue;
+      }
+      const angle = Math.atan2(sdy, sdx);
+      let pos = residual;
+      while (pos <= d) {
+        const t = pos / d;
+        const p = lastPoint.pressure + (pressure - lastPoint.pressure) * t;
+        emitDab(ctx, lastPoint.x + sdx * t, lastPoint.y + sdy * t, p, angle);
+        emitted += 1;
+        let step = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(p));
+        if (emitted > DAB_CAP) {
+          // Giant-flick guardrail: past the cap the step doubles, and doubles
+          // again per additional cap-block — stays smooth enough, can't jank.
+          // Deterministic: the count is per call, and every parity-relevant
+          // consumer feeds addPoints one point (= one segment) at a time.
+          step *= Math.min(16, 2 ** Math.floor(emitted / DAB_CAP));
+        }
+        pos += step;
+      }
+      residual = pos - d;
+      lastPoint = { x: raw.x, y: raw.y, pressure };
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  // Stroke-end hook. Dabs are emitted as points arrive, so nothing to flush
+  // today — this exists so the per-stroke lifecycle is explicit (Stage 3
+  // taper/wet-edge will need it). Never called on overflow restarts.
+  const end = () => {};
+
+  return { addPoints, end };
+}
+
+// ---------------------------------------------------------------------------
+// Paper grain (Stage 2): a fixed-seed noise tile "etched" out of a stroke
+// buffer ONCE at commit time via destination-out. The FIXED constant seed
+// matters: every client builds the byte-identical tile, so remote / replay /
+// spectator commits stay pixel-equal to local.
+
+const GRAIN_SEED = 0x9e3779b9;
+const GRAIN_SIZE = 256;
+let grainTile = null; // lazily-built, shared for the session
+
+function getGrainTile() {
+  if (!grainTile) {
+    const canvas = document.createElement("canvas");
+    canvas.width = GRAIN_SIZE;
+    canvas.height = GRAIN_SIZE;
+    const ctx = canvas.getContext("2d");
+    const image = ctx.createImageData(GRAIN_SIZE, GRAIN_SIZE);
+    const rand = mulberry32(GRAIN_SEED);
+    const data = image.data;
+    for (let i = 3; i < data.length; i += 4) {
+      data[i] = (rand() * 256) | 0; // black pixels, random alpha (tooth depth)
+    }
+    ctx.putImageData(image, 0, 0);
+    grainTile = canvas;
+  }
+  return grainTile;
+}
+
+// Erode `strength` worth of tooth across `bounds` ({x0, y0, w, h}, WORLD
+// coords). Tiles are aligned to world-space multiples of the tile size — the
+// buffer ctx carries the buffer's world-origin transform, so world position
+// (not buffer position) decides the pattern phase: two strokes over the same
+// paper spot share the same tooth.
+export function applyGrain(bufferCtx, bounds, strength) {
+  if (!(strength > 0)) {
+    return;
+  }
+  const tile = getGrainTile();
+  const startX = Math.floor(bounds.x0 / GRAIN_SIZE) * GRAIN_SIZE;
+  const startY = Math.floor(bounds.y0 / GRAIN_SIZE) * GRAIN_SIZE;
+  bufferCtx.save();
+  bufferCtx.globalCompositeOperation = "destination-out";
+  bufferCtx.globalAlpha = strength;
+  for (let y = startY; y < bounds.y0 + bounds.h; y += GRAIN_SIZE) {
+    for (let x = startX; x < bounds.x0 + bounds.w; x += GRAIN_SIZE) {
+      bufferCtx.drawImage(tile, x, y);
+    }
+  }
+  bufferCtx.restore();
+}
+
+// One-stop pre-commit hook for a v2 stroke buffer: flush the dab renderer,
+// then etch the brush's paper grain — inside the buffer, before the single
+// opacity-stamped commit. No-op for legacy strokes (renderer null, grain 0).
+// Pass renderer = null on OVERFLOW commits: the renderer's residual/lastPoint
+// walk state must survive the buffer restart untouched.
+export function prepareStrokeCommit(buf, renderer, grain) {
+  if (!buf || !buf.has()) {
+    return;
+  }
+  if (renderer) {
+    renderer.end(buf.getCtx());
+  }
+  if (grain > 0) {
+    applyGrain(buf.getCtx(), buf.bounds(), grain);
+  }
 }

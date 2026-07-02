@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   brushCatalog,
   drawBrushSegment,
+  getDab,
   getTexture,
+  makeStrokeRenderer,
   paletteCatalog,
   paperTextures,
   pointRand,
+  prepareStrokeCommit,
 } from "./utils/brushes";
 import { createStrokeBuffer } from "./utils/strokeBuffer";
 import {
@@ -2102,6 +2105,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     localStrokeRef.current = null;
     if (stroke.buf.has()) {
+      // Stage-2: flush the dab renderer + etch paper grain INSIDE the buffer,
+      // then stamp once at the stroke's opacity (legacy strokes: no-op).
+      prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.grain);
       stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
     }
     stroke.buf.dispose();
@@ -2154,25 +2160,47 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (stroke.buf.ensure(point.x, point.y, stroke.pad).overflow) {
             // The stroke outgrew the 2048² buffer cap: bank what we have into
             // the layer and restart the buffer here (a rare, visually-minor
-            // opacity seam on giant strokes — intended).
+            // opacity seam on giant strokes — intended). Grain is etched into
+            // each committed chunk; renderer = null keeps the dab walk state
+            // (residual/lastPoint) alive across the restart.
+            prepareStrokeCommit(stroke.buf, null, stroke.grain);
             stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
             stroke.buf.reset();
             stroke.buf.ensure(point.x, point.y, stroke.pad);
           }
-          drawBrushSegment(stroke.buf.getCtx(), lastPoint, point, stroke.drawSettings, pointRand(stroke.seed, point.x, point.y));
+          if (stroke.renderer) {
+            // Stage-2 dab path: the renderer interpolates spaced stamps from
+            // its OWN per-stroke lastPoint/residual — feed one point at a time
+            // (matching how remote batches are unpacked per point).
+            stroke.renderer.addPoints(stroke.buf.getCtx(), [point]);
+          } else {
+            drawBrushSegment(stroke.buf.getCtx(), lastPoint, point, stroke.drawSettings, pointRand(stroke.seed, point.x, point.y));
+          }
         } else {
           drawBrushSegment(context, lastPoint, point, settings);
         }
         lastPointRef.current = point;
         if (net) {
-          // Wire dedupe: a point that rounds to the same pixel as the previous
-          // one with (near-)identical pressure repaints nothing on replay, so
-          // don't spend op bytes on it. Local render keeps the raw point.
-          const nx = Math.round(point.x);
-          const ny = Math.round(point.y);
+          // Wire dedupe: a point that quantizes onto the previous one with
+          // (near-)identical pressure repaints nothing on replay, so don't
+          // spend op bytes on it. Local render keeps the raw point. Quarter-px
+          // (not whole-px) since Stage 2: dab placement integrates spacing
+          // along the path, so sub-px point fidelity is visible now.
+          const nx = Math.round(point.x * 4) / 4;
+          const ny = Math.round(point.y * 4) / 4;
           const prev = net.last;
           if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - point.pressure) >= 0.01) {
             const netPoint = { x: nx, y: ny, pressure: point.pressure };
+            // Pen tilt rides the wire as small ints (Stage 3 dynamics will
+            // read them; harmless for Stage-2 rendering).
+            if (nativeEvent.pointerType === "pen") {
+              const tx = Math.round(pointerEvent.tiltX || 0);
+              const ty = Math.round(pointerEvent.tiltY || 0);
+              if (tx !== 0 || ty !== 0) {
+                netPoint.tx = tx;
+                netPoint.ty = ty;
+              }
+            }
             net.pending.push(netPoint);
             net.last = netPoint;
           }
@@ -2363,17 +2391,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Per-stroke randomness seed: rides the wire so every client renders the
       // exact same jitter/scatter for this stroke (see pointRand in brushes).
       const seed = Math.floor(Math.random() * 2 ** 31);
+      // Stage-2 routing: brushes with dab params mark their ops settings.v = 2
+      // (rides the wire), so every consumer — local, live remote, spectator,
+      // history replay — picks the makeStrokeRenderer path for this stroke.
+      // Spray/eraser/anything without dab params stays legacy, and legacy
+      // history ops (no v) replay pixel-stable forever.
+      const dab = settings.brush === "eraser" ? null : getDab(settings.brush);
+      const netSettings = {
+        brush: settings.brush,
+        color: settings.color,
+        size: settings.size,
+        opacity: settings.opacity,
+        variation: settings.variation,
+        seed,
+      };
+      if (dab) {
+        netSettings.v = 2;
+      }
       // Open an outgoing network stroke so each painted point streams to friends.
       strokeNetRef.current = {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        settings: {
-          brush: settings.brush,
-          color: settings.color,
-          size: settings.size,
-          opacity: settings.opacity,
-          variation: settings.variation,
-          seed,
-        },
+        settings: netSettings,
         pending: [],
         lastSent: 0,
         last: null, // last appended net point (wire-level dedupe)
@@ -2382,7 +2420,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // eraser preview would appear to punch holes through LOWER layers
       // mid-stroke, so erasing keeps the direct destination-out path.
       if (settings.brush !== "eraser") {
-        const netSettings = strokeNetRef.current.settings;
         localStrokeRef.current = {
           buf: createStrokeBuffer(),
           layer: getActiveLayer(),
@@ -2390,6 +2427,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           drawSettings: { ...netSettings, opacity: 1 },
           seed,
           pad: settings.size * 3 + 40, // covers glow shadowBlur + spray scatter
+          // Stage-2 dab renderer: holds lastPoint/residual PER STROKE so wire
+          // batching can't move dabs. Null → legacy segment path.
+          renderer: dab ? makeStrokeRenderer(netSettings) : null,
+          grain: (dab && dab.grain) || 0, // paper tooth etched at commit
         };
       } else {
         localStrokeRef.current = null;
@@ -3936,6 +3977,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (entry.buf) {
         const ctx = getRemoteCtx();
         if (ctx && entry.buf.has()) {
+          // Stage-2: flush the dab renderer + etch paper grain, then the
+          // single opacity-stamped commit (legacy strokes: no-op).
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.grain);
           entry.buf.commit(ctx, entry.opacity);
         }
         entry.buf.dispose();
@@ -4023,15 +4067,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             }
           }
           const opacity = Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity));
+          // Stage-2 routing (identical to the local + spectator branch):
+          // v >= 2 AND the brush has dab params → makeStrokeRenderer, whose
+          // per-stroke walk state makes the 40ms wire batching irrelevant to
+          // dab placement. The renderer needs the full-alpha buffer, so the
+          // rare past-the-cap (buf: null) fallback stays on legacy segments.
+          const dab = settings.v >= 2 ? getDab(settings.brush) : null;
           // Past the cap, this stroke is flagged (buf: null) onto the legacy
           // direct per-segment path — its end-op then has nothing to commit.
+          const buf = buffered < REMOTE_BUFFER_CAP ? createStrokeBuffer() : null;
           entry = {
-            buf: buffered < REMOTE_BUFFER_CAP ? createStrokeBuffer() : null,
+            buf,
             settings,
             drawSettings: { ...settings, opacity: 1 },
             opacity,
             pad: (settings.size || 24) * 3 + 40,
             lastTouch: 0,
+            renderer: dab && buf ? makeStrokeRenderer(settings) : null,
+            grain: dab && buf ? dab.grain || 0 : 0,
           };
           strokes.set(op.strokeId, entry);
           ensureRemoteSweep();
@@ -4042,12 +4095,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           for (const point of op.points || []) {
             if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
               // Outgrew the 2048² cap: bank the buffer into the layer and
-              // restart it here (rare, visually-minor opacity seam).
+              // restart it here (rare, visually-minor opacity seam). Grain is
+              // etched per chunk; renderer = null keeps the dab walk state
+              // alive across the restart.
+              prepareStrokeCommit(entry.buf, null, entry.grain);
               entry.buf.commit(ctx, entry.opacity);
               entry.buf.reset();
               entry.buf.ensure(point.x, point.y, entry.pad);
             }
-            drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+            if (entry.renderer) {
+              // One point at a time so batch boundaries can never matter.
+              entry.renderer.addPoints(entry.buf.getCtx(), [point]);
+            } else {
+              drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+            }
             last = point;
           }
         } else {
