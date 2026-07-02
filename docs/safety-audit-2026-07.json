@@ -1,0 +1,902 @@
+{
+  "summary": "Persona-based red-team (safety/abuse) + blue-team (fun/social) audit of Drawesome, then synthesize two prioritized lists",
+  "agentCount": 7,
+  "logs": [],
+  "result": {
+    "personaReports": [
+      {
+        "persona": "Child-safety red-teamer assessing risk vectors for minor isolation, contact, identity leakage, and grooming enablement on a youth collaborative painting platform.",
+        "summary": "Drawesome is a real-time multiplayer painting app designed for kids and teens with no account requirement to draw. The platform implements defenses against public-room abuse (text moderation in kid_safe rooms, image scanning via elected watchers, reversible op-hiding, host roles). However, **private \"friends\" rooms are creation-friction-free, unmoderated, and shareable via 6-character invite codes—opening pathways for a predator to isolate minors and lure them into unmonitored spaces**. Guest auto-names prevent simple name-based targeting, but a child's signed-in account name or @mention cross-room notifications can enable repeated contact. Chat is persisted server-side with profile IDs for deletion scrubbing, but an attacker in a private room has unrestricted messaging and no content scan. The platform lacks age-gating, parental consent, in-app contact-info filtering for socials/external services, and SLA-bound human review of reports before escalation.",
+        "findings": [
+          {
+            "title": "Private room code generation creates unmoderated isolation vector",
+            "kind": "safety",
+            "severity": "critical",
+            "evidence": "server.js:1485–1494 (genRoomCode), 1516–1546 (POST /api/rooms), 293–295 (default audience='friends' for code-reached rooms); server.js:854–855 (no text moderation in non-kid_safe rooms); CONTENT_MODERATION.md line 178–179 (moderation 'not in friends/adult_18 rooms')",
+            "scenario": "Attacker joins MAIN or a public featured room, spots a target child (by guest name or signed-in account name via userList), crafts a 6-char code (e.g., XYZA5), sends a chat message \"hey cool art—draw with me in my private room code XYZA5\" (text passes kid_safe scan if it avoids profanity). Child joins the code, creating a friends-audience room owned by attacker. Room is never listed in discovery, never auto-moderated (text scan off, image watcher off, no severity ladder). Attacker now has unrestricted private chat + full drawing canvas with the target with zero friction.",
+            "mitigation": "Require explicit acceptance of a private room invite before auto-joining (e.g., join modal shows 'Room XYZA5 invites you—accept?' rather than silent creation). Alternatively: (1) always flag private-room joins in analytics/reports for spot-check review; (2) scan chat in private rooms if a minor is detected (via parent email domain, age-gate consent); (3) rate-limit private-room code sharing in public-room chat (flag 'invite codes' as suspicious)."
+          },
+          {
+            "title": "No age-gating or parental consent for account creation or drawing",
+            "kind": "safety",
+            "severity": "critical",
+            "evidence": "src/components/SignupPage.jsx lines 1–150 (email/password signup with zero age checks, no parental-consent or COPPA flow); src/utils/auth.js lines 152–183 (signUpWithEmail with minimal validation); server.js lines 1531–1533 (public room creation requires signed-in user but no age verification); nothing in codebase prevents a 50-year-old from creating an email account 'noreply@gmail.com' and signing into an age-gated platform",
+            "scenario": "Predator creates account with email 'john@adult.com', name 'Coach Dave', enters as host in a public room (kid_safe), then pivots to private rooms and DMs minors. Zero friction: no age attestation, no email verification, no background check for 'grown-up owner' role. Account persists across sessions, enabling repeated contact.",
+            "mitigation": "Implement age-gate (ask 'are you 18+?', store attestation, flag low-confidence cases). For public-room ownership require email domain whitelist (school/@edu, parent domains) or phone verification. In private rooms, flag cross-age contact (adult account name talking to kid account) for human review. If COPPA applies, require parental email consent before minor account creation (non-negotiable for US/kid-directed apps)."
+          },
+          {
+            "title": "@mention notification system enables cross-room targeting and repeated contact",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js lines 561–580 (notifyMentions function fans @mentions to cross-room notifier sockets); useMentionWatcher.js lines 20–96 (client watches up to 12 rooms for @mentions of a display name); server.js lines 549–559 (nameMentioned checks if message contains @name; case-insensitive whole-token matching). App.jsx shows mention notifications in a profile inbox persisted in localStorage. An attacker can @mention a target child's account name in any room they share, triggering a notification that pulls the child's attention back to a chain of contact attempts.",
+            "scenario": "Predator learns child's account name is 'Luna Fox' (visible in public room userList). Predator creates account 'ArtCoach123', joins DINO room (featured, always-open). Sends chat: 'Hey @Luna Fox come draw dinosaurs with me in room code FISH7'. Luna gets a @mention notification in her cross-room inbox. Even if Luna ignores it, predator can continue pinging her daily from different rooms, building rapport. With no per-child contact limits, predator establishes a communication channel that persists across sessions and rooms.",
+            "mitigation": "(1) Disable @mentions for signed-in child accounts by default; require them to opt-in per adult contact (parents control this). (2) Block @mentions from unverified accounts to accounts under 18. (3) Implement a weekly @mention limit per target child per sender (e.g., max 3 unique senders per week). (4) Require explicit follow/friend acceptance before cross-room @mentions work. (5) Report all @mentions from adults to minors (flag for human review if >1 per week from same account)."
+          },
+          {
+            "title": "Display names are guest-auto-generated but signed-in names are not restricted, enabling identity spoofing and impersonation",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js lines 489–496 (guestNameFor generates 'Neon Fox' etc. per session, unique per room); server.js lines 769, 883–890 (user.name assigned from identity.displayName or guestNameFor; rename case allows free-form naming up to 20 chars); src/App.jsx shows no name-uniqueness validation or moderation per room. An attacker's signed-in account can set display name 'Mom' or 'Teacher Dave' or copy another kid's auto-generated name.",
+            "scenario": "Child 'Pixel Bunny' (auto-generated guest) is drawing with friend in DINO. Predator (signed-in account) joins same room, renames to 'Pixel Bunny #2' or 'Teacher Dave says great job!'. Chat message: 'Hi Pixel Bunny, it's your teacher—finish drawing with me in room COACH1 for extra credit'. Victim believes it's an authority figure. Private room isolation + spoofed identity = lure + isolation.",
+            "mitigation": "(1) On join, reserve the full set of room-participant names (+ close misspellings via Levenshtein distance) so a signed-in user cannot pick a name matching any guest name in the current room or resembling an authority figure. (2) Tag signed-in vs. guest names visually (e.g., badge or color-coding). (3) Prohibit names containing 'teacher', 'coach', 'parent', 'admin', 'moderator', 'officer', etc. (4) If a user renames, notify everyone in the room (e.g., 'ArtCoach123 renamed to Pixel Bunny #2')."
+          },
+          {
+            "title": "No contact-info filtering in chat or drawn text (socials, email, phone, location sharing)",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server/moderation/textFilter.js lines 1–208 (scan() only checks SEVERE slurs/explicit terms and MILD profanity; no pattern matching for emails, phone, Discord, Instagram, Snapchat, TikTok, phone numbers, or location keywords); server.js lines 918–926 (kid_safe chat scan calls textFilter.scan() which has no contact-info rules); server.js lines 847–853 (drawn text only scanned for profanity, not contact info). Text filter explicitly designed to avoid false positives on innocent words, but contact info is an intentional attack vector predators use.",
+            "scenario": "Child in public MEMEWALL room sees chat message 'dm me on discord: badactor#1234'. Another message: 'let's chat on insta @badactor_art' or '📱 text me: 555-0123'. Or drawn text in a private room with contact info. Server allows these because they don't match 'fuck' or 'nigger'. Predator migrates conversation off-platform where they have total privacy and no audit trail. Parents cannot see messages. Platform loses all visibility into abuse.",
+            "mitigation": "(1) Extend textFilter with contact-info patterns: emails (user@domain.com), phone (#-grids), social handles (@instagram, discord#, Snapchat username, TikTok, Telegram, Roblox, Minecraft usernames). (2) In kid_safe rooms, detect and block/mask contact-info in both chat and drawn text (same severity as profanity). (3) In friends rooms with a minor, flag contact-info-sharing messages to hosts/admins (alert: 'possible off-platform contact attempt'). (4) In account-deletion audit logs, note any contact-info shared by the deleted account so moderators can check if they were targeting other minors."
+          },
+          {
+            "title": "No human-review SLA or escalation path for reports in private rooms",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js lines 1386–1394 (POST /api/report accepts any anonymous report, files it in reports array, but only surfaces it in LiveAdmin which is admin-only access); server.js lines 1465–1478 (GET/POST /api/admin/reports with no SLA, no escalation tiers, no notification of receipt); nothing in code auto-escalates a report to a human moderator on a schedule. Reports sit in reports.json until an admin manually logs into /admin and marks them resolved. No guarantee a child reporting an adult predator gets a response within hours/days.",
+            "scenario": "Child in COACH1 private room receives explicit sexual messages or requests for images from account 'FitnessBuddy'. Child reports via in-app report button ('This person is being inappropriate'). Report is filed. But: (1) no SLA—report might sit for days; (2) no auto-escalation (e.g., to Cloudflare, to law enforcement if grooming terms are detected); (3) no receipt confirmation ('we got your report, we'll respond in 4 hours'); (4) no notification to child of action taken; (5) admin portal is behind a static key, not multi-user roles, so a single admin bottleneck. By the time someone reads it, predator has deleted their account or moved to another kid.",
+            "mitigation": "(1) Implement report urgency tiers: flag reports containing terms like 'sexual', 'image request', 'meet', 'address', 'parent gone' as URGENT (max 1h SLA). (2) Send auto-receipt to reporter: 'We got your report—our team will review it within 4 hours. Stay safe.' (3) Implement multi-user admin roles + audit trail (not single admin key). (4) Auto-escalate URGENT reports to multiple admins + external escalation partner (e.g., CyberTipline). (5) If a private-room report names an account by ID, immediately mute/shadow-ban that account pending review (they can still draw, but their chat is undelivered to other users)."
+          },
+          {
+            "title": "No persistent friendship/follow system, but repeated cross-room contact is possible via coded invites and @mentions",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "No 'follow', 'friend', 'favorite', or 'block' feature in the codebase. However, a signed-in attacker can: (1) learn a target's account name from any room's userList (visible to all); (2) create an invite code (genRoomCode ~1.7M possible codes); (3) send @mentions + room codes in public rooms to lure target to private rooms; (4) repeat daily. Server.js lines 561–580 route all @mentions to notifier sockets with no per-child contact limit. No block/mute mechanism at the global account level.",
+            "scenario": "Adult predator 'TutorMike' creates signed-in account, joins MAIN. Spots 'AlexArt' (a child account visible in userList). Sends @mention: 'Hey @AlexArt I'm giving free art lessons in room TUTRL1!' Alex joins. Predator builds rapport over days, then pivots to requests ('can you send a photo of yourself?') or isolation ('let's keep our lessons private, don't tell anyone'). Alex has zero way to globally block TutorMike—only per-room mute (and only if Alex becomes host, which unlikely in private room where TutorMike is owner). Next day, TutorMike creates room TUTRL2, sends another @mention. Alex gets looped in again.",
+            "mitigation": "(1) Implement global account-level block/mute. (2) Require explicit accept of @mentions from accounts outside a child's signed-in contacts (whitelist: users in the same school district, verified by email domain, or explicitly added by child). (3) Cap @mentions per account per child: max 3 unique senders per week (threshold tuneable). (4) If a child blocks an account, auto-decline future private-room invites from that account. (5) Require signed-in minors to opt into @mention notifications (disabled by default); parents control via parental-consent settings."
+          },
+          {
+            "title": "Signed-in account deletion does not scrub account name from chat audit logs, enabling deanonymization",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js lines 152–167 (appendChatAudit stores user's profileId + name + message in .chatlog files); src/utils/accountDeletion.js lines 105–131 (fileServerDeletion deletes PocketBase user record via pb.collection('users').delete(id), which cascade-deletes 'owned' rows like gallery snapshots per PocketBase rules, but chat audit logs are server-side in .chatlog/<ROOM>.jsonl and NOT deleted). Comment in accountDeletion.js line 14 says 'account-deletion scrub' but does not mention chat; server.js comment line 174 says 'never a human-readable name' but that's aspirational, not enforced—name IS stored in audit log.",
+            "scenario": "Child account 'LunaGamer' (age 11) joins a room, chats about homework, school name, friend names. Later, parent deletes the account (in-app deletion flow). Server wipes LocalStorage + IDB data on device, but .chatlog/MAINROOM.jsonl still contains: '{\"ts\":...,\"room\":\"MAIN\",\"userId\":\"u1234\",\"profileId\":\"pb_xyz123\",\"name\":\"LunaGamer\",\"message\":\"hey im at eastside school\"}'.  A moderator reviewing old logs, a disgruntled admin, or anyone with file access can correlate 'LunaGamer' + messages + timestamp to re-identify the child if they access the plaintext log.",
+            "mitigation": "(1) On account deletion, immediately wipe all chat audit logs for that profileId: replace name with '[deleted]' and redact message to '[deleted account message]' or remove the line entirely. (2) Implement a server-side account-deletion handler that: queries all .chatlog files, filters out lines matching the deleted profileId, and rewrites the files. (3) Store profileId (for linking) but never the display name in audit logs; only names are only needed for real-time display, not audit. (4) Implement log retention + auto-purge: after 90 days, delete old logs (reduces re-identification surface). (5) Require audit-log access to be admin-only, multi-person approval for exports, and logged."
+          },
+          {
+            "title": "Spectator viewport (homepage) leaks room activity and user presence without participant consent",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js lines 715–738 (spectate=1 mode allows unlimited read-only viewers of a room's live canvas + chat history + userList); app broadcasts history and userList to spectators (line 536–540); src/components/HomePage.jsx lines 1–150 shows live carousel of active public rooms with participant counts. Spectators are not added to room.users (no count cap), so millions could watch a room's canvas and see every participant's name + color in real-time.",
+            "scenario": "Parent or predator watches MAIN room for hours, sees 'PixelArt' and 'CosmicDino' drawing together. Learns the kids' names + drawing patterns + online times. Uses homepage to 'find' the kid ('they're in DINO every Tuesday 4pm'). Is not counted as a participant, so the room feels safe to observers but is fully visible. Predator notes when a specific child is online + alone (no other kids), then joins with a new account to isolate them.",
+            "mitigation": "(1) Disable spectate mode for public kid_safe rooms (or allow only invited, verified spectators). (2) Hide userList from spectators—show only participant count ('5 people painting'), not names. (3) Delay spectator canvas by 2–3 seconds (so live interactions are not visible in real-time, reducing hunting). (4) Require explicit opt-in from room host to allow spectators (default: off). (5) Log spectator IPs/sessions and report long-duration watchers (>1h) to mods for human review (possible predatory surveillance)."
+          },
+          {
+            "title": "Token in WebSocket URL query string is logged by proxies, CDN, and browsers (hardened WS auth outstanding)",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js lines 751–752 (token = url.searchParams.get('token'); client passes PocketBase access token in ?token=...); src/hooks/useMultiplayer.js presumably calls `new WebSocket(url + '?token=' + token)`. PocketBase tokens are long-lived and tied to user identity. URL query strings are logged in: Cloudflare access logs, proxy logs, browser history, HAR files, developer tools, proxy cache headers.",
+            "scenario": "Child's parent (or attacker with network access) reviews browser history, checks Cloudflare logs, or uses DevTools Network tab and sees URL like 'wss://drawesome.art/ws?token=pb_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'. Token can be replayed in a different browser/device to hijack the child's account, or used to identify the child's activity pattern. Child signs in, token is leaked in logs, predator steals it and impersonates the child to other kids ('hey it's Alex'). Parent cannot audit what the child did in the app because tokens are semi-public.",
+            "mitigation": "(1) Move token from URL to HTTP Authorization header or a secure WebSocket subprotocol (e.g., sec-websocket-protocol). (2) Use short-lived tokens (e.g., 15 min expiry) + refresh via a POST endpoint before WS reconnect. (3) Implement per-session tokens that are bound to a device fingerprint (IP + user-agent hash) so a leaked token cannot be replayed elsewhere. (4) Log token access (when used) and alert the account owner if a token is used from a new IP/device. (5) Provide parents a way to see 'logged-in sessions' and revoke specific tokens remotely."
+          },
+          {
+            "title": "Report data is not encrypted at rest and plaintext chat audit logs contain sensitive conversations",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js lines 1307–1317 (reports array is JSON.stringify'd to .reports.json on disk, plaintext); server.js lines 152–167 (chat audit logs are .jsonl lines appended plaintext to .chatlog/<ROOM>.jsonl). DATA_DIR is a local filesystem or Docker volume. No encryption-at-rest mentioned. Admin key is stored plaintext in .admin-key file (lines 1297–1305).",
+            "scenario": "A child describes abuse or trauma in a private room ('he touched me inappropriately'), reports it. Report + full chat history are written to plaintext .reports.json and .chatlog files. Server is breached or a disgruntled employee accesses the files. Sensitive information (names, messages, allegations) is exposed. Or a cloud provider (AWS, etc.) performs routine maintenance and plaintext logs sit on a drive that is later discarded without wiping.",
+            "mitigation": "(1) Encrypt reports.json and .chatlog files at rest using a server key or envelope encryption. (2) Use file permissions (chmod 600) and OS-level encryption (BitLocker, LUKS). (3) Implement a 'sensitive report' flag; when set, redact chat context from plaintext storage and store it separately encrypted. (4) Rotate the admin key regularly; store it in an environment variable or secrets manager (not plaintext file). (5) Implement audit logging for who accesses reports/logs (every read/export is logged). (6) Purge old chat logs after 90 days (retention policy)."
+          },
+          {
+            "title": "No rate limit on private room creation enables invite-spam and message-flood attacks against minors",
+            "kind": "safety",
+            "severity": "low",
+            "evidence": "server.js lines 1496–1508 (rateOk function limits public-room creation to 8 per 60s per profile/IP). Private (friends) rooms are created lazily on first WS connect (line 695, getRoom(roomId)), not via REST endpoint. No rate limit on lazy creation. An attacker can craft 1000 random room codes, send @mentions with each code to a target child in a public room (each @mention goes through moderation scan, passes if no profanity), and the child gets 1000 notifications + room-join requests without friction.",
+            "scenario": "Predator script: (1) generates 1000 random codes (e.g., AAAAA1..ZZZZ9); (2) for each code, joins a public room, sends chat '@LunaGamer join AAAAA1!' (repeats every 5 seconds); (3) Luna's inbox floods with 1000 @mention notifications. Even if blocked, the attack demonstrates that a minor can be overwhelmed with unsolicited contact attempts.",
+            "mitigation": "(1) Rate-limit private-room code-invitation messages in chat: per sender, max 10 room codes per hour (flagged in text filter as invite-spam). (2) Rate-limit @mentions per sender per target: max 5 per hour (excess gets buffered/dropped). (3) Require a child to confirm they want to join a private room (accept dialog) if the invite is from an account they haven't interacted with before. (4) Implement 'invite mode' toggle for children: disabled by default, only accept private-room invites from accounts on a whitelist."
+          }
+        ]
+      },
+      {
+        "persona": "Troll looking to upset kids in shared rooms without getting caught",
+        "summary": "Drawesome is a collaborative paint app for kids with layered moderation (chat text filter + NSFW watcher + host controls), but serious gaps exist. The NSFW watcher is desktop-only and optional — rooms with no capable watchers get zero canvas monitoring. Chat moderation only catches whole-word profanity and skips drawn text entirely. Muting and kicking are identity-based but don't prevent reconnection as an anonymous user. Display names have zero filter, enabling impersonation. The system stops most coordinated abuse but fails against determined trolls exploiting the optional watcher, name spoofing, and unscanned drawn text.",
+        "findings": [
+          {
+            "title": "NSFW watcher completely disabled if no eligible client present",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:315-330. electWatchers() filters candidates with (u) => u.watcherCapable. Lines 44-71 of nsfwWatcher.js show isWatcherCapable() returns false for touch-first devices (phones/tablets), iPad, <4 cores, <4GB RAM, AND requires fine pointer. Zero checks force watcher fallback; a room full of mobile kids or weak devices = zero NSFW scanning.",
+            "scenario": "Troll joins a kids' room from iPad or phone (primary user base), draws explicit genital imagery / hate symbols in high detail. Server never elected this troll as watcher. No other capable device in room (all mobile). Drawing ops go directly to history (line 518) and broadcast (line 522) with zero image analysis. The canvas shows the abuse immediately; moderation never fires until a human report arrives. Even then, scan() (textFilter.js) doesn't touch drawn-text ops at all — only text ops at line 508-513, and even that is 'if...data.op.kind==='text''. A pixel-drawn genitalia image bypasses everything.",
+            "mitigation": "Require server-side canvas downsampling + off-device inference (e.g., run TensorFlow.js model once per N ops in Node, not relying on client capability). OR whitelist only kid_safe rooms that have at least one elected watcher before allowing non-host drawing. OR defer first N drawing ops until a watcher is present."
+          },
+          {
+            "title": "Drawn text abuse: scan() not called on freeform text drawings",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:505-514. Text filter scan() is ONLY called if data.op.kind==='text' (structured text op). But a troll can draw freeform letters/words as brush strokes instead. scan() never sees them. No pixel-level text detection. Compare: chat moderation at line 577-585 does call scan(message) on all chat.",
+            "scenario": "Troll uses brush tool to hand-draw the word 'nigger' or 'kill yourself' as pixel art strokes (kind='brush' not kind='text'). Line 509 condition is false. Strokes are tagged at line 517-518 and broadcast at line 522. Hosts see abuse in real time but there is no auto-report. The drawn slurs appear exactly as if legitimate marks were made.",
+            "mitigation": "OCR-scan the canvas periodically (or on flag) looking for text-like patterns. OR teach the text filter to consume the op's geometry (if brush) and reject if center-of-mass looks like blocked glyphs. OR require brush text to use the op.kind='text' path, not free drawing."
+          },
+          {
+            "title": "Anonymous user mute/kick does not persist across reconnect",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:423-432. Kick only applies to signed-in users (profileId check). Line 446: mute applies to profileId at runtime but line 616-619 only persists to mutedProfileIds if target.profileId exists. Anonymous users (no profileId) are never added to kickedProfiles; they can rejoin immediately as a new userId (line 358-359: nextUserId includes timestamp).",
+            "scenario": "Troll joins room anonymously, spams hateful chat or draws abuse. Host mutes them (line 614-619 skips persistence because no profileId). Troll closes tab, reopens drawesome.art?room=MAIN. New WebSocket connection (line 394) assigns new userId. Check at line 425-432 never blocks them (kickedProfiles is empty or doesn't have their new identity). They rejoin and spam again. This repeats indefinitely; only ban-all-anons stops it, which breaks legitimate use.",
+            "mitigation": "Track anonymous users by IP + device fingerprint (localStorage or cookie). Store temp bans in kickedProfiles by IP. Requires frontend to send device key + backend to validate it per room."
+          },
+          {
+            "title": "Display names have zero content filter; enable identity spoofing",
+            "kind": "abuse",
+            "severity": "high",
+            "evidence": "server.js:541-549 'rename' handler. Line 543 only validates type and length ('string' && trim() && slice(0,20)). No call to scan(). Compare chat (line 577-585) which DOES call scan(message). Display name is broadcast in every userList (line 548), op (line 522 as userId, but echoed via line 587 user.name), and chat (line 587).",
+            "scenario": "Troll uses rename to set displayName to 'NiggaKing' or '@admin_bot' (impersonation). Line 543 accepts it. All other users see this name in the room (userList), chat bubbles, and op attributions. No host alert. The troll claims 'I'm the moderator, clear the canvas' or 'I'm CoolArtist2 [the popular kid]' and kids obey. Rename is triggered client-side with zero server-side permission check beyond the bare type validation.",
+            "mitigation": "Apply scan(name) to displayNames before accepting (line 543). Reject names that are too close to 'admin', 'moderator', existing user names (edit distance). Require signed-in users to use their PocketBase displayName; don't allow rename on anon users."
+          },
+          {
+            "title": "Chat filter evasion via unicode homoglyphs and zerowidth characters",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "textFilter.js:39-80. stripDiacritics() uses NFD decomposition (line 41) but does NOT strip zero-width characters (U+200B, U+200C, U+200D, U+FEFF). These pass through unchanged. A message like 'fu​ck' (u+200B between u and c) normalizes to the same string, but the regex doesn't match because the boundary is broken by zero-width. LEET folding (line 44-47) doesn't cover homoglyphs like Cyrillic 'а' (U+0430) vs Latin 'a' (U+0061).",
+            "scenario": "Troll sends chat message 'fu​ck you' (with U+200B). scan() calls normalize() which lowercases and folds leet. The zero-width stays. buildMatcher() creates regex with letter boundaries (?<![a-z]) which still expect visible letters. The zero-width breaks the token boundary. Regex doesn't match. Message is NOT severe. maskMessage() (line 971) doesn't catch it. Message is broadcast as-is (line 586-590). Kids see 'fu' + invis + 'ck you'.",
+            "mitigation": "Strip all zero-width and control characters in normalize(): line 41 after NFD, add .replace(/[​‌‍­\\p{Cc}\\p{Cf}]/gu, ''). Also normalize Cyrillic/Greek lookalikes to Latin equivalents before regex match."
+          },
+          {
+            "title": "Chat spam / @mention harassment — no rate limiting per user",
+            "kind": "abuse",
+            "severity": "medium",
+            "evidence": "server.js:571-591 'chat' case. No rate limit check. No flood detection. Muted users can't chat (line 572) but unmuted users can spam unbounded. broadcast() (line 383-391) sends to all room users every time. No per-user window tracking or message-per-second cap.",
+            "scenario": "Troll's account is not muted. They send {'type':'chat','message':'fuck '} every 50ms in a tight loop (raw WS frames, not UI-throttled). 1200 messages/minute flood the chat buffer (line 82 keeps only 50 messages in useMultiplayer.js). Other kids' chat is buried. If the troll crafts messages that don't trigger scan() (e.g., spam emojis or spaces), muting requires a host to act. No automatic throttling.",
+            "mitigation": "Add per-user-per-room rate limiter: track send times per userId in a rolling window (e.g., max 5 messages per 10 seconds). Drop excess. Escalate to auto-mute if threshold is breached."
+          },
+          {
+            "title": "Mute can be bypassed by host-escalation in private rooms",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:644-660 'promote'/'demote'. Line 646: Only room.ownerProfileId can change roles. But line 614-615: mute can only be set by host. If a malicious owner promotes the troll (who is muted) to co-host, the mute persists (line 616-619 persists to profileId) BUT the troll can now set lock, hide ops, mute others. Line 743 auto-mutes authors on corroborated flags, but muting never auto-revokes host perms.",
+            "scenario": "Troll A joins and spams abuse. Host mutes Troll A (profileId is now in mutedProfileIds). Troll B (the room owner / a friend of Troll A's) immediately promotes Troll A to co-host. Troll A is still muted (can't chat, line 572) but IS now a host (isHost returns true at line 368). They can now hide ops (mod_hide, line 666-673), lock the room (line 597), and escalate to kicking the host. The mute.label persists but the role grants moderation power.",
+            "mitigation": "When promoting, check if target is muted. Reject promotion if they are, or auto-unmute + require confirmation. OR strip all moderation actions if muted, not just chat (add mute check to lock/hide/kick handlers)."
+          },
+          {
+            "title": "No tracking of canvas-clearing attack pattern (mass op deletion)",
+            "kind": "abuse",
+            "severity": "medium",
+            "evidence": "server.js:551-560 'clear' case. Requires host in owned rooms (line 554) but in LEGACY unowned rooms (room.ownerProfileId is null), ANY user can call clear and wipe the entire history (room.history = []) with no logging. Line 559 broadcasts but doesn't track WHO cleared it beyond userId (an anon can do this). No cooldown, no approval needed in legacy mode.",
+            "scenario": "Group of 3 trolls joins legacy unowned room (not kid_safe, e.g., 'private' room reached via invite code). They each call clear repeatedly, or one crafts a raw WS 'clear' message. Line 554 check fails (ownerProfileId is null). History is wiped. Everyone else sees blank canvas. room.lastCleared saves one backup (line 556) but only one undo is possible (line 564-566). If they clear again, the second clear backs up the first clear's blank history. Net: no recovery. Hosts can't prevent it without locking the room (line 597).",
+            "mitigation": "Never allow clear in unowned rooms; require a host to exist and own it. OR require whitelist of permission per user at join time (is_host flag from PocketBase). OR implement clear cooldown (one per N seconds, per userId, per room)."
+          },
+          {
+            "title": "Drawn-text ops are not scanned for profanity at all",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:508-513. Text moderation ONLY checks 'if (room.audience === 'kid_safe' && data.op.kind === 'text')' then scan(). But drawShape() utility (src/utils/shapes.js) can create ops of kind='text' via the text tool. If code ever allows other op.kind values (e.g., 'label', 'annotation') or if the client sends kind='text' with props the server doesn't expect, scan() may not cover it. Actually, on re-read, line 508 DOES check kind === 'text', so DRAWN text IS covered. But only if client marks it as kind='text'. A troll crafting raw WS frames can send {'type':'op','op':{'kind':'brush','text':'fuck',...}} and the scan at 509 never triggers because kind is 'brush'.",
+            "scenario": "Troll opens browser DevTools, crafts raw WS message: {'type':'op','op':{'kind':'brush','text':'fuck','...brush_props...'}}. Server receives it at line 500. Line 508 condition is false (kind !== 'text'). No scan. Line 517-518 tags and broadcasts. Kids see it.",
+            "mitigation": "scan() every op.text field if present, regardless of kind (not just kind='text'). Add: if (data.op?.text && typeof data.op.text === 'string') { const verdict = scan(data.op.text); if (verdict.severity === 'severe') { autoModerate(...); break; } }"
+          },
+          {
+            "title": "Token still exposed in WS URL query string (noted in task #40 pending)",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:418. WS URL is constructed client-side with token in searchParams (line 418: url.searchParams.get('token')). Browser logs this in network inspector and history. Cloudflare tunnel logs may retain it. No TLS downgrade is needed; the token is plaintext in the URL path of the WebSocket handshake.",
+            "scenario": "Parent/school admin reads browser history and sees 'wss://drawesome.art/ws?room=MAIN&token=eyJ...'. The token is a PocketBase JWT; they decode it and learn the child's profileId. The token can be reused until expiry to impersonate the child in the app (sign requests, create rooms in their name, vote as them, etc.). The token should be in an Authorization header (supported by ws lib) not the URL.",
+            "mitigation": "Move token from query param to Authorization header at WS connection time (see task #40). Client: ws.addEventListener('open', () => ws.send(JSON.stringify({type:'auth',token:...}))) instead. Server: handle auth message in ws.on('message') before processing other message types."
+          },
+          {
+            "title": "Private rooms unmoderated; profanity filter disabled even if audience is set",
+            "kind": "safety",
+            "severity": "low",
+            "evidence": "server.js:577. Chat scan ONLY applies 'if (room.audience === 'kid_safe')'. Line 199 shows unowned invite-code rooms default to 'friends' (not moderated). Line 108-110 show audience can be set to 'friends' explicitly. In friends rooms, scan() is never called; all chat is unfiltered (line 586-590).",
+            "scenario": "Host creates a public room but mistakenly sets audience='friends'. Troll joins and spams 'fuck fuck fuck'. No scan. No maskMessage. Kids see it verbatim. The idea is that invite-code private rooms should be unmoderated (adult conversation), but a host may accidentally create a discoverable room with audience=friends and expect moderation.",
+            "mitigation": "Clarify audience selection UX: 'kid_safe = moderated (public or private), friends = unmoderated (private invite only)'. OR apply basic chat filter to all rooms but allow host to disable it. OR audit that audience defaults match room visibility (public => kid_safe always)."
+          },
+          {
+            "title": "Vote brigading possible in event voting (client-side anti-cheat only)",
+            "kind": "trust",
+            "severity": "low",
+            "evidence": "eventEngine.js:21-37. Vote profile ID is stored in localStorage (line 32) but is client-controlled. getVoteProfileId() generates a UUID on first call and persists it. Line 43-58: readVotedPostIds() reads from localStorage. If a troll clears their browser localStorage, calls getVoteProfileId() again, they get a new pseudo-profile-id. Multiple votes per post are possible. The backend (not yet implemented, mock data only per line 1 comment) doesn't enforce one vote per profile across sessions.",
+            "scenario": "Troll opens DevTools, runs localStorage.clear(), then refreshes the page. getVoteProfileId() generates a new UUID (line 30-31). readVotedPostIds() returns [] (line 50). They vote for a post. They clear localStorage again, repeat. In a single browser session they cast unlimited votes for the same post. When voting is wired to a backend, the server should validate (post_id, profile_id) uniqueness.",
+            "mitigation": "When backend voting is implemented, enforce (post_id, profile_id) unique constraint in DB. Validate that the profile_id matches a signed-in user's PocketBase id; don't trust client-side localStorage. Use server-side session tracking."
+          }
+        ]
+      },
+      {
+        "persona": "Adversarial griefer reading client source and sending hand-crafted WebSocket messages and HTTP requests to abuse the Drawesome server.",
+        "summary": "The Drawesome server has several protocol-level vulnerabilities that a network attacker can exploit without needing an account. The main exposure is unvalidated WS messages allowing non-hosts to send privileged operations (lock/set_wet with no re-check), arbitrary room code enumeration to spectate private rooms, and a TOCTOU race on room ownership claiming. The 6-char room code space (32^6 ≈ 1B) is brute-forceable via spectate if there's no rate limiting per IP on WS connection rate. Text moderation is solid, but operation IDs can be overwritten in mod_hide/restore/remove by crafting opId arrays. Guest naming is deterministic per room state snapshot, and password leaks in logs.",
+        "findings": [
+          {
+            "title": "Private room codes (0-6 char) are fully enumerable via spectate endpoint with no rate limit",
+            "kind": "privacy",
+            "severity": "critical",
+            "evidence": "server.js:715-738 accepts ?spectate=1 with any room code without checking if it's private or rate-limiting spectator joins. The /ws endpoint is not gated by IP or concurrent-connection limits. room codes are 6 chars from ROOM_CODE_ALPHABET (32 chars), giving 32^6 ≈ 1.07 billion possible codes but only a tiny fraction are active; an attacker can sprays WS connections across codes.",
+            "scenario": "Attacker opens 1000s of concurrent WebSocket connections to /ws?room=AAAAAA&spectate=1 through /ws?room=ZZZZZZ&spectate=1, each getting the live mural and chat of any room matching that code. With no per-IP rate limit, they can enumerate all private rooms and capture the chat. A room code only needs to be guessed once; once found, it stays open indefinitely unless deleted.",
+            "mitigation": "Add per-IP rate limiting to /ws connection attempts (e.g., max 10 concurrent WS per IP, or 1 new connection per 100ms per IP). Alternatively, require authentication to spectate private rooms, or refuse to create a room unless someone is actively connected (today rooms can be enumerated and watched before anyone joins)."
+          },
+          {
+            "title": "Non-host can send lock/unlock and set_wet in private rooms, then flip them back before leaving",
+            "kind": "abuse",
+            "severity": "high",
+            "evidence": "server.js:942-948 (set_wet) and server.js:982-989 (lock/unlock): for private rooms (audience !== 'kid_safe'), the isHost() check is ONLY applied to public rooms. Private rooms allow ANY member to call lock/unlock and set_wet. The message handler (line 828-1149) processes these ONCE per message, never re-checking: if a non-host sends {type:'lock'}, room.locked flips, broadcasts go out, and the sender has no further privilege to flip it back.",
+            "scenario": "Attacker joins a private 6-char friend room as a guest. They send {type:'lock'} via WS. The check on line 944 reads 'if (room.audience === \"kid_safe\" && !isHost(room, user)) break;' — since audience is 'friends' (private), the condition short-circuits and the lock is SET. Now all painters are locked out. The attacker can then send {type:'unlock'} to undo it, or just disconnect and rejoin. This is especially griefing-heavy if the room owner is AFK.",
+            "mitigation": "Change line 944 to: if (!isHost(room, user)) break; (remove the audience check). Host-only powers should apply uniformly regardless of room audience. OR, make set_wet/vote_start/etc. owner-only in private rooms too, not free-for-all."
+          },
+          {
+            "title": "TOCTOU race: two simultaneous signed-in users can both claim ownership of an empty room",
+            "kind": "abuse",
+            "severity": "high",
+            "evidence": "server.js:789-794: the ownership claim happens AFTER the user is added to room.users but the check 'if (user.profileId && !room.ownerProfileId)' is not atomic. Two signed-in users connecting concurrently will both see ownerProfileId=null, both enter the if block, and both set it (last write wins). The comment says 'Guard on still-unowned so two simultaneous joiners can't both claim' but the code does not prevent it — it is a data race on the room object.",
+            "scenario": "Alice and Bob both connect to an unclaimed room at the exact same time (within the same event-loop tick, or on two threads if clustering is added). Both bypass line 791's check, both execute line 792, and the last one wins the ownerProfileId. Now two accounts think they own the room, but only one is actually stored. This breaks the exclusive-ownership assumption for /promote/demote (line 1035) which checks 'user.profileId !== room.ownerProfileId'. If Alice wins the race and then Bob sends promote/demote, his request is silently dropped because he's not the owner.",
+            "mitigation": "Use a compare-and-swap or transaction: 'if (user.profileId && !room.ownerProfileId) { room.ownerProfileId = user.profileId; } else { /* you don't own it */ }'. Or, move the ownership claim into the getRoom initialization so it's deterministic based on room load order, not connection order."
+          },
+          {
+            "title": "Unvalidated opIds in mod_hide/mod_restore allow hiding arbitrary ranges or non-existent ops",
+            "kind": "abuse",
+            "severity": "medium",
+            "evidence": "server.js:1054-1070 (mod_hide/mod_restore): the handler reads 'const ids = Array.isArray(data.opIds) ? data.opIds : []' and then directly adds them to hiddenOpIds without checking if they exist in room.history or if the opId values are reasonable. No range validation, no check that opIds are integers. An attacker can send {type:'mod_hide', opIds:[-1, Infinity, 'foo', null]}.",
+            "scenario": "A host sends {type:'mod_hide', opIds:[0, 1, 'hello', null]}. Line 1058 iterates over the array and calls room.hiddenOpIds.add(opId) for each, adding the string 'hello' and null into the Set. On the next history broadcast (line 1059), the visibleHistory filter (line 354) does 'op.opId => !room.hiddenOpIds.has(op.opId)' which compares integers to strings/nulls and will never match. Benign here, but if a host is trying to hide specific ops by ID, they might accidentally hide nothing if they typo a value.",
+            "mitigation": "Validate opIds before adding: 'const ids = (Array.isArray(data.opIds) ? data.opIds : []).filter(id => Number.isInteger(id) && id > 0 && id <= room.opSeq);' Then iterate only valid IDs."
+          },
+          {
+            "title": "ADMIN_KEY printed to console and .admin-key file is world-readable if permissions not restrictive",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:1297-1305: ADMIN_KEY is printed to stdout on startup (line 1841), and persisted to .admin-key file with no umask or chmod. If the process runs in a shared environment (e.g., a container or shared server) and stdout is logged or the file is world-readable, an attacker can steal the key.",
+            "scenario": "A developer runs the server locally in a shared tmux session, and another user on the same machine runs 'history | grep ADMIN_KEY' or reads the .admin-key file. The admin key is now compromised. An attacker with the key can call /api/admin/* endpoints and delete rooms, clear chat, modify sheets, and access live metrics.",
+            "mitigation": "Never print ADMIN_KEY to stdout; write it to a secure .env file instead, or require the operator to set ADMIN_KEY in the environment. Chmod .admin-key to 0600 (owner read/write only). Consider rotating the key daily or using a time-limited token instead."
+          },
+          {
+            "title": "6-char private room code is guessable via brute-force spectate; 1.07B codes but most are unused",
+            "kind": "privacy",
+            "severity": "high",
+            "evidence": "server.js:1484-1493: room codes are generated as 6 random chars from a 32-char alphabet, giving 32^6 ≈ 1.07B possible codes. The /ws endpoint has no rate limit per IP, so an attacker can spray thousands of WS connections per second trying random codes. The spectate endpoint (line 715) does NOT check if a room is private; it will stream the mural and chat to anyone who guesses the code.",
+            "scenario": "Alice creates a private room with code 'ABCDEF' to draw with Bob. An attacker opens a script that connects to /ws?room=AAAAAA&spectate=1, AAAAAB, AAAAAC, ..., checking each one. With no per-IP throttling, they can try 1000s of codes per second. Once they find 'ABCDEF', they see all the drawings and chat in real-time, and can even join as a guest to mess with them. The attacker never needs to guess the exact code before Alice and Bob connect — they can enumerate all active rooms after the fact.",
+            "mitigation": "Require join-tokens for private rooms: /api/join?code=X&token=<invite-token>. Or, hash the code before storing it so brute-force doesn't leak room existence. Or, enforce a min 8-10 char code and add per-IP WS rate limiting (max 1 new connection per second per IP)."
+          },
+          {
+            "title": "Vote choice is validated but room.vote.votes dict is unindexed; a user can change their vote until it closes",
+            "kind": "fun-gap",
+            "severity": "low",
+            "evidence": "server.js:972-978: the vote message handler stores room.vote.votes[id] = choice, allowing the same user (id) to vote multiple times by sending {type:'vote', choice:0}, then {type:'vote', choice:1}, etc. The last vote wins. This is intentional per the comment 'one vote per user, changeable until close', but it means a user can flip their vote after seeing what others chose.",
+            "scenario": "A user votes for option 1 early. Thirty seconds later, they see the tally shows option 2 is winning. They send {type:'vote', choice:2} again, changing their vote to the apparent winner. The design allows this, so it's more of a fairness gap than a bug, but it undermines the integrity of the vote if one user can see live results and flip their vote strategically.",
+            "mitigation": "Either: (1) Don't broadcast vote tally until the vote closes (keep results hidden until endsAt), or (2) Store a flag per user that they've voted and reject duplicate votes from the same user. The current behavior is not technically wrong, just strategically unfair."
+          },
+          {
+            "title": "Smudge brush is private-room-only but can be sent in a 'friends' room and silently ignored",
+            "kind": "fun-gap",
+            "severity": "low",
+            "evidence": "server.js:854-855: 'if (room.audience === \"kid_safe\" && data.op.kind === \"draw\" && data.op.settings && data.op.settings.brush === \"smudge\") break;' blocks smudge in public rooms, but in private ('friends') rooms, the smudge op is allowed and relayed. However, the client-side UI might not offer smudge in a 'friends' room, or the intent is unclear.",
+            "scenario": "A developer enables smudge on a 'friends' room by sending {type:'op', op:{kind:'draw', settings:{brush:'smudge'}, ...}} directly. The server accepts it and relays it. If the client's rendering code doesn't handle smudge ops, they'll be ignored on replay. This is a minor discrepancy between server and client intent.",
+            "mitigation": "Either: (1) Allow smudge everywhere (remove the check), or (2) Block smudge in all non-kid_safe rooms too, for consistency. Document the intended use case."
+          },
+          {
+            "title": "Room join-history on connect is NOT capped, can grow to 20k ops; late joiners download full history",
+            "kind": "growth",
+            "severity": "medium",
+            "evidence": "server.js:819: 'ws.send(JSON.stringify({ type: \"history\", ops: visibleHistory(room) }));' sends the entire visible op history on join. Line 49: 'const MAX_HISTORY = Number(process.env.MAX_HISTORY || 20000);' and line 860-861 cap the history at 20k ops, but every single one is serialized and sent as JSON to every new joiner. A 20k-op room history can be 5-10 MB of JSON.",
+            "scenario": "A long-running mural accumulates 20k strokes (not unreasonable for a week of painting). A new user joins and their client downloads the full 5-10 MB history frame at once. On a slow connection (3G), this takes 10+ seconds before the canvas appears. An attacker could also join and leave repeatedly, forcing the server to serialize 20k ops each time, wasting CPU and bandwidth.",
+            "mitigation": "Implement progressive history sync: send the join-history in chunks (e.g., first 500 ops on connect, then stream the rest), or compress the ops before sending. For spectators, cap history to the newest 1500 ops (line 730 already does this for spectators, so apply the same cap to regular players)."
+          },
+          {
+            "title": "Spectator WS connections never time out; idle watchers accumulate indefinitely",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:715-738: spectator sockets are added to room.spectators and given an onmessage handler, but there is NO ping/pong or keepalive. If a spectator browser stays open but the user goes idle for hours, the WS stays in memory. On the homepage carousel, many spectator connections are opened and closed, but if a tab hangs with a spectator WS open, it will accumulate in room.spectators.",
+            "scenario": "An attacker opens /home in 1000 browser tabs and leaves them idle. Each tab has a spectator WS to the live carousel room. After a week, the server's room.spectators Set for a featured room contains 1000+ dead WS sockets that haven't sent a message. The broadcast on line 536-540 iterates all of them and tries to send, but they're in CLOSED state and fail silently. This is mostly benign but wastes memory and CPU.",
+            "mitigation": "Add a ping/pong to spectator connections: send a ping every 30s and close the WS if no pong is received within 10s. Alternatively, set a read timeout on the WS and close it if no message arrives for 5 minutes."
+          },
+          {
+            "title": "Chat history persists first 50 messages per room, but CHAT_BUFFER_MAX is 200; mismatch in late-joiner context",
+            "kind": "fun-gap",
+            "severity": "low",
+            "evidence": "server.js:519-523: 'chatHistoryMsg(room)' returns '(room.chat || []).slice(-50)', so a late joiner gets the last 50 chat messages. But line 146: 'const CHAT_BUFFER_MAX = 200;' and line 188: 'chat: Array.isArray(data.chat) ? data.chat.slice(-CHAT_BUFFER_MAX) : []' the room persists up to 200 messages. On join, only 50 are sent; the other 150 are available but never delivered. This is minor (50 is usually enough context) but inconsistent.",
+            "scenario": "A room has 150 chat messages over an hour. A new user joins and only sees the last 50. An admin reviewing the audit log sees all 150+ (from the .chatlog file), so there's a discrepancy in what 'context' means depending on when you ask.",
+            "mitigation": "Either bump the late-joiner slice to 200 (to match the buffer size), or trim the buffer to 50 (to save disk space). Document which one is intended."
+          },
+          {
+            "title": "Admin key is a simple hex string with no expiry or rotation; once leaked, attacker has forever access",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:1302-1305: ADMIN_KEY is generated as randomBytes(12).toString('hex'), a 24-char hex string (~94 bits of entropy). Once generated, it is persisted to .admin-key and never rotates. There is no rate limiting on admin endpoints, so an attacker with the key can spam delete-room, clear-chat, or brute-force the admin endpoints.",
+            "scenario": "The .admin-key file is accidentally committed to the Git repo. An attacker finds it in the public GitHub history. They now have permanent admin access to the production server and can delete all rooms, clear all chat, and access all metrics. There is no way to revoke the old key without restarting the server.",
+            "mitigation": "Implement key rotation: generate a new ADMIN_KEY on each startup (unless overridden by ADMIN_KEY env var) and log it ONLY to a secure place (e.g., sent to an admin's email or webhook, not stdout). Add rate limiting to admin endpoints (e.g., max 10 requests per minute per key). Consider implementing token-based admin auth (JWT with expiry) instead of a static key."
+          }
+        ]
+      },
+      {
+        "persona": "Privacy analyst for a kids' collaborative drawing app (Drawesome)",
+        "summary": "Drawesome implements guest-first anonymous painting with optional PocketBase sign-in for gallery sync and room moderation roles. The app stores user-generated content (room murals, chat, artworks) server-side with minimal identification. Major privacy surface: durable chat logs with profileIds for account-deletion scrubbing, weak private-room code entropy (32^6 ≈ 1B combinations), cross-room mention watchers that observe chat leakage across rooms, and token-in-URL transport that exposes auth secrets to server logs and proxy records. Account deletion wipes local data reliably but leaves server-side chat logs requiring manual scrubbing by profileId; no parent/guardian deletion pathway for COPPA minors.",
+        "findings": [
+          {
+            "title": "Auth token exposed in WebSocket URL query string",
+            "kind": "privacy",
+            "severity": "high",
+            "evidence": "src/hooks/useMultiplayer.js:16 — token passed as URL param: `&token=${encodeURIComponent(token)}`. server.js:751 reads it from `url.searchParams.get('token')`. URLs are logged in proxy/reverse-proxy access logs, CloudFlare logs, browser history, and network monitoring tools.",
+            "scenario": "A signed-in user connects to a room; their PocketBase access token (JWT containing user id) rides in the WS URL as a query parameter. Any reverse proxy, CDN, load balancer, or monitoring system logging full URLs now has the token. If an admin logs are ever shared or breached, attackers see tokens. Token replay lets a stolen token join rooms as that user, see their gallery, and moderate.",
+            "mitigation": "Pass the token via an initial WS frame after connection (in a 'hello' message) instead of the URL, or use a derived short-lived session key exchanged via HTTP headers before WS upgrade. Validate the token server-side only in the first in-bound message, not in the URL."
+          },
+          {
+            "title": "Private room codes have low entropy; enumerable without rate limiting",
+            "kind": "privacy",
+            "severity": "high",
+            "evidence": "server.js:1484-1494 — room code is 6 characters from 32-char alphabet (A-Z minus I,O + 2-9), so 32^6 ≈ 1.07 billion combinations. genRoomCode() checks for collisions in memory + disk but does not enforce rate limits on join attempts. resolveArtOwner() shows no per-IP throttling on room joins.",
+            "scenario": "An attacker (or a curious teen) wants to brute-force private room codes to find unmoderated rooms or eavesdrop on a friend group. They can open WebSocket connections in rapid succession with guessed codes (ABCDEF, ABCDEG, etc.). There is no per-IP or per-session rate limit on room joins, so a script can enumerate the code space. After ~1000 tries, they hit a live room, see the full mural history, chat logs, and presence. The admin interface does not rate-limit either.",
+            "mitigation": "Increase code entropy: use 8+ characters and include all alphanumerics (62 chars). Implement per-IP rate limiting on /ws room joins (e.g., max 10 new rooms per 60s per source IP). Log suspicious enumeration patterns and alert admins. Consider invite tokens (short-lived signed URLs) instead of static codes."
+          },
+          {
+            "title": "Server-side chat logs persist profileIds indefinitely; account deletion does not scrub them",
+            "kind": "privacy",
+            "severity": "high",
+            "evidence": "server.js:138-167 — chat logs are written to `.chatlog/<roomCode>.jsonl` append-only files with entries containing `profileId` (line 933: `appendChatAudit(roomId, { ts, room, userId, profileId, name, message })`). Account deletion in accountDeletion.js:105-131 calls PocketBase delete() but does NOT scrub the audit logs. No server-side endpoint exists to redact a profileId from the chat logs.",
+            "scenario": "A child's parent requests account deletion via the app. The local data is wiped (IndexedDB, localStorage). PocketBase account is deleted. But the child's messages remain in `.chatlog/MAIN.jsonl` and `.chatlog/PRIVATECODE.jsonl` with their profileId intact. A moderator or admin querying `/api/admin/rooms/:id/chat` can still read all past messages with the profileId, reconstructing the child's conversation history indefinitely. No time-based expiration or scrubbing is triggered.",
+            "mitigation": "Implement server-side account deletion handler that queries and redacts (replaces with null/redacted marker) all chat log entries matching the deleted profileId. Document this in the privacy policy. Consider time-limited chat retention (e.g., delete logs older than 90 days) or opt-in data export for parents."
+          },
+          {
+            "title": "Cross-room @mention notifier leaks message text and room names to arbitrary room watchers",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:561-580 — notifyMentions() broadcasts mention events with full `message` text and `roomTitle` to any notifier socket watching that room. Client socket subscribes by sending {type:'watch', rooms:[...], name} with a list of room codes (line 676, max 12 rooms). The server does NOT validate that the watcher has permission to see those rooms (no auth required).",
+            "scenario": "Alice is in a private friends-only room 'SECRETCODE' and mentions @Bob. The server broadcasts the full message ('I think Alice just got hacked — check her gallery') and room title ('Alice & Friends Secret Hangout') to any notifier socket that is watching 'SECRETCODE'. If Bob (or any script) has previously connected to /ws?notify=1 and sent {rooms:['SECRETCODE'], name:'Bob'}, they see the mention notification with the exact text. An unauthenticated attacker who guesses the room code can watch it and read all @mention traffic including sensitive conversations.",
+            "mitigation": "Add access control: only send mention notifications to watchers who can actually see that room (i.e., require the watcher to be a member or pass a valid token for the room audience). Alternatively, mask message text in mention notifications to a summary ('You were @mentioned in [room]') without the full text. Log who is watching which rooms for security audits."
+          },
+          {
+            "title": "Spectator mode broadcasts full canvas operations to unlimited anonymous viewers",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:715-738 — spectate=1 mode adds the WS to room.spectators without counting users or checking auth. broadcast() (line 526-541) sends all operations to both room.users and room.spectators. No admission control or audience gating on spectate mode.",
+            "scenario": "A public room shows the 'Open Studio' on the homepage carousel. An attacker (or curious user) can open the live room viewer on the home page (which uses ?spectate=1). They see the live canvas being painted, all chat messages, user roster with names, and the full opus history. They can then watch spectators of featured rooms indefinitely, mapping who paints when and what they draw. The homepage doesn't gate spectators to 'listed' public rooms only; any room code can be spectated if someone discovers it.",
+            "mitigation": "Gate spectate mode to kid_safe public rooms only (line 705-710 already blocks adult_18, extend it). Log spectator connections in the moderation dashboard. Consider limiting spectator count per room or requiring an explicit join (not just anonymous watch). Return empty history or a redacted history for spectators in private rooms if they somehow connect."
+          },
+          {
+            "title": "No parent/guardian deletion mechanism for COPPA compliance",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "accountDeletion.js provides in-app account deletion only. No endpoint for verifiable parent/guardian-initiated deletion. PocketBase users collection delete rule is `@request.auth.id = id` (line 125: only the account holder can delete). No parent email or PIN flow to revoke a child's account.",
+            "scenario": "A parent discovers their 10-year-old child has been using Drawesome with their email and wants to delete the account and all associated data. The app offers in-app account deletion, but there is no parent-initiated deletion flow. A parent cannot prove guardianship via email verification or PIN. COPPA requires a verifiable parental consent mechanism for data deletion if the child cannot manage the account alone. The app may be non-compliant if it targets under-13 kids without explicit parental controls.",
+            "mitigation": "Add a parent deletion endpoint: POST /api/delete-child-account with a verification email sent to the account's email (parent verifies link). Implement PocketBase rule allowing deletion if a parent confirms the email. Document parental rights in privacy policy. Alternatively, implement parental controls / family mode where a parent email can manage child accounts."
+          },
+          {
+            "title": "Room code generation not constrained to prevent enumeration of populated rooms",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:1485-1494 — genRoomCode() only checks if the code already exists in-memory (rooms.has()) or on disk (existsSync()). No attempt to space out codes or use a pseudorandom sequence that is hard to predict. Codes are returned sequentially as room creation requests arrive, so creating many rooms reveals the generation order.",
+            "scenario": "An attacker calls POST /api/rooms in rapid succession, creating many dummy public rooms. They observe the room codes returned (e.g., AAAAAA, ABCDEF, AGHIJK). The generation uses Math.random() per character, so the sequence is not pseudorandom in a cryptographic sense. An attacker can model the RNG state and predict future codes. Alternatively, they can brute-force codes in lexicographic order to find populated rooms faster and join them to exfiltrate murals or chat.",
+            "mitigation": "Use cryptographically secure random (crypto.getRandomValues) to generate codes. Increase entropy as noted above. Track and rate-limit rapid room creation per user/IP. Consider assigning codes from a pre-generated shuffled list to prevent prediction."
+          },
+          {
+            "title": "Image uploads stored as data: URLs (base64) in plaintext JSON, no metadata stripping",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:1263-1280 — artworks are stored as `image: '<data:image/png;base64,...>'` in plaintext JSON files (line 1276). No sanitization, no EXIF stripping, no format re-encoding. Coloring sheets (line 1614-1629) are also stored as raw data: URLs. If a child pastes a screenshot of a sensitive page or uploads a photo, metadata (GPS, timestamps, embedded text) stays in the base64 blob.",
+            "scenario": "A child takes a screenshot of their home address from Google Maps and tries to save it to the gallery. The base64 PNG contains EXIF metadata with the original filename or embedded GPS data. Drawesome stores the full base64 string in the artwork JSON. An admin reading the .artworks/device-key.json file can decode the PNG and extract GPS coordinates, revealing where the child lives.",
+            "mitigation": "Re-encode uploaded images server-side: decode base64 PNG/JPG, strip all metadata (use imagemagick or sharp), re-encode to a new data: URL, and store only the sanitized version. Or: store images as static files in a dedicated directory and serve them with cache headers, so they're not embedded in JSON. Set Content-Disposition: inline to prevent accidental download."
+          },
+          {
+            "title": "No time-limited data retention; room murals and chat persist indefinitely",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:168-196 — rooms are loaded from disk and cached in memory indefinitely. Chat buffer (CHAT_BUFFER_MAX=200) is persisted with the room; audit logs (CHAT_LOG_CAP_BYTES=2MB) cap disk size but not the age of messages. No automatic purge of old rooms or chat logs based on age. Auto-close sweep (line 391-416) only closes *empty* idle rooms; a room with any history lingers forever.",
+            "scenario": "A child joins a public room 'MAIN' and draws and chats for a day, then never returns. The room stays open forever, with full history + chat persisted to disk. A year later, an attacker guesses or discovers the MAIN room code, joins it, and sees the year-old conversation with the child's guest name, drawing, and messages. No data minimization or time decay.",
+            "mitigation": "Implement data retention windows: (1) delete chat logs older than 90-180 days, (2) auto-close empty rooms after 30 days idle, (3) for private rooms, allow the owner to set an explicit expiration date. Document retention in the privacy policy. Consider offering opt-in data export + auto-delete for users."
+          },
+          {
+            "title": "Admin key is predictable if leaked; no rotation or per-admin access control",
+            "kind": "trust",
+            "severity": "medium",
+            "evidence": "server.js:1298-1305 — admin key is stored in .admin-key file or env var. If the file is committed to git or leaked in a Docker image, the hex string is exposed. No per-admin accounts, no key rotation, no audit log of admin actions (line 1360 logs to in-memory modLog, not persisted).",
+            "scenario": "The .admin-key file is accidentally committed to a public GitHub repo. An attacker finds it, makes HTTP requests with `x-admin-key` header, and gains full access to /api/admin/* (delete rooms, clear chat, delete sheets, view reports). They can moderate maliciously or export sensitive chat logs. There is no way to rotate the key or revoke individual admin tokens without redeploying.",
+            "mitigation": "Use environment variables exclusively (not persisted files). Implement rate-limited TOTP or signed JWT admin tokens (scoped to actions). Add a per-admin audit log (persisted) of who deleted what and when. Rotate the admin key on a schedule or allow dynamic revocation."
+          },
+          {
+            "title": "Mute status is persisted to profileId but not notified to the muted user",
+            "kind": "trust",
+            "severity": "low",
+            "evidence": "server.js:998-1014 — a host sends {type:'mute', targetId, muted:true}. If the target has a profileId, the mute is stored in room.mutedProfileIds and persisted (line 1007). When the user reconnects, they are re-muted (line 779). But the user is never proactively told they are muted; they only learn by sending a message and seeing no broadcast.",
+            "scenario": "A host mutes a child's signed-in account in a room. The child reconnects later and continues painting, unaware they cannot chat. They type messages that never appear, creating confusion and frustration. The host never sees a confirmation that the mute was applied. No transparency.",
+            "mitigation": "Send a 'muted' message to the muted user on reconnect and after they send a message. Show a visual indicator in the UI ('You are muted by a host'). Log mute/unmute actions in the moderation log and surface them to hosts."
+          }
+        ]
+      },
+      {
+        "persona": "A 15-year-old social artist who wants to paint with friends and show off their art online, plus an 11-year-old nervous about stranger danger who needs reassurance and a welcoming first experience.",
+        "summary": "Drawesome is a thoughtfully architected multiplayer paint app with strong kid-safe fundamentals (moderation, opt-in accounts, no ads/purchases), good UX for drop-in public rooms, and solid feature depth (theme voting, chat, coloring sheets, cursor presence). The 60-second entry path is smooth (home carousel + \"jump in as guest\" button). However, three blind spots crimp the teen social magic and parental trust: (1) auth token rides unencrypted in WebSocket URLs, leaking login state to proxies/logs; (2) the post-painting experience is thin — gallery saves locally, sharing is manual (no copy-to-clipboard, no social export preview), and there's zero carryover identity across sessions (no \"saved friends\" or \"my profile\"), (3) fun is confined to drawing; reactive social tissue (applause, emotes, reactions) and low-stakes collaborative games (exquisite corpse, pictionary) that keep friends returning are entirely absent. The app does NOT feel lonely at 0:00 (carousel is live and warm), and moderation is credible (host can mute/kick/hide). But a solo 15-year-old painting alone in a room with no audience has no way to \"show off\" or earn recognition, and siblings can't reliably rejoin the same room next week.",
+        "findings": [
+          {
+            "title": "Auth token transmitted in plaintext in WebSocket URL query parameter",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "src/hooks/useMultiplayer.js:16,27 — `&token=${encodeURIComponent(token)}` appended to WebSocket URL; server.js:751 — `url.searchParams.get('token')` retrieves it. The PocketBase access token (a HS256 JWT containing the user's profile ID) is logged by proxies, stored in browser history, and visible in DevTools Network tab.",
+            "scenario": "A teen signs in via Google OAuth, gets an access token, and opens a shared room with friends. The token rides in the WS URL unencrypted: `wss://drawesome.art/ws?room=ABCDE&token=eyJ...`. A Cloudflare proxy logs the full URL; an attacker on the same WiFi sniffs the frame headers. The token grants room ownership + host powers. Any proxy admin or ISP with packet visibility sees 'token=...' in plaintext.",
+            "mitigation": "Move token from URL to a WebSocket subprotocol header or POST it in the socket upgrade request body (harder but possible with a fallback handshake: connect anonymous, then send `{type:'auth', token}` as the first message). For now, a quick interim fix: send the token as a message immediately after connection (connect empty, then `{type:'authenticate', token}` before any other op)."
+          },
+          {
+            "title": "No way to reliably find or rejoin friends across sessions",
+            "kind": "fun-gap",
+            "severity": "high",
+            "evidence": "src/utils/recentRooms.js keeps 6 recent room codes; no 'saved friends' list. RoomLobby.jsx:10 shows recent rooms but only by code (no friend names). When a teen closes the app, there is no persistent link to 'friends I've drawn with' — they must ask for a new room code each time. Chat @mentions are cross-room notifications but don't build a friend roster.",
+            "scenario": "Two friends (both 15) paint together in room ABCDE on Monday. Tuesday afternoon, one wants to jump back in and paint more together. They remember the code 'kind of starts with A', but there's no saved-friends list, no 'my friends' roster, no 'people I've drawn with' card in the home/lobby view. They either guess at the code (30 min of tries) or text the other friend to re-share it. The fun moment passes.",
+            "mitigation": "Add an opt-in 'Saved Friends' roster: when two signed-in users draw together, each can press a 'friend ♡' button to add the other (two-way follow). Saved friends appear in a small card in the lobby/home. A friend-join shows 'You are painting with [Friend]' to create the social connective tissue. Bonus: live notifications when a saved friend joins any public room."
+          },
+          {
+            "title": "Painted art cannot be easily shared to social media or messaging",
+            "kind": "fun-gap",
+            "severity": "high",
+            "evidence": "src/App.jsx lines 3500–3650 export canvas to GIF or image, but the export is a raw download — no preview, no copy-to-clipboard, no share-sheet trigger, no iframe embed code. The home gallery requires account sign-in to see (AccountPanel.jsx). Shared canvases have no unique URL to send a friend.",
+            "scenario": "A 15-year-old finishes a beautiful collaborative painting in a room with 4 friends. They want to post it to Instagram, or message it to a group chat. They tap 'Download GIF' and get a file, but then: (a) they have to manually open Slack/Discord/WhatsApp and attach it (app-switcher friction), (b) the file is 2–5 MB, some messaging apps compress it to mush, (c) there's no link to the live room so friends can click and rejoin. Compare: Figma, Google Drawings, or Sketchpad.io — all put a 'Share & present' button right at the top. By the time the teen finishes the friction loop, the moment is gone.",
+            "mitigation": "Add a 'Share this painting' button that: (1) generates a static image thumbnail (for WhatsApp/iMessage preview), (2) shows a ready-to-copy image URL (`drawesome.art/gallery/u_xyz/painting123`), (3) lets them share the live room code via a 'Invite friends to paint more' link. One-tap copy-to-clipboard for each."
+          },
+          {
+            "title": "No reactive social rewards (reactions, applause, emotes) for collaborative moments",
+            "kind": "fun-gap",
+            "severity": "high",
+            "evidence": "The canvas supports drawing, erasing, shapes, chat, and cursors. No reaction system exists. The closest is room voting (theme voting), which is about the prompt, not celebrating a peer's stroke. Live cursors show presence but never celebratory reactions (like Figma's emoji reactions or Miro's clapping).",
+            "scenario": "A 13-year-old draws a perfect, intricate dragon wing in a shared room with three friends. Their friend sees it and wants to applaud — but there's no way to react without typing 'nice!' in chat. Three messages of 'wow!' and 'dude that's sick!' clutter the chat, and the artist never sees those feelings compressed into a single celebratory signal. In a Discord art server, that same moment triggers emoji reactions + a 'pin' option. The difference is the game — on Drawesome, the artist feels like they're painting alone, even with friends in the room.",
+            "mitigation": "Add emoji reactions to live strokes (hold-tap a just-drawn stroke to pick an emoji, broadcasts as `{type:'reaction', userId, emoji, position}` near the stroke). Simpler MVP: add a 'thumbs up' + 'flame' reaction picker in the chat bar, so friends can react to the last 5 strokes by the person they're looking at. Cost: ~100 lines of code. Impact: turns 'painting together' into 'celebrating together'."
+          },
+          {
+            "title": "No account identity or profile visible to other users (lost social carryover)",
+            "kind": "fun-gap",
+            "severity": "medium",
+            "evidence": "src/App.jsx:769 assigns a guest name ('Neon Fox'). Signed-in users show their real name (from Google/email), but only in the current room's userlist. When they disconnect and rejoin a new room 48 hours later, they're a different session — no cumulative 'you've drawn 23 paintings' badge, no profile card, no way to see 'this is my friend Sarah, we've drawn together 5 times'. Signed-in profiles are not discoverable or referenceable from other rooms.",
+            "scenario": "A teen signs in and paints as 'Sarah' in a public room for 30 minutes. They leave. Next week, a friend joins and sees 'Sarah is here!' but Sarah is gone. The friend wants to DM Sarah or add her as a friend, but there is no profile URL, no 'view Sarah's gallery', no cross-room identity. Sarah becomes a ghost — present in one moment, gone forever from social reach.",
+            "mitigation": "Optionally: add a `/profile/<userId>` page showing recent paintings and a 'Draw with me next' button (admin-gated or opt-in per user). Short-term hack: make @mention lookup work cross-room in chat. Already partially shipped (useMentionWatcher.js), but the mention lookup is chat-only and doesn't show a follower button."
+          },
+          {
+            "title": "Coloring sheets are room-level, not per-user or persistent (no personal asset library)",
+            "kind": "fun-gap",
+            "severity": "medium",
+            "evidence": "server.js:1585–1610 — coloring sheets are a global admin-uploaded list, applied to a room via `/api/rooms/{id}/sheets`. Users cannot create, save, or iterate on personal sheets. Once a room's sheet is set, it's baked. A user can't save their favorite sheets for later or carry their outline art from one room to another.",
+            "scenario": "A 12-year-old finds a cool rocket-ship coloring sheet in the SPACE room. Next day, they start a new private room with their sibling. There's no way to apply the rocket sheet to the new room without an admin recreating it. The user can't build a personal library of favorite sheets, and collaborative sheet creation (two kids drawing a shared outline, then coloring) is not possible.",
+            "mitigation": "Allow signed-in users to upload & save personal coloring sheets (stored server-side per account, <5MB per user). Offer a '+ New sheet' button in rooms so kids can draw an outline, save it, and reuse it next week. This is low-effort (POST /api/sheets, store in PocketBase) and high-impact for creative reuse."
+          },
+          {
+            "title": "No back-end rate limiting or API abuse protection on paint operations",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:839–865 — the `case 'op'` handler broadcasts ops without rate limiting per user. No check for ops-per-second, op size, or memory pressure per connection. An attacker can send 1000 ops/sec and either (a) DoS the room, (b) crash the server via memory inflation, or (c) trigger the NSFW watcher to spin out. Room creation is rate-limited (server.js:1498–1508, `rateOk()` per profile), but in-room op rate is uncapped.",
+            "scenario": "An attacker opens a browser console and sends `for (let i=0;i<10000;i++) ws.send(JSON.stringify({type:'op', op:{...huge op...}}))`. The room's history inflates to 50K ops, late joiners' initial sync is 50MB, and the server's memory balloons. The room becomes unusable for legit users.",
+            "mitigation": "Add per-user op rate limits in the handler: track ops-per-user per second, cap at ~100 ops/sec (generous for normal painting), and either drop or mute users exceeding it. Also add a max-op-size check (ensure op.text, op.image etc. are < 50KB). Test the NSFW watcher doesn't crash on malformed ops."
+          },
+          {
+            "title": "Spectator (homepage carousel) rooms accept unlimited concurrent viewers (resource leak risk)",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:712–738 — spectator mode adds a socket to room.spectators without any cap. A room can accumulate 10,000 spectators (all homepage viewers watching MAIN on refresh loops). Each spectator gets every op broadcast, inflating bandwidth.",
+            "scenario": "Drawesome gets posted to a large subreddit. 50,000 people visit the site and their browsers auto-refresh the homepage every 15s, each opening a spectator connection to MAIN. The room's spectators set grows to 50K. Every op is broadcast to 50K sockets. Server memory and egress spike. Real painters in MAIN see lag.",
+            "mitigation": "Cap spectators per room (e.g., MAX_SPECTATORS = 500). When full, queue new spectators or drop old ones with a gentle 'room is full' message."
+          },
+          {
+            "title": "No parental-supervision mode or family account linking",
+            "kind": "trust",
+            "severity": "medium",
+            "evidence": "SignupPage.jsx allows email signup, but there is no parental-consent flow, no 'my parent's account' linking for under-13 users, and no 'guardian dashboard' to see what a child did. This is COPPA-relevant if the app claims to serve under-13 kids.",
+            "scenario": "A 10-year-old signs up with their own email. A parent has no way to know what rooms they're in, who they're talking to, or what they've saved. The app says 'kid-safe' but offers zero visibility to a responsible adult.",
+            "mitigation": "Add an optional 'Family Mode': when a child signs up, they can link a 'guardian email'. That email gets a digest (weekly/daily) of the child's activity: rooms joined, chats sent, artworks saved. Guardian can remotely toggle room access (whitelist/blacklist). This is table-stakes for App Store kid apps."
+          },
+          {
+            "title": "Muted users can still see all chat and ops (mute is one-way for them, not protective)",
+            "kind": "safety",
+            "severity": "low",
+            "evidence": "server.js:779 — `user.muted` is set on the user object, but the server only prevents that user's messages from broadcasting (server.js:918-925 silent drop). The muted user still receives all other chat. No client-side indication that 'you are muted' or 'your messages aren't being sent'.",
+            "scenario": "A host mutes a user for spam. That user keeps typing in chat, thinking they're talking to everyone. They're not. They have no feedback that they're muted (unless they notice nobody replies). They might feel isolated or blamed, when in fact they're just silenced.",
+            "mitigation": "Send a `{type:'muted'}` message to the muted user when they first mute and after each attempt to send chat. Show a client-side indicator ('You are muted — ask a host to unmute') in the chat input. This is kind + clear."
+          },
+          {
+            "title": "No 'am I safe?' check for kids: no parental-consent prompt or age disclosure on signup",
+            "kind": "trust",
+            "severity": "low",
+            "evidence": "SignupPage.jsx offers email + OAuth, but no 'I am under 13' checkbox and no guardian-email field. The app's Safety page is honest (no ads, no real-money purchases, moderation exists), but there's zero friction or consent flow to ensure a parent is aware.",
+            "scenario": "A 9-year-old navigates to Drawesome on their parent's tablet and signs up with their email before the parent realizes the app exists. The parent never consents. A week later, the child is in a room with 10 strangers. The parent has no idea.",
+            "mitigation": "Add a one-time 'Account created' email that goes to the signup email. Include a 'parent needs to approve this account?' link that triggers a guardian-consent flow. For under-13 flagged accounts, require guardian email + token-click approval before the account is fully active."
+          }
+        ]
+      },
+      {
+        "persona": "Protective Parent & App Store Reviewer (COPPA-aware)",
+        "summary": "Drawesome is a thoughtfully designed kid-safe paint app with strong foundations: no account required, opt-in cloud storage, transparent public room moderation, in-app reporting, and genuine account deletion. However, several gaps exist that would concern a parent or regulator: private rooms have zero moderation despite being joinable by kids; the NSFW watcher only activates with capable clients (gaps in all-mobile rooms); no personal block/mute controls for kids themselves; no parental consent/verification for signed-in accounts; and @mention notifications from public rooms can expose a child's display name to strangers with no gatekeeping. Reports work but have no published SLA or guaranteed human review. These aren't dealbreakers, but they require visible fixes before claiming \"App Store/COPPA defensible\" or asking a parent to trust their 10-year-old unattended.",
+        "findings": [
+          {
+            "title": "No moderation in private 'friends' rooms despite kid access",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:918 explicitly skips text/image scanning in non-kid_safe rooms; server.js:445-459 shows NSFW watcher only activates in kid_safe rooms; private rooms default to 'friends' audience (server.js:295) which bypasses all filters",
+            "scenario": "A malicious adult creates a 'friends' room, invites a child via code, and uploads NSFW/predatory imagery. Chat contains unfiltered profanity and grooming language. No automatic moderation runs; only a human report (filed via /api/report and visible in /admin) would trigger review.",
+            "mitigation": "Extend text filter + image watcher to friends/private rooms, or gate private-room creation to signed-in grown-ups (currently only public rooms require auth). Add prominent safety warnings on private-room invite flows."
+          },
+          {
+            "title": "NSFW image watcher has no fallback in all-mobile rooms",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:445 filters candidates by watcherCapable (clients self-report); electWatchers elects up to MAX_WATCHERS=2 capable clients per public room; if a room has only mobile users (no desktop with native Tensorflow.js), watchers=[] and image moderation silently fails",
+            "scenario": "A public room fills with 10 kids on tablets; none have watcherCapable=true (no desktop NSFW detection). A user uploads a flagged image. No watcher runs; no flag is filed; no auto-report happens. The image sits visible until a human report is filed.",
+            "mitigation": "Implement server-side image analysis (e.g., simple hash-based or lightweight ML) as a guaranteed backstop, or enforce at least one desktop client in large public rooms."
+          },
+          {
+            "title": "Kids can be @mentioned across public rooms by strangers with no consent gatekeeping",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:936 calls notifyMentions() for any chat message in any room; useMentionWatcher.js listens for mentions in other rooms and displays notifications; server.js:676-678 anyone can watch any room by sending {type:'watch',rooms:[...],name}; no authentication or permission check",
+            "scenario": "A stranger joins MAIN (public), sees a child's name in chat (e.g., 'Neon Fox'), then @mentions them in another public room ('Hey Neon Fox, come to my room SPARKLE'). The notification arrives with the stranger's message. If the child follows, they land in a room full of unknown adults.",
+            "mitigation": "Require signed-in users to opt into cross-room notifications (off by default for guests). OR gate @mention notifications to rooms the child is already in. OR require the notified user to be in a shared room with the sender first."
+          },
+          {
+            "title": "Child-facing reports have no published SLA or human-review guarantee",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:1387-1394 POST /api/report accepts any body with room+reason+reporterName, stores it in-memory, saves to .reports.json, and requires admin-key to resolve; no email confirmation, no escalation chain, no response mechanism for the reporter",
+            "scenario": "A 10-year-old sees an inappropriate drawing and taps the report button. They see 'Report sent'. In reality, the report lands in a 500-item in-memory queue with no SLA; if the admin is asleep or the service is restarted, open reports vanish from memory (only persisted copy survives). The child has no way to know if anyone reviewed it or took action.",
+            "mitigation": "Add report-receipt notification (even if anon); publish an SLA ('we review reports within 24h'); implement a report-status page the reporter can check; escalate high-severity reports (slurs, CSAM) to a secondary channel with guaranteed escalation."
+          },
+          {
+            "title": "No parental consent/age declaration before account creation",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "src/utils/auth.js allows Google OAuth sign-in with no age check; server.js does not verify account-holder is 18+ before a child's data is linked; AiAssistPanel.jsx has a 'profileKind' dropdown ('self' vs 'child') but it's only a label—no enforcement or parental gate",
+            "scenario": "A 10-year-old signs in with a parent's Google account (or their own Gmail, created without parental consent). Their account can create public rooms, host, invite others—all without a parent/guardian ever consenting to or knowing about account creation.",
+            "mitigation": "Implement COPPA-compliant age gating (e.g., ask birthdate on first sign-in, block under-13 without verifiable parental consent, or gate public-room creation to 13+). Display parental consent flow for accounts with child profile data."
+          },
+          {
+            "title": "No child-facing personal block/mute controls for disruptive peers",
+            "kind": "safety",
+            "severity": "high",
+            "evidence": "server.js:998-1008 allows only hosts to mute a user; client-side App.jsx has no 'mute this user' option for regular children; a muted user simply can't send chat (but their drawing still appears)",
+            "scenario": "A kid is in a room with a noisy, inappropriate peer. They can't mute them or hide their messages. They must either leave the room, wait for a host to mute, or keep reporting.",
+            "mitigation": "Add a client-side 'hide this person's messages' option that filters locally (no server change needed). Store block list in browser storage. Allows kids agency without relying on a host."
+          },
+          {
+            "title": "Guest display names leak across rooms via @mentions without opt-in",
+            "kind": "privacy",
+            "severity": "medium",
+            "evidence": "server.js:769 assigns fun guest names (e.g., 'Neon Fox') deterministically; useMentionWatcher.js watches for these names in other rooms; any stranger in any public room can learn a child's name and cross-reference it to other rooms the child visits",
+            "scenario": "A child is known as 'Neon Fox' in MAIN. A stranger joins SPACE and sees a message '@Neon Fox come here'. They now know the child visits both MAIN and SPACE (room identity leak). If the stranger asks other rooms 'has anyone seen Neon Fox?', they can build a profile of the child's room-visiting pattern.",
+            "mitigation": "Use opaque, session-specific names in public chat (e.g., 'Guest-A123'); only show real names to rooms the child is actually in. OR require opt-in for cross-room @mentions."
+          },
+          {
+            "title": "Private rooms can be created by anyone (no grown-up owner requirement)",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server.js:1518-1539 POST /api/rooms requires auth only for audience='kid_safe'; friends rooms are created lazily on first WS connect with no ownership check (server.js:295). A guest joining room code 'ABCD' auto-creates a private room with no owner.",
+            "scenario": "A predator creates a room by joining room code 'ABCD' (invites kids via link). The room has no host/owner. No moderation runs. The predator can upload NSFW content, chat with slurs, and the kids have no grown-up to lock it or hide flagged content. Reports are filed but no automatic cleanup happens.",
+            "mitigation": "Require the first signed-in user to become the room owner (or require all private rooms to have an explicit owner). OR add a 'room timeout' if it remains unowned after 10 minutes."
+          },
+          {
+            "title": "Text filter is client-readable and evasion techniques are not fully addressed",
+            "kind": "safety",
+            "severity": "medium",
+            "evidence": "server/moderation/textFilter.js is shipped in the browser bundle; normalization covers leet/spacing/diacritics but not unicode homoglyphs or mixed-script lookalikes (e.g., Cyrillic а for a)",
+            "scenario": "A user sees the filter in DevTools, and uses lookalike characters (Cyrillic а, Greek α) or zero-width characters to bypass it. The filter's normalization doesn't fold lookalikes.",
+            "mitigation": "Move word-list logic server-side only (reduce client-side exposure). Add homoglyph normalization (NFKC Unicode, mixed-script detection). Consider a secondary ML-based review layer for high-confidence hits."
+          },
+          {
+            "title": "No age declaration or parental-consent statement on App Store pages",
+            "kind": "trust",
+            "severity": "medium",
+            "evidence": "src/components/SafetyPage.jsx and PrivacyPage.jsx claim 'built for kids' but do not state minimum age (COPPA: 13+ without consent, 6+ with parental permission). No explicit parental-consent process visible.",
+            "scenario": "An App Store reviewer checks SafetyPage and sees 'kids can draw' but no explicit age gate or parental-consent statement. Reviewer rejects for non-COPPA-compliance.",
+            "mitigation": "Add prominent statement: 'For children under 13: Accounts require verifiable parental consent. For 13+: Sign in with your own account. For all: Draw anonymously with no account.' Include link to parental consent process."
+          },
+          {
+            "title": "Admin key stored plaintext with no rotation mechanism or audit log",
+            "kind": "trust",
+            "severity": "medium",
+            "evidence": "server.js:1300-1304 reads/writes ADMIN_KEY to .admin-key file; no key rotation, no backup keys, no audit trail of admin actions",
+            "scenario": "The .admin-key file is leaked. An attacker can reset reports, delete rooms, promote users—forever. No way to know when the breach happened or rotate the key without downtime.",
+            "mitigation": "Implement key rotation (new key every N days); maintain audit log of admin actions (which key, when, what); support multiple simultaneous keys with expiration."
+          },
+          {
+            "title": "Report resolver has no transparency or justification field",
+            "kind": "trust",
+            "severity": "low",
+            "evidence": "server.js:1470-1478 POST /api/admin/reports/:id/resolve only sets status='resolved' with no note field or audit trail; reporters see 'resolved' but not why or what action was taken",
+            "scenario": "A child's parent files a report about an inappropriate message. Days later they check status='resolved' but have no idea what action was taken (hidden? user banned? or just marked resolved?).",
+            "mitigation": "Add 'resolution_reason' and 'resolved_by' fields; allow admins to add notes; expose a read-only report-status page (by report ID + token) so reporters see outcomes without leaking other reports."
+          }
+        ]
+      }
+    ],
+    "synthesis": {
+      "headline": "Drawesome has a genuinely strong safety spine for its PUBLIC surface — kid_safe rooms get text moderation, elected NSFW watchers, host mute/kick, reversible op-hiding, and in-app reporting — and I confirmed several earlier fixes have already landed (non-hosts can no longer lock private rooms; muted users are now notified). But the audit exposes a consistent, dangerous pattern the personas hit independently: every safety control is scoped to `kid_safe` public rooms, and the PRIVATE 'friends' surface a child can be lured into has none of them — no text scan, no image scan, no watcher, and no required grown-up owner (server.js:918, 944, 437-443). Layered on top are two confirmed data-exposure defects specific to minors: an unauthenticated cross-room @mention 'watch' channel that leaks full message text out of any room by code (server.js:673-687, 570-577), and an account-deletion flow that wipes the device and PocketBase but never scrubs the durable server chatlog, so a deleted child's name+messages persist in plaintext forever (accountDeletion.js:125 vs server.js:933). The socket auth token still rides in the WS URL (task #40, still open). These are the things to fix before telling any parent their 10-year-old is safe unattended.",
+      "criticalMissed": [
+        {
+          "title": "Private 'friends' rooms are a fully unmoderated surface a child can be lured into — no text scan, no image scan, no watcher",
+          "severity": "critical",
+          "why": "This is the single most-corroborated finding (3 personas independently). Every defense the app advertises is gated on room.audience==='kid_safe'. A predator who gets a child into a 6-char-code friends room has unrestricted chat AND an unscanned canvas with them, invisible to discovery and to moderators until a human report happens. The public rooms being safe creates false confidence about a surface that is wide open.",
+          "evidence": "server.js:918 (chat scan only if audience==='kid_safe', comment 'Private rooms are unfiltered'); server.js:437-443 (electWatchers clears all watchers for non-kid_safe rooms — image scanning off); server.js:847,855 (drawn-text + smudge gates also kid_safe-only). Confirmed live in current code.",
+          "fix": "Extend text scan (scan() at server.js:919) and NSFW watcher election to friends rooms that any non-owner joins, OR require every private room to have a signed-in grown-up owner before a second user can draw/chat. At minimum, run the SEVERE-tier text filter in ALL rooms (it already exists and is cheap) and show a prominent 'this room is not auto-moderated' banner on invite/join."
+        },
+        {
+          "title": "NSFW image watcher silently does not run when no client is 'watcher-capable' (all-mobile kid rooms) — no server-side fallback",
+          "severity": "critical",
+          "why": "Two personas hit this. The core user base is kids on phones/tablets, which self-report watcherCapable=false. A kid_safe room full of tablets elects ZERO watchers, so explicit imagery drawn on the canvas is broadcast with no scan and no auto-flag — it just appears. The room looks protected but isn't, which is worse than an obvious gap.",
+          "evidence": "server.js:445-447 (candidates = users.filter(watcherCapable); if empty, chosen is empty, no watcher elected, drawing still broadcasts); nsfwWatcher.js isWatcherCapable() returns false for touch-first/iPad/<4 cores/<4GB. No server-side inference backstop anywhere.",
+          "fix": "Add a guaranteed server-side backstop: periodically downsample the room canvas and run a lightweight NSFW check in Node (or an off-device inference endpoint) for any kid_safe room with zero elected watchers. Cheaper interim: if a kid_safe room has 0 capable watchers, throttle non-owner drawing and surface a visible 'a grown-up hasn't verified this room yet' state, and prioritize such rooms in the admin queue."
+        },
+        {
+          "title": "Unauthenticated cross-room 'watch' channel leaks full @mention message text (incl. from private rooms) and enables stranger contact",
+          "severity": "critical",
+          "why": "Three personas converged here. The notify socket requires NO auth: anyone sends {type:'watch', rooms:[codes], name} and is attached to any existing room by code; the mention payload includes the FULL message text plus roomTitle. Combined with guessable/known room codes and visible display names in userLists, a stranger can (a) read private-room conversations that @mention a target, and (b) repeatedly ping a named child from any room to pull them toward isolation. Direct child-contact + data-leak vector.",
+          "evidence": "server.js:673-687 (watch handler: no token/membership check, attaches to any rooms.get(code)); server.js:561-580 notifyMentions sends {type:'mention', roomTitle, from, text: message} — full text; server.js:725 spectate/userList also exposes names with no auth.",
+          "fix": "(1) Only deliver mention notifications to a watcher who is an actual member of that room, or holds a valid token whose profileId is in the room — reject watch subscriptions to rooms the socket can't otherwise access. (2) Strip message text from the notification payload — send 'You were mentioned in {room}', never the text. (3) Default cross-room @mention notifications OFF for guests/child accounts; require opt-in."
+        },
+        {
+          "title": "Account deletion never scrubs the durable server chatlog — a deleted minor's name + messages persist in plaintext forever",
+          "severity": "critical",
+          "why": "Two personas, and I confirmed the scrub is entirely unimplemented despite comments promising it. Deletion wipes the device and the PocketBase user (cascading gallery), but .chatlog/<ROOM>.jsonl lives on the Node filesystem, holds {name, message, profileId}, and nothing touches it on deletion. A child (or parent on their behalf) 'deletes' the account believing their data is gone; their real display name and conversation content — potentially school names, whereabouts — remain re-identifiable indefinitely. This is a COPPA/GDPR-erasure failure specific to minors.",
+          "evidence": "server.js:144-145 + 933 (audit log stores name+message+profileId 'so a FUTURE account-deletion scrub can redact by id' — aspirational); accountDeletion.js:125 only calls pb.collection('users').delete(id); grep confirms NO chatlog/scrub/redact/purge code anywhere in server.js.",
+          "fix": "Add a server-side deletion endpoint (authenticated by the user's token) that rewrites every .chatlog/*.jsonl, replacing lines matching the deleted profileId with '[deleted]' name and redacted message. Call it from fileServerDeletion() before/after the PocketBase delete. Add a time-based purge (e.g., chatlogs older than 90 days) as defense-in-depth. Stop storing display name in the audit log at all — profileId alone suffices for scrubbing."
+        },
+        {
+          "title": "No age gate or parental consent anywhere; any adult can create a signed-in account and host/contact kids",
+          "severity": "high",
+          "why": "Three personas. There is no birthdate prompt, no 'under 13' handling, no verifiable parental consent, and no email verification. An adult creates an account with any email, hosts public rooms (which requires only sign-in, not age), then pivots to private rooms/@mentions. For a self-described kids' app this is both the top App Store rejection risk and the enabling condition for adult-to-minor contact.",
+          "evidence": "SignupPage.jsx (email/password + OAuth with zero age check); server.js:1531 (kid_safe room creation requires identity but no age verification); AiAssistPanel 'profileKind' self/child is a label with no enforcement.",
+          "fix": "Add a birthdate/age-attestation on first sign-in; for under-13 require a verifiable-parental-consent flow (parent email + click confirmation) before the account is active, and gate public-room OWNERSHIP/hosting to 13+ or verified adults. Publish the minimum-age + consent statement on the Safety/Privacy pages (App Store reviewers look for exactly this)."
+        },
+        {
+          "title": "Private rooms auto-create on WebSocket connect with no required grown-up owner or moderation",
+          "severity": "high",
+          "why": "Two personas. Joining any 6-char code lazily creates a 'friends' room with no owner, so there is no host to lock it, hide ops, mute, or kick — and (per finding #1) no auto-moderation. An adult can stand up an ownerless, unmoderated room and funnel kids into it with zero friction and no accountable party.",
+          "evidence": "server.js:295 (private rooms default to 'friends' audience); getRoom() lazily creates on first WS connect with no ownership requirement; server.js:1518-1539 (only kid_safe creation requires auth). Confirmed audience!=='kid_safe' disables watchers + scan.",
+          "fix": "Require the first signed-in user to become owner of any private room, and refuse drawing/chat by a second participant until an owner exists (or auto-close ownerless rooms after a short timeout). Combine with running at least the SEVERE text filter in all rooms."
+        },
+        {
+          "title": "Auth token transmitted in the WebSocket URL query string (PocketBase JWT) — leaks to proxy/CDN logs and browser history",
+          "severity": "high",
+          "why": "FOUR personas flagged this and it is already tracked as open task #40. The token is a PocketBase JWT carrying the user's profileId and grants room ownership/host powers; in the URL it lands in Cloudflare/proxy access logs, browser history, and DevTools. A leaked token can be replayed to impersonate the child. Widely-confirmed, concrete, and already scoped.",
+          "evidence": "server.js:751 (const token = url.searchParams.get('token')); src/hooks/useMultiplayer.js:16 (&token=${encodeURIComponent(token)} appended to WS URL). Task #40 'Harden WS auth transport (token not in URL)' still pending.",
+          "fix": "Connect anonymously, then send {type:'auth', token} as the first WS message and validate there (the handler structure already supports first-message auth via the notify path). Move to short-lived tokens with refresh. This is a bounded, high-confidence fix — prioritize task #40."
+        },
+        {
+          "title": "Admin key is plaintext-on-disk, printed to stdout, single shared secret with no rotation or per-admin audit",
+          "severity": "high",
+          "why": "Two personas. One leak of .admin-key (git commit, shared log, container image) grants permanent, irrevocable full admin: delete rooms, clear chat, read all reports and chatlogs (which contain minors' messages). No rotation, no expiry, no rate limit, no record of who did what.",
+          "evidence": "server.js:1297-1305 (randomBytes(12).toString('hex'), persisted to .admin-key, printed on startup); admin endpoints have no rate limit; modLog is in-memory only.",
+          "fix": "Read ADMIN_KEY from env only (never persist/print it); chmod 0600 if a file is unavoidable; add rate limiting on /api/admin/*; move to per-admin tokens with expiry and a persisted audit log of admin actions."
+        },
+        {
+          "title": "Reports have no SLA, receipt, or escalation path for urgent (grooming/CSAM) content",
+          "severity": "high",
+          "why": "Two personas. A child who reports an adult's sexual message gets 'Report sent' but the report lands in an in-memory queue (only a periodic file persists) with no acknowledgement, no urgency triage, and no guaranteed human review — a single admin behind a static key is the whole pipeline. For the abuse scenarios above, response latency is the harm.",
+          "evidence": "server.js:1386-1394 (POST /api/report stores to array + .reports.json, admin-key to resolve; no SLA/escalation); modLog in-memory (line 1361).",
+          "fix": "Send a report receipt; add urgency triage (keyword flags like sexual/image/meet/address → URGENT tier); on an URGENT report naming a profileId, auto-shadow-mute that account's chat pending review; route URGENT reports to a secondary alerting channel and document an external escalation path (e.g., NCMEC CyberTipline)."
+        },
+        {
+          "title": "Free-form display-name rename has no content filter or impersonation guard",
+          "severity": "high",
+          "why": "Two personas. rename validates only type+length; no scan, no impersonation block. A signed-in user can set their name to 'Teacher Dave', 'admin', or copy another kid's auto-generated name, then leverage authority/identity to lure or instruct kids ('finish drawing with me in room COACH1'). Cheap and effective social-engineering surface.",
+          "evidence": "server.js rename handler validates only string/length/slice(0,20), never calls scan(); chat by contrast calls scan() at line 919; names broadcast in userList and chat.",
+          "fix": "Run scan() on new names; reject names containing authority terms (teacher/coach/parent/admin/mod/officer) and names matching/near-matching another current room participant (edit distance); visually badge guest vs signed-in names; broadcast a 'X renamed to Y' notice on rename."
+        }
+      ],
+      "wouldHelpUsers": [
+        {
+          "title": "Live reactions / applause on strokes (emoji reactions near a peer's drawing)",
+          "impact": "high",
+          "effort": "quick",
+          "what": "The teen persona's strongest point: friends can paint together but have no way to celebrate a peer's stroke except cluttering chat. Add a reaction picker (thumbs up / flame / heart) that broadcasts {type:'reaction', userId, emoji, position} and floats near the target stroke, expiring after a couple seconds. ~100 lines, no persistence needed, and it converts 'painting near friends' into 'painting WITH friends'. Highest impact-per-effort social feature in the whole audit."
+        },
+        {
+          "title": "One-tap share of a finished painting (image + copy-to-clipboard + rejoin link)",
+          "impact": "high",
+          "effort": "medium",
+          "what": "Export today is a raw file download with no preview, no clipboard, no link back to the room. Add a 'Share' button that produces a static thumbnail (for iMessage/WhatsApp previews), a copy-to-clipboard image, and a 'come paint more' room-code link. This is how a 15-year-old shows off — the core motivation for the age group — and it drives organic re-invites. Reuses existing canvas export in App.jsx."
+        },
+        {
+          "title": "Opt-in Saved Friends roster with two-way add",
+          "impact": "high",
+          "effort": "medium",
+          "what": "Kids currently can't reliably rejoin the same friends next week — recentRooms stores only codes, no people. When two signed-in users draw together, let each tap 'friend' to form a two-way link; show saved friends in the lobby with 'draw with me' and a notification when a saved friend opens a public room. This is the retention backbone. Gate to signed-in users and route through the consent model so it doesn't reopen the stranger-contact vector."
+        },
+        {
+          "title": "Client-side personal block/hide for kids ('hide this person's messages/cursor')",
+          "impact": "high",
+          "effort": "quick",
+          "what": "A parent-persona finding that doubles as a genuinely fun/agency feature: today only hosts can mute. Let any kid locally hide a specific user's chat and cursor (stored in browser storage, no server change). Gives kids immediate agency over annoyance without waiting for a host or filing a report — and it's a safety win too."
+        },
+        {
+          "title": "Personal coloring-sheet library (save your own outlines, reuse across rooms)",
+          "impact": "medium",
+          "effort": "medium",
+          "what": "Sheets are admin-uploaded and room-baked; kids can't save a favorite or carry an outline they drew into a new room. Let signed-in users save personal sheets (POST /api/sheets, per-account cap) and a '+ New sheet' button to draw an outline, save it, and reuse next week — high creative-reuse value, moderate effort on the existing sheet plumbing."
+        },
+        {
+          "title": "Lightweight collaborative games (exquisite corpse / quick Pictionary) on top of theme voting",
+          "impact": "medium",
+          "effort": "large",
+          "what": "Theme voting already exists; extend it into structured low-stakes games (pass-the-drawing exquisite corpse, guess-the-word) that give friends a reason to return. Higher effort but strong for the teen social loop; sequence it AFTER reactions + share + friends, which deliver more per unit effort."
+        },
+        {
+          "title": "Optional Family Mode: guardian email digest + remote room controls",
+          "impact": "medium",
+          "effort": "large",
+          "what": "Two personas want parental visibility. Let a child link a guardian email that receives a periodic activity digest (rooms joined, chats sent, art saved) and can toggle room access. This is table-stakes trust for kid-app store placement and pairs naturally with the age-gate/consent work in the critical list."
+        }
+      ],
+      "quickWins": [
+        "Run the existing SEVERE-tier text filter (scan() at server.js:919) in ALL rooms, not just kid_safe — a one-condition change that closes the worst of the unmoderated-private-room chat gap today.",
+        "Strip message text from @mention notifications (server.js:570-577): send 'You were mentioned in {room}' instead of the full `text`. One-line payload change that stops private-room content leaking to unauthenticated watchers.",
+        "Reject 'watch' subscriptions to rooms the socket isn't a member of (server.js:673-687) — add a membership/token check before r.notifiers.add(ws), closing the enumerate-and-eavesdrop path.",
+        "Stop printing ADMIN_KEY to stdout and read it from env only; chmod 0600 the .admin-key file (server.js:1297-1305). Minutes of work, removes a permanent-compromise vector.",
+        "Add scan() + an authority-term/near-duplicate blocklist to the rename handler so users can't set names like 'Teacher Dave' or copy a kid's name (server.js rename case). Reuses the existing filter.",
+        "Add a client-side 'hide this person' toggle (chat + cursor) stored in browser storage — pure frontend, gives kids immediate agency with zero server change.",
+        "Ship task #40 (token out of the WS URL): connect anonymously, send {type:'auth', token} as the first frame, validate there. Scoped, already-tracked, and closes a 4-persona finding.",
+        "Cap spectators per room and hide participant NAMES from spectators (show only a count) — server.js:715-725. Small change that removes the presence/name-harvesting surface on the homepage viewer.",
+        "Send a report receipt on POST /api/report and flag reports containing sexual/image/meet/address keywords as URGENT in the admin queue — no full pipeline needed, just triage + acknowledgement."
+      ]
+    }
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Personas"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Synthesize"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "persona:predator-vector",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "a06856904d6a9babb",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722804,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Child-safety red-teamer assessing risk vectors for minor is…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971862466,
+      "tokens": 85261,
+      "toolCalls": 24,
+      "durationMs": 139662,
+      "resultPreview": "{\"persona\":\"Child-safety red-teamer assessing risk vectors for minor isolation, contact, identity leakage, and grooming enablement on a youth collaborative painting platform.\",\"summary\":\"Drawesome is a real-time multiplayer painting app designed for kids and teens with no account requirement to draw. The platform implements defenses against public-room abuse (text moderation in kid_safe rooms, ima…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "persona:troll-harasser",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "a1c250fcb5419eb05",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722805,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Troll looking to upset kids in shared rooms without getting…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971834841,
+      "tokens": 71935,
+      "toolCalls": 30,
+      "durationMs": 112036,
+      "resultPreview": "{\"persona\":\"Troll looking to upset kids in shared rooms without getting caught\",\"summary\":\"Drawesome is a collaborative paint app for kids with layered moderation (chat text filter + NSFW watcher + host controls), but serious gaps exist. The NSFW watcher is desktop-only and optional — rooms with no capable watchers get zero canvas monitoring. Chat moderation only catches whole-word profanity and s…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "persona:griefer-mechanics",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "ac940674c23d961d9",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722805,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Adversarial griefer reading client source and sending hand-…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971821987,
+      "tokens": 82144,
+      "toolCalls": 22,
+      "durationMs": 99181,
+      "resultPreview": "{\"persona\":\"Adversarial griefer reading client source and sending hand-crafted WebSocket messages and HTTP requests to abuse the Drawesome server.\",\"summary\":\"The Drawesome server has several protocol-level vulnerabilities that a network attacker can exploit without needing an account. The main exposure is unvalidated WS messages allowing non-hosts to send privileged operations (lock/set_wet with …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "persona:privacy-hunter",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "a9bc38efdc38962e6",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722805,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Privacy analyst for a kids' collaborative drawing app (Draw…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971846300,
+      "tokens": 77332,
+      "toolCalls": 23,
+      "durationMs": 123494,
+      "resultPreview": "{\"persona\":\"Privacy analyst for a kids' collaborative drawing app (Drawesome)\",\"summary\":\"Drawesome implements guest-first anonymous painting with optional PocketBase sign-in for gallery sync and room moderation roles. The app stores user-generated content (room murals, chat, artworks) server-side with minimal identification. Major privacy surface: durable chat logs with profileIds for account-del…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "persona:shy-kid-social-teen",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "a85f2824df3a0190c",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722806,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "A 15-year-old social artist who wants to paint with friends…",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971858759,
+      "tokens": 83569,
+      "toolCalls": 35,
+      "durationMs": 135953,
+      "resultPreview": "{\"persona\":\"A 15-year-old social artist who wants to paint with friends and show off their art online, plus an 11-year-old nervous about stranger danger who needs reassurance and a welcoming first experience.\",\"summary\":\"Drawesome is a thoughtfully architected multiplayer paint app with strong kid-safe fundamentals (moderation, opt-in accounts, no ads/purchases), good UX for drop-in public rooms, …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "persona:parent-guardian",
+      "phaseIndex": 1,
+      "phaseTitle": "Personas",
+      "agentId": "af04ce2be0305d27e",
+      "agentType": "Explore",
+      "model": "claude-haiku-4-5-20251001",
+      "state": "done",
+      "startedAt": 1782971722806,
+      "queuedAt": 1782971722791,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Protective Parent & App Store Reviewer (COPPA-aware)",
+      "promptPreview": "Repo: C:/Users/Craig Campbell/Projects/happypaint — \"Drawesome\" (drawesome.art), a real-time paint-together web studio for KIDS AND TEENS, mobile-first, no-account-needed guest access. Stack: React SPA (src/App.jsx StudioApp ~6100 lines, components/, hooks/, utils/), Node server.js (Express + ws /ws relay, per-room op history, PocketBase accounts). Recently shipped: multiple public \"featured\" room…",
+      "lastProgressAt": 1782971967782,
+      "tokens": 81558,
+      "toolCalls": 47,
+      "durationMs": 244976,
+      "resultPreview": "{\"persona\":\"Protective Parent & App Store Reviewer (COPPA-aware)\",\"summary\":\"Drawesome is a thoughtfully designed kid-safe paint app with strong foundations: no account required, opt-in cloud storage, transparent public room moderation, in-app reporting, and genuine account deletion. However, several gaps exist that would concern a parent or regulator: private rooms have zero moderation despite be…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "synthesize",
+      "phaseIndex": 2,
+      "phaseTitle": "Synthesize",
+      "agentId": "af3f0f9f63938cd65",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1782971967792,
+      "queuedAt": 1782971967783,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Drawesome has a genuinely strong safety spine for its PUBLI…",
+      "promptPreview": "You are the lead synthesizing a persona red-team/blue-team audit of Drawesome (kids+teens paint-together app) into two decisive lists for the owner. Below are 6 persona reports (JSON). Deduplicate overlapping findings, resolve severity honestly (a thing multiple personas hit independently is more urgent), and DISTINGUISH what's genuinely dangerous from what's merely nice-to-have.\n\nProduce: (A) cri…",
+      "lastProgressAt": 1782972130888,
+      "tokens": 74663,
+      "toolCalls": 14,
+      "durationMs": 163094,
+      "resultPreview": "{\"headline\":\"Drawesome has a genuinely strong safety spine for its PUBLIC surface — kid_safe rooms get text moderation, elected NSFW watchers, host mute/kick, reversible op-hiding, and in-app reporting — and I confirmed several earlier fixes have already landed (non-hosts can no longer lock private rooms; muted users are now notified). But the audit exposes a consistent, dangerous pattern the pers…"
+    }
+  ],
+  "totalTokens": 556462,
+  "totalToolCalls": 195
+}
