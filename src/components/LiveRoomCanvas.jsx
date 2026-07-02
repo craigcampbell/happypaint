@@ -5,8 +5,9 @@
 // framed to the drawn content so visitors immediately see art being made.
 
 import { useEffect, useRef } from "react";
-import { drawBrushSegment, getDab, makeStrokeRenderer, pointRand, prepareStrokeCommit } from "../utils/brushes";
+import { drawBrushSegment, getDab, makeSmudgeRenderer, makeStrokeRenderer, pointRand, prepareStrokeCommit } from "../utils/brushes";
 import { createStrokeBuffer } from "../utils/strokeBuffer";
+import { createMixMap } from "../utils/mixMap";
 import { drawShape, drawText } from "../utils/shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
 
@@ -21,7 +22,7 @@ const STROKE_IDLE_MS = 8000;
 // `strokes` holds the per-strokeId in-progress buffers (Stage 1, #62): non-
 // eraser draw ops build in a bbox-capped buffer at full opacity and land on
 // the paper ONCE, at the stroke's opacity, when their end-op arrives.
-function applyOp(ctx, op, lastMap, strokes, onImage) {
+function applyOp(ctx, op, lastMap, strokes, onImage, mix) {
   if (!op) return;
   if (op.kind === "draw") {
     const settings = op.settings || {};
@@ -34,6 +35,22 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
       }
       if (op.end) lastMap.delete(op.strokeId);
       else lastMap.set(op.strokeId, last);
+      return;
+    }
+    if (settings.brush === "smudge") {
+      // Smudge (private rooms) sample-and-drags the paper directly — the off
+      // canvas IS the spectator's layer 0. No buffer; end just cleans up.
+      let entry = strokes.get(op.strokeId);
+      if (!entry) {
+        entry = { buf: null, lastTouch: 0, smudge: makeSmudgeRenderer(settings, ctx.canvas) };
+        strokes.set(op.strokeId, entry);
+      }
+      entry.lastTouch = Date.now();
+      for (const point of op.points || []) entry.smudge.addPoints(ctx, [point]);
+      if (op.end) {
+        strokes.delete(op.strokeId);
+        lastMap.delete(op.strokeId);
+      }
       return;
     }
     let entry = strokes.get(op.strokeId);
@@ -53,7 +70,7 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
         pad: (settings.size || 24) * 3 + 40, // covers glow shadowBlur + spray scatter
         lastTouch: 0,
         // Per-stroke dab walk state → wire batching can't move dabs.
-        renderer: dab && buf ? makeStrokeRenderer(settings) : null,
+        renderer: dab && buf ? makeStrokeRenderer(settings, mix.sample) : null,
         fx: dab && buf ? dab : null, // commit passes: wet edge / impasto / grain
       };
       strokes.set(op.strokeId, entry);
@@ -69,6 +86,7 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
           // restart.
           prepareStrokeCommit(entry.buf, null, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
+          mix.markDirty(entry.buf.bounds());
           entry.buf.reset();
           entry.buf.ensure(point.x, point.y, entry.pad);
         }
@@ -92,6 +110,7 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
         // / grain), then the single opacity-stamped commit (legacy: no-op).
         prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
         entry.buf.commit(ctx, entry.opacity);
+        mix.markDirty(entry.buf.bounds()); // paper changed under the wet-mix mirror
         entry.buf.dispose();
       }
       strokes.delete(op.strokeId);
@@ -107,6 +126,7 @@ function applyOp(ctx, op, lastMap, strokes, onImage) {
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, op.x, op.y, op.w, op.h);
+      mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
       onImage?.();
     };
     img.src = op.dataUrl;
@@ -172,11 +192,19 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       offCtx.setTransform(1, 0, 0, 1, 0, 0);
       offCtx.globalCompositeOperation = "source-over";
       offCtx.globalAlpha = 1;
-      offCtx.fillStyle = "#ffffff";
-      offCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      // TRANSPARENT like the studio's layer 0 (blit paints the white page):
+      // visually identical (source-over is associative; eraser cuts to
+      // transparent either way), and it keeps the wet-canvas mix map's
+      // "transparent = nothing to pick up" reads consistent across consumers.
+      offCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     };
     resetPaper();
     lastMapRef.current = new Map();
+
+    // Wet-canvas mix map: the spectator's own 1/8-scale mirror of the off
+    // canvas (its "layer 0"), sampled by wet strokes during replay/live ops.
+    // Lazy inside: no pixels are read until a wet dab actually samples.
+    const mix = createMixMap(() => off, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // In-progress stroke buffers (strokeId -> entry), per room connection.
     const strokes = new Map();
@@ -191,6 +219,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
         if (entry.buf) {
           prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(offCtx, entry.opacity);
+          mix.markDirty(entry.buf.bounds());
           entry.buf.dispose();
         }
         strokes.delete(id);
@@ -329,21 +358,23 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
         if (data.type === "history") {
           reconnectDelay = 2500; // healthy connection — reset the backoff
           resetPaper();
+          mix.markAllDirty(); // the paper was rebuilt wholesale
           lastMapRef.current = new Map();
           dropStrokes(); // stale live buffers — the replay re-delivers their points
-          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit);
+          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit, mix);
           commitAllStrokes(); // legacy / cut-off strokes with no end marker
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           blit();
           onActivity?.((data.ops || []).length);
         } else if (data.type === "op") {
-          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit);
+          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit, mix);
           blit();
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);
         } else if (data.type === "clear") {
           resetPaper();
+          mix.clear(); // blank paper — empty the wet-mix mirror too
           lastMapRef.current = new Map();
           dropStrokes(); // in-progress strokes are wiped with the mural
           boundsRef.current = null;
@@ -383,6 +414,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           if (entry.buf) {
             prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
             entry.buf.commit(offCtx, entry.opacity);
+            mix.markDirty(entry.buf.bounds());
             entry.buf.dispose();
           }
           strokes.delete(id);

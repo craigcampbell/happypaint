@@ -24,6 +24,18 @@ export default function BrushPreview({ brush, color }) {
       ctx.setLineDash([]);
       return;
     }
+    if (brush === "smudge") {
+      // No pigment of its own — a neutral streak fading along the drag
+      // direction, so it reads as "pushes the paint that's already there".
+      const grad = ctx.createLinearGradient(w / 2 - 14, 0, w / 2 + 14, 0);
+      grad.addColorStop(0, "rgba(122, 135, 148, 0.9)");
+      grad.addColorStop(1, "rgba(122, 135, 148, 0.06)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(w / 2, h / 2, 14, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
     const cx = w / 2;
     const cy = h / 2;
     const fill = color || "#111827";
@@ -54,6 +66,23 @@ export default function BrushPreview({ brush, color }) {
         ctx.fill();
       }
       ctx.globalAlpha = 1;
+      return;
+    }
+    if (brush === "gouache") {
+      // Matte poster paint: the real dab's 1.3x tangent stretch, flat + opaque.
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 11.7, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    if (brush === "ink") {
+      // All about taper: a thick-to-hairline sweep instead of a plain dot.
+      ctx.beginPath();
+      ctx.moveTo(cx - 16, cy);
+      ctx.quadraticCurveTo(cx - 4, cy - 9, cx + 16, cy - 1);
+      ctx.quadraticCurveTo(cx - 4, cy + 3, cx - 16, cy);
+      ctx.closePath();
+      ctx.fill();
       return;
     }
     if (brush === "watercolor") {

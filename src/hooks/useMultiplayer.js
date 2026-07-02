@@ -166,6 +166,12 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendPromote = useCallback((targetId) => send({ type: "promote", targetId }), [send]);
   const sendDemote = useCallback((targetId) => send({ type: "demote", targetId }), [send]);
 
+  // Wet-canvas toggle + theme voting (permissions enforced server-side:
+  // host-only in public rooms, any member in private rooms).
+  const sendSetWet = useCallback((wet) => send({ type: "set_wet", wet }), [send]);
+  const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
+  const sendVote = useCallback((choice) => send({ type: "vote", choice }), [send]);
+
   // Moderation: report whether we can run the in-browser watcher, flag a region,
   // and (host-only, enforced server-side) reversibly hide / restore / remove ops.
   const sendWatcherAck = useCallback((capable) => send({ type: "watcher_ack", capable }), [send]);
@@ -178,6 +184,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     connected, users, self, chat, disconnect,
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
+    sendSetWet, sendVoteStart, sendVote,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

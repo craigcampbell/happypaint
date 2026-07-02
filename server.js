@@ -186,9 +186,12 @@ function loadRoom(roomId) {
       hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
       userSeconds: Number(data.userSeconds) || 0,
       chat: Array.isArray(data.chat) ? data.chat.slice(-CHAT_BUFFER_MAX) : [],
+      // Wet-canvas toggle + the last theme-vote winner both survive restarts.
+      wetCanvas: !!data.wetCanvas,
+      customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [] };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -223,6 +226,8 @@ async function saveRoomNow(roomId) {
       hiddenOpIds: Array.from(room.hiddenOpIds || []),
       userSeconds: room.userSeconds || 0,
       chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
+      wetCanvas: !!room.wetCanvas,
+      customPrompt: room.customPrompt || null,
       savedAt: Date.now(),
     });
     // Temp-file + rename so a crash mid-write never leaves a truncated room file.
@@ -318,6 +323,11 @@ function getRoom(roomId) {
       spectators: new Set(), // read-only homepage viewers (not counted as users)
       modLog: [], // recent moderation actions (in-memory, capped)
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
+      wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
+      customPrompt: saved.customPrompt, // theme-vote winner; beats the daily prompt
+      vote: null, // open theme vote: { options, votes: {userId: 0|1|2}, endsAt }
+      voteTimer: null, // the vote-close timeout (cleared with the room)
+      lastVoteAt: 0, // vote_start cooldown anchor (in-memory)
       lastActivity: Date.now(),
     });
   }
@@ -370,6 +380,7 @@ function closeRoom(roomId, reason) {
     });
     const t = persistTimers.get(roomId);
     if (t) { clearTimeout(t); persistTimers.delete(roomId); }
+    if (room.voteTimer) { clearTimeout(room.voteTimer); room.voteTimer = null; }
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
@@ -568,6 +579,71 @@ function notifyMentions(room, roomId, senderName, message, ts) {
   }
 }
 
+// ---- Theme voting (mad-libs prompts, 3 options, room votes) -----------------
+// buildTopicOptions() rolls three distinct "Draw a {adj} {subject}" strings,
+// each with a 50% chance of a " — {twist}" tail. Rooms vote for 45s; the
+// winner becomes room.customPrompt (persisted, beats the daily rotation).
+const TOPIC_ADJ = [
+  'sleepy', 'giant', 'tiny', 'neon', 'grumpy', 'dancing', 'robot', 'magical',
+  'upside-down', 'super speedy', 'invisible', 'sparkly', 'squishy', 'ancient',
+  'glow-in-the-dark', 'banana-flavored', 'mysterious', 'fluffy', 'pixelated', 'gigantic',
+];
+const TOPIC_SUBJECT = [
+  'dragon breakfast', 'cat concert', 'space picnic', 'underwater city', 'dino disco',
+  'pizza planet', 'haunted treehouse', 'robot bakery', 'penguin parade', 'candy volcano',
+  'wizard school bus', 'monster truck rally', 'jellyfish ballet', 'sock puppet band',
+  'moon garden', 'ninja tea party', 'cloud castle', 'bug circus', 'taco spaceship',
+  'mermaid arcade', 'yeti sleepover', 'donut factory', 'skateboarding turtle', 'library of secrets',
+];
+const TOPIC_TWIST = [
+  'but everything is made of candy', 'during a thunderstorm', 'in the year 3000',
+  'but gravity is off', 'with too many googly eyes', 'at the bottom of the ocean',
+  'but everyone is a potato', 'in the middle of the night', 'made entirely of spaghetti',
+  'while it rains glitter', 'but it keeps melting', 'seen through a keyhole',
+];
+const VOTE_DURATION_MS = 45_000;
+const VOTE_COOLDOWN_MS = 120_000;
+
+function buildTopicOptions() {
+  const options = [];
+  let guard = 0;
+  while (options.length < 3 && guard < 60) {
+    guard += 1;
+    const adj = pick(TOPIC_ADJ);
+    const article = /^[aeiou]/i.test(adj) ? 'an' : 'a';
+    let option = `Draw ${article} ${adj} ${pick(TOPIC_SUBJECT)}`;
+    if (Math.random() < 0.5) option += ` — ${pick(TOPIC_TWIST)}`;
+    if (!options.includes(option)) options.push(option);
+  }
+  return options;
+}
+
+function voteCounts(vote) {
+  const counts = [0, 0, 0];
+  for (const choice of Object.values(vote.votes)) {
+    if (choice >= 0 && choice <= 2) counts[choice] += 1;
+  }
+  return counts;
+}
+
+// Close a room's vote: winner (tie -> lowest index) becomes the room prompt.
+// Guarded per room — the timeout may outlive the room or a superseded vote.
+function finishVote(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.vote) return;
+  const counts = voteCounts(room.vote);
+  let winner = 0;
+  for (let i = 1; i < 3; i += 1) {
+    if (counts[i] > counts[winner]) winner = i;
+  }
+  const prompt = room.vote.options[winner];
+  room.customPrompt = prompt;
+  room.vote = null;
+  room.voteTimer = null;
+  broadcast(roomId, { type: 'vote_result', prompt, counts });
+  persistRoom(roomId);
+}
+
 wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
@@ -618,10 +694,11 @@ wss.on('connection', async (ws, req) => {
 
   const room = getRoom(roomId);
 
-  // The prompt shown in the handshake: featured rooms carry the same daily
-  // rotating prompt the lobby shows; ad-hoc rooms have none.
+  // The prompt shown in the handshake: a theme-vote winner (customPrompt)
+  // beats the daily rotation; featured rooms otherwise carry the same daily
+  // prompt the lobby shows; ad-hoc rooms have none until they vote one in.
   const featured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
-  const roomPrompt = featured ? dailyPromptFor(featured) : null;
+  const roomPrompt = room.customPrompt || (featured ? dailyPromptFor(featured) : null);
 
   // adult_18 is a defined-but-disabled audience: real adult verification doesn't
   // exist in this stack, so no normal user can create one (POST /api/rooms 403s)
@@ -643,6 +720,7 @@ wss.on('connection', async (ws, req) => {
       type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
       roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
       prompt: roomPrompt,
+      wetCanvas: !!room.wetCanvas,
     }));
     ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
     // Always send history (even empty) so the spectator view resets cleanly when
@@ -729,6 +807,9 @@ wss.on('connection', async (ws, req) => {
     roomTitle: room.title || null,
     audience: room.audience,
     prompt: roomPrompt,
+    wetCanvas: !!room.wetCanvas,
+    // Any vote already running rides the handshake so late joiners can vote.
+    vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -770,6 +851,8 @@ wss.on('connection', async (ws, req) => {
             break;
           }
         }
+        // Smudge is a private-room brush: never let its ops land in a public room.
+        if (room.audience === 'kid_safe' && data.op.kind === 'draw' && data.op.settings && data.op.settings.brush === 'smudge') break;
         // Tag with the author so replay/cursors can attribute it, plus a stable
         // monotonic opId so moderation can hide/restore individual ops later.
         const op = { ...data.op, userId: id, opId: (room.opSeq = (room.opSeq || 0) + 1) };
@@ -852,6 +935,46 @@ wss.on('connection', async (ws, req) => {
         // Ping cross-room watchers who are @mentioned here (see notifyMentions).
         notifyMentions(room, roomId, user.name, message, chatTs);
         persistRoom(roomId);
+        break;
+      }
+
+      // ---- Wet canvas (paint mixing) toggle ---------------------------------
+      case 'set_wet': {
+        // Hosts flip it in public rooms; in a private room any member may.
+        if (room.audience === 'kid_safe' && !isHost(room, user)) break;
+        room.wetCanvas = !!data.wet;
+        broadcast(roomId, { type: 'wet_state', wet: room.wetCanvas });
+        persistRoom(roomId);
+        break;
+      }
+
+      // ---- Theme voting ------------------------------------------------------
+      case 'vote_start': {
+        // Same power model as set_wet: host-only in public rooms, open in private.
+        if (room.audience === 'kid_safe' && !isHost(room, user)) break;
+        const now = Date.now();
+        if (room.vote) {
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: 'A vote is already running!' }));
+          break;
+        }
+        const wait = VOTE_COOLDOWN_MS - (now - (room.lastVoteAt || 0));
+        if (wait > 0) {
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: `Next vote unlocks in ${Math.ceil(wait / 1000)}s` }));
+          break;
+        }
+        room.lastVoteAt = now;
+        room.vote = { options: buildTopicOptions(), votes: {}, endsAt: now + VOTE_DURATION_MS };
+        if (room.voteTimer) clearTimeout(room.voteTimer);
+        room.voteTimer = setTimeout(() => finishVote(roomId), VOTE_DURATION_MS);
+        broadcast(roomId, { type: 'vote_open', options: room.vote.options, endsAt: room.vote.endsAt });
+        break;
+      }
+      case 'vote': {
+        if (!room.vote) break;
+        const choice = Number(data.choice);
+        if (!Number.isInteger(choice) || choice < 0 || choice > 2) break;
+        room.vote.votes[id] = choice; // one vote per user, changeable until close
+        broadcast(roomId, { type: 'vote_tally', counts: voteCounts(room.vote) });
         break;
       }
 

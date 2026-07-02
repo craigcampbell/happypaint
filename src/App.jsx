@@ -5,6 +5,7 @@ import {
   drawBrushSegment,
   getDab,
   getTexture,
+  makeSmudgeRenderer,
   makeStrokeRenderer,
   paletteCatalog,
   paperTextures,
@@ -12,6 +13,7 @@ import {
   prepareStrokeCommit,
 } from "./utils/brushes";
 import { createStrokeBuffer } from "./utils/strokeBuffer";
+import { createMixMap } from "./utils/mixMap";
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
@@ -441,6 +443,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // stroke's opacity, at pen-up. Null while idle / while erasing.
   // { buf, layer, settings, drawSettings, seed, pad }
   const localStrokeRef = useRef(null);
+  // In-progress LOCAL smudge walker (private rooms). Smudge never buffers — it
+  // sample-and-drags LAYER 0 directly — so it lives beside, not inside,
+  // localStrokeRef. Null while idle / for every other brush.
+  const localSmudgeRef = useRef(null);
+  // Wet-canvas mixing: 1/8-scale CPU mirror of LAYER 0 (see utils/mixMap).
+  // Lazily created; commit paths mark it dirty, wet dabs sample it.
+  const mixMapRef = useRef(null);
   // Friends' in-progress strokes get the same treatment: strokeId ->
   // { buf, settings, drawSettings, opacity, pad, lastTouch }. `buf` is null for
   // the direct-path fallback once REMOTE_BUFFER_CAP buffers are already open.
@@ -611,6 +620,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [roomPrompt, setRoomPrompt] = useState(null);
   const [promptDismissed, setPromptDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
+  // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
+  // pointer handlers: startStroke captures it INTO the op settings, so a
+  // stroke's wetness is frozen at pen-down and replays deterministically.
+  const [roomWet, setRoomWet] = useState(false);
+  const roomWetRef = useRef(false);
+  // Open theme vote: { options, endsAt, counts, myChoice } (null when closed).
+  const [roomVote, setRoomVote] = useState(null);
+  const [voteSecondsLeft, setVoteSecondsLeft] = useState(0);
 
   // Saved brush recipes are the kind === "brush" Paint Space assets.
   const savedBrushAssets = useMemo(
@@ -692,6 +709,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const getActiveLayer = useCallback(() => {
     return layersRef.current.find((layer) => layer.id === activeLayerIdRef.current) || null;
+  }, []);
+
+  // ---- Wet-canvas mix map (1/8-scale LAYER-0 mirror; see utils/mixMap) -----
+  // sampleMix is the sampler injected into every makeStrokeRenderer; it only
+  // materializes the map once a wet dab actually samples (born fully dirty, so
+  // whatever is already on layer 0 is mirrored on first use). The mark* calls
+  // below are O(1) bbox unions — the pixel refresh happens lazily in sample().
+  const sampleMix = useCallback((x, y) => {
+    if (!mixMapRef.current) {
+      mixMapRef.current = createMixMap(() => layersRef.current[0]?.canvas || null, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+    return mixMapRef.current.sample(x, y);
+  }, []);
+  // A stroke-buffer/image commit landed on `layer` — if that's layer 0, the
+  // mix map's mirror of that bbox is stale now.
+  const markMixDirty = useCallback((layer, bounds) => {
+    if (mixMapRef.current && layer && layer === layersRef.current[0]) {
+      mixMapRef.current.markDirty(bounds);
+    }
   }, []);
 
   useEffect(() => {
@@ -1250,6 +1286,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           ? snapshot.activeLayerId
           : layersRef.current[layersRef.current.length - 1]?.id || null;
       }
+      // Undo/redo can swap layer 0's pixels wholesale — re-mirror on next wet sample.
+      mixMapRef.current?.markAllDirty();
       invalidateCompositeCache();
       renderDisplay();
       syncLayerState();
@@ -1301,6 +1339,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // empties for all artists, snapshot for local undo, and tell the room.
     pushHistory("full");
     layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+    mixMapRef.current?.clear(); // layer 0 is blank — empty the wet-mix mirror too
     remoteStrokeLastRef.current.clear();
     dropRemoteStrokes(); // friends' in-progress strokes are wiped with the mural
     mpRef.current?.sendClear();
@@ -1913,12 +1952,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const y = Math.round(center.y - h / 2);
       pushHistory();
       active.canvas.getContext("2d").drawImage(image, x, y, w, h);
+      markMixDirty(active, { x0: x, y0: y, w, h }); // wet-mix mirror (layer 0 only)
       renderDisplay();
       refreshActiveThumbnail();
       mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h });
       markChanged("Image added");
     },
-    [getActiveLayer, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay],
+    [getActiveLayer, markChanged, markMixDirty, pushHistory, refreshActiveThumbnail, renderDisplay],
   );
 
   const sharePng = useCallback(async () => {
@@ -1978,13 +2018,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
 
+      // Private-room-only brushes (smudge) are ghosted in public rooms; the
+      // picker routes their taps to a toast, but guard here too.
+      if (brush?.privateOnly && roomAudienceRef.current === "kid_safe") {
+        showToast("Smudge works in private rooms — start one from Rooms!");
+        return;
+      }
+
       setSelectedBrush(brushId);
       setSelectedTool("brush");
       // Picking a brush means you want to draw — drop out of the pan/hand tool.
       handToolRef.current = false;
       setHandTool(false);
     },
-    [studioUnlocked],
+    [showToast, studioUnlocked],
   );
 
   const chooseTexture = useCallback(
@@ -2110,9 +2157,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // at the stroke's opacity (legacy strokes: no-op).
       prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.fx);
       stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+      markMixDirty(stroke.layer, stroke.buf.bounds()); // wet-mix mirror (layer 0 only)
     }
     stroke.buf.dispose();
-  }, []);
+  }, [markMixDirty]);
 
   // Relay this pointer's position to the room as a live cursor (throttled to
   // ~50ms). Coordinates are normalised 0..1 so each friend can place the cursor
@@ -2152,8 +2200,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const net = strokeNetRef.current;
       // Non-eraser strokes paint into the offscreen stroke buffer at FULL
       // opacity with coordinate-seeded randomness (#62); the eraser stays on
-      // the legacy direct destination-out path (stroke === null).
+      // the legacy direct destination-out path (stroke === null), and smudge
+      // (smudge !== null) sample-and-drags LAYER 0 directly — no buffer.
       const stroke = localStrokeRef.current;
+      const smudge = localSmudgeRef.current;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
@@ -2167,6 +2217,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             // restart.
             prepareStrokeCommit(stroke.buf, null, stroke.fx);
             stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+            markMixDirty(stroke.layer, stroke.buf.bounds()); // overflow chunk landed on the layer
             stroke.buf.reset();
             stroke.buf.ensure(point.x, point.y, stroke.pad);
           }
@@ -2177,6 +2228,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             stroke.renderer.addPoints(stroke.buf.getCtx(), [point]);
           } else {
             drawBrushSegment(stroke.buf.getCtx(), lastPoint, point, stroke.drawSettings, pointRand(stroke.seed, point.x, point.y));
+          }
+        } else if (smudge) {
+          // Smudge always targets LAYER 0 — even when another layer is active
+          // — because every peer replays smudge ops against layer 0 (see
+          // startStroke). One point at a time, same as the wire consumers.
+          const layer0 = layersRef.current[0];
+          if (layer0) {
+            smudge.addPoints(layer0.canvas.getContext("2d"), [point]);
           }
         } else {
           drawBrushSegment(context, lastPoint, point, settings);
@@ -2213,11 +2272,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // stroke grow live rather than only on pen-up.
       flushStrokeNet(false);
 
+      // Smudging layer 0 while another layer is active mutates pixels inside
+      // the "below" composite cache — invalidate so the frame path falls back
+      // to a full recomposite (same cost remote ops already pay when idle).
+      if (smudge && activeLayerIdRef.current !== layersRef.current[0]?.id) {
+        invalidateCompositeCache();
+      }
+
       // Coalesced, cache-backed display update (W1/W2/W5): at most one
       // below + active + above composite per painted frame.
       scheduleStrokeFrame();
     },
-    [flushStrokeNet, getActiveLayer, getPoint, scheduleStrokeFrame],
+    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markMixDirty, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -2319,6 +2385,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           opacity: settings.opacity,
         });
         if (filled) {
+          // Flood fill has no cheap bbox — if it touched layer 0, re-mirror
+          // the whole wet-mix map on next sample (fills are rare).
+          if (active === layersRef.current[0]) {
+            mixMapRef.current?.markAllDirty();
+          }
           renderDisplay();
           refreshActiveThumbnail();
           recordReplay(true);
@@ -2384,11 +2455,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Safety net: if a dropped pointerup ever orphaned a stroke buffer,
       // commit it before opening a new one (no-op in the normal flow).
       commitLocalStroke();
+      localSmudgeRef.current = null;
+      // Smudge is private-room only. The picker ghosts it in kid_safe rooms;
+      // this guards restored drafts / audience races by falling back to marker.
+      const brushId = settings.brush === "smudge" && roomAudienceRef.current === "kid_safe" ? "marker" : settings.brush;
       // Velocity-pressure synthesis (#63) starts fresh on every stroke.
       velocityRef.current.lastT = null;
       velocityRef.current.ema = null;
       lastPointRef.current = getPoint(event.nativeEvent);
-      pushHistory();
+      // Smudge edits LAYER 0 even when another layer is active — snapshot the
+      // full stack in that case so undo restores the right layer's pixels.
+      pushHistory(brushId === "smudge" && activeLayerIdRef.current !== layersRef.current[0]?.id ? "full" : "active");
       buildCompositeCache();
       // Per-stroke randomness seed: rides the wire so every client renders the
       // exact same jitter/scatter for this stroke (see pointRand in brushes).
@@ -2397,10 +2474,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // (rides the wire), so every consumer — local, live remote, spectator,
       // history replay — picks the makeStrokeRenderer path for this stroke.
       // Spray/eraser/anything without dab params stays legacy, and legacy
-      // history ops (no v) replay pixel-stable forever.
-      const dab = settings.brush === "eraser" ? null : getDab(settings.brush);
+      // history ops (no v) replay pixel-stable forever. (Smudge is routed BY
+      // BRUSH ID in every consumer, not via the dab table.)
+      const dab = brushId === "eraser" || brushId === "smudge" ? null : getDab(brushId);
       const netSettings = {
-        brush: settings.brush,
+        brush: brushId,
         color: settings.color,
         size: settings.size,
         opacity: settings.opacity,
@@ -2409,6 +2487,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       };
       if (dab) {
         netSettings.v = 2;
+        // The room's wet state is captured INTO the op at pen-down: replay
+        // stays deterministic no matter how the toggle flips later.
+        if (roomWetRef.current) {
+          netSettings.wet = true;
+        }
       }
       // Open an outgoing network stroke so each painted point streams to friends.
       strokeNetRef.current = {
@@ -2418,10 +2501,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         lastSent: 0,
         last: null, // last appended net point (wire-level dedupe)
       };
-      // Stage-1 buffered stroke (#62) for everything but the eraser. A buffered
-      // eraser preview would appear to punch holes through LOWER layers
-      // mid-stroke, so erasing keeps the direct destination-out path.
-      if (settings.brush !== "eraser") {
+      // Stage-1 buffered stroke (#62) for everything but the eraser and
+      // smudge. A buffered eraser preview would appear to punch holes through
+      // LOWER layers mid-stroke, so erasing keeps the direct destination-out
+      // path; smudge sample-and-drags LAYER 0 in place (buffering it would
+      // sample stale pixels and double-stamp on commit).
+      if (brushId === "smudge") {
+        localStrokeRef.current = null;
+        const layer0 = layersRef.current[0];
+        localSmudgeRef.current = layer0 ? makeSmudgeRenderer(netSettings, layer0.canvas) : null;
+      } else if (brushId !== "eraser") {
         localStrokeRef.current = {
           buf: createStrokeBuffer(),
           layer: getActiveLayer(),
@@ -2431,7 +2520,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           pad: settings.size * 3 + 40, // covers glow shadowBlur + spray scatter
           // Stage-2 dab renderer: holds lastPoint/residual PER STROKE so wire
           // batching can't move dabs. Null → legacy segment path.
-          renderer: dab ? makeStrokeRenderer(netSettings) : null,
+          renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
           fx: dab || null, // commit passes: wet edge / impasto / paper grain
         };
       } else {
@@ -2443,7 +2532,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // finishStroke's markChanged("Stroke saved") covers the status update.
       dirtyRef.current = true;
     },
-    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, shouldRejectPointer, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, sampleMix, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -2538,9 +2627,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         // at the stroke's opacity (#62 — a single pen-down/up tap commits its
         // one dab here too), then flush any pending per-move composite and do
         // one full recomposite (this also invalidates the per-stroke caches).
+        // Smudge already landed on layer 0 dab by dab — just drop its walker.
         flushStrokeNet(true);
         strokeNetRef.current = null;
         commitLocalStroke();
+        localSmudgeRef.current = null;
         flushStrokeFrame();
         renderDisplay();
         markChanged("Stroke saved");
@@ -2582,6 +2673,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       flushStrokeNet(true);
       strokeNetRef.current = null;
       commitLocalStroke();
+      localSmudgeRef.current = null;
       activePointerRef.current = null;
       lastPointRef.current = null;
       activeStrokeLayerIdRef.current = null;
@@ -3984,13 +4076,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // commit (legacy strokes: no-op).
           prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
+          markMixDirty(layersRef.current[0], entry.buf.bounds()); // remote commits land on layer 0
         }
         entry.buf.dispose();
       }
       remoteStrokesRef.current.delete(strokeId);
       remoteStrokeLastRef.current.delete(strokeId);
     },
-    [getRemoteCtx],
+    [getRemoteCtx, markMixDirty],
   );
 
   // Idle sweep: while any remote stroke is open, check every 2s and commit
@@ -4060,6 +4153,39 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           return;
         }
+        if (settings.brush === "smudge") {
+          // Ignore smudge in public rooms (the server drops these too — this
+          // is belt-and-braces against a hacked/stale client).
+          if (roomAudienceRef.current === "kid_safe") {
+            return;
+          }
+          // Smudge sample-and-drags LAYER 0 directly — no stroke buffer.
+          // Everyone replays it against layer 0 in server op order, so history
+          // replay is deterministic; live overlap divergence is accepted and
+          // self-heals on the next history frame.
+          const strokes = remoteStrokesRef.current;
+          let entry = strokes.get(op.strokeId);
+          if (!entry) {
+            entry = {
+              buf: null, // nothing to buffer / commit — end just cleans up
+              opacity: 1,
+              lastTouch: 0,
+              renderer: null,
+              fx: null,
+              smudge: makeSmudgeRenderer(settings, ctx.canvas),
+            };
+            strokes.set(op.strokeId, entry);
+            ensureRemoteSweep();
+          }
+          entry.lastTouch = Date.now();
+          for (const point of op.points || []) {
+            entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
+          }
+          if (op.end) {
+            commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
+          }
+          return;
+        }
         const strokes = remoteStrokesRef.current;
         let entry = strokes.get(op.strokeId);
         if (!entry) {
@@ -4086,7 +4212,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             opacity,
             pad: (settings.size || 24) * 3 + 40,
             lastTouch: 0,
-            renderer: dab && buf ? makeStrokeRenderer(settings) : null,
+            renderer: dab && buf ? makeStrokeRenderer(settings, sampleMix) : null,
             fx: dab && buf ? dab : null, // commit passes need the buffer
           };
           strokes.set(op.strokeId, entry);
@@ -4103,6 +4229,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               // state alive across the restart.
               prepareStrokeCommit(entry.buf, null, entry.fx);
               entry.buf.commit(ctx, entry.opacity);
+              markMixDirty(layersRef.current[0], entry.buf.bounds());
               entry.buf.reset();
               entry.buf.ensure(point.x, point.y, entry.pad);
             }
@@ -4133,12 +4260,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         const image = new Image();
         image.onload = () => {
           ctx.drawImage(image, op.x, op.y, op.w, op.h);
+          markMixDirty(layersRef.current[0], { x0: op.x, y0: op.y, w: op.w, h: op.h });
           renderDisplay();
         };
         image.src = op.dataUrl;
       }
     },
-    [commitRemoteStroke, ensureRemoteSweep, getRemoteCtx, renderDisplay],
+    [commitRemoteStroke, ensureRemoteSweep, getRemoteCtx, markMixDirty, renderDisplay, sampleMix],
   );
 
   // Buffers are transient: drop the idle sweep and every open stroke buffer
@@ -4155,6 +4283,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       remoteStrokesRef.current.clear();
       localStrokeRef.current?.buf.dispose();
       localStrokeRef.current = null;
+      localSmudgeRef.current = null;
     },
     [],
   );
@@ -4174,8 +4303,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
-          // Today's drawing prompt for this room (public prompt rooms).
+          // Today's drawing prompt for this room (public prompt rooms / the
+          // last theme-vote winner).
           setRoomPrompt(data.prompt || null);
+          // Wet-canvas state + any theme vote already running ride the
+          // handshake, so late joiners (and reconnects) sync both.
+          roomWetRef.current = !!data.wetCanvas;
+          setRoomWet(!!data.wetCanvas);
+          setRoomVote(data.vote ? { options: data.vote.options || [], endsAt: data.vote.endsAt || 0, counts: data.vote.counts || [0, 0, 0], myChoice: null } : null);
           // Remember this room (with its friendly title) so it shows up under
           // "Your rooms" in the switcher for quick hopping back.
           recordRecentRoom(roomId, data.roomTitle || null, Date.now());
@@ -4190,6 +4325,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             // Public rooms are brush-only (fill/shape/text hidden) — snap back
             // if one of the hidden tools was selected before the audience arrived.
             setSelectedTool((prev) => (prev === "brush" ? prev : "brush"));
+            // Private-only brushes (smudge) fall back too (a restored draft
+            // could carry one into a public room before the audience arrived).
+            setSelectedBrush((prev) => (brushCatalog.find((b) => b.id === prev)?.privateOnly ? "marker" : prev));
           }
           if (data.audience === "kid_safe" && isWatcherCapable()) {
             mpRef.current?.sendWatcherAck?.(true);
@@ -4242,6 +4380,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Replayed strokes with no end marker (legacy clients, strokes cut
           // off by the snapshot) stay open above — commit them all now.
           commitAllRemoteStrokes();
+          // Replay end: layer 0 was rebuilt wholesale — re-mirror the wet-mix
+          // map on its next sample.
+          mixMapRef.current?.markAllDirty();
           nsfwWatcherRef.current?.markDirty();
           renderDisplay();
           refreshActiveThumbnail();
@@ -4267,6 +4408,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "clear":
           layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+          mixMapRef.current?.clear(); // layer 0 is blank — empty the wet-mix mirror
           // In-progress strokes are wiped with the mural (legacy parity: the
           // direct path's pixels lived on the layers that just got cleared).
           // A live LOCAL stroke keeps drawing — only its pre-clear part drops.
@@ -4298,6 +4440,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             remoteCursorsRef.current.delete(data.userId);
             userPosRef.current.delete(data.userId); // bound growth: drop their saved position too
           }
+          break;
+        case "wet_state":
+          // The room's wet toggle flipped. Strokes already in flight keep the
+          // wetness captured in their op settings (replay determinism).
+          roomWetRef.current = !!data.wet;
+          setRoomWet(!!data.wet);
+          showToast(data.wet ? "💧 Wet canvas ON — paints mix and smear!" : "☀️ Canvas dried — paints stay put.");
+          break;
+        case "vote_open":
+          setRoomVote({ options: data.options || [], endsAt: data.endsAt || 0, counts: [0, 0, 0], myChoice: null });
+          break;
+        case "vote_tally":
+          setRoomVote((vote) => (vote ? { ...vote, counts: data.counts || vote.counts } : vote));
+          break;
+        case "vote_result":
+          setRoomVote(null);
+          if (data.prompt) {
+            setRoomPrompt(data.prompt);
+            setPromptDismissed(false); // a fresh theme un-hides the chip
+            showToast(`🎨 New theme: ${data.prompt}`);
+          }
+          break;
+        case "vote_denied":
+          showToast(data.reason ? `🗳️ ${data.reason}` : "🗳️ Can't start a vote right now.");
           break;
         case "watcher_role":
           // The server elected (or stood down) this client as an NSFW watcher.
@@ -4427,8 +4593,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendModHide: mp.sendModHide,
       sendModRestore: mp.sendModRestore,
       sendModRemove: mp.sendModRemove,
+      sendSetWet: mp.sendSetWet,
+      sendVoteStart: mp.sendVoteStart,
+      sendVote: mp.sendVote,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote]);
+
+  // Live countdown for the open theme vote. Ticks twice a second while a vote
+  // card is showing; the server's vote_result is what actually closes it.
+  useEffect(() => {
+    if (!roomVote?.endsAt) {
+      return undefined;
+    }
+    const tick = () => setVoteSecondsLeft(Math.max(0, Math.ceil((roomVote.endsAt - Date.now()) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, [roomVote?.endsAt]);
 
   // Create the in-browser NSFW watcher once. It is completely inert until the
   // server elects this client (watcher_role) and never touches the drawing path:
@@ -5272,6 +5453,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             Invite friends
           </button>
 
+          <button
+            type="button"
+            className={`mp-wet-toggle${roomWet ? " is-on" : ""}`}
+            onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+            disabled={roomAudience === "kid_safe" && !isRoomHost}
+            aria-pressed={roomWet}
+            title={
+              roomAudience === "kid_safe" && !isRoomHost
+                ? "Wet canvas — only a host can switch this in public rooms"
+                : roomWet
+                  ? "Wet canvas is ON — paints mix and smear. Tap to dry."
+                  : "Wet canvas — make paints mix and smear into each other"
+            }
+          >
+            💧
+          </button>
+
           {isRoomHost ? (
             <button type="button" className="mp-host-btn" onClick={() => setShowHostPanel(true)}>
               ⭐ Host{roomLocked ? " · 🔒" : ""}
@@ -5687,6 +5885,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           >
             <div className="mp-chat-head" onPointerDown={startChatDrag}>
               <span>💬 {roomTitle || `Room ${roomId}`}</span>
+              {roomAudience === "kid_safe" && !isRoomHost ? null : (
+                /* Desktop home of the vote starter (the mobile chat-room row
+                   below has its own; CSS hides this one on small screens). */
+                <button
+                  type="button"
+                  className="vote-start-btn"
+                  onClick={() => mpRef.current?.sendVoteStart?.()}
+                  disabled={Boolean(roomVote)}
+                  title="Start a 45-second room vote on the next drawing theme"
+                >
+                  🗳️ Theme vote
+                </button>
+              )}
               <button type="button" onClick={() => setShowChat(false)} aria-label="Hide chat">
                 –
               </button>
@@ -5709,12 +5920,62 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               <button type="button" className="mp-chat-iconbtn" onClick={() => setShowReport(true)} title="Report something">
                 ⚠️
               </button>
+              <button
+                type="button"
+                className={`mp-chat-iconbtn mp-wet-toggle${roomWet ? " is-on" : ""}`}
+                onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+                disabled={roomAudience === "kid_safe" && !isRoomHost}
+                aria-pressed={roomWet}
+                title={
+                  roomAudience === "kid_safe" && !isRoomHost
+                    ? "Wet canvas — only a host can switch this in public rooms"
+                    : roomWet
+                      ? "Wet canvas is ON — paints mix and smear. Tap to dry."
+                      : "Wet canvas — make paints mix and smear into each other"
+                }
+              >
+                💧
+              </button>
+              {roomAudience === "kid_safe" && !isRoomHost ? null : (
+                <button
+                  type="button"
+                  className="mp-chat-iconbtn"
+                  onClick={() => mpRef.current?.sendVoteStart?.()}
+                  disabled={Boolean(roomVote)}
+                  title="Start a 45-second room vote on the next drawing theme"
+                >
+                  🗳️
+                </button>
+              )}
               {isRoomHost ? (
                 <button type="button" className="mp-chat-iconbtn" onClick={() => setShowHostPanel(true)} title="Host controls">
                   ⭐
                 </button>
               ) : null}
             </div>
+            {roomVote ? (
+              <div className="vote-card" role="group" aria-label="Theme vote">
+                <div className="vote-card-head">
+                  <span>🗳️ Pick the next theme!</span>
+                  <span className="vote-countdown" aria-live="polite">{voteSecondsLeft}s</span>
+                </div>
+                {roomVote.options.map((option, index) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={`vote-option${roomVote.myChoice === index ? " is-picked" : ""}`}
+                    onClick={() => {
+                      // Optimistic highlight; counts come back via vote_tally.
+                      mpRef.current?.sendVote?.(index);
+                      setRoomVote((vote) => (vote ? { ...vote, myChoice: index } : vote));
+                    }}
+                  >
+                    <span className="vote-option-text">{option}</span>
+                    <span className="vote-option-count">{roomVote.counts?.[index] || 0}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {mp.users.length > 0 ? (
               <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
                 {mp.users.map((u) => {
@@ -6018,17 +6279,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <div className="brush-grid">
             {brushCatalog.map((brush) => {
               const locked = brush.tier === "studio" && !studioUnlocked;
+              // Private-room-only brushes (smudge) render ghosted in public
+              // rooms: not selectable, tap explains where they DO work.
+              const privateGated = Boolean(brush.privateOnly) && roomAudience === "kid_safe";
               return (
                 <button
                   type="button"
                   key={brush.id}
-                  className={`brush-chip ${selectedTool === "brush" && selectedBrush === brush.id ? "is-active" : ""}`}
-                  onClick={() => chooseBrush(brush.id)}
+                  className={`brush-chip ${selectedTool === "brush" && selectedBrush === brush.id ? "is-active" : ""}${privateGated ? " is-private-gated" : ""}`}
+                  onClick={() =>
+                    privateGated
+                      ? showToast("Smudge works in private rooms — start one from Rooms!")
+                      : chooseBrush(brush.id)
+                  }
+                  aria-disabled={privateGated}
                   aria-pressed={selectedTool === "brush" && selectedBrush === brush.id}
                 >
                   <BrushPreview brush={brush.id} color={selectedColor} />
                   <span className="chip-name">{brush.name}</span>
                   {locked ? <small>Studio</small> : null}
+                  {privateGated ? <small className="chip-private-note">🔒 Private rooms</small> : null}
                 </button>
               );
             })}

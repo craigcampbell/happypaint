@@ -80,6 +80,24 @@ export const brushCatalog = [
     dab: { spacing: 0.14, minSize: 0.32, flow: 0.3, shape: "water", wetEdge: 0.25, grain: 0.18 },
   },
   {
+    id: "gouache",
+    name: "Gouache",
+    icon: "🧴",
+    tier: "free",
+    description: "Opaque, soft, flat poster paint — bold matte color that just covers.",
+    dab: { spacing: 0.1, minSize: 0.25, flow: 0.92, shape: "gouache", grain: 0.08, wetEdge: 0.08 },
+  },
+  {
+    id: "ink",
+    name: "Brushed ink",
+    icon: "🖋️",
+    tier: "free",
+    description: "A pointed ink brush — press for bold strokes, lift for hairline tapers.",
+    // minSize 0.08 is the whole point: a huge thin-to-thick pressure range, so
+    // the stroke is ALL about taper. Crisp round dab, no commit passes.
+    dab: { spacing: 0.06, minSize: 0.08, flow: 1, shape: "round" },
+  },
+  {
     // No `dab`: spray is already a scatter stamp — it stays on the legacy path
     // (Stage 2 intentionally excludes it from v2 routing).
     id: "spray",
@@ -95,6 +113,20 @@ export const brushCatalog = [
     icon: "🧽",
     tier: "free",
     description: "Removes paint while keeping the paper texture.",
+  },
+  {
+    // No `dab`: smudge is special-cased BY ID in every consumer. It has no
+    // pigment of its own (noColor) — it sample-and-drags LAYER 0's existing
+    // paint via makeSmudgeRenderer, directly, with no stroke buffer. Private
+    // rooms only: in kid_safe rooms the picker ghosts it, startStroke falls
+    // back to marker, and both client and server drop incoming smudge ops.
+    id: "smudge",
+    name: "Smudge",
+    icon: "👉",
+    tier: "free",
+    privateOnly: true,
+    noColor: true,
+    description: "Drag and blend the paint that's already there — like a finger on wet paint.",
   },
   {
     id: "glow",
@@ -215,6 +247,42 @@ export function shiftLightness(hex, amount) {
   });
   return `rgb(${out[0]},${out[1]},${out[2]})`;
 }
+
+// Parse a colour string to [r, g, b] ints. Hex (#abc / #aabbcc) covers every
+// palette / colour-input value the app produces; rgb(...) covers colours that
+// already round-tripped through the wet-mix path. Falls back to near-black.
+export function parseColorRgb(color) {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color || "");
+  if (hex) {
+    let digits = hex[1];
+    if (digits.length === 3) {
+      digits = digits[0] + digits[0] + digits[1] + digits[1] + digits[2] + digits[2];
+    }
+    return [parseInt(digits.slice(0, 2), 16), parseInt(digits.slice(2, 4), 16), parseInt(digits.slice(4, 6), 16)];
+  }
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(color || "");
+  if (rgb) {
+    return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  }
+  return [17, 24, 39];
+}
+
+// shiftLightness for numeric channels: same math, no string parsing on the
+// wet-mix hot path (per-bristle tinting of the per-dab blended colour).
+function tintRgbString(r, g, b, amount) {
+  const shift = (c) => {
+    const v = amount >= 0 ? c + (255 - c) * amount : c * (1 + amount);
+    return Math.max(0, Math.min(255, Math.round(v)));
+  };
+  return `rgb(${shift(r)},${shift(g)},${shift(b)})`;
+}
+
+// Wet-canvas pickup strength per brush: how strongly a dab's colour blends
+// toward the paint already on layer 0 under it (settings.wet strokes only).
+const WET_PICKUP = { oil: 0.3, acrylic: 0.25, watercolor: 0.45, gouache: 0.2 };
+// How fast the carried colour diffuses toward what the stroke passes over —
+// the "drag" that smears a picked-up colour along the rest of the stroke.
+const WET_DRAG = 0.15;
 
 // Per-point generator derived from the stroke seed + the point's COORDINATES
 // (not its index): wire batching boundaries and the wire-level duplicate-point
@@ -419,11 +487,29 @@ const TWO_PI = Math.PI * 2;
 const DAB_MIN_STEP = 1.5; // world px — absolute spacing floor (perf guardrail)
 const DAB_CAP = 600; // dabs per addPoints call before the step doubles
 
-export function makeStrokeRenderer(settings) {
+// `getMix` (optional): a sampler (x, y) -> [r, g, b] | null over the 1/8-scale
+// LAYER-0 mix map. Only consulted when the op's settings carry wet: true AND
+// the brush has a WET_PICKUP entry — so dry strokes cost nothing. Wetness rides
+// IN the op settings, so replay is deterministic regardless of later toggles;
+// cross-client differences in the sampled values (canvas AA) are accepted —
+// bounded and cosmetic.
+export function makeStrokeRenderer(settings, getMix) {
   const dab = getDab(settings.brush) || {};
   const color = settings.color;
   const seed = settings.seed;
   const size = clamp(settings.size || 24, 1, 160);
+  const wetPickup = settings.wet && typeof getMix === "function" ? WET_PICKUP[settings.brush] || 0 : 0;
+  // Carried wet colour (floats, so the diffusion stays smooth). Starts at the
+  // brush colour and is dragged toward every non-transparent sample it crosses.
+  let mixR = 0;
+  let mixG = 0;
+  let mixB = 0;
+  if (wetPickup > 0) {
+    const base = parseColorRgb(color);
+    mixR = base[0];
+    mixG = base[1];
+    mixB = base[2];
+  }
   const minSize = dab.minSize == null ? 0.5 : dab.minSize;
   const flowBase = dab.flow == null ? 1 : dab.flow;
   // Big brushes stamp fewer, larger dabs — blur/fleck cost scales with area.
@@ -444,13 +530,19 @@ export function makeStrokeRenderer(settings) {
     bristleTable = [];
     for (let i = 0; i < count; i += 1) {
       const roll = mulberry32(((seed == null ? 0 : seed) ^ Math.imul(i, 2654435761)) >>> 0);
-      bristleTable.push({
+      // NOTE: roll() consumption order is frozen (offset → length → width →
+      // alpha → tint) — reordering would re-roll every persisted oil/acrylic
+      // stroke's bristle character on the next history replay.
+      const entry = {
         offset: (roll() * 2 - 1) * 0.85, // perpendicular lane, fraction of radius
         length: 0.55 + roll() * 0.45, // along-tangent elongation variance
         width: 0.6 + roll() * 0.6, // ribbon thickness variance
         alpha: 0.55 + roll() * 0.45, // per-bristle paint load
-        color: shiftLightness(color, (roll() * 2 - 1) * 0.08), // ±8% lightness
-      });
+        tint: (roll() * 2 - 1) * 0.08, // ±8% lightness
+      };
+      // Pre-built string for the dry path; the wet path re-tints per dab.
+      entry.color = shiftLightness(color, entry.tint);
+      bristleTable.push(entry);
     }
   }
 
@@ -479,7 +571,31 @@ export function makeStrokeRenderer(settings) {
     }
     const rot = rotJitter > 0 ? angle + (rand() - 0.5) * rotJitter : angle;
     const radius = sizePx / 2;
-    ctx.fillStyle = color;
+    // Wet canvas: blend this dab's colour toward the paint already under it
+    // (skipping transparent samples), and drag the carried colour along so a
+    // picked-up hue smears down the rest of the stroke. Cheap: one CPU-array
+    // sample + a few mults per dab — never a getImageData here.
+    let dabColor = color;
+    let wetR = 0;
+    let wetG = 0;
+    let wetB = 0;
+    if (wetPickup > 0) {
+      const sampled = getMix(dx, dy);
+      if (sampled) {
+        mixR += (sampled[0] - mixR) * WET_DRAG;
+        mixG += (sampled[1] - mixG) * WET_DRAG;
+        mixB += (sampled[2] - mixB) * WET_DRAG;
+        wetR = mixR + (sampled[0] - mixR) * wetPickup;
+        wetG = mixG + (sampled[1] - mixG) * wetPickup;
+        wetB = mixB + (sampled[2] - mixB) * wetPickup;
+      } else {
+        wetR = mixR;
+        wetG = mixG;
+        wetB = mixB;
+      }
+      dabColor = `rgb(${Math.round(wetR)},${Math.round(wetG)},${Math.round(wetB)})`;
+    }
+    ctx.fillStyle = dabColor;
     if (shape === "ellipse") {
       // Loaded-brush paint: elongated 1.6x along the stroke tangent.
       ctx.globalAlpha = flowAlpha;
@@ -524,6 +640,19 @@ export function makeStrokeRenderer(settings) {
         ctx.arc(dx + Math.cos(fa) * fd, dy + Math.sin(fa) * fd, fr, 0, TWO_PI);
         ctx.fill();
       }
+    } else if (shape === "gouache") {
+      // Matte poster paint: a round dab slightly stretched 1.3x along the
+      // stroke tangent — soft, flat, opaque. Its light grain + wet-edge
+      // character lands in the commit passes, not per dab.
+      ctx.globalAlpha = flowAlpha;
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(rot);
+      ctx.scale(1.3, 1);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, TWO_PI);
+      ctx.fill();
+      ctx.restore();
     } else if (shape === "bristle") {
       // Oil/acrylic: N elongated sub-dab ribbons fanned perpendicular to the
       // tangent, stretched `stretchK` along it. All per-bristle variation
@@ -534,7 +663,9 @@ export function makeStrokeRenderer(settings) {
       ctx.rotate(rot);
       const ribbonHalf = (radius * 1.7) / bristleTable.length;
       for (const bristle of bristleTable) {
-        ctx.fillStyle = bristle.color;
+        // Wet dabs re-tint the blended colour per bristle (numeric, cheap);
+        // dry dabs reuse the strings pre-built at construction.
+        ctx.fillStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
         ctx.globalAlpha = flowAlpha * bristle.alpha;
         ctx.beginPath();
         ctx.ellipse(
@@ -638,6 +769,115 @@ export function makeStrokeRenderer(settings) {
   // Stroke-end hook. Dabs are emitted as points arrive, so nothing to flush
   // today — this exists so the per-stroke lifecycle is explicit (Stage 3
   // taper/wet-edge will need it). Never called on overflow restarts.
+  const end = () => {};
+
+  return { addPoints, end };
+}
+
+// ---------------------------------------------------------------------------
+// Smudge (private rooms only): a dab walk that carries NO pigment. Each dab
+// samples a square of LAYER 0 slightly BEHIND the motion and re-stamps it at
+// the dab position at partial alpha — sample-and-drag, like a finger through
+// wet paint. It draws DIRECTLY onto layer 0 (never a stroke buffer): the op
+// stream is the source of truth and every consumer replays it against layer 0
+// in server op order, so history replay is deterministic; live concurrent
+// overlap can diverge briefly and self-heals on the next history frame.
+// drawImage with source === destination canvas is well-defined (the source
+// rect is snapshotted first), and the sampled rect is tiny — no full-canvas
+// reads, no getImageData, so the hot path stays lean.
+
+const SMUDGE_SPACING = 0.18;
+const SMUDGE_MIN_SIZE = 0.3;
+const SMUDGE_STRENGTH = 0.45; // per-dab re-stamp alpha
+const SMUDGE_DRAG = 0.35; // sample offset behind the motion, fraction of dab size
+
+export function makeSmudgeRenderer(settings, sourceCanvas) {
+  const size = clamp(settings.size || 24, 1, 160);
+  const dabSizeAt = (pressure) => size * (SMUDGE_MIN_SIZE + (1 - SMUDGE_MIN_SIZE) * Math.pow(pressure, 1.35));
+
+  let lastPoint = null;
+  let residual = 0;
+  let started = false;
+
+  const emitDab = (ctx, x, y, pressure, angle) => {
+    const sizePx = dabSizeAt(pressure);
+    const half = sizePx / 2;
+    const shift = sizePx * SMUDGE_DRAG;
+    // Source trails the motion; stamping it at the dab position drags paint
+    // forward. Clamp the source rect to the canvas (shifting the destination
+    // by the same amount) so edge dabs never reference out-of-bounds pixels.
+    let sx = x - Math.cos(angle) * shift - half;
+    let sy = y - Math.sin(angle) * shift - half;
+    let w = sizePx;
+    let h = sizePx;
+    let dxOut = x - half;
+    let dyOut = y - half;
+    if (sx < 0) {
+      dxOut -= sx;
+      w += sx;
+      sx = 0;
+    }
+    if (sy < 0) {
+      dyOut -= sy;
+      h += sy;
+      sy = 0;
+    }
+    if (sx + w > sourceCanvas.width) {
+      w = sourceCanvas.width - sx;
+    }
+    if (sy + h > sourceCanvas.height) {
+      h = sourceCanvas.height - sy;
+    }
+    if (w < 1 || h < 1) {
+      return;
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = SMUDGE_STRENGTH;
+    ctx.drawImage(sourceCanvas, sx, sy, w, h, dxOut, dyOut, w, h);
+    ctx.restore();
+  };
+
+  // Same batching-proof walk as makeStrokeRenderer: per-stroke residual +
+  // stationary-point skip, fed one point at a time by every consumer.
+  const addPoints = (ctx, points) => {
+    let emitted = 0;
+    for (const raw of points) {
+      const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
+      if (!started) {
+        started = true;
+        // First dab has no direction yet: a zero-shift re-stamp is a no-op
+        // visually, so just prime the walk state.
+        residual = Math.max(DAB_MIN_STEP, SMUDGE_SPACING * dabSizeAt(pressure));
+        lastPoint = { x: raw.x, y: raw.y, pressure };
+        continue;
+      }
+      const sdx = raw.x - lastPoint.x;
+      const sdy = raw.y - lastPoint.y;
+      const d = Math.hypot(sdx, sdy);
+      if (d < 1e-6) {
+        continue; // stationary pressure-only update — see makeStrokeRenderer
+      }
+      const angle = Math.atan2(sdy, sdx);
+      let pos = residual;
+      while (pos <= d) {
+        const t = pos / d;
+        const p = lastPoint.pressure + (pressure - lastPoint.pressure) * t;
+        emitDab(ctx, lastPoint.x + sdx * t, lastPoint.y + sdy * t, p, angle);
+        emitted += 1;
+        let step = Math.max(DAB_MIN_STEP, SMUDGE_SPACING * dabSizeAt(p));
+        if (emitted > DAB_CAP) {
+          step *= Math.min(16, 2 ** Math.floor(emitted / DAB_CAP)); // giant-flick guardrail
+        }
+        pos += step;
+      }
+      residual = pos - d;
+      lastPoint = { x: raw.x, y: raw.y, pressure };
+    }
+  };
+
+  // No end-commit: smudge already landed on layer 0 dab by dab. end:true on
+  // the wire just cleans the per-stroke map entries in each consumer.
   const end = () => {};
 
   return { addPoints, end };
