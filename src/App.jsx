@@ -619,6 +619,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // shown as a dismissible chip over the canvas top.
   const [roomPrompt, setRoomPrompt] = useState(null);
   const [promptDismissed, setPromptDismissed] = useState(false);
+  const [privateNoticeDismissed, setPrivateNoticeDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
   // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
   // pointer handlers: startStroke captures it INTO the op settings, so a
@@ -4650,8 +4651,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, [loadSheets]);
 
   const applySheet = useCallback((id) => {
-    mpRef.current?.sendSheet?.(id || null);
-  }, []);
+    mpRef.current?.sendSheet?.(id || null); // clears room-wide if you're a host / unowned room
+    if (!id) {
+      // Always remove the sheet from YOUR OWN view immediately, even if the
+      // server (host-gated in owned rooms) doesn't clear it for everyone — so a
+      // joiner can never get stuck staring at a coloring sheet they can't dismiss.
+      setSheetId(null);
+      loadSheetImage(null);
+      showToast("Coloring sheet removed");
+    }
+  }, [loadSheetImage, showToast]);
 
   // Apply a library sheet from the modal. Picking a sheet starts a fresh page,
   // so if there's existing art (or a sheet) we confirm, then wipe + set.
@@ -5638,6 +5647,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               <div className="room-prompt-chip" role="note">
                 <span>🎯 {roomPrompt}</span>
                 <button type="button" onClick={() => setPromptDismissed(true)} aria-label="Dismiss prompt">
+                  ✕
+                </button>
+              </div>
+            ) : null}
+
+            {roomAudience && roomAudience !== "kid_safe" && !privateNoticeDismissed ? (
+              <div
+                className="room-prompt-chip"
+                role="note"
+                style={{ background: "#fff7ed", color: "#9a3412" }}
+              >
+                <span>🔓 Private room — not auto-moderated like public rooms. Only invite people you know.</span>
+                <button type="button" onClick={() => setPrivateNoticeDismissed(true)} aria-label="Dismiss">
                   ✕
                 </button>
               </div>

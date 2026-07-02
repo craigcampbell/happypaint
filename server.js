@@ -558,21 +558,49 @@ function nameMentioned(lower, name) {
   }
 }
 
+// True if a user with `name` is actually present in this room right now, or has
+// spoken recently — so a notifier can only be pinged about rooms its name really
+// appears in, not any room it subscribes to by code (blocks eavesdrop-by-guess).
+function nameIsInRoom(room, name) {
+  const n = (name || '').trim().toLowerCase();
+  if (!n) return false;
+  for (const u of room.users.values()) {
+    if ((u.name || '').trim().toLowerCase() === n) return true;
+  }
+  const chat = room.chat || [];
+  for (let i = chat.length - 1; i >= 0 && i >= chat.length - 60; i -= 1) {
+    if ((chat[i]?.user?.name || '').trim().toLowerCase() === n) return true;
+  }
+  return false;
+}
+
 function notifyMentions(room, roomId, senderName, message, ts) {
   if (!room.notifiers || room.notifiers.size === 0) return;
   const lower = message.toLowerCase();
   const sender = (senderName || '').toLowerCase();
+  const now = Date.now();
   for (const ws of room.notifiers) {
     const name = (ws.watchName || '').trim().toLowerCase();
     if (!name || name === sender) continue; // no self-pings
     if (!nameMentioned(lower, name)) continue;
+    // Only notify if this name actually appears in this room (not an arbitrary
+    // room subscribed to just to harvest activity).
+    if (!nameIsInRoom(room, ws.watchName)) continue;
+    // Per-watcher rate limit: at most 6 mention deliveries per rolling 60s.
+    const bucket = ws.mentionTimes || (ws.mentionTimes = []);
+    while (bucket.length && now - bucket[0] > 60000) bucket.shift();
+    if (bucket.length >= 6) continue;
+    bucket.push(now);
     if (ws.readyState === 1) {
+      // NOTE: message text is deliberately NOT included — the notify channel is
+      // cross-room and only loosely authenticated, so leaking chat content (esp.
+      // from private rooms) would be a privacy hole. Recipients get "you were
+      // mentioned in <room>", never the message body.
       ws.send(JSON.stringify({
         type: 'mention',
         room: roomId,
         roomTitle: room.title || null,
         from: senderName || 'someone',
-        text: message,
         ts,
       }));
     }
@@ -881,7 +909,31 @@ wss.on('connection', async (ws, req) => {
         break;
       case 'rename': {
         if (typeof data.name === 'string' && data.name.trim()) {
-          user.name = data.name.trim().slice(0, 20);
+          const proposed = data.name.trim().slice(0, 20);
+          const lower = proposed.toLowerCase();
+          // Names are a social-engineering surface: block slurs, authority-figure
+          // impersonation, and copying another person already in the room.
+          const severe = scan(proposed).severity === 'severe';
+          const impersonates = /\b(teacher|coach|parent|mom|dad|mum|admin|moderator|mod|officer|police|staff|owner|host)\b/i.test(proposed);
+          let duplicate = false;
+          for (const u of room.users.values()) {
+            if (u !== user && (u.name || '').trim().toLowerCase() === lower) { duplicate = true; break; }
+          }
+          if (severe || impersonates || duplicate) {
+            if (user.ws.readyState === 1) {
+              user.ws.send(JSON.stringify({
+                type: 'rename_rejected',
+                reason: severe ? "that name isn't allowed" : impersonates ? "that name could impersonate a grown-up" : "someone here already uses that name",
+                name: user.name,
+              }));
+            }
+          } else {
+            const old = user.name;
+            user.name = proposed;
+            if (old && old !== proposed) {
+              broadcast(roomId, { type: 'system', text: `${old} is now ${proposed}` });
+            }
+          }
         }
         if (typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color)) {
           user.color = data.color;
@@ -913,16 +965,18 @@ wss.on('connection', async (ws, req) => {
         if (user.muted) break; // a host muted this user
         if (typeof data.message !== 'string' || !data.message.trim()) break;
         let message = String(data.message).slice(0, 300);
-        // Public-room chat moderation: drop severe messages (and alert hosts),
-        // soft-mask milder profanity. Private rooms are unfiltered.
-        if (room.audience === 'kid_safe') {
+        // Chat moderation. SEVERE content is blocked in EVERY room (public AND
+        // private) — a private room being "for friends" is no reason to relay
+        // slurs/explicit terms. The softer MILD masking stays public-only so
+        // private rooms aren't over-filtered on ordinary words.
+        {
           const verdict = scan(message);
           if (verdict.severity === 'severe') {
             autoModerate(room, user, `chat: ${verdict.terms.join(', ')}`);
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked' }));
             break;
           }
-          if (verdict.hit) message = maskMessage(message);
+          if (verdict.hit && room.audience === 'kid_safe') message = maskMessage(message);
         }
         const chatTs = Date.now();
         const entry = { user: { id, name: user.name, color: user.color }, message, ts: chatTs };
@@ -1292,8 +1346,10 @@ app.delete('/api/artworks/:id', async (req, res) => {
 });
 
 // ---- Admin + moderation ---------------------------------------------------
-// Admin key: from env, else a persisted random key (printed on boot). The parent
-// enters it once at /admin; it never ships in the client bundle.
+// Admin key: prefer ADMIN_KEY from the environment; otherwise a persisted random
+// key in a 0600 file. It is NEVER printed to logs (stdout ends up in shared
+// deploy/CI logs) and never ships in the client bundle — read it from the file
+// on this machine if you need it. The parent enters it once at /admin.
 const ADMIN_KEY_FILE = join(DATA_DIR, '.admin-key');
 let ADMIN_KEY = process.env.ADMIN_KEY || '';
 if (!ADMIN_KEY) {
@@ -1301,7 +1357,7 @@ if (!ADMIN_KEY) {
 }
 if (!ADMIN_KEY) {
   ADMIN_KEY = randomBytes(12).toString('hex');
-  try { writeFileSync(ADMIN_KEY_FILE, ADMIN_KEY); } catch { /* ignore */ }
+  try { writeFileSync(ADMIN_KEY_FILE, ADMIN_KEY, { mode: 0o600 }); } catch { /* ignore */ }
 }
 
 const REPORTS_FILE = join(DATA_DIR, '.reports.json');
@@ -1336,7 +1392,17 @@ function fileReport({ room, reason, reporterName, source }) {
     ts: Date.now(),
     status: 'open',
   };
-  reports.unshift(report);
+  // Urgency triage: keywords that suggest grooming/CSAM/self-harm/contact-sharing
+  // float the report to the very front of the admin queue and get flagged.
+  const haystack = `${report.reason} ${chatContext.map((c) => c.message).join(' ')}`.toLowerCase();
+  report.urgent = /\b(sexual|nude|naked|nsfw|porn|meet\s?up|meet me|address|phone|snap(chat)?|kik|discord|instagram|insta|tiktok|kill|suicide|self.?harm|groom)\b/.test(haystack);
+  if (report.urgent) {
+    reports.unshift(report); // already newest-first; keep it at the top explicitly
+  } else {
+    reports.unshift(report);
+  }
+  // Keep urgent reports pinned above non-urgent within the cap.
+  reports.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || b.ts - a.ts);
   if (reports.length > 500) reports.length = 500;
   persistReports();
   return report;
@@ -1389,8 +1455,9 @@ app.post('/api/report', (req, res) => {
   if (!room) {
     return res.status(400).json({ error: 'room required' });
   }
-  fileReport({ room, reason, reporterName, source: 'user' });
-  res.json({ ok: true });
+  const report = fileReport({ room, reason, reporterName, source: 'user' });
+  // Give the reporter a real receipt so a kid knows it went through.
+  res.json({ ok: true, received: true, urgent: !!report.urgent });
 });
 
 app.get('/api/admin/check', (req, res) => {
@@ -1837,8 +1904,10 @@ if (existsSync(distPath)) {
 }
 
 server.listen(PORT, () => {
-  console.log(`Happy Paint server on http://localhost:${PORT}  (ws path /ws)`);
-  console.log(`Admin key for /admin (also in .admin-key): ${ADMIN_KEY}`);
+  console.log(`Drawesome server on http://localhost:${PORT}  (ws path /ws)`);
+  // The admin key is intentionally NOT logged. Read it on this host from
+  // ${ADMIN_KEY_FILE} (or set ADMIN_KEY in the environment).
+  console.log(`Admin key: set via ADMIN_KEY env or read ${ADMIN_KEY_FILE} on the server host.`);
 });
 
 function shutdown() {
