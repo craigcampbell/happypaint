@@ -5386,19 +5386,6 @@ textarea:focus-visible,
   font-weight: 900;
 }
 
-.fs-live {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: #dc2626;
-  color: #ffffff;
-  font-size: 0.58rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-}
-
 .fs-eye {
   position: absolute;
   top: -12px;

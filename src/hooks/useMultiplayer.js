@@ -144,7 +144,9 @@ export function useMultiplayer(roomId, onMessage, token) {
 
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
-  const sendClear = useCallback(() => send({ type: "clear" }), [send]);
+  // In an animation room `frameId` scopes the clear to one shared frame;
+  // omitted (legacy rooms) it wipes the whole mural.
+  const sendClear = useCallback((frameId) => send(frameId ? { type: "clear", frameId } : { type: "clear" }), [send]);
   const sendRestore = useCallback(() => send({ type: "undo_clear" }), [send]);
   const sendSheet = useCallback((sheetId) => send({ type: "set_sheet", sheetId }), [send]);
   const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
@@ -169,6 +171,17 @@ export function useMultiplayer(roomId, onMessage, token) {
   // Wet-canvas toggle + theme voting (permissions enforced server-side:
   // host-only in public rooms, any member in private rooms).
   const sendSetWet = useCallback((wet) => send({ type: "set_wet", wet }), [send]);
+  // Shared animation: private-room hosts flip the film strip on/off; frame
+  // structure mutations are relayed and the server echoes them to EVERYONE
+  // (including the sender) so all clients apply them in server order.
+  const sendSetAnimation = useCallback((enabled) => send({ type: "set_animation", enabled }), [send]);
+  const sendFrameAdd = useCallback(
+    (afterFrameId, duplicateOf) => send({ type: "frame_add", afterFrameId: afterFrameId || null, duplicateOf: duplicateOf || null }),
+    [send],
+  );
+  const sendFrameDel = useCallback((frameId) => send({ type: "frame_del", frameId }), [send]);
+  const sendFrameMove = useCallback((frameId, toIndex) => send({ type: "frame_move", frameId, toIndex }), [send]);
+  const sendFrameDuration = useCallback((frameId, durationMs) => send({ type: "frame_duration", frameId, durationMs }), [send]);
   // Ephemeral emoji reaction dropped at a world point (never persisted).
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
@@ -187,6 +200,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction,
+    sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

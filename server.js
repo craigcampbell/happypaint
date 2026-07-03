@@ -78,6 +78,9 @@ const wss = new WebSocketServer({
   // Compress frames >1KB (the join-history payload shrinks ~8x). No context
   // takeover keeps per-socket memory flat; browsers negotiate this natively.
   perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true },
+  // Bound inbound frames (ws defaults to 100MiB!). The biggest legitimate
+  // message is an image op's dataURL — comfortably under this.
+  maxPayload: 16 * 1024 * 1024,
 });
 
 // ---- Rooms ----------------------------------------------------------------
@@ -189,9 +192,13 @@ function loadRoom(roomId) {
       // Wet-canvas toggle + the last theme-vote winner both survive restarts.
       wetCanvas: !!data.wetCanvas,
       customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
+      // Shared-animation state: the frame list + whether the room has the film
+      // strip enabled (private rooms opt in; FLIPBOOK is always on).
+      frames: Array.isArray(data.frames) ? data.frames : null,
+      animation: !!data.animation,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, animation: false };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -228,6 +235,8 @@ async function saveRoomNow(roomId) {
       chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
       wetCanvas: !!room.wetCanvas,
       customPrompt: room.customPrompt || null,
+      frames: room.frames,
+      animation: !!room.animationEnabled,
       savedAt: Date.now(),
     });
     // Temp-file + rename so a crash mid-write never leaves a truncated room file.
@@ -275,9 +284,53 @@ const FEATURED_ROOMS = [
   { code: 'VIBES', title: 'Aesthetic Board', emoji: '✨', prompts: ['Draw your current vibe', 'A moodboard in one color', 'Cozy things only', 'Sunset gradient anything'] },
   { code: 'OCCORNER', title: 'OC Corner', emoji: '🐲', prompts: ['Draw your OC — friends add theirs', 'Your OC in a new outfit', 'Two OCs team up', 'Give your OC a sidekick'] },
   { code: 'GRAFFITI', title: 'Graffiti Wall', emoji: '🧱', prompts: ['Tag the wall — keep it kind', 'Bubble-letter your name', 'Sticker-style doodles', 'Paint a mini mural piece'] },
+  // The ONE public animation room. Everywhere else, the film strip is a
+  // private-room setting (set_animation) — never on in public drawing rooms.
+  { code: 'FLIPBOOK', title: 'Animation Studio', emoji: '🎬', animation: true, prompts: ['Animate a bouncing ball', 'Make a flower bloom frame by frame', 'A stick figure does a trick', 'Loop some rain falling'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
+const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
+
+// ---- Shared animation frames -----------------------------------------------
+// In an animation room the frames themselves are shared state (Google-Docs
+// model): draw ops carry a frameId, frame add/remove/reorder/duration are
+// relayed + persisted, and rejoiners replay the whole flipbook exactly like the
+// mural. Caps REJECT at ingest (frame_full) rather than FIFO-trim, which would
+// silently rot the earliest frames of an animation.
+// Frame caps are a MEMORY budget, not just server disk: every client holds a
+// full-res canvas per frame (~40MB at 4000x2500), so 12 frames ≈ 480MB on an
+// iPad. Raise these only after frames move to the smaller animation doc size.
+const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 8);
+const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 8);
+// Bound a single op's serialized weight (image ops embed dataURLs — a photo
+// import is a few MB; nothing legitimate approaches this).
+const MAX_OP_DATAURL_CHARS = Number(process.env.MAX_OP_DATAURL_CHARS || 8_000_000);
+const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
+
+function sanitizeFrames(list) {
+  if (!Array.isArray(list)) return null;
+  const frames = list
+    .filter((f) => f && typeof f.id === 'string' && f.id.length <= 24)
+    .map((f) => ({ id: f.id, durationMs: Math.max(40, Math.min(2000, Number(f.durationMs) || 120)) }));
+  return frames.length ? frames : null;
+}
+
+// The frame an op belongs to (legacy untagged ops live on the first frame).
+function opFrameId(room, op) {
+  return op.frameId || (room.frames[0] && room.frames[0].id) || 'f0';
+}
+
+// Rebuild the per-frame op counts (after bulk history mutations: moderation
+// removes, undo_clear restores, room load). O(history) — moderation-frequency.
+function recountFrameOps(room) {
+  const counts = new Map(room.frames.map((f) => [f.id, 0]));
+  for (const op of room.history) {
+    const fid = opFrameId(room, op);
+    counts.set(fid, (counts.get(fid) || 0) + 1);
+  }
+  room.frameOpCounts = counts;
+}
 
 // The prompt shown today for a featured room (deterministic daily rotation, UTC).
 function dailyPromptFor(featured) {
@@ -299,6 +352,13 @@ function getRoom(roomId) {
     let opSeq = 0;
     for (const op of saved.history) {
       if (op && typeof op.opId === 'number' && op.opId > opSeq) opSeq = op.opId;
+    }
+    // Frame ids mint from the SAME counter (`f<opSeq>`) and can outlive the
+    // highest history opId (blank frames, per-frame clears) — scan them too or
+    // a restart could mint a duplicate frame id.
+    for (const f of Array.isArray(saved.frames) ? saved.frames : []) {
+      const m = /^f(\d+)$/.exec((f && f.id) || '');
+      if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
     }
     rooms.set(roomId, {
       code: roomId,
@@ -332,8 +392,15 @@ function getRoom(roomId) {
       vote: null, // open theme vote: { options, votes: {userId: 0|1|2}, endsAt }
       voteTimer: null, // the vote-close timeout (cleared with the room)
       lastVoteAt: 0, // vote_start cooldown anchor (in-memory)
+      // Shared-animation state. Every room carries a frames list (legacy
+      // untagged ops live on frames[0]); only animation-enabled rooms may grow
+      // it. Public rooms can NEVER opt in — only FLIPBOOK ships the strip.
+      frames: sanitizeFrames(saved.frames) || [{ id: 'f0', durationMs: 120 }],
+      animationEnabled: ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation),
+      lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
       lastActivity: Date.now(),
     });
+    recountFrameOps(rooms.get(roomId));
   }
   return rooms.get(roomId);
 }
@@ -347,6 +414,9 @@ function seedFeaturedRooms() {
     room.audience = 'kid_safe';
     room.listed = true;
     room.title = f.title;
+    // Animation is a per-room capability: always on for FLIPBOOK, always OFF
+    // for every other public room (re-asserted each boot so it can't drift).
+    room.animationEnabled = ANIMATION_ROOM_CODES.has(f.code);
   }
 }
 seedFeaturedRooms();
@@ -550,7 +620,14 @@ function broadcast(roomId, message, exceptId = null) {
     }
   });
   // Read-only homepage viewers see the live mural too, but never draw/count.
-  if (room.spectators) {
+  // Animation rooms: spectators watch the FIRST frame only (mirrors the join
+  // filter) — ops/clears for other frames would smear onto their one canvas.
+  if (room.spectators && room.spectators.size) {
+    if (room.animationEnabled) {
+      const firstId = room.frames[0] && room.frames[0].id;
+      if (message.type === 'op' && message.op && opFrameId(room, message.op) !== firstId) return;
+      if (message.type === 'clear' && message.frameId && message.frameId !== firstId) return;
+    }
     room.spectators.forEach((sws) => {
       if (sws.readyState === 1) sws.send(data);
     });
@@ -775,8 +852,13 @@ wss.on('connection', async (ws, req) => {
     // Always send history (even empty) so the spectator view resets cleanly when
     // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
     // ops — plenty for a homepage preview, a fraction of a big room's payload.
+    // Animation rooms: spectators watch the FIRST frame only (their single
+    // canvas would otherwise overdraw the whole flipbook into one smear).
     // (No chat catch-up either: the read-only viewer ignores chat.)
-    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room).slice(-1500) }));
+    const spectatorOps = room.animationEnabled
+      ? visibleHistory(room).filter((op) => opFrameId(room, op) === room.frames[0].id)
+      : visibleHistory(room);
+    ws.send(JSON.stringify({ type: 'history', ops: spectatorOps.slice(-1500) }));
     if (room.sheetId) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
     }
@@ -875,15 +957,18 @@ wss.on('connection', async (ws, req) => {
     wetCanvas: !!room.wetCanvas,
     moderated: room.audience === 'kid_safe',
     watched: room.watchers.size > 0,
+    // Shared animation: whether this room has the film strip, and its frames.
+    animation: !!room.animationEnabled,
     // Any vote already running rides the handshake so late joiners can vote.
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
-  // as the authoritative shared mural and clears its canvas before applying it, so
+  // as the authoritative shared state and clears its canvas before applying it, so
   // joining an empty room reliably shows a blank canvas instead of whatever the
-  // client had locally (a stale per-room draft, or the previous room's art).
-  ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room) }));
+  // client had locally. `frames` makes the flipbook part of that same catch-up:
+  // leave, come back, and you see everything your friends did (Google-Docs model).
+  ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
   }
@@ -920,12 +1005,49 @@ wss.on('connection', async (ws, req) => {
         }
         // Smudge is a private-room brush: never let its ops land in a public room.
         if (room.audience === 'kid_safe' && data.op.kind === 'draw' && data.op.settings && data.op.settings.brush === 'smudge') break;
+        // Bound single-op weight: image ops embed dataURLs; nothing legitimate
+        // approaches this cap, and unbounded ops multiply across history/joins.
+        if (typeof data.op.dataUrl === 'string' && data.op.dataUrl.length > MAX_OP_DATAURL_CHARS) break;
+        // Animation frames: an op may target a specific shared frame. Validate
+        // the frame exists (stale clients race frame deletes) and enforce the
+        // per-frame cap by REJECTING — FIFO-trimming would rot early frames.
+        let frameId = null;
+        if (data.op.frameId != null) {
+          frameId = String(data.op.frameId).slice(0, 24);
+          if (!room.frames.some((f) => f.id === frameId)) break;
+          // Rooms without animation only ever accept ops for their first frame.
+          if (!room.animationEnabled && frameId !== room.frames[0].id) break;
+        }
+        // Multi-frame rooms (animation on, or a preserved flipbook with the
+        // toggle off) live under per-frame caps — the global FIFO trim would
+        // silently rot early frames, so it only applies to single-frame rooms.
+        const multiFrame = room.animationEnabled || room.frames.length > 1;
+        const countKey = frameId || room.frames[0].id;
+        const frameCount = room.frameOpCounts.get(countKey) || 0;
+        if (multiFrame && frameCount >= FRAME_OP_CAP) {
+          if (data.op.kind === 'draw' && data.op.end) {
+            // Relay the end marker so peers close their stroke buffers, but
+            // don't grow history/counts — the cap is a hard ceiling for EVERY
+            // op kind (shape/text/image included), or history is unbounded.
+            broadcast(roomId, { type: 'op', op: { ...data.op, userId: id } }, id);
+          } else {
+            ws.send(JSON.stringify({ type: 'frame_full', frameId: countKey }));
+          }
+          break;
+        }
         // Tag with the author so replay/cursors can attribute it, plus a stable
         // monotonic opId so moderation can hide/restore individual ops later.
+        // Animation rooms also stamp the resolved frameId so ops never re-bind
+        // to "whichever frame is first" if frame 1 is later moved or deleted.
         const op = { ...data.op, userId: id, opId: (room.opSeq = (room.opSeq || 0) + 1) };
+        if (room.animationEnabled && !op.frameId) {
+          op.frameId = room.frames[0].id;
+        }
         room.history.push(op);
-        if (room.history.length > MAX_HISTORY) {
+        room.frameOpCounts.set(countKey, frameCount + 1);
+        if (!multiFrame && room.history.length > MAX_HISTORY) {
           room.history.splice(0, room.history.length - MAX_HISTORY);
+          recountFrameOps(room);
         }
         broadcast(roomId, { type: 'op', op }, id);
         persistRoom(roomId);
@@ -994,14 +1116,30 @@ wss.on('connection', async (ws, req) => {
         broadcast(roomId, { type: 'reaction', emoji: data.emoji, x: data.x, y: data.y, userId: id, name: user.name });
         break;
       }
-      case 'clear':
+      case 'clear': {
         // In an owned room only a host may wipe the shared mural; unowned public
         // rooms keep the original free-for-all behavior.
         if (room.ownerProfileId && !isHost(room, user)) break;
+        const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
+        if (room.animationEnabled && clearFrameId && room.frames.some((f) => f.id === clearFrameId)) {
+          // Animation rooms: Clear wipes ONE frame for everyone (never the whole
+          // movie, and never the room's coloring sheet).
+          const belongs = (op) => opFrameId(room, op) === clearFrameId;
+          room.lastCleared = room.history.filter(belongs);
+          room.lastClearedFrameId = clearFrameId;
+          room.lastClearedSheet = null;
+          room.history = room.history.filter((op) => !belongs(op));
+          room.frameOpCounts.set(clearFrameId, 0);
+          broadcast(roomId, { type: 'clear', userId: id, name: user.name, frameId: clearFrameId }, id);
+          persistRoom(roomId);
+          break;
+        }
         // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
         room.lastCleared = room.history;
+        room.lastClearedFrameId = null;
         room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
         room.history = [];
+        recountFrameOps(room);
         broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
         // A full clear blanks the canvas completely — drop the coloring sheet too.
         // Sheet state is separate from stroke history, so without this the sheet
@@ -1013,13 +1151,27 @@ wss.on('connection', async (ws, req) => {
         }
         persistRoom(roomId);
         break;
+      }
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
-        // Restore the most recently cleared mural AND the sheet it removed.
+        // Restore the most recently cleared mural/frame AND any sheet it removed.
         if ((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet) {
           if (room.lastCleared && room.lastCleared.length) {
-            room.history = room.lastCleared;
-            broadcast(roomId, { type: 'history', ops: room.history, restored: true });
+            if (room.lastClearedFrameId) {
+              // Per-frame restore: merge the backup in and re-sort by opId so
+              // replay order stays globally monotonic.
+              if (room.frames.some((f) => f.id === room.lastClearedFrameId)) {
+                room.history = room.history.concat(room.lastCleared).sort((a, b) => (a.opId || 0) - (b.opId || 0));
+              }
+              room.lastClearedFrameId = null;
+            } else {
+              // Full-mural restore: drop ops for frames deleted after the clear
+              // (they'd be zombie ops nothing can render or moderate away).
+              const live = new Set(room.frames.map((f) => f.id));
+              room.history = room.lastCleared.filter((op) => live.has(opFrameId(room, op)));
+            }
+            recountFrameOps(room);
+            broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
           }
           room.lastCleared = null;
           if (room.lastClearedSheet) {
@@ -1067,6 +1219,115 @@ wss.on('connection', async (ws, req) => {
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
         room.wetCanvas = !!data.wet;
         broadcast(roomId, { type: 'wet_state', wet: room.wetCanvas });
+        persistRoom(roomId);
+        break;
+      }
+
+      // ---- Shared animation frames ------------------------------------------
+      // Frame structure is shared state exactly like strokes: mutations are
+      // validated here, applied to the room, and broadcast to EVERYONE
+      // (including the sender) so all clients apply them in server order.
+      case 'set_animation': {
+        // The film strip is a PRIVATE-room setting (host flips it). Public
+        // rooms can never opt in — FLIPBOOK is the one public animation room.
+        if (room.audience === 'kid_safe') break;
+        if (!isHost(room, user)) break;
+        room.animationEnabled = !!data.enabled;
+        broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled });
+        persistRoom(roomId);
+        break;
+      }
+      case 'frame_add': {
+        if (!room.animationEnabled) break;
+        if (room.locked && !isHost(room, user)) break;
+        const maxFrames = room.audience === 'kid_safe' ? MAX_ANIM_FRAMES_PUBLIC : MAX_ANIM_FRAMES_PRIVATE;
+        if (room.frames.length >= maxFrames) {
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `This room is capped at ${maxFrames} frames` }));
+          break;
+        }
+        const afterId = data.afterFrameId != null ? String(data.afterFrameId).slice(0, 24) : null;
+        const afterIndex = afterId ? room.frames.findIndex((f) => f.id === afterId) : room.frames.length - 1;
+        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120 };
+        // Duplicate: copy the source frame's visible ops under fresh opIds so
+        // rejoiners replay the copy identically (the engine is deterministic —
+        // same ops, same seeds, same pixels). Clients clone pixels locally.
+        const dupId = data.duplicateOf != null ? String(data.duplicateOf).slice(0, 24) : null;
+        if (dupId && room.frames.some((f) => f.id === dupId)) {
+          const copies = visibleHistory(room)
+            .filter((op) => opFrameId(room, op) === dupId)
+            .map((op) => ({ ...op, frameId: frame.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
+          room.history = room.history.concat(copies);
+          room.frameOpCounts.set(frame.id, copies.length);
+          const src = room.frames.find((f) => f.id === dupId);
+          if (src) frame.durationMs = src.durationMs;
+        } else {
+          room.frameOpCounts.set(frame.id, 0);
+        }
+        room.frames.splice(afterIndex >= 0 ? afterIndex + 1 : room.frames.length, 0, frame);
+        broadcast(roomId, { type: 'frame_add', frame, afterFrameId: afterId, duplicateOf: dupId, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'frame_del': {
+        if (!room.animationEnabled) break;
+        if (room.locked && !isHost(room, user)) break;
+        if (room.frames.length <= 1) break;
+        const delId = String(data.frameId || '').slice(0, 24);
+        const delIndex = room.frames.findIndex((f) => f.id === delId);
+        if (delIndex < 0) break;
+        // Resolve which ops belong to this frame BEFORE the splice — untagged
+        // legacy ops resolve to the CURRENT first frame, and mutating the list
+        // first would silently migrate them to whichever frame becomes first.
+        const removeOpIds = new Set(
+          room.history.filter((op) => opFrameId(room, op) === delId).map((op) => op.opId),
+        );
+        room.frames.splice(delIndex, 1);
+        // The frame's ops leave history for good (this is not undo-clearable).
+        room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
+        room.frameOpCounts.delete(delId);
+        if (room.lastClearedFrameId === delId) {
+          room.lastCleared = null;
+          room.lastClearedFrameId = null;
+        }
+        broadcast(roomId, { type: 'frame_del', frameId: delId, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'frame_move': {
+        if (!room.animationEnabled) break;
+        if (room.locked && !isHost(room, user)) break;
+        const moveId = String(data.frameId || '').slice(0, 24);
+        const fromIndex = room.frames.findIndex((f) => f.id === moveId);
+        const toIndex = Math.max(0, Math.min(room.frames.length - 1, Number(data.toIndex) || 0));
+        if (fromIndex < 0 || fromIndex === toIndex) break;
+        // Untagged legacy ops resolve to "whichever frame is first" — if this
+        // move changes frames[0], pin them to the frame they belong to NOW or
+        // they'd silently migrate onto the new first frame.
+        if (fromIndex === 0 || toIndex === 0) {
+          const firstId = room.frames[0].id;
+          for (const op of room.history) {
+            if (!op.frameId) op.frameId = firstId;
+          }
+          if (room.lastCleared && !room.lastClearedFrameId) {
+            for (const op of room.lastCleared) {
+              if (!op.frameId) op.frameId = firstId;
+            }
+          }
+        }
+        const [moved] = room.frames.splice(fromIndex, 1);
+        room.frames.splice(toIndex, 0, moved);
+        broadcast(roomId, { type: 'frame_move', frameId: moveId, toIndex, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'frame_duration': {
+        if (!room.animationEnabled) break;
+        if (room.locked && !isHost(room, user)) break;
+        const durId = String(data.frameId || '').slice(0, 24);
+        const target = room.frames.find((f) => f.id === durId);
+        if (!target) break;
+        target.durationMs = Math.max(40, Math.min(2000, Number(data.durationMs) || 120));
+        broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, byUserId: id });
         persistRoom(roomId);
         break;
       }
@@ -1179,7 +1440,7 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.add(opId));
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
         persistRoom(roomId);
         break;
       }
@@ -1188,7 +1449,7 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room), restored: true });
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
         persistRoom(roomId);
         break;
       }
@@ -1198,7 +1459,8 @@ wss.on('connection', async (ws, req) => {
         if (!ids.size) break;
         room.history = room.history.filter((op) => !ids.has(op.opId));
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+        recountFrameOps(room);
+        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
         persistRoom(roomId);
         break;
       }
@@ -1252,7 +1514,7 @@ wss.on('connection', async (ws, req) => {
             toHide.forEach((opId) => room.hiddenOpIds.add(opId));
             const authorIds = new Set(room.history.filter((op) => toHide.includes(op.opId)).map((op) => op.userId));
             authorIds.forEach((uid) => { const au = room.users.get(uid); if (au) au.muted = true; });
-            broadcast(roomId, { type: 'history', ops: visibleHistory(room) });
+            broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
             alertHosts(room, {
               level: 'warn', reason: 'auto-hidden pending review', opIds: toHide,
               author: offender ? offender.name : null, source: 'auto', hidden: true,
@@ -1632,7 +1894,9 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
   const room = rooms.get(id);
   if (room) {
     room.lastCleared = room.history;
+    room.lastClearedFrameId = null;
     room.history = [];
+    recountFrameOps(room);
     broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
     persistRoom(id);
   }

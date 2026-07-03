@@ -2,7 +2,7 @@
 // Drives a LOCAL isolated server (scratch DATA_DIR) — never production.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
-import { mkdirSync } from "fs";
+import { mkdirSync, rmSync } from "fs";
 import path from "path";
 
 const ROOT = "C:/Users/Craig Campbell/Projects/happypaint";
@@ -11,6 +11,8 @@ const PORT = 8917;
 const BASE = `http://localhost:${PORT}`;
 const SHOTS = process.argv[2] || ".";
 
+// Frames persist server-side now — start every run from a clean room store.
+try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
@@ -40,7 +42,7 @@ const run = async () => {
   page.on("console", (msg) => { if (msg.type() === "error") consoleErrors.push(msg.text()); });
   page.on("pageerror", (err) => consoleErrors.push(String(err)));
 
-  await page.goto(`${BASE}/join/ZZFILM`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/join/FLIPBOOK`, { waitUntil: "domcontentloaded" });
   await sleep(2500);
 
   // Click through any greeter/guest modal generically.
@@ -65,7 +67,6 @@ const run = async () => {
   await page.locator(".fs-add").click();
   await sleep(300);
   check("add frame -> 3 cels", (await cels.count()) === 3, `count=${await cels.count()}`);
-  check("LIVE badge on cel 1", await page.locator(".fs-cel").first().locator(".fs-live").isVisible().catch(() => false));
 
   // 3) Draw a stroke on frame 3 (currently active after adds).
   const overlay = page.locator(".overlay-canvas");
@@ -127,7 +128,7 @@ const run = async () => {
   // 10) Mobile viewport — a FRESH phone load (chat starts closed on phones),
   // not a resized desktop session dragging its open chat window along.
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${BASE}/join/ZZFILM`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/join/FLIPBOOK`, { waitUntil: "domcontentloaded" });
   await sleep(2500);
   await page.locator(".fs-add").click().catch(() => {});
   await sleep(400);

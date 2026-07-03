@@ -37,6 +37,7 @@ import {
   createFrame,
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
+import { encodeAnimationVideo } from "./utils/videoExport";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
@@ -443,6 +444,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, []);
 
+  // The frame a remote op belongs to: its frameId tag, or the FIRST frame for
+  // legacy untagged ops. In non-animation rooms there is only one frame, so
+  // this is exactly the old shared-mural behavior.
+  const resolveOpFrame = useCallback((frameId) => {
+    if (frameId) {
+      const match = framesRef.current.find((frame) => frame.id === frameId);
+      if (match) {
+        return match;
+      }
+    }
+    return framesRef.current[0] || null;
+  }, []);
+
+  // True when the given frame is the one on screen (its pixels are live in
+  // layersRef and the wet-mix mirror).
+  const isActiveFrame = useCallback((frame) => frame === framesRef.current[activeFrameIndexRef.current], []);
+
   // Frames hidden LOCALLY via the film-strip eyeball (session-only preview
   // mute: playback + onion skin skip them; never on the wire, never persisted).
   const hiddenFramesRef = useRef(new Set());
@@ -681,6 +699,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // stroke's wetness is frozen at pen-down and replays deterministically.
   const [roomWet, setRoomWet] = useState(false);
   const roomWetRef = useRef(false);
+  // Shared animation: whether THIS room has the film strip (the FLIPBOOK
+  // public room, or a private room whose host enabled it). When on, frames are
+  // shared state — ops carry frameId and frame CRUD relays through the server,
+  // so everyone sees the same flipbook and rejoiners catch up like a document.
+  const [roomAnimation, setRoomAnimation] = useState(false);
+  const roomAnimationRef = useRef(false);
+  const [isExportingVideo, setIsExportingVideo] = useState(false);
+  // Our own session id (from the connected handshake) — used to recognise our
+  // echoed frame mutations without depending on the mp hook object.
+  const myUserIdRef = useRef(null);
   // Open theme vote: { options, endsAt, counts, myChoice } (null when closed).
   const [roomVote, setRoomVote] = useState(null);
   const [voteSecondsLeft, setVoteSecondsLeft] = useState(0);
@@ -761,6 +789,43 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [commitLayersToFrame, pruneOnionCache, renderFrameThumbnail],
   );
 
+  // Snap the local frame list to the server's authoritative metadata (ids,
+  // order, durations) — the Google-Docs invariant: everyone runs the same
+  // flipbook. Canvases are preserved for frames whose id survives (reconnects
+  // keep pixels; the history replay right after repaints them anyway); frames
+  // the server dropped disappear, new ones arrive blank until replayed into.
+  const reconcileFrames = useCallback(
+    (serverFrames) => {
+      if (!Array.isArray(serverFrames) || serverFrames.length === 0) {
+        return;
+      }
+      commitLayersToFrame();
+      const currentById = new Map(framesRef.current.map((frame) => [frame.id, frame]));
+      const activeId = framesRef.current[activeFrameIndexRef.current]?.id;
+      const next = serverFrames.map((meta) => {
+        const existing = currentById.get(meta.id);
+        if (existing) {
+          existing.durationMs = meta.durationMs;
+          return existing;
+        }
+        const frame = createFrame({ layers: createDefaultLayers(), durationMs: meta.durationMs });
+        frame.id = meta.id; // server ids are canonical
+        return frame;
+      });
+      framesRef.current = next;
+      const keptIndex = next.findIndex((frame) => frame.id === activeId);
+      activeFrameIndexRef.current = keptIndex >= 0 ? keptIndex : Math.max(0, Math.min(activeFrameIndexRef.current, next.length - 1));
+      const active = next[activeFrameIndexRef.current];
+      if (!active.layers.some((layer) => layer.id === active.activeLayerId)) {
+        active.activeLayerId = active.layers[active.layers.length - 1].id;
+      }
+      layersRef.current = active.layers;
+      activeLayerIdRef.current = active.activeLayerId;
+      syncFrameState();
+    },
+    [commitLayersToFrame, syncFrameState],
+  );
+
   // Queue a frame's thumbnail regen for idle time. Dirty ids are tracked per
   // FRAME (not "whoever is active when idle fires"), so switching cels inside
   // the idle window can't strand an edited frame's thumbnail; bursts coalesce
@@ -810,17 +875,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     queueThumbnailRefresh(frame.id);
   }, [bumpFrameStamp, commitLayersToFrame, queueThumbnailRefresh]);
 
-  // Remote counterpart: any remote mutation lands on the LIVE frame (index 0) —
-  // stale-mark its onion proxy and queue its cel thumbnail, whichever frame
-  // this client is viewing.
-  const touchLiveFrame = useCallback(() => {
-    const live = framesRef.current[0];
-    if (!live) {
-      return;
-    }
-    bumpFrameStamp(live.id);
-    queueThumbnailRefresh(live.id);
-  }, [bumpFrameStamp, queueThumbnailRefresh]);
+  // Remote counterpart: a remote mutation landed on some frame — stale-mark
+  // its onion proxy and queue its cel thumbnail, whichever frame this client
+  // is viewing. Pass the op's frameId (undefined = first frame, legacy).
+  const touchFrame = useCallback(
+    (frameId) => {
+      const frame = resolveOpFrame(frameId);
+      if (!frame) {
+        return;
+      }
+      bumpFrameStamp(frame.id);
+      queueThumbnailRefresh(frame.id);
+    },
+    [bumpFrameStamp, queueThumbnailRefresh, resolveOpFrame],
+  );
 
   const getActiveLayer = useCallback(() => {
     return layersRef.current.find((layer) => layer.id === activeLayerIdRef.current) || null;
@@ -1161,12 +1229,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (strokes.size === 0) {
       return;
     }
-    // Remote strokes belong to the LIVE frame (frame 1); while the artist is
-    // viewing another frame of their flipbook, don't overlay them on it.
-    if (activeFrameIndexRef.current !== 0) {
-      return;
-    }
+    // Only overlay in-progress strokes that belong to the frame ON SCREEN —
+    // a friend inking cel 3 shouldn't ghost over your view of cel 5.
+    const activeId = framesRef.current[activeFrameIndexRef.current]?.id;
     for (const entry of strokes.values()) {
+      const entryFrameId = entry.frameId || framesRef.current[0]?.id;
+      if (entryFrameId !== activeId) {
+        continue;
+      }
       if (entry.buf && entry.buf.has()) {
         context.save();
         context.globalAlpha = entry.opacity;
@@ -1481,21 +1551,28 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // Clear is a shared wipe ON THE LIVE FRAME: clear every layer, snapshot for
     // local undo, and tell the room. On frames 2+ (the local flipbook) it only
     // clears YOUR frame — the room's mural is untouched.
+    const animated = roomAnimationRef.current;
+    const activeFrame = framesRef.current[activeFrameIndexRef.current];
     const onLiveFrame = activeFrameIndexRef.current === 0;
     pushHistory("full");
     layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
     // The wet-mix mirror tracks the ACTIVE frame's layer 0 — whichever frame
     // this is, its layer 0 is blank now, so the mirror must empty too.
     mixMapRef.current?.clear();
-    if (onLiveFrame) {
+    if (animated && activeFrame) {
+      // Animation rooms: every frame is shared — clear THIS frame for everyone.
+      remoteStrokeLastRef.current.clear();
+      dropRemoteStrokes(); // in-flight strokes for this frame are wiped with it
+      mpRef.current?.sendClear(activeFrame.id);
+    } else if (onLiveFrame) {
       remoteStrokeLastRef.current.clear();
       dropRemoteStrokes(); // friends' in-progress strokes are wiped with the mural
       mpRef.current?.sendClear();
     }
     renderDisplay();
     refreshActiveThumbnail();
-    markChanged(onLiveFrame ? "Canvas cleared" : "Frame cleared");
-    if (onLiveFrame) {
+    markChanged(animated || onLiveFrame ? "Canvas cleared" : "Frame cleared");
+    if (animated || onLiveFrame) {
       showClearBanner("You");
     }
   }, [dropRemoteStrokes, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
@@ -1731,6 +1808,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       if (rebuilt.length === 0) {
+        return;
+      }
+      // Shared flipbooks are server state — swapping in locally-id'd frames
+      // would silently fork this client (nothing drawn after would be shared).
+      if (roomAnimationRef.current) {
+        setStatus("Drafts can't replace a shared animation — restore in a drawing room instead");
         return;
       }
 
@@ -2024,6 +2107,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         if (!image) {
           throw new Error("decode failed");
         }
+        if (roomAnimationRef.current) {
+          showToast("Open saved art in a drawing room — this room is a shared animation");
+          setShowMyArt(false);
+          return;
+        }
         pushHistory("full");
         const layer = createLayer({ name: "Saved art" });
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -2106,8 +2194,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       markMixDirty(active, { x0: x, y0: y, w, h }); // wet-mix mirror (layer 0 only)
       renderDisplay();
       refreshActiveThumbnail();
-      if (activeFrameIndexRef.current === 0) {
-        // Only the LIVE frame is shared; imports on other frames stay local.
+      if (roomAnimationRef.current) {
+        mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h, frameId: framesRef.current[activeFrameIndexRef.current]?.id });
+      } else if (activeFrameIndexRef.current === 0) {
         mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h });
       }
       markChanged("Image added");
@@ -2167,6 +2256,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
     async (item) => {
+      if (roomAnimationRef.current) {
+        setStatus("Open gallery art in a drawing room — this room is a shared animation");
+        return;
+      }
       pushHistory("full");
       setSelectedTexture(item.textureId || "linen");
 
@@ -2316,14 +2409,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     const points = net.pending;
     net.pending = [];
-    // Frames 2+ are the artist's LOCAL flipbook while animation rooms are in
-    // development — only frame 1 (the LIVE cel) is the room's shared mural, so
-    // strokes drawn on other frames never go on the wire. (A pointer can't
-    // switch frames mid-stroke, so this is stable for the whole stroke.)
-    if (activeFrameIndexRef.current !== 0) {
+    // Animation rooms share EVERY frame: the op is tagged with its frame so
+    // peers ink the right cel. Elsewhere only the first frame (the mural) is
+    // shared — extra frames shouldn't exist there, but never leak them.
+    // (activateFrame aborts in-flight strokes, so the frame is stroke-stable.)
+    const animated = roomAnimationRef.current;
+    if (!animated && activeFrameIndexRef.current !== 0) {
       return;
     }
     const op = { kind: "draw", strokeId: net.id, settings: net.settings, points };
+    if (animated) {
+      op.frameId = framesRef.current[activeFrameIndexRef.current]?.id;
+    }
     if (end) {
       op.end = true;
     }
@@ -2614,14 +2711,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             opacity: settings.opacity,
             fontSize: settings.textSize,
           });
-          if (activeFrameIndexRef.current === 0) {
-            // Only the LIVE frame is shared; text on other frames stays local.
-            mpRef.current?.sendOp({
+          if (roomAnimationRef.current || activeFrameIndexRef.current === 0) {
+            const textOp = {
               kind: "text",
               point: { x: point.x, y: point.y },
               text,
               opts: { color: settings.color, opacity: settings.opacity, fontSize: settings.textSize },
-            });
+            };
+            if (roomAnimationRef.current) {
+              textOp.frameId = framesRef.current[activeFrameIndexRef.current]?.id;
+            }
+            mpRef.current?.sendOp(textOp);
           }
           renderDisplay();
           refreshActiveThumbnail();
@@ -2796,15 +2896,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             fillShape: settingsRef.current.fillShape,
           };
           drawShape(active.canvas.getContext("2d"), tool, start, end, shapeOpts);
-          if (activeFrameIndexRef.current === 0) {
-            // Only the LIVE frame is shared; shapes on other frames stay local.
-            mpRef.current?.sendOp({
+          if (roomAnimationRef.current || activeFrameIndexRef.current === 0) {
+            const shapeOp = {
               kind: "shape",
               tool,
               start: { x: start.x, y: start.y },
               end: { x: end.x, y: end.y },
               opts: shapeOpts,
-            });
+            };
+            if (roomAnimationRef.current) {
+              shapeOp.frameId = framesRef.current[activeFrameIndexRef.current]?.id;
+            }
+            mpRef.current?.sendOp(shapeOp);
           }
           renderDisplay();
           markChanged("Shape added");
@@ -3506,14 +3609,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         stopPlayback();
       }
       activateFrame(index);
-      // Until animation rooms ship, only cel 1 is the room's shared mural —
-      // make the LIVE/private split legible every time someone hops frames.
-      markChanged(index === 0 ? "Frame 1 (LIVE — shared with the room)" : `Frame ${index + 1} — just yours for now`);
+      markChanged(`Frame ${index + 1}`);
     },
     [activateFrame, markChanged, stopPlayback],
   );
 
+  // Frame structure edits: in an animation room these are SHARED mutations —
+  // the request goes to the server, which validates (caps, locks) and echoes
+  // the mutation to everyone including us; the message handler applies it.
+  // Outside animation rooms (strip hidden; kept for safety) they stay local.
   const handleAddFrame = useCallback(() => {
+    if (roomAnimationRef.current) {
+      commitLayersToFrame();
+      mpRef.current?.sendFrameAdd?.(framesRef.current[activeFrameIndexRef.current]?.id, null);
+      return; // applied on the server echo
+    }
     if (framesRef.current.length >= MAX_FRAMES) {
       setStatus(`Loops are capped at ${MAX_FRAMES} frames`);
       return;
@@ -3529,15 +3639,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleDuplicateFrame = useCallback(
     (index) => {
+      const source = framesRef.current[index];
+      if (!source) {
+        return;
+      }
+      if (roomAnimationRef.current) {
+        commitLayersToFrame();
+        mpRef.current?.sendFrameAdd?.(source.id, source.id);
+        return; // applied on the server echo (pixel-cloned there)
+      }
       if (framesRef.current.length >= MAX_FRAMES) {
         setStatus(`Loops are capped at ${MAX_FRAMES} frames`);
         return;
       }
       commitLayersToFrame();
-      const source = framesRef.current[index];
-      if (!source) {
-        return;
-      }
       const copy = cloneFrame(source);
       framesRef.current.splice(index + 1, 0, copy);
       activateFrame(index + 1);
@@ -3552,11 +3667,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (framesRef.current.length <= 1) {
         return;
       }
-      // The LIVE frame IS the room's shared mural — deleting it would repoint
-      // the whole remote pipeline (ops/clear/replay) at a private frame.
-      if (index === 0) {
-        setStatus("Frame 1 is the room's LIVE canvas — it can't be deleted");
-        return;
+      if (roomAnimationRef.current) {
+        mpRef.current?.sendFrameDel?.(framesRef.current[index]?.id);
+        return; // applied on the server echo
       }
       framesRef.current.splice(index, 1);
       const nextIndex = Math.max(0, index - 1);
@@ -3573,10 +3686,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (target < 0 || target >= framesRef.current.length) {
         return;
       }
-      // The LIVE frame stays pinned at cel 1 (see handleDeleteFrame).
-      if (index === 0 || target === 0) {
-        setStatus("Frame 1 is the room's LIVE canvas — it stays first");
-        return;
+      if (roomAnimationRef.current) {
+        mpRef.current?.sendFrameMove?.(framesRef.current[index]?.id, target);
+        return; // applied on the server echo
       }
       commitLayersToFrame();
       const list = framesRef.current;
@@ -3589,6 +3701,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [activateFrame, commitLayersToFrame, syncFrameState, markChanged],
   );
 
+  // Per-frame debounce timers: editing two frames' timings back-to-back must
+  // send BOTH updates (a single shared timer would drop the first one).
+  const frameDurationSendRef = useRef(new Map());
   const handleFrameDurationChange = useCallback(
     (index, durationMs) => {
       const frame = framesRef.current[index];
@@ -3598,6 +3713,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       frame.durationMs = durationMs;
       setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
       dirtyRef.current = true;
+      // Shared timing: debounce the relay so slider drags send one message.
+      if (roomAnimationRef.current) {
+        const timers = frameDurationSendRef.current;
+        window.clearTimeout(timers.get(frame.id));
+        timers.set(
+          frame.id,
+          window.setTimeout(() => {
+            timers.delete(frame.id);
+            mpRef.current?.sendFrameDuration?.(frame.id, frame.durationMs);
+          }, 250),
+        );
+      }
     },
     [],
   );
@@ -3793,6 +3920,54 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setIsExportingGif(false);
     }
   }, [commitLayersToFrame, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
+
+  // Real video export — MP4 where the browser can (H.264 plays everywhere:
+  // iMessage, Discord, camera roll), WebM otherwise. Free for everyone.
+  // Frames are composited on demand at 1600x1000 (8:5) into the encoder's
+  // reusable canvas, so long flipbooks never pile up snapshots in memory.
+  const exportVideo = useCallback(async () => {
+    if (isExportingVideo) {
+      return;
+    }
+    if (playTimerRef.current) {
+      stopPlayback();
+    }
+    commitLayersToFrame();
+    // Snapshot the list: a friend's frame_add/del/move mid-export must not
+    // shrink or reorder what we're encoding (deleted frames' canvases stay
+    // alive and drawable, so a shallow copy is enough).
+    const exportFrames = framesRef.current.slice();
+    if (exportFrames.length === 0) {
+      return;
+    }
+    setIsExportingVideo(true);
+    setStatus("Encoding video…");
+    try {
+      const width = 1600;
+      const height = 1000;
+      const { blob, ext } = await encodeAnimationVideo({
+        width,
+        height,
+        count: exportFrames.length,
+        durationMsAt: (i) => exportFrames[i]?.durationMs || DEFAULT_FRAME_DURATION,
+        draw: async (context, i) => {
+          const frame = exportFrames[i];
+          if (!frame) {
+            return;
+          }
+          await renderPaper(context, { width, height, textureId: selectedTexture });
+          compositeLayers(context, frame.layers, { width, height });
+        },
+        onProgress: (pct) => setStatus(`Encoding video… ${Math.round(pct * 100)}%`),
+      });
+      downloadBlob(blob, `drawesome-${Date.now()}.${ext}`);
+      setStatus(`Video exported (.${ext}) 🎬`);
+    } catch {
+      setStatus("Video export failed on this browser — try Export GIF");
+    } finally {
+      setIsExportingVideo(false);
+    }
+  }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback]);
 
   // ---- Replay & Timelapse ----
 
@@ -4058,6 +4233,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (!snapshot?.blob) {
         return;
       }
+      if (roomAnimationRef.current) {
+        setStatus("Remix in a drawing room — this room is a shared animation");
+        return;
+      }
       pushHistory("full");
       const layer = createLayer({ name: "Remix" });
       const image = await createImageFromBlob(snapshot.blob).catch(() => null);
@@ -4237,6 +4416,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       if (asset.kind === "template") {
+        if (roomAnimationRef.current) {
+          setStatus("Templates can't replace a shared animation — use them in a drawing room");
+          setShowPaintSpace(false);
+          return;
+        }
         pushHistory();
         setSelectedTexture(asset.payload?.textureId || "linen");
         const layer = createLayer({ name: "Template" });
@@ -4281,6 +4465,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         // so they can't be loaded back into the frame editor.
         if (asset.payload?.isTimelapse) {
           setStatus("Timelapse clips are for viewing/sharing, not editing");
+          setShowPaintSpace(false);
+          return;
+        }
+        // Shared frames are server state now: locally swapping in a saved loop
+        // would fork this client from the room. Loop editing returns once
+        // "load a loop INTO the shared timeline" exists as a relayed action.
+        if (roomAnimationRef.current) {
+          setStatus("Saved loops can't be loaded into a shared animation room (yet!)");
+          setShowPaintSpace(false);
+          return;
+        }
+        if (framesRef.current.length <= 1 && (asset.payload?.frames || []).length > 1) {
+          setStatus("Multi-frame loops need an animation room — try the 🎬 Animation Studio!");
           setShowPaintSpace(false);
           return;
         }
@@ -4358,47 +4555,45 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [renderDisplay],
   );
 
-  // Remote ops ALWAYS land on frame 1's base layer (the LIVE cel), no matter
-  // which frame this client is viewing. Previously they landed on layer 0 of
-  // whatever frame was active, so two people on different frames diverged and
-  // a history replay wiped the frame you were animating. When frame 1 is the
-  // active frame (the common case), this is the exact same canvas as before.
-  const getSharedBaseLayer = useCallback(() => framesRef.current[0]?.layers?.[0] || null, []);
-
-  const getRemoteCtx = useCallback(() => {
-    const layer = getSharedBaseLayer();
+  // Remote ops land on the frame they were DRAWN on (op.frameId; untagged =
+  // first frame). In non-animation rooms there's only one frame, so this is
+  // the classic shared-mural behavior; in animation rooms every frame is
+  // shared state and two people can ink different cels simultaneously.
+  const frameBaseCtx = useCallback((frame) => {
+    const layer = frame?.layers?.[0];
     return layer ? layer.canvas.getContext("2d") : null;
-  }, [getSharedBaseLayer]);
+  }, []);
 
-  // True while the artist is looking at the LIVE (shared) frame.
-  const viewingSharedFrame = useCallback(() => activeFrameIndexRef.current === 0, []);
-
-  // Land a remote in-progress stroke on the shared base layer ONCE at its
+  // Land a remote in-progress stroke on ITS frame's base layer ONCE at its
   // stroke opacity (#62) and forget it — including its last-point entry, which
   // previously leaked one point per stroke forever.
   const commitRemoteStroke = useCallback(
     (strokeId, entry) => {
       if (entry.buf) {
-        const ctx = getRemoteCtx();
+        // Strict resolve: if the stroke's frame raced a delete, drop the
+        // buffer rather than smearing it onto whichever frame is first now.
+        const frame = entry.frameId
+          ? framesRef.current.find((item) => item.id === entry.frameId) || null
+          : framesRef.current[0] || null;
+        const ctx = frameBaseCtx(frame);
         if (ctx && entry.buf.has()) {
           // Stage-2/3: flush the dab renderer + run the commit passes (wet
           // edge / impasto / paper grain), then the single opacity-stamped
           // commit (legacy strokes: no-op).
           prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
-          // Remote commits land on the LIVE frame's base layer; the wet-mix
-          // mirror only tracks the canvas the artist is currently painting on.
-          if (viewingSharedFrame()) {
-            markMixDirty(getSharedBaseLayer(), entry.buf.bounds());
+          // The wet-mix mirror only tracks the frame on screen.
+          if (frame && isActiveFrame(frame)) {
+            markMixDirty(frame.layers[0], entry.buf.bounds());
           }
-          touchLiveFrame(); // LIVE cel proxy/thumb are stale
+          touchFrame(entry.frameId); // that cel's proxy/thumb are stale
         }
         entry.buf.dispose();
       }
       remoteStrokesRef.current.delete(strokeId);
       remoteStrokeLastRef.current.delete(strokeId);
     },
-    [getRemoteCtx, getSharedBaseLayer, markMixDirty, touchLiveFrame, viewingSharedFrame],
+    [frameBaseCtx, isActiveFrame, markMixDirty, touchFrame],
   );
 
   // Idle sweep: while any remote stroke is open, check every 2s and commit
@@ -4446,8 +4641,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (!op) {
         return;
       }
-      const ctx = getRemoteCtx();
-      if (!ctx) {
+      // Route the op to ITS frame (op.frameId; untagged = first frame). Ops
+      // for a frame that no longer exists (raced a delete) are dropped —
+      // resolveOpFrame only falls back for untagged legacy ops.
+      const frame = op.frameId
+        ? framesRef.current.find((item) => item.id === op.frameId) || null
+        : framesRef.current[0] || null;
+      const ctx = frameBaseCtx(frame);
+      if (!frame || !ctx) {
         return;
       }
       if (op.kind === "draw") {
@@ -4461,7 +4662,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             drawBrushSegment(ctx, last || point, point, settings);
             last = point;
           }
-          touchLiveFrame(); // pixels landed directly — proxy/thumb are stale
+          touchFrame(frame.id); // pixels landed directly — proxy/thumb are stale
           if (op.end) {
             lastMap.delete(op.strokeId);
           } else {
@@ -4488,6 +4689,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               lastTouch: 0,
               renderer: null,
               fx: null,
+              frameId: frame.id,
               smudge: makeSmudgeRenderer(settings, ctx.canvas),
             };
             strokes.set(op.strokeId, entry);
@@ -4497,7 +4699,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           for (const point of op.points || []) {
             entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
           }
-          touchLiveFrame(); // smudge drags layer 0 directly — proxy/thumb stale
+          touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
           if (op.end) {
             commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
           }
@@ -4529,6 +4731,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             opacity,
             pad: (settings.size || 24) * 3 + 40,
             lastTouch: 0,
+            frameId: frame.id, // the stroke's home frame — commit + overlays use it
             renderer: dab && buf ? makeStrokeRenderer(settings, sampleMix) : null,
             fx: dab && buf ? dab : null, // commit passes need the buffer
           };
@@ -4546,10 +4749,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               // state alive across the restart.
               prepareStrokeCommit(entry.buf, null, entry.fx);
               entry.buf.commit(ctx, entry.opacity);
-              if (viewingSharedFrame()) {
-                markMixDirty(getSharedBaseLayer(), entry.buf.bounds());
+              if (isActiveFrame(frame)) {
+                markMixDirty(frame.layers[0], entry.buf.bounds());
               }
-              touchLiveFrame(); // chunk banked into the layer early
+              touchFrame(frame.id); // chunk banked into the layer early
               entry.buf.reset();
               entry.buf.ensure(point.x, point.y, entry.pad);
             }
@@ -4566,7 +4769,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
             last = point;
           }
-          touchLiveFrame(); // over-cap legacy path draws the layer directly
+          touchFrame(frame.id); // over-cap legacy path draws the layer directly
         }
         if (op.end) {
           commitRemoteStroke(op.strokeId, entry);
@@ -4575,24 +4778,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         }
       } else if (op.kind === "shape") {
         drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
-        touchLiveFrame();
+        touchFrame(frame.id);
       } else if (op.kind === "text") {
         drawText(ctx, op.point, op.text, op.opts || {});
-        touchLiveFrame();
+        touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
         const image = new Image();
         image.onload = () => {
           ctx.drawImage(image, op.x, op.y, op.w, op.h);
-          touchLiveFrame();
-          if (viewingSharedFrame()) {
-            markMixDirty(getSharedBaseLayer(), { x0: op.x, y0: op.y, w: op.w, h: op.h });
+          touchFrame(frame.id);
+          if (isActiveFrame(frame)) {
+            markMixDirty(frame.layers[0], { x0: op.x, y0: op.y, w: op.w, h: op.h });
             renderDisplay();
           }
         };
         image.src = op.dataUrl;
       }
     },
-    [commitRemoteStroke, ensureRemoteSweep, getRemoteCtx, getSharedBaseLayer, markMixDirty, renderDisplay, sampleMix, touchLiveFrame, viewingSharedFrame],
+    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, isActiveFrame, markMixDirty, renderDisplay, sampleMix, touchFrame],
   );
 
   // Buffers are transient: drop the idle sweep and every open stroke buffer
@@ -4618,12 +4821,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     (data) => {
       switch (data.type) {
         case "connected": {
+          myUserIdRef.current = data.userId;
           // Re-apply a saved name/colour so the artist keeps their identity
           // across reconnects (and eventually, sign-in).
           const saved = profileRef.current;
           if (saved?.name && saved.name !== data.userName) {
             mpRef.current?.sendRename?.(saved.name, saved.color);
           }
+          // Does this room have the film strip? (FLIPBOOK, or a private room
+          // whose host enabled it.) Frames arrive in the history frame next.
+          roomAnimationRef.current = !!data.animation;
+          setRoomAnimation(!!data.animation);
           // Learn our ownership/host standing for this room from the server.
           setIsRoomHost(!!data.isHost);
           setIsRoomOwner(!!data.isOwner);
@@ -4683,15 +4891,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
-          // mural — local drafts never auto-restore over it.
+          // state — local drafts never auto-restore over it. `frames` rides
+          // along: the whole flipbook rebuilds, so leaving and coming back
+          // shows everything friends did in the meantime (Google-Docs model).
           const incomingOps = data.ops || [];
-          // Rebuild the shared mural from scratch (used for join AND for
-          // restoring a cleared mural), so always start from a clean slate.
-          // The mural lives on the LIVE frame (frame 1) — replay must never
-          // wipe a flipbook frame the artist happens to be viewing.
-          // Open live buffers are stale — the replay re-delivers their points.
-          (framesRef.current[0]?.layers || []).forEach((layer) =>
-            layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT),
+          if (data.frames) {
+            reconcileFrames(data.frames);
+          }
+          // Rebuild EVERY frame from a clean slate (join, moderation rebuilds,
+          // undo-clear restores). Open live buffers are stale — the replay
+          // re-delivers their points.
+          framesRef.current.forEach((frame) =>
+            frame.layers.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
           );
           dropRemoteStrokes();
           remoteStrokeLastRef.current.clear();
@@ -4710,31 +4921,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Replayed strokes with no end marker (legacy clients, strokes cut
           // off by the snapshot) stay open above — commit them all now.
           commitAllRemoteStrokes();
-          touchLiveFrame(); // LIVE cel rebuilt wholesale
+          // Every cel was rebuilt wholesale: stale-mark all proxies + thumbs.
+          framesRef.current.forEach((frame) => touchFrame(frame.id));
           nsfwWatcherRef.current?.markDirty();
-          if (activeFrameIndexRef.current === 0) {
-            // Replay end: layer 0 was rebuilt wholesale — re-mirror the wet-mix
-            // map on its next sample, and repaint the visible composite.
-            mixMapRef.current?.markAllDirty();
-            renderDisplay();
-            refreshActiveThumbnail();
-          }
+          // The active frame's layer 0 was rebuilt — re-mirror the wet-mix map
+          // on its next sample, and repaint the visible composite.
+          mixMapRef.current?.markAllDirty();
+          renderDisplay();
           if (data.restored) {
             setClearBanner(null);
             setStatus("Canvas brought back 🎉");
           }
           break;
         }
-        case "op":
+        case "op": {
           applyRemoteOp(data.op);
           if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
             lastOpIdRef.current = data.op.opId;
           }
           nsfwWatcherRef.current?.markDirty();
-          // The op landed on the LIVE frame; repainting only matters if that's
-          // the frame on screen. Mid-local-stroke, reuse the cheap stroke
-          // compositor; otherwise a rAF-coalesced full recomposite.
-          if (activeFrameIndexRef.current === 0) {
+          // Repainting only matters if the op's frame is on screen.
+          // Mid-local-stroke, reuse the cheap stroke compositor; otherwise a
+          // rAF-coalesced full recomposite.
+          const opFrameIdIn = data.op?.frameId || framesRef.current[0]?.id;
+          if (opFrameIdIn === framesRef.current[activeFrameIndexRef.current]?.id) {
             if (activePointerRef.current != null) {
               scheduleStrokeFrame();
             } else {
@@ -4742,25 +4952,144 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             }
           }
           break;
-        case "clear":
-          // A room clear wipes the LIVE frame (the shared mural) — never the
-          // flipbook frame the artist happens to be viewing.
-          (framesRef.current[0]?.layers || []).forEach((layer) =>
-            layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT),
+        }
+        case "clear": {
+          // A room clear wipes the shared frame it names. Without a frameId it
+          // is a FULL wipe: every frame in an animation room (admin clears the
+          // whole movie), just the first frame elsewhere (frames 2+ shouldn't
+          // exist there, but never nuke a local flipbook by accident).
+          const clearedFrames = data.frameId
+            ? framesRef.current.filter((frame) => frame.id === data.frameId)
+            : roomAnimationRef.current
+              ? [...framesRef.current]
+              : framesRef.current.slice(0, 1);
+          if (!clearedFrames.length) {
+            break;
+          }
+          const clearedIds = new Set(clearedFrames.map((frame) => frame.id));
+          clearedFrames.forEach((frame) =>
+            frame.layers.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
           );
-          // In-progress strokes are wiped with the mural (legacy parity: the
-          // direct path's pixels lived on the layers that just got cleared).
-          // A live LOCAL stroke keeps drawing — only its pre-clear part drops.
-          dropRemoteStrokes();
-          remoteStrokeLastRef.current.clear();
-          touchLiveFrame();
-          if (activeFrameIndexRef.current === 0) {
+          // In-progress remote strokes on cleared frames are wiped with them;
+          // strokes on surviving frames keep buffering. A live LOCAL stroke
+          // keeps drawing — only its pre-clear part drops.
+          for (const [sid, entry] of [...remoteStrokesRef.current]) {
+            if (clearedIds.has(entry.frameId || framesRef.current[0]?.id)) {
+              entry.buf?.dispose();
+              remoteStrokesRef.current.delete(sid);
+              remoteStrokeLastRef.current.delete(sid);
+            }
+          }
+          clearedFrames.forEach((frame) => touchFrame(frame.id));
+          if (clearedFrames.some((frame) => isActiveFrame(frame))) {
             mixMapRef.current?.clear(); // layer 0 is blank — empty the wet-mix mirror
             localStrokeRef.current?.buf.reset();
             renderDisplay();
             refreshActiveThumbnail();
           }
           showClearBanner(data.name || "Someone");
+          break;
+        }
+        // ---- Shared animation frames (server-ordered; echoed to sender too) --
+        case "room_animation": {
+          roomAnimationRef.current = !!data.enabled;
+          setRoomAnimation(!!data.enabled);
+          if (!data.enabled) {
+            // The strip is about to unmount: stop anything it was driving, or
+            // a live scrub leaves renderDisplay suppressed forever and a rAF
+            // playback loop keeps running with no pause control.
+            const scrub = scrubStateRef.current;
+            const wasScrubbing = scrub.active;
+            scrub.active = false;
+            if (scrub.raf) {
+              window.cancelAnimationFrame(scrub.raf);
+              scrub.raf = 0;
+            }
+            if (playTimerRef.current) {
+              stopPlayback();
+            }
+            if (activeFrameIndexRef.current !== 0) {
+              activateFrame(0); // land back on the visible frame
+            } else if (wasScrubbing) {
+              renderDisplay(); // the doc canvas still holds the scrub preview
+            }
+          }
+          showToast(data.enabled ? "🎬 Animation ON — film strip unlocked!" : "🎬 Animation off");
+          break;
+        }
+        case "frame_add": {
+          if (!data.frame?.id) break;
+          commitLayersToFrame();
+          const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
+          const frame = createFrame({ layers: createDefaultLayers(), durationMs: data.frame.durationMs || DEFAULT_FRAME_DURATION });
+          frame.id = data.frame.id; // server ids are canonical
+          if (data.duplicateOf) {
+            // Pixel-clone the source's visible composite; the server copied the
+            // ops, so rejoiners replay to the same pixels (deterministic engine).
+            commitAllRemoteStrokes();
+            const source = framesRef.current.find((f) => f.id === data.duplicateOf);
+            if (source) {
+              frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source), 0, 0);
+            }
+          }
+          const insertIndex = afterIndex >= 0 ? afterIndex + 1 : framesRef.current.length;
+          framesRef.current.splice(insertIndex, 0, frame);
+          if (data.byUserId === myUserIdRef.current) {
+            activateFrame(framesRef.current.indexOf(frame)); // the actor lands on their new frame
+          } else if (insertIndex <= activeFrameIndexRef.current) {
+            // Someone inserted before our spot — keep pointing at OUR frame or
+            // every subsequent local op mistags onto a neighbour.
+            activeFrameIndexRef.current += 1;
+          }
+          // activateFrame doesn't mirror the frame LIST into React — always sync.
+          syncFrameState();
+          break;
+        }
+        case "frame_del": {
+          const delIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
+          if (delIndex < 0 || framesRef.current.length <= 1) break;
+          const wasActive = delIndex === activeFrameIndexRef.current;
+          if (wasActive) {
+            // Terminate any in-flight stroke while the index still points at
+            // the dying frame — the end marker goes out tagged with its id
+            // (harmlessly rejected server-side) instead of a neighbour's.
+            abortActiveStroke();
+          }
+          framesRef.current.splice(delIndex, 1);
+          onionCacheRef.current.delete(data.frameId);
+          if (wasActive) {
+            activateFrame(Math.max(0, delIndex - 1));
+          } else if (activeFrameIndexRef.current > delIndex) {
+            activeFrameIndexRef.current -= 1;
+          }
+          // activateFrame doesn't mirror the frame LIST into React — always sync.
+          syncFrameState();
+          break;
+        }
+        case "frame_move": {
+          const fromIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
+          if (fromIndex < 0) break;
+          commitLayersToFrame();
+          const activeId = framesRef.current[activeFrameIndexRef.current]?.id;
+          const [moved] = framesRef.current.splice(fromIndex, 1);
+          framesRef.current.splice(Math.max(0, Math.min(framesRef.current.length, data.toIndex)), 0, moved);
+          const keptIndex = framesRef.current.findIndex((f) => f.id === activeId);
+          if (keptIndex >= 0) activeFrameIndexRef.current = keptIndex;
+          syncFrameState();
+          break;
+        }
+        case "frame_duration": {
+          const durFrame = framesRef.current.find((f) => f.id === data.frameId);
+          if (!durFrame) break;
+          durFrame.durationMs = data.durationMs;
+          setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
+          break;
+        }
+        case "frame_full":
+          setStatus("🎞️ This frame is full — start the next one!");
+          break;
+        case "frame_denied":
+          setStatus(data.reason || "Can't add more frames here");
           break;
         case "sheet":
           setSheetId(data.sheetId || null);
@@ -4856,7 +5185,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [applyRemoteOp, commitAllRemoteStrokes, dropRemoteStrokes, loadSheetImage, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast, touchLiveFrame],
+    [abortActiveStroke, activateFrame, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast, stopPlayback, syncFrameState, touchFrame],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -4952,8 +5281,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendVoteStart: mp.sendVoteStart,
       sendVote: mp.sendVote,
       sendReaction: mp.sendReaction,
+      sendSetAnimation: mp.sendSetAnimation,
+      sendFrameAdd: mp.sendFrameAdd,
+      sendFrameDel: mp.sendFrameDel,
+      sendFrameMove: mp.sendFrameMove,
+      sendFrameDuration: mp.sendFrameDuration,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration]);
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -5827,6 +6161,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             Invite friends
           </button>
 
+          {roomAudience && roomAudience !== "kid_safe" && isRoomHost ? (
+            <button
+              type="button"
+              className={`mp-wet-toggle${roomAnimation ? " is-on" : ""}`}
+              onClick={() => mpRef.current?.sendSetAnimation?.(!roomAnimation)}
+              aria-pressed={roomAnimation}
+              title={
+                roomAnimation
+                  ? "Animation is ON — the film strip is unlocked for this room. Tap to turn off."
+                  : "Animation — unlock the shared film strip for this room"
+              }
+            >
+              🎬
+            </button>
+          ) : null}
+
           <button
             type="button"
             className={`mp-wet-toggle${roomWet ? " is-on" : ""}`}
@@ -6080,30 +6430,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             ) : null}
           </div>
 
-          <FilmStrip
-            frames={frames}
-            activeFrameIndex={activeFrameIndex}
-            thumbnails={frameThumbnails}
-            isPlaying={isPlaying}
-            onionSkin={onionSkin}
-            isExporting={isExportingGif}
-            hiddenFrameIds={hiddenFrameIds}
-            liveBadge={frames.length > 1}
-            maxFrames={MAX_FRAMES}
-            onSelectFrame={handleSelectFrame}
-            onAddFrame={handleAddFrame}
-            onDuplicateFrame={handleDuplicateFrame}
-            onDeleteFrame={handleDeleteFrame}
-            onMoveFrame={handleMoveFrame}
-            onDurationChange={handleFrameDurationChange}
-            onTogglePlay={handleTogglePlay}
-            onToggleOnion={handleToggleOnion}
-            onToggleFrameHidden={handleToggleFrameHidden}
-            onScrub={handleScrub}
-            onScrubEnd={handleScrubEnd}
-            onExportGif={exportGif}
-            onSaveLoop={saveLoopToSpace}
-          />
+          {roomAnimation ? (
+            <FilmStrip
+              frames={frames}
+              activeFrameIndex={activeFrameIndex}
+              thumbnails={frameThumbnails}
+              isPlaying={isPlaying}
+              onionSkin={onionSkin}
+              isExporting={isExportingGif}
+              isExportingVideo={isExportingVideo}
+              hiddenFrameIds={hiddenFrameIds}
+              maxFrames={roomAudience === "kid_safe" ? 8 : 12}
+              onSelectFrame={handleSelectFrame}
+              onAddFrame={handleAddFrame}
+              onDuplicateFrame={handleDuplicateFrame}
+              onDeleteFrame={handleDeleteFrame}
+              onMoveFrame={handleMoveFrame}
+              onDurationChange={handleFrameDurationChange}
+              onTogglePlay={handleTogglePlay}
+              onToggleOnion={handleToggleOnion}
+              onToggleFrameHidden={handleToggleFrameHidden}
+              onScrub={handleScrub}
+              onScrubEnd={handleScrubEnd}
+              onExportGif={exportGif}
+              onExportVideo={exportVideo}
+              onSaveLoop={saveLoopToSpace}
+            />
+          ) : null}
         </div>
 
         {showClearConfirm ? (

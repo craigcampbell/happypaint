@@ -4,9 +4,8 @@
 // a scrub rail with a grabbable playhead, and a per-cel eyeball that hides a
 // frame LOCALLY (session-only preview mute — never shared, never exported out).
 //
-// Evolved from the old tool-rail FrameStrip; keeps its prop contract and adds
-// scrubbing + per-frame hide + the LIVE badge (cel 1 hosts the room's shared
-// mural while animation stays local-only).
+// Shown only in animation rooms (the FLIPBOOK studio, or a private room whose
+// host enabled it) — there, every frame is shared state like a document.
 
 import { useRef, useState } from "react";
 
@@ -17,8 +16,8 @@ export default function FilmStrip({
   isPlaying,
   onionSkin,
   isExporting,
+  isExportingVideo,
   hiddenFrameIds,
-  liveBadge,
   maxFrames,
   onSelectFrame,
   onAddFrame,
@@ -32,6 +31,7 @@ export default function FilmStrip({
   onScrub,
   onScrubEnd,
   onExportGif,
+  onExportVideo,
   onSaveLoop,
 }) {
   const railRef = useRef(null);
@@ -136,11 +136,6 @@ export default function FilmStrip({
               >
                 {thumbnails[frame.id] ? <img src={thumbnails[frame.id]} alt="" /> : <span className="frame-empty" />}
                 <small>{index + 1}</small>
-                {liveBadge && index === 0 ? (
-                  <span className="fs-live" title="Friends' strokes land on this frame">
-                    LIVE
-                  </span>
-                ) : null}
               </button>
               <button
                 type="button"
@@ -193,21 +188,17 @@ export default function FilmStrip({
         </button>
         {menuOpen ? (
           <div className="fs-menu" role="menu">
-            {/* Cel 1 (LIVE) is pinned: it hosts the room's shared mural, so it
-                can't move or be deleted while animation stays local-only. */}
             <button
               type="button"
               onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, -1))}
-              disabled={activeFrameIndex <= 1}
-              title={activeFrameIndex === 1 ? "The LIVE frame stays first" : undefined}
+              disabled={activeFrameIndex === 0}
             >
               ◀ Move left
             </button>
             <button
               type="button"
               onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, 1))}
-              disabled={activeFrameIndex === 0 || activeFrameIndex === frames.length - 1}
-              title={activeFrameIndex === 0 ? "The LIVE frame stays first" : undefined}
+              disabled={activeFrameIndex === frames.length - 1}
             >
               Move right ▶
             </button>
@@ -217,10 +208,12 @@ export default function FilmStrip({
             <button
               type="button"
               onClick={closeMenuThen(() => onDeleteFrame(activeFrameIndex))}
-              disabled={frames.length <= 1 || activeFrameIndex === 0}
-              title={activeFrameIndex === 0 ? "The LIVE frame can't be deleted" : undefined}
+              disabled={frames.length <= 1}
             >
               Delete
+            </button>
+            <button type="button" onClick={closeMenuThen(onExportVideo)} disabled={isExportingVideo}>
+              {isExportingVideo ? "Encoding…" : "Export video"}
             </button>
             <button type="button" onClick={closeMenuThen(onExportGif)} disabled={isExporting}>
               {isExporting ? "Encoding…" : "Export GIF"}
