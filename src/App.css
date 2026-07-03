@@ -102,14 +102,19 @@ button:disabled {
 .canvas-stage {
   flex: 1 1 auto;
   min-height: 0;
-  display: block;
+  /* Column: canvas on top, film strip as a second in-flow row below. The strip
+     never overlaps the pointer-captured overlay canvas this way. */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-/* The canvas fills the whole stage; panning/zooming happens inside it. */
+/* The canvas fills the remaining stage above the film strip. */
 .canvas-paper {
   position: relative;
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #cdd7e0;
   border-radius: 16px;
@@ -5263,4 +5268,286 @@ textarea:focus-visible,
   .home-code { margin-left: 0; width: 100%; }
   .home-code input { flex: 1; width: auto; }
   .home-room-meta { margin-left: 0; width: 100%; }
+}
+
+/* ---- Film strip (bottom animation timeline) --------------------------------
+   Skeuomorphic reel: charcoal strip, sprocket holes (pure CSS radial-gradient
+   bands — zero images), cel thumbnails with a warm projector glow on the active
+   cel, a scrub rail with a grabbable playhead, and per-cel eyeball toggles. */
+
+.film-strip {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto 16px;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 12px 8px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #232c35, #1b232b 55%, #161d24);
+  border: 1px solid #0d1319;
+  box-shadow: 0 10px 26px rgba(15, 23, 30, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.fs-transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fs-transport button {
+  min-height: 34px;
+  min-width: 38px;
+  padding: 0 10px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+  font-size: 0.95rem;
+}
+
+.fs-transport button[aria-pressed="true"] {
+  border-color: #f4b840;
+  box-shadow: inset 0 0 0 2px #f4b840;
+}
+
+.fs-transport button:disabled {
+  opacity: 0.45;
+}
+
+.fs-counter {
+  min-width: 34px;
+  text-align: center;
+  color: #9fb0c0;
+  font-size: 0.78rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The reel: horizontal scroll of cels between two sprocket-hole bands. */
+.fs-reel {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 15px 6px;
+  scroll-snap-type: x proximity;
+  background:
+    radial-gradient(circle, #0d1319 3.5px, transparent 4px) left top / 18px 12px repeat-x,
+    radial-gradient(circle, #0d1319 3.5px, transparent 4px) left bottom / 18px 12px repeat-x;
+}
+
+.fs-cel {
+  position: relative;
+  flex: 0 0 auto;
+  scroll-snap-align: center;
+}
+
+.fs-cel-thumb {
+  position: relative;
+  width: 96px;
+  height: 60px; /* 8:5 — matches the 4000x2500 canvas */
+  padding: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 2px solid #39434d;
+  background: #f6f1e7;
+}
+
+.fs-cel.is-active .fs-cel-thumb {
+  border-color: #f4b840;
+  box-shadow: 0 0 0 2px #f4b840, 0 0 16px rgba(244, 184, 64, 0.45); /* projector glow */
+}
+
+.fs-cel.is-scrub .fs-cel-thumb {
+  border-color: #7dd3fc;
+}
+
+.fs-cel.is-hidden .fs-cel-thumb {
+  opacity: 0.4;
+}
+
+.fs-cel-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fs-cel-thumb small {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(23, 33, 43, 0.72);
+  color: #ffffff;
+  font-size: 0.64rem;
+  font-weight: 900;
+}
+
+.fs-live {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 0.58rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.fs-eye {
+  position: absolute;
+  top: -12px;
+  right: -6px;
+  z-index: 1;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 999px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.fs-cel.is-hidden .fs-eye {
+  box-shadow: inset 0 0 0 2px #f4b840;
+}
+
+.fs-add {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 60px;
+  border-radius: 6px;
+  border: 1px dashed #4a5662;
+  background: #26313c;
+  color: #9fb0c0;
+  font-size: 1.4rem;
+}
+
+.fs-add:disabled {
+  opacity: 0.4;
+}
+
+/* Scrub rail: full-width groove under the reel with a glowing playhead. */
+.fs-rail {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 16px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #10161c, #1a222a);
+  border: 1px solid #0d1319;
+  cursor: ew-resize;
+  touch-action: none; /* pointer-captured scrubbing, no page scroll */
+}
+
+.fs-needle {
+  position: absolute;
+  top: -4px;
+  width: 4px;
+  height: 24px;
+  border-radius: 2px;
+  background: #f4b840;
+  box-shadow: 0 0 8px rgba(244, 184, 64, 0.8);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.fs-detail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fs-duration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9fb0c0;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.fs-duration input[type="range"] {
+  width: 90px;
+  accent-color: #f4b840;
+}
+
+.fs-duration output {
+  min-width: 46px;
+  text-align: right;
+  color: #e8eef4;
+  font-variant-numeric: tabular-nums;
+}
+
+.fs-menu-toggle {
+  min-height: 34px;
+  min-width: 38px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+}
+
+.fs-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 80; /* above the mobile quickbar (70) */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 240px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #1b232b;
+  border: 1px solid #0d1319;
+  box-shadow: 0 14px 30px rgba(15, 23, 30, 0.45);
+}
+
+.fs-menu button {
+  min-height: 36px;
+  padding: 0 8px;
+  background: #26313c;
+  border: 1px solid #39434d;
+  color: #e8eef4;
+  font-size: 0.8rem;
+}
+
+.fs-menu button:disabled {
+  opacity: 0.45;
+}
+
+@media (max-width: 1024px), (pointer: coarse) {
+  .film-strip {
+    gap: 2px 8px;
+    padding: 6px 8px 6px;
+    border-radius: 12px;
+    /* Clear the floating quickbar (bottom:10px, ~58px tall, z-70) so the reel
+       and scrub rail stay reachable — same 78px convention as the tool rail. */
+    margin-bottom: calc(70px + env(safe-area-inset-bottom));
+  }
+  .fs-duration {
+    display: none; /* long-press/menu era comes with animation rooms */
+  }
+  .fs-counter {
+    display: none;
+  }
+  .fs-reel {
+    padding: 12px 4px;
+    scroll-snap-type: x mandatory;
+  }
+  .fs-cel-thumb {
+    width: 76px;
+    height: 48px;
+  }
+  .fs-add {
+    width: 38px;
+    height: 48px;
+  }
 }
