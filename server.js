@@ -1000,17 +1000,33 @@ wss.on('connection', async (ws, req) => {
         if (room.ownerProfileId && !isHost(room, user)) break;
         // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
         room.lastCleared = room.history;
+        room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
         room.history = [];
         broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
+        // A full clear blanks the canvas completely — drop the coloring sheet too.
+        // Sheet state is separate from stroke history, so without this the sheet
+        // survives every wipe and reloads for everyone on each visit (the stuck
+        // "Pikachu on MAIN" bug). Echoed to the clearer too (no sender exclusion).
+        if (room.sheetId) {
+          room.sheetId = null;
+          broadcast(roomId, { type: 'sheet', sheetId: null });
+        }
         persistRoom(roomId);
         break;
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
-        // Restore the most recently cleared mural for the whole room.
-        if (room.lastCleared && room.lastCleared.length) {
-          room.history = room.lastCleared;
+        // Restore the most recently cleared mural AND the sheet it removed.
+        if ((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet) {
+          if (room.lastCleared && room.lastCleared.length) {
+            room.history = room.lastCleared;
+            broadcast(roomId, { type: 'history', ops: room.history, restored: true });
+          }
           room.lastCleared = null;
-          broadcast(roomId, { type: 'history', ops: room.history, restored: true });
+          if (room.lastClearedSheet) {
+            room.sheetId = room.lastClearedSheet;
+            room.lastClearedSheet = null;
+            broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
+          }
           persistRoom(roomId);
         }
         break;
