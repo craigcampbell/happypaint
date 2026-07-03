@@ -306,8 +306,12 @@ function getRoom(roomId) {
       history: saved.history,
       lastCleared: null,
       sheetId: saved.sheetId,
-      ownerProfileId: saved.ownerProfileId,
-      coHosts: saved.coHosts,
+      // Featured anchor rooms (MAIN, DOODLE, …) are communal and must never be
+      // owned. An older build let the first signed-in visitor claim them, which
+      // host-gated Clear and let the mural stack up un-wipeable — strip any stale
+      // owner/co-hosts on load so they self-heal on the next deploy.
+      ownerProfileId: FEATURED_CODES.has(roomId) ? null : saved.ownerProfileId,
+      coHosts: FEATURED_CODES.has(roomId) ? [] : saved.coHosts,
       mutedProfileIds: new Set(saved.mutedProfileIds),
       kickedProfiles: new Map(), // profileId -> expiry ts; in-memory short ban
       locked: saved.locked,
@@ -831,9 +835,19 @@ wss.on('connection', async (ws, req) => {
   ws.roomId = roomId;
   ws.userId = id;
 
-  // First signed-in grown-up to enter an unowned room claims & hosts it.
+  // First signed-in grown-up to enter an unowned PRIVATE room claims & hosts it.
   // Guard on still-unowned so two simultaneous joiners can't both claim.
-  if (user.profileId && !room.ownerProfileId) {
+  // PUBLIC rooms are never auto-claimed here: the always-open featured anchors
+  // (MAIN, DOODLE, …) are communal free-for-all, and a user-created public room
+  // already got its owner at creation time (POST /api/rooms). Without this guard
+  // the first signed-in visitor silently "owned" MAIN, so the host-gated Clear
+  // dropped everyone else's wipe and the shared mural stacked up un-clearable.
+  if (
+    user.profileId &&
+    !room.ownerProfileId &&
+    room.audience !== 'kid_safe' &&
+    !FEATURED_CODES.has(roomId)
+  ) {
     room.ownerProfileId = user.profileId;
     persistRoom(roomId);
   }
