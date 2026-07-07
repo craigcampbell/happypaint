@@ -655,6 +655,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [brushSize, setBrushSize] = useState(24);
   const [brushOpacity, setBrushOpacity] = useState(0.86);
   const [brushVariation, setBrushVariation] = useState(0.08);
+  // Smudge carries no pigment — it just BLENDS. Its own "strength" (how hard it
+  // pulls paint), independent of brush opacity so switching brushes doesn't
+  // clobber it. Rides the op so replay is deterministic.
+  const [smudgeStrength, setSmudgeStrength] = useState(0.5);
   const [fillShape, setFillShape] = useState(false);
   const [textSize, setTextSize] = useState(64);
   const [gallery, setGallery] = useState([]);
@@ -988,6 +992,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       opacity: brushOpacity,
       size: brushSize,
       variation: brushVariation,
+      strength: smudgeStrength, // smudge blend strength (ignored by other brushes)
       v: recipeSettings?.v,
       dab: recipeSettings?.dab,
       texture: selectedTexture,
@@ -1005,6 +1010,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     selectedColor,
     selectedTexture,
     selectedTool,
+    smudgeStrength,
     studioUnlocked,
     textSize,
   ]);
@@ -2844,9 +2850,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // commit it before opening a new one (no-op in the normal flow).
       commitLocalStroke();
       localSmudgeRef.current = null;
-      // Smudge is private-room only. The picker ghosts it in kid_safe rooms;
-      // this guards restored drafts / audience races by falling back to marker.
-      const brushId = settings.brush === "smudge" && roomAudienceRef.current === "kid_safe" ? "marker" : settings.brush;
+      // Smudge is private-room only EXCEPT the finger-paint room, where smearing
+      // is the toy. The picker ghosts it in other kid_safe rooms; this fallback
+      // guards restored drafts / audience races — without the fingerPaint
+      // exception it would silently turn FINGERS smudge into a colored marker.
+      const smudgeBlocked = roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current;
+      const brushId = settings.brush === "smudge" && smudgeBlocked ? "marker" : settings.brush;
       if (roomAudienceRef.current === "kid_safe" && settings.dab?.shape === "stamp") {
         setStatus("Imported brushes work in private rooms");
         event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -2890,6 +2899,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         variation: settings.variation,
         seed,
       };
+      // Smudge's Strength (per-dab blend alpha) rides the wire so the local
+      // renderer honours the slider AND every remote/replay/spectator client
+      // smears with the identical alpha — deterministic parity. Only smudge
+      // reads it, so we don't bloat every other brush's op.
+      if (brushId === "smudge") {
+        netSettings.strength = settings.strength;
+      }
       if (authoringDab) {
         netSettings.v = authoringDab.version;
         if (authoringDab.version >= 3) {
@@ -6667,6 +6683,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const isPaintActive = !handTool && selectedTool === "brush" && selectedBrush !== "eraser";
   const isEraserActive = !handTool && selectedTool === "brush" && selectedBrush === "eraser";
+  // Smudge blends the paint already on the canvas — it carries no pigment, so it
+  // shows a Strength control instead of a colour + opacity + variation. The
+  // eraser likewise ignores colour (it cuts to transparent).
+  const isSmudgeActive = selectedTool === "brush" && selectedBrush === "smudge";
+  const noColorBrush = selectedTool === "brush" && (selectedBrush === "smudge" || selectedBrush === "eraser");
 
   // Tapping Paint flips to the brush; tapping it again (already painting) opens
   // the tools drawer and scrolls to the brush/colour section.
@@ -7844,53 +7865,64 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         </section>
 
-        <section className="tool-section rail-top rail-top-2">
-          <h2>Color</h2>
-          <div className={`palette-grid ${selectedTool === "brush" && selectedBrush === "crayon" ? "crayons-mode" : ""}`}>
-            {activePalette.colors.map((color) => (
-              <button
-                type="button"
-                key={color}
-                className={`color-swatch ${selectedColor === color ? "is-active" : ""}`}
-                style={{ backgroundColor: color }}
-                onClick={() => choosePaletteColor(color)}
-                aria-label={`Use ${color}`}
-                aria-pressed={selectedColor === color}
-              />
-            ))}
-          </div>
-          <label className="color-picker">
-            <span>Custom</span>
-            <input
-              type="color"
-              value={selectedColor}
-              // Live-preview the colour while dragging in the picker, but only
-              // add ONE swatch to recents when the pick is committed (on blur) —
-              // otherwise every intermediate shade spawned a duplicate swatch.
-              onChange={(event) => setSelectedColor(event.target.value)}
-              onBlur={(event) => {
-                rememberColor(event.target.value);
-                handToolRef.current = false;
-                setHandTool(false);
-              }}
-            />
-          </label>
-          {recentColors.length > 0 ? (
-            <div className="palette-grid recent-colors" aria-label="Recent colors">
-              {recentColors.map((color) => (
+        {noColorBrush ? (
+          <section className="tool-section rail-top rail-top-2 no-color-note">
+            <h2>Color</h2>
+            <p className="tool-hint">
+              {isSmudgeActive
+                ? "👉 Smudge blends the paint that's already on the canvas — no colour needed. Set how hard it pushes with Strength below."
+                : "🧽 The eraser clears back to paper — no colour needed."}
+            </p>
+          </section>
+        ) : (
+          <section className="tool-section rail-top rail-top-2">
+            <h2>Color</h2>
+            <div className={`palette-grid ${selectedTool === "brush" && selectedBrush === "crayon" ? "crayons-mode" : ""}`}>
+              {activePalette.colors.map((color) => (
                 <button
                   type="button"
-                  key={`recent-${color}`}
+                  key={color}
                   className={`color-swatch ${selectedColor === color ? "is-active" : ""}`}
                   style={{ backgroundColor: color }}
                   onClick={() => choosePaletteColor(color)}
-                  aria-label={`Use recent ${color}`}
+                  aria-label={`Use ${color}`}
                   aria-pressed={selectedColor === color}
                 />
               ))}
             </div>
-          ) : null}
-        </section>
+            <label className="color-picker">
+              <span>Custom</span>
+              <input
+                type="color"
+                value={selectedColor}
+                // Live-preview the colour while dragging in the picker, but only
+                // add ONE swatch to recents when the pick is committed (on blur) —
+                // otherwise every intermediate shade spawned a duplicate swatch.
+                onChange={(event) => setSelectedColor(event.target.value)}
+                onBlur={(event) => {
+                  rememberColor(event.target.value);
+                  handToolRef.current = false;
+                  setHandTool(false);
+                }}
+              />
+            </label>
+            {recentColors.length > 0 ? (
+              <div className="palette-grid recent-colors" aria-label="Recent colors">
+                {recentColors.map((color) => (
+                  <button
+                    type="button"
+                    key={`recent-${color}`}
+                    className={`color-swatch ${selectedColor === color ? "is-active" : ""}`}
+                    style={{ backgroundColor: color }}
+                    onClick={() => choosePaletteColor(color)}
+                    aria-label={`Use recent ${color}`}
+                    aria-pressed={selectedColor === color}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </section>
+        )}
 
         <section className="tool-section">
           <h2>Paper</h2>
@@ -7929,32 +7961,50 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             />
             <output>{brushSize}</output>
           </label>
-          <label>
-            <span>Opacity</span>
-            <input
-              type="range"
-              min="8"
-              max="100"
-              value={Math.round(brushOpacity * 100)}
-              aria-label="Brush opacity"
-              aria-valuetext={`${Math.round(brushOpacity * 100)} percent`}
-              onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)}
-            />
-            <output>{Math.round(brushOpacity * 100)}%</output>
-          </label>
-          <label>
-            <span>Variation</span>
-            <input
-              type="range"
-              min="0"
-              max="40"
-              value={Math.round(brushVariation * 100)}
-              aria-label="Brush variation"
-              aria-valuetext={`${Math.round(brushVariation * 100)} percent`}
-              onChange={(event) => setBrushVariation(Number(event.target.value) / 100)}
-            />
-            <output>{Math.round(brushVariation * 100)}%</output>
-          </label>
+          {isSmudgeActive ? (
+            <label>
+              <span>Strength</span>
+              <input
+                type="range"
+                min="5"
+                max="95"
+                value={Math.round(smudgeStrength * 100)}
+                aria-label="Smudge strength"
+                aria-valuetext={`${Math.round(smudgeStrength * 100)} percent`}
+                onChange={(event) => setSmudgeStrength(Number(event.target.value) / 100)}
+              />
+              <output>{Math.round(smudgeStrength * 100)}%</output>
+            </label>
+          ) : (
+            <label>
+              <span>Opacity</span>
+              <input
+                type="range"
+                min="8"
+                max="100"
+                value={Math.round(brushOpacity * 100)}
+                aria-label="Brush opacity"
+                aria-valuetext={`${Math.round(brushOpacity * 100)} percent`}
+                onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)}
+              />
+              <output>{Math.round(brushOpacity * 100)}%</output>
+            </label>
+          )}
+          {isSmudgeActive ? null : (
+            <label>
+              <span>Variation</span>
+              <input
+                type="range"
+                min="0"
+                max="40"
+                value={Math.round(brushVariation * 100)}
+                aria-label="Brush variation"
+                aria-valuetext={`${Math.round(brushVariation * 100)} percent`}
+                onChange={(event) => setBrushVariation(Number(event.target.value) / 100)}
+              />
+              <output>{Math.round(brushVariation * 100)}%</output>
+            </label>
+          )}
           {selectedTool === "text" ? (
             <label>
               <span>Text size</span>

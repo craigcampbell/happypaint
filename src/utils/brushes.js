@@ -1092,11 +1092,14 @@ export function makeStrokeRenderer(settings, getMix) {
 
 const SMUDGE_SPACING = 0.18;
 const SMUDGE_MIN_SIZE = 0.3;
-const SMUDGE_STRENGTH = 0.45; // per-dab re-stamp alpha
+const SMUDGE_STRENGTH = 0.45; // default per-dab re-stamp alpha (no strength set)
 const SMUDGE_DRAG = 0.35; // sample offset behind the motion, fraction of dab size
 
 export function makeSmudgeRenderer(settings, sourceCanvas) {
   const size = clamp(settings.size || 24, 1, 160);
+  // How hard the finger pulls paint: the per-dab re-stamp alpha. User-set via
+  // the Strength slider (settings.strength, 0..1); falls back to the default.
+  const strength = clamp(settings.strength == null ? SMUDGE_STRENGTH : settings.strength, 0.05, 0.95);
   const dabSizeAt = (pressure) => size * (SMUDGE_MIN_SIZE + (1 - SMUDGE_MIN_SIZE) * Math.pow(pressure, 1.35));
 
   let lastPoint = null;
@@ -1137,7 +1140,7 @@ export function makeSmudgeRenderer(settings, sourceCanvas) {
     }
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = SMUDGE_STRENGTH;
+    ctx.globalAlpha = strength;
     ctx.drawImage(sourceCanvas, sx, sy, w, h, dxOut, dyOut, w, h);
     ctx.restore();
   };

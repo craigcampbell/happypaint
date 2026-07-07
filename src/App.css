@@ -4359,6 +4359,18 @@ button:disabled {
   font-weight: 800;
   white-space: nowrap;
 }
+/* Smudge/eraser carry no pigment — the Color section shows a hint instead of
+   swatches, so the rail explains why the palette went away. */
+.tool-section .tool-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f1f4f8;
+  color: #4a5a6c;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
 /* Touch: room-info controls (Invite + 🌐/🔒/⚠️ icon buttons) hit 44px (B3). */
 @media (max-width: 1024px), (pointer: coarse) {
   .mp-chat-room .mp-chat-invite {
