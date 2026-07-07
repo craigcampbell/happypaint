@@ -116,6 +116,29 @@ const run = async () => {
   const aAfter = await darkPixels(pageA);
   check("A sees B's stroke live on the same frame", aAfter > aBefore + 30, `${aBefore} -> ${aAfter}`);
 
+  // 5.5) CREW PRESENCE — both A and B are on frame 2 (index 1); each should
+  // see the other's colored pip on that cel, and it should follow B on a hop.
+  await sleep(900); // presence relays on frame-select (cold path)
+  const pipsAt = async (page, index) => page.locator(".fs-cel").nth(index).locator(".fs-pip").count();
+  check("A sees B's presence pip on frame 2", (await pipsAt(pageA, 1)) >= 1, `pips=${await pipsAt(pageA, 1)}`);
+  check("B sees A's presence pip on frame 2", (await pipsAt(pageB, 1)) >= 1, `pips=${await pipsAt(pageB, 1)}`);
+  await selectCel(pageB, 0); // B hops to frame 1
+  await sleep(900);
+  check("B's pip follows to frame 1 on A's strip", (await pipsAt(pageA, 0)) >= 1 && (await pipsAt(pageA, 1)) === 0,
+    `cel1=${await pipsAt(pageA, 0)} cel2=${await pipsAt(pageA, 1)}`);
+  await selectCel(pageB, 1); // back to frame 2 alongside A
+
+  // 5.6) BEACON — B taps "Come look!"; A gets a tap-to-jump card.
+  await selectCel(pageA, 0); // A is on frame 1, B on frame 2
+  await sleep(700);
+  await pageB.locator(".fs-beacon").click();
+  await sleep(700);
+  check("A receives B's beacon card", await pageA.locator(".beacon-card").isVisible().catch(() => false));
+  await pageA.locator(".beacon-go").click();
+  await sleep(900);
+  const aActiveCel = await pageA.locator(".fs-cel.is-active small").innerText().catch(() => "?");
+  check("beacon jumps A to B's frame (frame 2)", aActiveCel === "2", `active=${aActiveCel}`);
+
   // 6) THE GOOGLE-DOCS TEST: A leaves; B keeps working (new frame + art);
   //    A comes back and sees everything B did.
   await pageA.goto("about:blank");
@@ -216,6 +239,13 @@ const run = async () => {
   await pageB.locator(".sb-close").click();
   await sleep(300);
   await drawStroke(pageB, 0.5, 0.5);
+  // Cross-Part beacon: B (in Part 2) summons the crew; A (in Part 1, a DIFFERENT
+  // room) must receive the beacon — the fan-out across every segment room.
+  await sleep(3200); // clear B's 1/3s beacon cap from earlier
+  await pageB.locator(".fs-beacon").click();
+  await sleep(900);
+  check("cross-Part beacon reaches A in another Part", await pageA.locator(".beacon-card").isVisible().catch(() => false));
+  await pageA.locator(".beacon-dismiss").click().catch(() => {});
   // Host exports the whole film — both segments render offline into one video.
   const filmDownload = pageA.waitForEvent("download", { timeout: 90000 }).catch(() => null);
   await pageA.getByRole("button", { name: /export the whole film/i }).click();

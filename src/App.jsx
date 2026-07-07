@@ -746,6 +746,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [production, setProduction] = useState(null);
   const productionRef = useRef(null);
   const [showStoryboard, setShowStoryboard] = useState(false);
+  // Crew presence: which cel each teammate is on (animation rooms). Ref is the
+  // source of truth (userId -> {sceneId, frameId, name, color, ts}); the state
+  // snapshot drives the pips/chips render (cold path — updated on presence
+  // messages + the shared 4s cursor-stale sweep, never in the draw loop).
+  const crewPresenceRef = useRef(new Map());
+  const [crewPresence, setCrewPresence] = useState([]); // [{userId, sceneId, frameId, name, color}]
+  const publishCrewPresence = useCallback(() => {
+    setCrewPresence(Array.from(crewPresenceRef.current.entries()).map(([userId, p]) => ({ userId, ...p })));
+  }, []);
+  // "Come look at my frame!" beacon: a friendly tap-to-jump card (auto-dismiss).
+  const [beacon, setBeacon] = useState(null); // { name, color, target } | null
+  const beaconTimerRef = useRef(0);
+  const showBeacon = useCallback((name, color, target) => {
+    setBeacon({ name, color, target });
+    window.clearTimeout(beaconTimerRef.current);
+    beaconTimerRef.current = window.setTimeout(() => setBeacon(null), 9000);
+  }, []);
   // Open theme vote: { options, endsAt, counts, myChoice } (null when closed).
   const [roomVote, setRoomVote] = useState(null);
   const [voteSecondsLeft, setVoteSecondsLeft] = useState(0);
@@ -3702,6 +3719,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [abortActiveStroke, pruneOnionCache, recordReplay, renderDisplay, syncLayerState, updateHistoryCounts],
   );
 
+  // Tell the room which cel we're on (cold path: frame-select / scene-switch /
+  // join). Guarded to animation rooms; server rate-limits + relays. Reads only
+  // refs, so it's declared here (ahead of handleSelectFrame's deps).
+  const announcePresence = useCallback(() => {
+    if (!roomAnimationRef.current) return;
+    const frameId = framesRef.current[activeFrameIndexRef.current]?.id;
+    mpRef.current?.sendFramePresence?.(activeSceneIdRef.current, frameId);
+  }, []);
+
   const handleSelectFrame = useCallback(
     (index) => {
       if (isExportingVideoRef.current) {
@@ -3714,9 +3740,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         stopPlayback();
       }
       activateFrame(index);
+      announcePresence(); // tell the crew which cel we hopped to
       markChanged(`Frame ${index + 1}`);
     },
-    [activateFrame, markChanged, stopPlayback],
+    [activateFrame, announcePresence, markChanged, stopPlayback],
   );
 
   // Page to another scene: ask the server for its frames+ops; the history
@@ -5341,6 +5368,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             setClearBanner(null);
             setStatus("Canvas brought back 🎉");
           }
+          // Now that a scene is hydrated (join or scene-switch), let the crew
+          // know which cel we're parked on so their pips include us.
+          announcePresence();
           // Wake anything awaiting this scene's hydration (export stitching) —
           // but only after embedded image ops finish decoding, or the exporter
           // would encode frames whose pictures haven't landed yet.
@@ -5527,6 +5557,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           framesRef.current.splice(insertIndex, 0, frame);
           if (data.byUserId === myUserIdRef.current) {
             activateFrame(framesRef.current.indexOf(frame)); // the actor lands on their new frame
+            announcePresence(); // ...and tells the crew they're on the new cel
           } else if (insertIndex <= activeFrameIndexRef.current) {
             // Someone inserted before our spot — keep pointing at OUR frame or
             // every subsequent local op mistags onto a neighbour.
@@ -5557,6 +5588,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           onionCacheRef.current.delete(data.frameId);
           if (wasActive) {
             activateFrame(Math.max(0, delIndex - 1));
+            announcePresence(); // our cel changed under us — re-announce
           } else if (activeFrameIndexRef.current > delIndex) {
             activeFrameIndexRef.current -= 1;
           }
@@ -5620,8 +5652,45 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (data.userId) {
             remoteCursorsRef.current.delete(data.userId);
             userPosRef.current.delete(data.userId); // bound growth: drop their saved position too
+            if (crewPresenceRef.current.delete(data.userId)) {
+              publishCrewPresence(); // their cel-pip vanishes with them
+            }
           }
           break;
+        case "frame_presence":
+          // A teammate moved to a cel (cold path). Overwrites their single
+          // entry (Map keyed by userId → self-heals on hop); pips re-derive.
+          if (data.userId) {
+            crewPresenceRef.current.set(data.userId, {
+              sceneId: data.sceneId || null,
+              frameId: data.frameId || null,
+              name: data.name,
+              color: data.color,
+              ts: Date.now(),
+            });
+            publishCrewPresence();
+          }
+          break;
+        case "presence_snapshot":
+          // Join catch-up: where everyone already is. Seed all at once.
+          for (const p of data.entries || []) {
+            crewPresenceRef.current.set(p.userId, {
+              sceneId: p.sceneId || null,
+              frameId: p.frameId || null,
+              name: p.name,
+              color: p.color,
+              ts: Date.now(),
+            });
+          }
+          publishCrewPresence();
+          break;
+        case "beacon": {
+          // "Come look at my frame!" — a friendly, tappable summon (never a
+          // forced view-yank). Lands the tapper on the exact Part+scene+frame.
+          const target = { roomCode: data.roomCode, sceneId: data.sceneId, frameId: data.frameId };
+          showBeacon(data.name || "A friend", data.color, target);
+          break;
+        }
         case "reaction": {
           // Ephemeral floating emoji from someone (or our own echo). Placed at the
           // world point, mapped to screen once; it floats up + fades via CSS.
@@ -5694,7 +5763,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [abortActiveStroke, activateFrame, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -5801,8 +5870,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendProductionCreate: mp.sendProductionCreate,
       sendProductionAddSegment: mp.sendProductionAddSegment,
       sendProductionRename: mp.sendProductionRename,
+      sendFramePresence: mp.sendFramePresence,
+      sendBeacon: mp.sendBeacon,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon]);
+
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -6011,11 +6083,74 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Keep crew presence honest against the roster: presence is a COLD signal
+  // (sent once per cel change, not refreshed), so a TTL would wrongly drop a
+  // teammate who's sitting still. Instead, whenever the room roster changes,
+  // drop presence for anyone no longer present — robust even if a leave
+  // message was missed.
+  useEffect(() => {
+    if (crewPresenceRef.current.size === 0) {
+      return;
+    }
+    const liveIds = new Set(mp.users.map((u) => u.id));
+    let changed = false;
+    for (const userId of crewPresenceRef.current.keys()) {
+      if (!liveIds.has(userId)) {
+        crewPresenceRef.current.delete(userId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      publishCrewPresence();
+    }
+  }, [mp.users, publishCrewPresence]);
+
+  // Derive cel pips (frameId -> people on it, CURRENT scene only) + a count of
+  // crew off in other scenes for the pager. Recomputes only when presence or
+  // the active scene changes — never on the draw path.
+  const celPresence = useMemo(() => {
+    const map = {};
+    for (const p of crewPresence) {
+      const sameScene = !p.sceneId || !activeSceneId || p.sceneId === activeSceneId;
+      if (sameScene && p.frameId) {
+        (map[p.frameId] = map[p.frameId] || []).push({ name: p.name, color: p.color });
+      }
+    }
+    return map;
+  }, [crewPresence, activeSceneId]);
+  const otherSceneCrew = useMemo(
+    () => crewPresence.filter((p) => p.sceneId && activeSceneId && p.sceneId !== activeSceneId).length,
+    [crewPresence, activeSceneId],
+  );
+
+  // Accept a "come look!" beacon: land on the exact Part + scene + frame.
+  const acceptBeacon = useCallback(
+    async (target) => {
+      setBeacon(null);
+      if (!target) {
+        return;
+      }
+      if (target.roomCode && target.roomCode !== roomId) {
+        window.location.href = `/join/${target.roomCode}`; // another Part — hop rooms
+        return;
+      }
+      if (target.sceneId && target.sceneId !== activeSceneIdRef.current) {
+        await switchScene(target.sceneId);
+      }
+      const index = framesRef.current.findIndex((f) => f.id === target.frameId);
+      if (index >= 0) {
+        handleSelectFrame(index);
+      }
+    },
+    [roomId, switchScene, handleSelectFrame],
+  );
+
   // Clear any pending "focused friend" highlight timer on unmount.
   useEffect(() => () => {
     if (focusTimerRef.current) {
       window.clearTimeout(focusTimerRef.current);
     }
+    window.clearTimeout(beaconTimerRef.current);
   }, []);
 
   // Non-passive wheel listener so zoom can preventDefault page scroll.
@@ -6913,6 +7048,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               ))}
             </div>
 
+            {/* "Come look at my frame!" beacon — a friendly tap-to-jump card. */}
+            {beacon ? (
+              <div className="beacon-card" role="alert">
+                <span className="beacon-dot" style={{ background: beacon.color || "#2d6cdf" }} aria-hidden="true" />
+                <span className="beacon-text">
+                  🔎 <strong>{beacon.name}</strong> wants you on their frame!
+                </span>
+                <button type="button" className="primary-action beacon-go" onClick={() => acceptBeacon(beacon.target)}>
+                  Take me!
+                </button>
+                <button type="button" className="beacon-dismiss" onClick={() => setBeacon(null)} aria-label="Dismiss">
+                  ✕
+                </button>
+              </div>
+            ) : null}
+
             {/* Reaction picker — cheer on your friends. */}
             <div className="reaction-picker">
               <button
@@ -7026,6 +7177,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onSaveLoop={saveLoopToSpace}
               onOpenStoryboard={roomAudience !== "kid_safe" ? () => setShowStoryboard(true) : null}
               inProduction={!!production}
+              celPresence={celPresence}
+              otherSceneCrew={otherSceneCrew}
+              onBeacon={() => mpRef.current?.sendBeacon?.(activeSceneIdRef.current, framesRef.current[activeFrameIndexRef.current]?.id)}
             />
           ) : null}
         </div>

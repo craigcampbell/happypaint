@@ -41,6 +41,9 @@ export default function FilmStrip({
   onSaveLoop,
   onOpenStoryboard = null,
   inProduction = false,
+  celPresence = {}, // frameId -> [{name, color}] (teammates on that cel, current scene)
+  otherSceneCrew = 0, // count of teammates off in other scenes
+  onBeacon = null, // "come look at my frame!"
 }) {
   const railRef = useRef(null);
   // Visual-only scrub position; the canvas preview is painted by StudioApp
@@ -121,6 +124,16 @@ export default function FilmStrip({
         <span className="fs-counter" aria-live="off">
           {displayIndex + 1}/{frames.length}
         </span>
+        {otherSceneCrew > 0 ? (
+          <span className="fs-elsewhere" title={`${otherSceneCrew} friend${otherSceneCrew > 1 ? "s" : ""} painting in other scenes`}>
+            👥 {otherSceneCrew} elsewhere
+          </span>
+        ) : null}
+        {onBeacon ? (
+          <button type="button" className="fs-beacon" onClick={onBeacon} title="Call your friends over to this frame">
+            🔎 Come look!
+          </button>
+        ) : null}
         {scenes.length > 1 || canManageScenes ? (
           <div className="fs-scenes" role="group" aria-label="Scenes">
             <button
@@ -181,6 +194,16 @@ export default function FilmStrip({
               >
                 {thumbnails[frame.id] ? <img src={thumbnails[frame.id]} alt="" /> : <span className="frame-empty" />}
                 <small>{index + 1}</small>
+                {celPresence[frame.id]?.length ? (
+                  <span className="fs-pips" aria-hidden="true">
+                    {celPresence[frame.id].slice(0, 3).map((person, i) => (
+                      <span key={i} className="fs-pip" style={{ background: person.color || "#2d6cdf" }} title={person.name} />
+                    ))}
+                    {celPresence[frame.id].length > 3 ? (
+                      <span className="fs-pip fs-pip-more">+{celPresence[frame.id].length - 3}</span>
+                    ) : null}
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"

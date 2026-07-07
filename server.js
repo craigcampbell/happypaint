@@ -1064,6 +1064,9 @@ function productionSummary(production) {
         index,
         title: (room && room.title) || `Part ${index + 1}`,
         users: room ? room.users.size : 0,
+        // Live crew chips for the storyboard — LIVE rooms only (never getRoom
+        // an idle segment). Just the already-public {name,color}, capped.
+        crew: room ? Array.from(room.users.values()).slice(0, 6).map((u) => ({ name: u.name, color: u.color })) : [],
         frames: room ? room.frames.length : 0,
         scenes: room ? room.scenes.length : 0,
         runtimeMs: room ? room.frames.reduce((sum, f) => sum + (f.durationMs || 120), 0) : 0,
@@ -1165,6 +1168,10 @@ function getRoom(roomId) {
       chat: saved.chat || [], // recent chat buffer (late-joiner context, persisted)
       watchers: new Set(), // elected client ids running the in-browser watcher
       spectators: new Set(), // read-only homepage viewers (not counted as users)
+      // Ephemeral "who's on which cel" presence for animation rooms: userId ->
+      // {sceneId, frameId, ts}. Never persisted (like cursors/spectators),
+      // bounded by MAX_ROOM_USERS, cleared on disconnect + overwritten on hop.
+      presence: new Map(),
       modLog: [], // recent moderation actions (in-memory, capped)
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
@@ -1785,6 +1792,16 @@ wss.on('connection', async (ws, req) => {
   // page between scenes with scene_fetch, keeping memory at a scene's worth.
   if (room.animationEnabled) {
     ws.send(JSON.stringify(sceneHistoryMsg(room, room.scenes[0].id)));
+    // Catch the joiner up on WHERE everyone already is (presence is otherwise
+    // only broadcast at send-time, so a late joiner would see no pips).
+    if (room.presence.size) {
+      const entries = [];
+      room.presence.forEach((p, uid) => {
+        const u = room.users.get(uid);
+        if (u && uid !== id) entries.push({ userId: uid, name: u.name, color: u.color, sceneId: p.sceneId, frameId: p.frameId });
+      });
+      if (entries.length) ws.send(JSON.stringify({ type: 'presence_snapshot', entries }));
+    }
   } else {
     ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
   }
@@ -1795,6 +1812,12 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify(chatHistoryMsg(room))); // catch the late joiner up on the conversation
   }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
+  // If this room is a film segment, refresh every member's storyboard so the
+  // new painter's crew chip appears on this Part right away.
+  if (room.productionId) {
+    const joinProduction = getProduction(room.productionId);
+    if (joinProduction) broadcastProduction(joinProduction);
+  }
 
   ws.on('message', (raw) => {
     let data;
@@ -1948,6 +1971,53 @@ wss.on('connection', async (ws, req) => {
         if (times.length >= 5) break; // ~5/sec per user
         times.push(nowR);
         broadcast(roomId, { type: 'reaction', emoji: data.emoji, x: data.x, y: data.y, userId: id, name: user.name });
+        break;
+      }
+      // ---- Crew presence: who's painting which cel (animation rooms) --------
+      // COLD path only — the client fires this on frame-select / scene-switch /
+      // join, never per stroke or cursor-move. Purely ephemeral: relayed +
+      // remembered in room.presence, never touches history or the draw path.
+      case 'frame_presence': {
+        if (!room.animationEnabled) break;
+        const pSceneId = data.sceneId != null ? String(data.sceneId).slice(0, 24) : null;
+        const pFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
+        // Drop stale ids (raced a delete) rather than advertising a ghost cel.
+        if (pFrameId && !room.frames.some((f) => f.id === pFrameId)) break;
+        if (pSceneId && !room.scenes.some((s) => s.id === pSceneId)) break;
+        const nowP = Date.now();
+        const pt = user.presenceTimes || (user.presenceTimes = []);
+        while (pt.length && nowP - pt[0] > 1000) pt.shift();
+        if (pt.length >= 5) break; // ~5/sec per user — cold path, generous
+        pt.push(nowP);
+        room.presence.set(id, { sceneId: pSceneId, frameId: pFrameId, ts: nowP });
+        broadcast(roomId, { type: 'frame_presence', userId: id, name: user.name, color: user.color, sceneId: pSceneId, frameId: pFrameId }, id);
+        break;
+      }
+      // "Come look at my frame!" — a location beacon (room+scene+frame), never
+      // free text. Peers get a tap-to-jump toast; honoring it is opt-in.
+      case 'beacon': {
+        if (!room.animationEnabled) break;
+        const bSceneId = data.sceneId != null ? String(data.sceneId).slice(0, 24) : null;
+        const bFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
+        if (bFrameId && !room.frames.some((f) => f.id === bFrameId)) break;
+        const nowB = Date.now();
+        const bt = user.beaconTimes || (user.beaconTimes = []);
+        while (bt.length && nowB - bt[0] > 3000) bt.shift();
+        if (bt.length >= 1) break; // 1 per 3s — a summon, not a spam toy
+        bt.push(nowB);
+        // roomCode = the SENDER's room, so peers in other Parts hop via /join
+        // while same-room peers land locally.
+        const beaconMsg = { type: 'beacon', fromUserId: id, name: user.name, color: user.color, roomCode: roomId, sceneId: bSceneId, frameId: bFrameId };
+        const beaconProd = room.productionId && getProduction(room.productionId);
+        if (beaconProd) {
+          // Summon the WHOLE crew across every Part of the film, not just this
+          // room — "come see my frame in Part 3" is the point.
+          for (const code of beaconProd.segments) {
+            if (rooms.has(code)) broadcast(code, beaconMsg, code === roomId ? id : null);
+          }
+        } else {
+          broadcast(roomId, beaconMsg, id);
+        }
         break;
       }
       case 'clear': {
@@ -2134,6 +2204,11 @@ wss.on('connection', async (ws, req) => {
         room.frames = room.frames.filter((f) => !doomedFrames.has(f.id));
         room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
         doomedFrames.forEach((fid) => room.frameOpCounts.delete(fid));
+        // Drop crew presence parked in the deleted scene so a stale cel-pip
+        // never re-advertises (presence_snapshot would otherwise re-send it).
+        room.presence.forEach((p, uid) => {
+          if (p.sceneId === delSceneId || doomedFrames.has(p.frameId)) room.presence.delete(uid);
+        });
         if (doomedFrames.has(room.lastClearedFrameId)) {
           room.lastCleared = null;
           room.lastClearedFrameId = null;
@@ -2219,6 +2294,11 @@ wss.on('connection', async (ws, req) => {
         // The frame's ops leave history for good (this is not undo-clearable).
         room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
         room.frameOpCounts.delete(delId);
+        // Clear any crew presence parked on the deleted cel (else a stale pip
+        // re-advertises to later joiners via presence_snapshot).
+        room.presence.forEach((p, uid) => {
+          if (p.frameId === delId) room.presence.delete(uid);
+        });
         if (room.lastClearedFrameId === delId) {
           room.lastCleared = null;
           room.lastClearedFrameId = null;
@@ -2556,8 +2636,15 @@ wss.on('connection', async (ws, req) => {
     room.userSeconds = (room.userSeconds || 0) + Math.max(0, (Date.now() - user.connectedAt) / 1000);
     analyticsEndSession(user);
     room.users.delete(id);
+    room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
+    // A film's storyboard shows live crew chips per Part — refresh so this
+    // painter's chip vanishes from the board the moment they leave.
+    if (room.productionId) {
+      const production = getProduction(room.productionId);
+      if (production) broadcastProduction(production);
+    }
     persistRoom(roomId); // persist engagement once they leave
     // If a watcher left, promote another capable client so coverage continues.
     if (room.watchers.has(id) || room.watchers.size < MAX_WATCHERS) {

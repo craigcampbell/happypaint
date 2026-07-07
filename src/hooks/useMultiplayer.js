@@ -217,6 +217,10 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendProductionCreate = useCallback((title) => send({ type: "production_create", title: title || null }), [send]);
   const sendProductionAddSegment = useCallback(() => send({ type: "production_add_segment" }), [send]);
   const sendProductionRename = useCallback((title) => send({ type: "production_rename", title }), [send]);
+  // Crew presence (COLD path — sent on frame-select / scene-switch / join, never
+  // per stroke) + the "come look at my frame!" beacon. Both ephemeral, relayed.
+  const sendFramePresence = useCallback((sceneId, frameId) => send({ type: "frame_presence", sceneId: sceneId || null, frameId: frameId || null }), [send]);
+  const sendBeacon = useCallback((sceneId, frameId) => send({ type: "beacon", sceneId: sceneId || null, frameId: frameId || null }), [send]);
   // Ephemeral emoji reaction dropped at a world point (never persisted).
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
@@ -238,6 +242,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,
+    sendFramePresence, sendBeacon,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

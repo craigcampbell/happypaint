@@ -115,6 +115,15 @@ export default function Storyboard({
                       <strong>
                         {segment.index + 1}. {segment.title}
                       </strong>
+                      {segment.crew?.length ? (
+                        <div className="sb-crew" aria-label={`${segment.crew.length} painting here`}>
+                          {segment.crew.slice(0, 6).map((person, i) => (
+                            <span key={i} className="sb-crew-chip" style={{ background: person.color || "#2d6cdf" }} title={person.name}>
+                              {(person.name || "?").slice(0, 1).toUpperCase()}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       <span>
                         {segment.users > 0 ? `🧑‍🎨 ${segment.users} painting · ` : ""}
                         ⏱ {formatRuntime(segment.runtimeMs)}
