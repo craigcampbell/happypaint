@@ -5587,6 +5587,71 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+/* Confetti cheer button + emoji menu. */
+.fs-cheer {
+  position: relative;
+}
+
+.fs-cheer-toggle {
+  min-height: 34px;
+  min-width: 38px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+  font-size: 0.95rem;
+}
+
+.fs-cheer-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 80;
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 12px;
+  background: #1b232b;
+  border: 1px solid #0d1319;
+  box-shadow: 0 14px 30px rgba(15, 23, 30, 0.45);
+}
+
+.fs-cheer-menu button {
+  min-height: 40px;
+  min-width: 40px;
+  background: #26313c;
+  border: 1px solid #39434d;
+  font-size: 1.2rem;
+}
+
+/* Confetti burst on a cel — a few emoji pop, scatter up, and fade. */
+.fs-cheer-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 2;
+}
+
+.fs-confetti {
+  position: absolute;
+  left: 50%;
+  top: 55%;
+  font-size: 1.05rem;
+  animation: fs-confetti-pop 1.5s ease-out forwards;
+}
+
+.fs-confetti:nth-child(1) { --dx: -22px; --dr: -25deg; animation-delay: 0ms; }
+.fs-confetti:nth-child(2) { --dx: 20px; --dr: 20deg; animation-delay: 60ms; }
+.fs-confetti:nth-child(3) { --dx: -6px; --dr: 8deg; animation-delay: 120ms; }
+.fs-confetti:nth-child(4) { --dx: 30px; --dr: -14deg; animation-delay: 40ms; }
+.fs-confetti:nth-child(5) { --dx: -32px; --dr: 18deg; animation-delay: 90ms; }
+
+@keyframes fs-confetti-pop {
+  0% { transform: translate(-50%, 0) scale(0.4) rotate(0deg); opacity: 0; }
+  25% { transform: translate(calc(-50% + var(--dx, 0) * 0.5), -14px) scale(1.25) rotate(var(--dr, 0)); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx, 0)), -42px) scale(0.9) rotate(var(--dr, 0)); opacity: 0; }
+}
+
 /* "Come look at my frame!" beacon card — floats over the canvas, tap to jump. */
 .beacon-card {
   position: absolute;

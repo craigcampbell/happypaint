@@ -128,6 +128,16 @@ const run = async () => {
     `cel1=${await pipsAt(pageA, 0)} cel2=${await pipsAt(pageA, 1)}`);
   await selectCel(pageB, 1); // back to frame 2 alongside A
 
+  // 5.7) CONFETTI CHEERS — A cheers frame 2; B (on frame 2) sees confetti pop.
+  await pageA.locator(".fs-cheer-toggle").click();
+  await sleep(200);
+  await pageA.locator(".fs-cheer-menu button").first().click();
+  await sleep(500);
+  check("B sees confetti burst on the cheered cel", (await pageB.locator(".fs-cel").nth(1).locator(".fs-confetti").count()) >= 1);
+  check("cheerer A sees their own confetti too", (await pageA.locator(".fs-cel").nth(1).locator(".fs-confetti").count()) >= 1);
+  await sleep(1800); // confetti auto-clears
+  check("confetti auto-clears after the burst", (await pageB.locator(".fs-confetti").count()) === 0);
+
   // 5.6) BEACON — B taps "Come look!"; A gets a tap-to-jump card.
   await selectCel(pageA, 0); // A is on frame 1, B on frame 2
   await sleep(700);

@@ -221,6 +221,8 @@ export function useMultiplayer(roomId, onMessage, token) {
   // per stroke) + the "come look at my frame!" beacon. Both ephemeral, relayed.
   const sendFramePresence = useCallback((sceneId, frameId) => send({ type: "frame_presence", sceneId: sceneId || null, frameId: frameId || null }), [send]);
   const sendBeacon = useCallback((sceneId, frameId) => send({ type: "beacon", sceneId: sceneId || null, frameId: frameId || null }), [send]);
+  // Confetti cheer on a frame (curated emoji, ephemeral).
+  const sendCheer = useCallback((frameId, emoji) => send({ type: "cheer", frameId: frameId || null, emoji }), [send]);
   // Ephemeral emoji reaction dropped at a world point (never persisted).
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
@@ -242,7 +244,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,
-    sendFramePresence, sendBeacon,
+    sendFramePresence, sendBeacon, sendCheer,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

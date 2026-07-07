@@ -2020,6 +2020,22 @@ wss.on('connection', async (ws, req) => {
         }
         break;
       }
+      // Confetti cheer on a specific frame — pure celebration. Curated emoji
+      // only (no text), ephemeral, echoed to the cheerer too so they see it pop.
+      case 'cheer': {
+        if (!room.animationEnabled) break;
+        const CHEERS = ['⭐', '❤️', '🎉', '👏', '🌟', '🥳'];
+        if (!CHEERS.includes(data.emoji)) break;
+        const cheerFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
+        if (cheerFrameId && !room.frames.some((f) => f.id === cheerFrameId)) break;
+        const nowC = Date.now();
+        const ct = user.cheerTimes || (user.cheerTimes = []);
+        while (ct.length && nowC - ct[0] > 1000) ct.shift();
+        if (ct.length >= 4) break; // ~4/sec per user
+        ct.push(nowC);
+        broadcast(roomId, { type: 'cheer', frameId: cheerFrameId, emoji: data.emoji, userId: id, name: user.name });
+        break;
+      }
       case 'clear': {
         // In an owned room only a host may wipe the shared mural; unowned public
         // rooms keep the original free-for-all behavior.

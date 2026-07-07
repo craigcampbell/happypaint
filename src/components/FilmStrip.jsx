@@ -44,12 +44,20 @@ export default function FilmStrip({
   celPresence = {}, // frameId -> [{name, color}] (teammates on that cel, current scene)
   otherSceneCrew = 0, // count of teammates off in other scenes
   onBeacon = null, // "come look at my frame!"
+  cheers = [], // [{ id, frameId, emoji }] confetti bursts
+  onCheer = null, // cheer the active frame
 }) {
   const railRef = useRef(null);
   // Visual-only scrub position; the canvas preview is painted by StudioApp
   // through onScrub. null = not scrubbing.
   const [scrubIndex, setScrubIndex] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [cheerOpen, setCheerOpen] = useState(false);
+  // Group active cheer bursts by the cel they land on.
+  const cheersByFrame = {};
+  for (const c of cheers) {
+    (cheersByFrame[c.frameId] = cheersByFrame[c.frameId] || []).push(c);
+  }
 
   const activeFrame = frames[activeFrameIndex];
   const multiFrame = frames.length > 1;
@@ -134,6 +142,36 @@ export default function FilmStrip({
             🔎 Come look!
           </button>
         ) : null}
+        {onCheer ? (
+          <div className="fs-cheer">
+            <button
+              type="button"
+              className="fs-cheer-toggle"
+              onClick={() => setCheerOpen((o) => !o)}
+              aria-label="Cheer this frame"
+              title="Cheer this frame — everyone sees it pop!"
+            >
+              🎉
+            </button>
+            {cheerOpen ? (
+              <div className="fs-cheer-menu" role="menu">
+                {["⭐", "❤️", "🎉", "👏", "🌟", "🥳"].map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => {
+                      onCheer(e);
+                      setCheerOpen(false);
+                    }}
+                    aria-label={`Cheer ${e}`}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {scenes.length > 1 || canManageScenes ? (
           <div className="fs-scenes" role="group" aria-label="Scenes">
             <button
@@ -194,6 +232,13 @@ export default function FilmStrip({
               >
                 {thumbnails[frame.id] ? <img src={thumbnails[frame.id]} alt="" /> : <span className="frame-empty" />}
                 <small>{index + 1}</small>
+                {cheersByFrame[frame.id]?.length ? (
+                  <span className="fs-cheer-burst" aria-hidden="true">
+                    {cheersByFrame[frame.id].map((c) => (
+                      <span key={c.id} className="fs-confetti">{c.emoji}</span>
+                    ))}
+                  </span>
+                ) : null}
                 {celPresence[frame.id]?.length ? (
                   <span className="fs-pips" aria-hidden="true">
                     {celPresence[frame.id].slice(0, 3).map((person, i) => (

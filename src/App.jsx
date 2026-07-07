@@ -755,6 +755,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const publishCrewPresence = useCallback(() => {
     setCrewPresence(Array.from(crewPresenceRef.current.entries()).map(([userId, p]) => ({ userId, ...p })));
   }, []);
+  // Confetti cheers bursting on a cel: [{ id, frameId, emoji }], auto-removed.
+  const [cheers, setCheers] = useState([]);
+  const cheerIdRef = useRef(0);
   // "Come look at my frame!" beacon: a friendly tap-to-jump card (auto-dismiss).
   const [beacon, setBeacon] = useState(null); // { name, color, target } | null
   const beaconTimerRef = useRef(0);
@@ -5691,6 +5694,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           showBeacon(data.name || "A friend", data.color, target);
           break;
         }
+        case "cheer": {
+          // Confetti pops on a cel — echoed to the cheerer too. Auto-removed.
+          if (!data.frameId || !data.emoji) break;
+          const cid = `ch${Date.now()}_${(cheerIdRef.current += 1)}`;
+          setCheers((list) => [...list.slice(-11), { id: cid, frameId: data.frameId, emoji: data.emoji }]);
+          window.setTimeout(() => setCheers((list) => list.filter((c) => c.id !== cid)), 1600);
+          break;
+        }
         case "reaction": {
           // Ephemeral floating emoji from someone (or our own echo). Placed at the
           // world point, mapped to screen once; it floats up + fades via CSS.
@@ -5872,8 +5883,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendProductionRename: mp.sendProductionRename,
       sendFramePresence: mp.sendFramePresence,
       sendBeacon: mp.sendBeacon,
+      sendCheer: mp.sendCheer,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer]);
 
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
@@ -7180,6 +7192,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               celPresence={celPresence}
               otherSceneCrew={otherSceneCrew}
               onBeacon={() => mpRef.current?.sendBeacon?.(activeSceneIdRef.current, framesRef.current[activeFrameIndexRef.current]?.id)}
+              cheers={cheers}
+              onCheer={(emoji) => mpRef.current?.sendCheer?.(framesRef.current[activeFrameIndexRef.current]?.id, emoji)}
             />
           ) : null}
         </div>
