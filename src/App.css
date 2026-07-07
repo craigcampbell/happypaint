@@ -5524,6 +5524,255 @@ textarea:focus-visible,
   color: #fca5a5 !important;
 }
 
+.fs-storyboard {
+  min-height: 34px;
+  min-width: 38px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+  font-size: 0.95rem;
+}
+
+.fs-storyboard.is-on {
+  border-color: #f4b840;
+  box-shadow: inset 0 0 0 2px #f4b840;
+}
+
+/* ---- Production storyboard (the film's call sheet) ------------------------ */
+
+.storyboard-card {
+  width: min(880px, calc(100vw - 24px));
+  max-height: 88vh;
+  overflow-y: auto;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #c9a06b, #b9915d); /* corkboard */
+  border: 1px solid #8a6a3f;
+  box-shadow: 0 28px 60px rgba(32, 24, 12, 0.45);
+  padding: 0 0 16px;
+}
+
+.sb-clapper {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: #1b232b;
+  color: #ffffff;
+  border-radius: 18px 18px 0 0;
+}
+
+.sb-clapper-stripes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  border-radius: 18px 18px 0 0;
+  background: repeating-linear-gradient(-45deg, #f4b840 0 14px, #1b232b 14px 28px);
+}
+
+.sb-clapper h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sb-rename {
+  min-height: 30px;
+  min-width: 34px;
+  padding: 0 6px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+}
+
+.sb-title-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+}
+
+.sb-title-form input {
+  flex: 1;
+  min-width: 0;
+  background: #ffffff;
+}
+
+.sb-runtime {
+  margin-left: auto;
+  color: #f4b840;
+  font-weight: 900;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sb-close {
+  min-height: 34px;
+  min-width: 38px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+}
+
+.sb-pitch {
+  padding: 22px 20px;
+  color: #3d2f1b;
+  font-weight: 700;
+}
+
+.sb-pitch p {
+  margin: 0 0 14px;
+}
+
+.sb-create {
+  min-height: 46px;
+  font-size: 1rem;
+}
+
+.sb-hint {
+  color: #6b573a;
+}
+
+/* Corkboard of parts: each panel is a taped-up card with a LIVE preview. */
+.sb-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 18px;
+  padding: 22px 20px 8px;
+}
+
+.sb-panel {
+  position: relative;
+  border-radius: 8px;
+  background: #fdf9ef;
+  border: 1px solid #d8c9a8;
+  box-shadow: 0 8px 18px rgba(61, 47, 27, 0.28);
+  transform: rotate(-0.6deg);
+  padding: 8px 8px 10px;
+}
+
+.sb-panel:nth-child(even) {
+  transform: rotate(0.7deg);
+}
+
+.sb-panel.is-here {
+  outline: 3px solid #f4b840;
+  outline-offset: 2px;
+}
+
+.sb-tape {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 84px;
+  height: 20px;
+  transform: translateX(-50%) rotate(-2deg);
+  background: rgba(244, 227, 178, 0.85);
+  border-left: 1px dashed rgba(138, 106, 63, 0.4);
+  border-right: 1px dashed rgba(138, 106, 63, 0.4);
+  box-shadow: 0 1px 3px rgba(61, 47, 27, 0.2);
+}
+
+.sb-panel-preview {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 132px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid #e2d7bd;
+  background: #ffffff;
+}
+
+.sb-panel-preview .live-room-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sb-here {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f4b840;
+  color: #1b232b;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.sb-panel-meta {
+  display: grid;
+  gap: 2px;
+  padding: 8px 4px 0;
+  color: #3d2f1b;
+}
+
+.sb-panel-meta strong {
+  font-size: 0.9rem;
+}
+
+.sb-panel-meta span {
+  font-size: 0.75rem;
+  color: #6b573a;
+  font-weight: 800;
+}
+
+.sb-add {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  min-height: 180px;
+  border: 2px dashed #8a6a3f;
+  background: rgba(253, 249, 239, 0.5);
+  color: #6b573a;
+  font-weight: 900;
+  text-align: center;
+}
+
+.sb-add-plus {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.sb-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 16px 20px 0;
+}
+
+.sb-footer .primary-action {
+  min-height: 46px;
+}
+
+.sb-footnote {
+  color: #6b573a;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .sb-board {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 14px;
+    padding: 18px 12px 4px;
+  }
+  .sb-panel-preview {
+    height: 100px;
+  }
+}
+
 /* The reel: horizontal scroll of cels between two sprocket-hole bands. */
 .fs-reel {
   position: relative;

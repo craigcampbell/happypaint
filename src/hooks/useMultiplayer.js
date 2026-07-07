@@ -213,6 +213,10 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendSceneFetch = useCallback((sceneId) => send({ type: "scene_fetch", sceneId }), [send]);
   const sendSceneAdd = useCallback(() => send({ type: "scene_add" }), [send]);
   const sendSceneDel = useCallback((sceneId) => send({ type: "scene_del", sceneId }), [send]);
+  // Productions: tie segment rooms into one film (host-only, server-enforced).
+  const sendProductionCreate = useCallback((title) => send({ type: "production_create", title: title || null }), [send]);
+  const sendProductionAddSegment = useCallback(() => send({ type: "production_add_segment" }), [send]);
+  const sendProductionRename = useCallback((title) => send({ type: "production_rename", title }), [send]);
   // Ephemeral emoji reaction dropped at a world point (never persisted).
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
@@ -233,6 +237,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendSetWet, sendVoteStart, sendVote, sendReaction,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
+    sendProductionCreate, sendProductionAddSegment, sendProductionRename,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

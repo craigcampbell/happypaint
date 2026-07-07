@@ -41,6 +41,7 @@ import {
 } from "./utils/frames";
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
+import { replayFrameOnto } from "./utils/opReplay";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
@@ -87,6 +88,7 @@ import PaintSpacePanel from "./components/PaintSpacePanel";
 import ReplayPlayer from "./components/ReplayPlayer";
 import AiAssistPanel from "./components/AiAssistPanel";
 import BrushStudio from "./components/BrushStudio";
+import Storyboard from "./components/Storyboard";
 import PublishPackModal from "./components/PublishPackModal";
 import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
@@ -689,6 +691,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // localStorage so it survives the reload that happens when hopping rooms.
   const [notifications, setNotifications] = useState(() => getNotifications());
   const [isRoomHost, setIsRoomHost] = useState(false);
+  const isRoomHostRef = useRef(false); // mirror for reads inside the mp message handler
   const [isRoomOwner, setIsRoomOwner] = useState(false);
   const [roomLocked, setRoomLocked] = useState(false);
   const [roomTitle, setRoomTitle] = useState(null);
@@ -739,6 +742,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // Our own session id (from the connected handshake) — used to recognise our
   // echoed frame mutations without depending on the mp hook object.
   const myUserIdRef = useRef(null);
+  // Production (multi-room film) this room belongs to, + the storyboard modal.
+  const [production, setProduction] = useState(null);
+  const productionRef = useRef(null);
+  const [showStoryboard, setShowStoryboard] = useState(false);
   // Open theme vote: { options, endsAt, counts, myChoice } (null when closed).
   const [roomVote, setRoomVote] = useState(null);
   const [voteSecondsLeft, setVoteSecondsLeft] = useState(0);
@@ -4174,6 +4181,87 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
 
+  // Export the WHOLE production — every part, in order, as one movie. Fully
+  // offline: each segment's ops come from /api/rooms/:code/film and replay
+  // through the shared op interpreter into ONE reusable world canvas, so a
+  // 2-minute film renders memory-flat and never touches the artist's view
+  // (you can keep painting while it renders — edits after the fetch just
+  // aren't in this cut).
+  const exportProduction = useCallback(async () => {
+    const activeProduction = productionRef.current;
+    if (!activeProduction || isExportingVideo) {
+      return;
+    }
+    if (typeof window.VideoEncoder !== "function") {
+      setStatus("Full-film export needs a newer browser (Chrome, Edge, or Safari 16.4+)");
+      return;
+    }
+    setIsExportingVideo(true);
+    setStatus("🎬 Gathering the parts…");
+    try {
+      const width = 1600;
+      const height = 1000;
+      // 1) Fetch every segment's frame plan + complete visible op log.
+      const plan = [];
+      for (const segment of activeProduction.segments) {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(segment.code)}/film`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("segment fetch failed");
+        }
+        const film = await response.json();
+        // Warm the module-level stamp cache from this segment's pixel-bearing
+        // ops BEFORE any frame renders. Export replays frames in index order,
+        // not draw order, so a "reuse" op (stampDataUrl compressed out) can
+        // otherwise render before the tip-pixel op and drop the stroke.
+        await Promise.all(
+          (film.ops || [])
+            .filter((op) => op.settings?.dab?.stampDataUrl)
+            .map((op) => preloadBrushStamp(op.settings.dab)),
+        );
+        const firstFrameId = film.scenes?.[0]?.frames?.[0]?.id;
+        const opsByFrame = new Map();
+        for (const op of film.ops || []) {
+          const frameId = op.frameId || firstFrameId;
+          const list = opsByFrame.get(frameId) || [];
+          list.push(op);
+          opsByFrame.set(frameId, list);
+        }
+        for (const scene of film.scenes || []) {
+          for (const meta of scene.frames || []) {
+            plan.push({ ops: opsByFrame.get(meta.id) || [], durationMs: meta.durationMs });
+          }
+        }
+      }
+      if (plan.length === 0) {
+        setStatus("Nothing to render yet — draw some frames first!");
+        return;
+      }
+      // 2) Offline-replay each frame into a reusable world canvas and encode.
+      const world = document.createElement("canvas");
+      world.width = CANVAS_WIDTH;
+      world.height = CANVAS_HEIGHT;
+      const { blob, ext } = await encodeAnimationVideo({
+        width,
+        height,
+        count: plan.length,
+        durationMsAt: (i) => plan[i]?.durationMs || DEFAULT_FRAME_DURATION,
+        draw: async (context, i) => {
+          await replayFrameOnto(world, plan[i]?.ops || []);
+          await renderPaper(context, { width, height, textureId: selectedTexture });
+          context.drawImage(world, 0, 0, width, height);
+        },
+        onProgress: (pct) => setStatus(`🎬 Rendering "${activeProduction.title}"… ${Math.round(pct * 100)}%`),
+      });
+      const slug = (activeProduction.title || "film").replace(/[^\w-]+/g, "-").toLowerCase();
+      downloadBlob(blob, `${slug}-${Date.now()}.${ext}`);
+      setStatus(`🎬 "${activeProduction.title}" exported (.${ext}) — premiere time! 🍿`);
+    } catch {
+      setStatus("Film export hit a snag — try again in a moment");
+    } finally {
+      setIsExportingVideo(false);
+    }
+  }, [isExportingVideo, renderPaper, selectedTexture]);
+
   // ---- Replay & Timelapse ----
 
   // Open the replay player: snapshot the latest frame now (so the player shows
@@ -5132,7 +5220,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // whose host enabled it.) Frames arrive in the history frame next.
           roomAnimationRef.current = !!data.animation;
           setRoomAnimation(!!data.animation);
+          productionRef.current = data.production || null;
+          setProduction(data.production || null);
           // Learn our ownership/host standing for this room from the server.
+          isRoomHostRef.current = !!data.isHost;
           setIsRoomHost(!!data.isHost);
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
@@ -5183,6 +5274,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setRoomTitle(data.title || null);
           break;
         case "role_changed":
+          isRoomHostRef.current = !!data.isHost;
           setIsRoomHost(!!data.isHost);
           if (data.isHost) setStatus("⭐ You're a co-host now");
           break;
@@ -5305,6 +5397,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               activeSceneIdRef.current = null; // force the switch
               switchScene(fallback.id);
             }
+          }
+          break;
+        }
+        case "production_state": {
+          const previous = productionRef.current;
+          productionRef.current = data.production || null;
+          setProduction(data.production || null);
+          // A new part opening is a MOMENT — announce it to the whole crew.
+          if (data.production && previous && data.production.segments.length > previous.segments.length) {
+            const newest = data.production.segments[data.production.segments.length - 1];
+            showToast(`🎬 ${newest.title} is open — places, everyone!`);
+          } else if (data.production && !previous) {
+            showToast(`🎬 "${data.production.title}" is now in production!`);
+            // Only the host who started it gets the storyboard flung open —
+            // everyone else keeps painting and can open it from the strip.
+            if (isRoomHostRef.current) setShowStoryboard(true);
           }
           break;
         }
@@ -5690,8 +5798,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendSceneFetch: mp.sendSceneFetch,
       sendSceneAdd: mp.sendSceneAdd,
       sendSceneDel: mp.sendSceneDel,
+      sendProductionCreate: mp.sendProductionCreate,
+      sendProductionAddSegment: mp.sendProductionAddSegment,
+      sendProductionRename: mp.sendProductionRename,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename]);
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -6913,9 +7024,28 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onExportGif={exportGif}
               onExportVideo={exportVideo}
               onSaveLoop={saveLoopToSpace}
+              onOpenStoryboard={roomAudience !== "kid_safe" ? () => setShowStoryboard(true) : null}
+              inProduction={!!production}
             />
           ) : null}
         </div>
+
+        {showStoryboard ? (
+          <Storyboard
+            production={production}
+            roomId={roomId}
+            isRoomHost={isRoomHost}
+            isExportingVideo={isExportingVideo}
+            onClose={() => setShowStoryboard(false)}
+            onCreate={() => mpRef.current?.sendProductionCreate?.()}
+            onAddPart={() => mpRef.current?.sendProductionAddSegment?.()}
+            onRename={(title) => mpRef.current?.sendProductionRename?.(title)}
+            onJoinPart={(code) => {
+              window.location.href = `/join/${code}`;
+            }}
+            onExportFilm={exportProduction}
+          />
+        ) : null}
 
         {showClearConfirm ? (
           <div className="confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="clear-confirm-title">

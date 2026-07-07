@@ -190,6 +190,49 @@ const run = async () => {
   const bBack = await darkPixels(pageB);
   check("B pages back — scene 1 still blank (isolation)", bBack < 20, `darkPixels=${bBack}`);
 
+  // 9.5) PRODUCTIONS — host links segment rooms into one film via the
+  // storyboard, B works in Part 2, host exports the whole film offline.
+  await pageA.goto(`${BASE}/join/ZZSCENES`, { waitUntil: "domcontentloaded" });
+  await sleep(2500);
+  await pageA.locator(".fs-storyboard").click();
+  await sleep(500);
+  await pageA.getByRole("button", { name: /start a production/i }).click();
+  await sleep(1200);
+  check("production created — storyboard shows Part 1", (await pageA.locator(".sb-panel:not(.sb-add)").count()) === 1);
+  check("host is marked on their part", await pageA.locator(".sb-panel.is-here").isVisible().catch(() => false));
+  await pageA.locator(".sb-add").click();
+  await sleep(1200);
+  check("Add Part -> 2 panels on the board", (await pageA.locator(".sb-panel:not(.sb-add)").count()) === 2);
+  check("panels carry live preview canvases", (await pageA.locator(".sb-panel .live-room-canvas").count()) === 2);
+  const part2Code = await pageA.locator(".sb-panel").nth(1).getAttribute("data-code");
+  check("part 2 got a room code", !!part2Code, `code=${part2Code}`);
+  // B joins Part 2 (sees the same production) and draws there.
+  await pageB.goto(`${BASE}/join/${part2Code}`, { waitUntil: "domcontentloaded" });
+  await sleep(2800);
+  check("B in Part 2: film strip is on (segment room)", await pageB.locator(".film-strip").isVisible().catch(() => false));
+  await pageB.locator(".fs-storyboard").click();
+  await sleep(600);
+  check("B in Part 2: storyboard shows both parts", (await pageB.locator(".sb-panel:not(.sb-add)").count()) === 2);
+  await pageB.locator(".sb-close").click();
+  await sleep(300);
+  await drawStroke(pageB, 0.5, 0.5);
+  // Host exports the whole film — both segments render offline into one video.
+  const filmDownload = pageA.waitForEvent("download", { timeout: 90000 }).catch(() => null);
+  await pageA.getByRole("button", { name: /export the whole film/i }).click();
+  const filmFile = await filmDownload;
+  let filmOk = false;
+  let filmDetail = "no download";
+  if (filmFile) {
+    const savedTo = path.join(SCRATCH, filmFile.suggestedFilename());
+    await filmFile.saveAs(savedTo);
+    const { statSync } = await import("fs");
+    const size = statSync(savedTo).size;
+    filmOk = size > 2000;
+    filmDetail = `${filmFile.suggestedFilename()} (${size} bytes)`;
+  }
+  check("whole-film export produces a real video", filmOk, filmDetail);
+  await pageA.locator(".sb-close").click().catch(() => {});
+
   // 10) FINGERS — toddler room: no chat anywhere, chunky wet brushes only,
   // smudge present and NOT gated.
   await pageA.goto(`${BASE}/join/FINGERS`, { waitUntil: "domcontentloaded" });

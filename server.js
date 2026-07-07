@@ -830,9 +830,10 @@ function loadRoom(roomId) {
       frames: Array.isArray(data.frames) ? data.frames : null,
       scenes: Array.isArray(data.scenes) ? data.scenes : null,
       animation: !!data.animation,
+      productionId: typeof data.productionId === 'string' ? data.productionId.slice(0, 32) : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, productionId: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -872,6 +873,7 @@ async function saveRoomNow(roomId) {
       frames: room.frames,
       scenes: room.scenes,
       animation: !!room.animationEnabled,
+      productionId: room.productionId || null,
       savedAt: Date.now(),
     });
     // Temp-file + rename so a crash mid-write never leaves a truncated room file.
@@ -1001,6 +1003,85 @@ function scenesMeta(room) {
   }));
 }
 
+// ---- Productions: several segment rooms tied into one film -----------------
+// A production is a tiny manifest — { id, title, segments: [roomCode…] } —
+// stored under DATA_DIR/.productions. Segment rooms are ordinary private
+// animation rooms (all moderation/host machinery untouched); the storyboard
+// UI pages between them and the film export walks them client-side. Access
+// model matches invites: knowing a segment's room code is being in the crew.
+const PRODUCTIONS_DIR = join(DATA_DIR, '.productions');
+const MAX_PRODUCTION_SEGMENTS = Number(process.env.MAX_PRODUCTION_SEGMENTS || 6);
+const productions = new Map(); // id -> manifest (lazily loaded)
+
+function productionFile(id) {
+  return join(PRODUCTIONS_DIR, `${String(id).replace(/[^a-z0-9]/gi, '').slice(0, 32)}.json`);
+}
+
+function getProduction(id) {
+  if (!id) return null;
+  if (!productions.has(id)) {
+    try {
+      const data = JSON.parse(readFileSync(productionFile(id), 'utf8'));
+      if (data && Array.isArray(data.segments)) {
+        productions.set(id, {
+          id: String(data.id || id).slice(0, 32),
+          title: typeof data.title === 'string' ? data.title.slice(0, 48) : 'Our Movie',
+          segments: data.segments.map((c) => String(c).slice(0, 16)),
+          createdAt: Number(data.createdAt) || Date.now(),
+        });
+      }
+    } catch {
+      return null;
+    }
+  }
+  return productions.get(id) || null;
+}
+
+function saveProduction(production) {
+  try {
+    mkdirSync(PRODUCTIONS_DIR, { recursive: true });
+    writeFileSync(productionFile(production.id), JSON.stringify(production));
+  } catch {
+    // best-effort — the in-memory manifest keeps the session working
+  }
+}
+
+// The storyboard payload: per-segment title, live crew count, frame count and
+// runtime, so the board reads like a call sheet ("Part 2 · 3 painting · 12s").
+function productionSummary(production) {
+  return {
+    id: production.id,
+    title: production.title,
+    maxSegments: MAX_PRODUCTION_SEGMENTS,
+    segments: production.segments.map((code, index) => {
+      // LIVE rooms only — never getRoom() here, or every idle sibling segment
+      // gets parsed off disk and pinned in the `rooms` map (the productionId
+      // auto-close exemption then never evicts it). Dead segments report
+      // disk-free defaults; their real title/frames restore when someone joins.
+      const room = rooms.get(code);
+      return {
+        code,
+        index,
+        title: (room && room.title) || `Part ${index + 1}`,
+        users: room ? room.users.size : 0,
+        frames: room ? room.frames.length : 0,
+        scenes: room ? room.scenes.length : 0,
+        runtimeMs: room ? room.frames.reduce((sum, f) => sum + (f.durationMs || 120), 0) : 0,
+      };
+    }),
+  };
+}
+
+// Fan a production update out to every LIVE member room of the film.
+function broadcastProduction(production) {
+  const message = { type: 'production_state', production: productionSummary(production) };
+  for (const code of production.segments) {
+    if (rooms.has(code)) {
+      broadcast(code, message);
+    }
+  }
+}
+
 // One scene's shareable state: its frame list + the visible ops that live on
 // those frames. This is what joins, scene switches, and resyncs deliver —
 // never the whole movie, so client memory stays at one scene's worth.
@@ -1101,6 +1182,8 @@ function getRoom(roomId) {
       // Finger-paint mode: smudge allowed despite kid_safe, chat disabled,
       // wet canvas on. Only the featured FINGERS room carries it.
       fingerPaint: FINGER_PAINT_CODES.has(roomId),
+      // Which multi-room production (film) this room is a segment of, if any.
+      productionId: saved.productionId || null,
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
       lastActivity: Date.now(),
     });
@@ -1183,6 +1266,11 @@ function autoCloseSweep() {
   const now = Date.now();
   rooms.forEach((room, id) => {
     if (FEATURED_CODES.has(id) || room.users.size > 0) return;
+    // Production segments are chapters of someone's FILM — an idle Part 3
+    // getting reaped would put a hole in the movie. They outlive the sweep,
+    // but only while the film still exists: an orphaned segment (manifest lost)
+    // ages out normally instead of leaking forever.
+    if (room.productionId && getProduction(room.productionId)) return;
     if (now - (room.lastActivity || now) > allowedIdleMs(room)) {
       closeRoom(id, 'inactive');
     }
@@ -1194,6 +1282,7 @@ function autoCloseSweep() {
     if (FEATURED_CODES.has(id) || rooms.has(id)) continue;
     try {
       const data = JSON.parse(readFileSync(join(ROOM_DIR, f), 'utf8'));
+      if (data.productionId && getProduction(data.productionId)) continue; // only live films are exempt
       const pseudo = { history: data.history || [], userSeconds: Number(data.userSeconds) || 0 };
       if (now - (data.savedAt || 0) > allowedIdleMs(pseudo)) {
         unlinkSync(join(ROOM_DIR, f));
@@ -1679,6 +1768,10 @@ wss.on('connection', async (ws, req) => {
     animation: !!room.animationEnabled,
     // Finger-paint room: smudge-friendly, always wet, chat-free (pre-readers).
     fingerPaint: !!room.fingerPaint,
+    // If this room is a segment of a film, the whole storyboard rides along.
+    production: room.productionId && getProduction(room.productionId)
+      ? productionSummary(getProduction(room.productionId))
+      : null,
     // Any vote already running rides the handshake so late joiners can vote.
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
   }));
@@ -2177,6 +2270,67 @@ wss.on('connection', async (ws, req) => {
         target.durationMs = Math.max(40, Math.min(2000, Number(data.durationMs) || 120));
         broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, sceneId: target.sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
+        break;
+      }
+
+      // ---- Productions: tie segment rooms into one film ---------------------
+      // Host-only, private animation rooms only (like scenes). Everyone in any
+      // member room gets production_state updates so all storyboards stay live.
+      case 'production_create': {
+        if (!room.animationEnabled || room.audience === 'kid_safe') break;
+        if (!isHost(room, user)) break;
+        if (room.productionId && getProduction(room.productionId)) break; // already part of a film
+        const production = {
+          id: randomBytes(8).toString('hex'),
+          title: typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, 48) : 'Our Movie',
+          segments: [roomId],
+          createdAt: Date.now(),
+        };
+        productions.set(production.id, production);
+        saveProduction(production);
+        room.productionId = production.id;
+        if (!room.title) room.title = 'Part 1';
+        persistRoom(roomId);
+        broadcastProduction(production);
+        break;
+      }
+      case 'production_add_segment': {
+        if (!room.productionId) break;
+        if (!isHost(room, user)) break;
+        const production = getProduction(room.productionId);
+        if (!production) break;
+        if (production.segments.length >= MAX_PRODUCTION_SEGMENTS) {
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_PRODUCTION_SEGMENTS} parts — that's a feature-length kid flick!` }));
+          break;
+        }
+        if (!rateOk(`prod:${user.profileId || id}`)) break; // reuse the room-creation limiter
+        const code = genRoomCode();
+        const segmentRoom = getRoom(code);
+        segmentRoom.audience = 'friends';
+        segmentRoom.listed = false;
+        segmentRoom.animationEnabled = true;
+        segmentRoom.title = `Part ${production.segments.length + 1}`;
+        segmentRoom.productionId = production.id;
+        // The creating host directs the new part too (session-scoped until
+        // someone joins it; ownership rules unchanged).
+        if (user.profileId) segmentRoom.ownerProfileId = user.profileId;
+        persistRoom(code);
+        production.segments.push(code);
+        saveProduction(production);
+        broadcastProduction(production);
+        break;
+      }
+      case 'production_rename': {
+        if (!room.productionId) break;
+        if (!isHost(room, user)) break;
+        const production = getProduction(room.productionId);
+        if (!production) break;
+        const title = typeof data.title === 'string' ? data.title.trim().slice(0, 48) : '';
+        if (!title) break;
+        if (scan(title).severity === 'severe') break; // film titles are shared surfaces
+        production.title = title;
+        saveProduction(production);
+        broadcastProduction(production);
         break;
       }
 
@@ -2868,6 +3022,29 @@ app.post('/api/rooms', async (req, res) => {
   if (identity) room.ownerProfileId = identity.profileId;
   persistRoom(code);
   res.json({ code, audience: room.audience, listed: room.listed, title: room.title });
+});
+
+// One segment's complete film data for the client-side production exporter:
+// scene metadata + every visible op, replayed offline through the shared op
+// interpreter. Animation rooms only. Access model matches invites: knowing
+// the room code = being in the crew. Never materializes rooms for probes.
+app.get('/api/rooms/:code/film', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  // Serializing a whole segment's history is a heavy, event-loop-blocking
+  // sync stringify (up to MAX_ANIM_ROOM_OPS ops). FLIPBOOK's code is public, so
+  // gate per-IP or an anon client could loop this and jank every live canvas.
+  if (!rateOk(`film:${req.ip || 'anon'}`)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
+  const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9_-]/gi, '').slice(0, 16);
+  if (!code || (!rooms.has(code) && !existsSync(roomFile(code)))) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const room = getRoom(code);
+  if (!room.animationEnabled) {
+    return res.status(404).json({ error: 'not_a_film' });
+  }
+  res.json({ code, title: room.title || null, scenes: scenesMeta(room), ops: visibleHistory(room) });
 });
 
 // The discovery lobby source: live, listed, kid_safe rooms only. Sanitized —

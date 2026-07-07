@@ -39,6 +39,8 @@ export default function FilmStrip({
   onExportGif,
   onExportVideo,
   onSaveLoop,
+  onOpenStoryboard = null,
+  inProduction = false,
 }) {
   const railRef = useRef(null);
   // Visual-only scrub position; the canvas preview is painted by StudioApp
@@ -206,6 +208,17 @@ export default function FilmStrip({
       </div>
 
       <div className="fs-detail">
+        {onOpenStoryboard ? (
+          <button
+            type="button"
+            className={`fs-storyboard${inProduction ? " is-on" : ""}`}
+            onClick={onOpenStoryboard}
+            title={inProduction ? "Open the storyboard — your film's parts" : "Storyboard — link rooms into one film"}
+            aria-label="Storyboard"
+          >
+            📋
+          </button>
+        ) : null}
         {activeFrame ? (
           <label className="fs-duration" title="How long this frame shows">
             <input
