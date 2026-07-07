@@ -13,11 +13,55 @@ import {
   normalizeRecipe,
   renderRecipePreview,
 } from "../utils/brushStudio";
+import { extractAbrBrushTips } from "../utils/abrImport";
 
 const PREVIEW_W = 220;
 const PREVIEW_H = 90;
 const CARD_W = 96;
 const CARD_H = 48;
+const TIP_IMPORT_SIZES = [192, 160, 128, 96];
+const TIP_IMPORT_MAX_CHARS = 96_000;
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function fileToTipDataUrl(file) {
+  const src = await readFileAsDataUrl(file);
+  const image = await loadImage(src);
+  for (const size of TIP_IMPORT_SIZES) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, size, size);
+    const scale = Math.min(size / image.width, size / image.height);
+    const w = Math.max(1, Math.round(image.width * scale));
+    const h = Math.max(1, Math.round(image.height * scale));
+    const x = Math.round((size - w) / 2);
+    const y = Math.round((size - h) / 2);
+    context.drawImage(image, x, y, w, h);
+    const dataUrl = canvas.toDataURL("image/png");
+    if (dataUrl.length <= TIP_IMPORT_MAX_CHARS || size === TIP_IMPORT_SIZES[TIP_IMPORT_SIZES.length - 1]) {
+      return dataUrl;
+    }
+  }
+  return "";
+}
 
 // A small live-preview canvas that re-renders whenever the recipe/color change.
 function RecipePreview({ recipe, color, width = PREVIEW_W, height = PREVIEW_H, className = "brush-preview" }) {
@@ -27,7 +71,7 @@ function RecipePreview({ recipe, color, width = PREVIEW_W, height = PREVIEW_H, c
     if (!canvas) {
       return;
     }
-    renderRecipePreview(canvas.getContext("2d"), recipe, { color, width, height });
+    renderRecipePreview(canvas.getContext("2d"), recipe, { color, width, height }).catch(() => {});
   }, [recipe, color, width, height]);
   return <canvas ref={canvasRef} width={width} height={height} className={className} aria-hidden="true" />;
 }
@@ -53,13 +97,56 @@ export default function BrushStudio({
   initialRecipe,
   onClose,
   onSaveRecipe,
+  onSaveImportedBrushes,
   onApplyRecipe,
 }) {
   const [recipe, setRecipe] = useState(() => normalizeRecipe(initialRecipe || DEFAULT_RECIPE));
   const [name, setName] = useState("My Brush");
   const [tagsText, setTagsText] = useState("");
+  const [importStatus, setImportStatus] = useState("");
 
   const update = (patch) => setRecipe((current) => normalizeRecipe({ ...current, ...patch }));
+  const handleTipImport = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (/\.abr$/i.test(file.name)) {
+      setImportStatus("Reading ABR...");
+      try {
+        const tips = await extractAbrBrushTips(await file.arrayBuffer(), { maxTips: 24 });
+        if (tips.length === 0) {
+          setImportStatus("No usable brush tips found in that ABR.");
+          return;
+        }
+        const first = tips[0];
+        update({ baseBrush: "stamp", tipDataUrl: first.tipDataUrl, tipId: "" });
+        setName(first.title || file.name.replace(/\.abr$/i, ""));
+        const saved = await onSaveImportedBrushes?.(tips, { fileName: file.name });
+        setImportStatus(saved ? `Imported ${saved} ABR brush tip${saved === 1 ? "" : "s"}.` : `Loaded ${tips.length} ABR tip${tips.length === 1 ? "" : "s"}.`);
+      } catch {
+        setImportStatus("Couldn't read that ABR file.");
+      }
+      return;
+    }
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
+      setImportStatus("Use a PNG, JPEG, WebP, or ABR file.");
+      return;
+    }
+    setImportStatus("Importing tip...");
+    try {
+      const tipDataUrl = await fileToTipDataUrl(file);
+      if (!tipDataUrl || tipDataUrl.length > TIP_IMPORT_MAX_CHARS) {
+        setImportStatus("That tip is too detailed. Try a simpler image.");
+        return;
+      }
+      update({ baseBrush: "stamp", tipDataUrl, tipId: "" });
+      setImportStatus("Tip imported.");
+    } catch {
+      setImportStatus("Couldn't import that image.");
+    }
+  };
 
   const tags = useMemo(
     () =>
@@ -103,6 +190,22 @@ export default function BrushStudio({
               ))}
             </select>
           </label>
+
+          <label className="color-picker brush-tip-import">
+            <span>Brush tip</span>
+            <input type="file" accept="image/png,image/jpeg,image/webp,.abr" onChange={handleTipImport} />
+          </label>
+
+          {recipe.tipDataUrl ? (
+            <div className="brush-tip-preview">
+              <img src={recipe.tipDataUrl} alt="" />
+              <button type="button" onClick={() => update({ baseBrush: "marker", tipDataUrl: "", tipId: "" })}>
+                Remove tip
+              </button>
+            </div>
+          ) : null}
+
+          {importStatus ? <p className="brush-import-status">{importStatus}</p> : null}
 
           <label>
             <span>Size</span>

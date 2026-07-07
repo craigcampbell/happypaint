@@ -14,7 +14,7 @@
 // only create + save-to-locker + apply, but we store a sync-ready shape incl.
 // `visibility` and `moderation_status` so publish can build on it.
 
-import { drawBrushSegment } from "./brushes";
+import { drawBrushSegment, makeStrokeRenderer, preloadBrushStamp } from "./brushes";
 
 // Base brushes a recipe can build on (must be ids in brushes.js brushCatalog).
 export const RECIPE_BASE_BRUSHES = [
@@ -23,6 +23,7 @@ export const RECIPE_BASE_BRUSHES = [
   { id: "paint", name: "Paint" },
   { id: "spray", name: "Spray" },
   { id: "glow", name: "Glow" },
+  { id: "stamp", name: "Imported tip" },
 ];
 
 export const DEFAULT_RECIPE = {
@@ -32,7 +33,25 @@ export const DEFAULT_RECIPE = {
   variation: 0.1,
   glow: false, // adds a soft halo around the stroke
   textured: false, // adds subtle size jitter for a hand-made feel
+  tipDataUrl: "",
+  tipId: "",
 };
+
+const TIP_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp);base64,/i;
+const MAX_TIP_DATA_URL = 96_000;
+
+function validTipDataUrl(value) {
+  return typeof value === "string" && value.length <= MAX_TIP_DATA_URL && TIP_DATA_URL_RE.test(value);
+}
+
+function hashText(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `tip_${(h >>> 0).toString(36)}`;
+}
 
 // Normalize/clamp an arbitrary partial recipe into a complete, valid recipe.
 export function normalizeRecipe(recipe = {}) {
@@ -46,6 +65,8 @@ export function normalizeRecipe(recipe = {}) {
     variation: Math.min(1, Math.max(0, recipe.variation ?? DEFAULT_RECIPE.variation)),
     glow: Boolean(recipe.glow),
     textured: Boolean(recipe.textured),
+    tipDataUrl: validTipDataUrl(recipe.tipDataUrl) ? recipe.tipDataUrl : "",
+    tipId: typeof recipe.tipId === "string" && recipe.tipId.length <= 48 ? recipe.tipId : "",
   };
 }
 
@@ -55,7 +76,31 @@ export function normalizeRecipe(recipe = {}) {
 // glow recipe selects the glow brush; otherwise the recipe's base brush is used.
 export function recipeToBrushSettings(recipe, { color }) {
   const normalized = normalizeRecipe(recipe);
-  const brush = normalized.glow ? "glow" : normalized.baseBrush;
+  if (normalized.baseBrush === "stamp" && normalized.tipDataUrl) {
+    const variation = normalized.textured
+      ? Math.min(1, normalized.variation + 0.08)
+      : normalized.variation;
+    return {
+      brush: "custom",
+      color: color || "#111827",
+      size: normalized.size,
+      opacity: normalized.opacity,
+      variation,
+      v: 3,
+      dab: {
+        shape: "stamp",
+        stampDataUrl: normalized.tipDataUrl,
+        stampId: normalized.tipId || hashText(normalized.tipDataUrl),
+        spacing: 0.08 + variation * 0.16,
+        minSize: 0.18,
+        flow: 0.92,
+        scatter: variation * 0.12,
+        rotJitter: variation * Math.PI,
+        roundness: 1,
+      },
+    };
+  }
+  const brush = normalized.glow ? "glow" : normalized.baseBrush === "stamp" ? "marker" : normalized.baseBrush;
   // `textured` nudges variation up a touch for a hand-made look.
   const variation = normalized.textured
     ? Math.min(1, normalized.variation + 0.12)
@@ -86,14 +131,25 @@ function previewPath(width, height) {
 
 // Render a live preview stroke of a recipe onto a 2D context (clears first).
 // Reuses drawBrushSegment so the preview matches the real brush exactly.
-export function renderRecipePreview(context, recipe, { color = "#7c3aed", width, height } = {}) {
+export async function renderRecipePreview(context, recipe, { color = "#7c3aed", width, height } = {}) {
   const w = width || context.canvas.width;
   const h = height || context.canvas.height;
   context.clearRect(0, 0, w, h);
   const settings = recipeToBrushSettings(recipe, { color });
   const path = previewPath(w, h);
-  for (let i = 1; i < path.length; i += 1) {
-    drawBrushSegment(context, path[i - 1], path[i], settings);
+  if (settings.v >= 3 && settings.dab) {
+    const ready = await preloadBrushStamp(settings.dab);
+    if (!ready) {
+      return;
+    }
+    const renderer = makeStrokeRenderer(settings, () => null);
+    for (const point of path) {
+      renderer.addPoints(context, [point]);
+    }
+  } else {
+    for (let i = 1; i < path.length; i += 1) {
+      drawBrushSegment(context, path[i - 1], path[i], settings);
+    }
   }
   // Reset any lingering shadow from a glow stroke so the next paint is clean.
   context.shadowBlur = 0;

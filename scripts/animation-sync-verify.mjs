@@ -162,6 +162,45 @@ const run = async () => {
   }
   check("video export produces a real file", videoOk, videoDetail);
 
+  // 9) SCENES — host-only, in a private room (first joiner = guest-host).
+  await pageA.goto(`${BASE}/join/ZZSCENES`, { waitUntil: "domcontentloaded" });
+  await sleep(2500);
+  await pageA.locator(".mp-anim-toggle").click(); // host unlocks the film strip
+  await sleep(900);
+  check("host 🎬 toggle enables the strip in a private room", await pageA.locator(".film-strip").isVisible().catch(() => false));
+  check("host sees the scene pager (+🎬)", await pageA.locator(".fs-scene-add").isVisible().catch(() => false));
+  await pageA.locator(".fs-scene-add").click();
+  await sleep(1200);
+  const sceneLabel = await pageA.locator(".fs-scene-label").innerText().catch(() => "?");
+  check("host adds scene 2 and lands in it", sceneLabel.includes("2/2"), `label=${sceneLabel}`);
+  check("new scene starts with 1 blank frame", (await pageA.locator(".fs-cel").count()) === 1);
+  await drawStroke(pageA, 0.45, 0.45); // art on scene 2's frame
+  // B joins: lands in scene 1, pages to scene 2, sees A's art; scene 1 stays blank.
+  await pageB.goto(`${BASE}/join/ZZSCENES`, { waitUntil: "domcontentloaded" });
+  await sleep(2800);
+  const bLabel = await pageB.locator(".fs-scene-label").innerText().catch(() => "?");
+  check("B joins into scene 1 of 2", bLabel.includes("1/2"), `label=${bLabel}`);
+  const bScene1 = await darkPixels(pageB);
+  await pageB.locator(".fs-scenes button", { hasText: "⏭" }).click();
+  await sleep(1500);
+  const bScene2 = await darkPixels(pageB);
+  check("B pages to scene 2 and sees A's art", bScene2 > 50 && bScene1 < 20, `s1=${bScene1} s2=${bScene2}`);
+  await pageB.locator(".fs-scenes button", { hasText: "⏮" }).click();
+  await sleep(1500);
+  const bBack = await darkPixels(pageB);
+  check("B pages back — scene 1 still blank (isolation)", bBack < 20, `darkPixels=${bBack}`);
+
+  // 10) FINGERS — toddler room: no chat anywhere, chunky wet brushes only,
+  // smudge present and NOT gated.
+  await pageA.goto(`${BASE}/join/FINGERS`, { waitUntil: "domcontentloaded" });
+  await sleep(2500);
+  check("FINGERS: no chat window or toggle", !(await pageA.locator(".mp-chat, .mp-chat-toggle").first().isVisible().catch(() => false)));
+  const chipCount = await pageA.locator(".brush-chip").count();
+  const gatedCount = await pageA.locator(".brush-chip.is-private-gated").count();
+  check("FINGERS: only the finger-paint brushes show", chipCount === 4, `chips=${chipCount}`);
+  check("FINGERS: smudge is NOT gated there", gatedCount === 0, `gated=${gatedCount}`);
+  check("FINGERS: no film strip (it's a paint room)", !(await pageA.locator(".film-strip").isVisible().catch(() => false)));
+
   const fatal = errors.filter((e) => !/favicon|manifest/i.test(e));
   check("zero page errors across both clients", fatal.length === 0, fatal.slice(0, 2).join(" | "));
 

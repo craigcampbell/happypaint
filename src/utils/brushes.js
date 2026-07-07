@@ -139,11 +139,228 @@ export const brushCatalog = [
 ];
 
 // The Stage-2 dab params for a brush id, or null for legacy-path brushes
-// (spray, eraser, unknown/custom ids). The single routing predicate every
-// consumer shares: `settings.v >= 2 && getDab(settings.brush)`.
+// (spray, eraser, unknown/custom ids). V2 strokes resolve through this static
+// catalog forever; v3 strokes carry sanitized inline dab params instead.
 export function getDab(brushId) {
   const brush = brushCatalog.find((entry) => entry.id === brushId);
   return (brush && brush.dab) || null;
+}
+
+// V3 authoring dabs are embedded into each new stroke's settings so future
+// edits to the catalog cannot repaint old room history. The static v2 catalog
+// above stays the replay contract for previously persisted strokes.
+const NATURAL_DABS = {
+  oil: {
+    spacing: 0.065,
+    minSize: 0.28,
+    flow: 0.9,
+    shape: "bristle",
+    bristles: 12,
+    stretch: 2.6,
+    wetEdge: 0.12,
+    impasto: 0.18,
+    loaded: 1,
+    load: 1.18,
+    depletion: 0.018,
+    reload: 0.004,
+    tooth: 0.34,
+    bristleMemory: 0.72,
+    laneWobble: 0.14,
+  },
+  acrylic: {
+    spacing: 0.075,
+    minSize: 0.24,
+    flow: 0.96,
+    shape: "bristle",
+    bristles: 9,
+    stretch: 2.0,
+    wetEdge: 0.04,
+    impasto: 0.12,
+    loaded: 1,
+    load: 0.95,
+    depletion: 0.03,
+    reload: 0.002,
+    tooth: 0.24,
+    bristleMemory: 0.58,
+    laneWobble: 0.09,
+  },
+};
+
+const INLINE_SHAPES = new Set(["round", "pencil", "crayon", "ellipse", "glow", "bristle", "water", "gouache", "stamp"]);
+const MAX_INLINE_STAMP_CHARS = 96_000;
+const STAMP_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp);base64,/i;
+
+function finiteNumber(value, fallback) {
+  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function clampNumber(value, fallback, min, max) {
+  return clamp(finiteNumber(value, fallback), min, max);
+}
+
+function clampInt(value, fallback, min, max) {
+  return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function hashText(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `tip_${(h >>> 0).toString(36)}`;
+}
+
+function validStampDataUrl(value) {
+  return typeof value === "string" && value.length <= MAX_INLINE_STAMP_CHARS && STAMP_DATA_URL_RE.test(value);
+}
+
+// Public because v3 ops can carry user/imported dab params. Keep this strict:
+// these values are used on the draw hot path, so hostile or corrupt ops should
+// degrade to a bounded brush, not a 10,000-bristle denial-of-service brush.
+export function normalizeInlineDab(dab) {
+  if (!dab || typeof dab !== "object") {
+    return null;
+  }
+  const shape = INLINE_SHAPES.has(dab.shape) ? dab.shape : "round";
+  const out = {
+    spacing: clampNumber(dab.spacing, 0.14, 0.04, 0.5),
+    minSize: clampNumber(dab.minSize, 0.5, 0.04, 1),
+    flow: clampNumber(dab.flow, 1, 0.02, 1.5),
+    shape,
+    scatter: clampNumber(dab.scatter, 0, 0, 2),
+    rotJitter: clampNumber(dab.rotJitter, 0, 0, Math.PI * 2),
+    grain: clampNumber(dab.grain, 0, 0, 0.75),
+    bristles: clampInt(dab.bristles, 6, 1, 24),
+    stretch: clampNumber(dab.stretch, 1, 0.3, 4),
+    wetEdge: clampNumber(dab.wetEdge, 0, 0, 0.5),
+    impasto: clampNumber(dab.impasto, 0, 0, 0.5),
+    loaded: clampNumber(dab.loaded, 0, 0, 1),
+    load: clampNumber(dab.load, 1, 0.05, 1.5),
+    depletion: clampNumber(dab.depletion, 0, 0, 0.08),
+    reload: clampNumber(dab.reload, 0, 0, 0.04),
+    tooth: clampNumber(dab.tooth, 0, 0, 0.75),
+    bristleMemory: clampNumber(dab.bristleMemory, 0, 0, 0.95),
+    laneWobble: clampNumber(dab.laneWobble, 0, 0, 0.5),
+  };
+  if (shape === "stamp") {
+    const stampId = typeof dab.stampId === "string" && dab.stampId.length <= 48
+      ? dab.stampId
+      : validStampDataUrl(dab.stampDataUrl) ? hashText(dab.stampDataUrl) : "";
+    const cached = stampId ? stampCache.get(stampId) : null;
+    const stampDataUrl = validStampDataUrl(dab.stampDataUrl) ? dab.stampDataUrl : cached?.dataUrl || "";
+    if (!stampId || !stampDataUrl) {
+      return null;
+    }
+    out.stampDataUrl = stampDataUrl;
+    out.stampId = stampId;
+    out.roundness = clampNumber(dab.roundness, 1, 0.1, 2);
+  }
+  return out;
+}
+
+export function getAuthoringDab(brushId) {
+  const natural = NATURAL_DABS[brushId];
+  if (natural) {
+    return { version: 3, dab: normalizeInlineDab(natural) };
+  }
+  const dab = getDab(brushId);
+  return dab ? { version: 2, dab } : null;
+}
+
+export function getStrokeDab(settings) {
+  if (settings && settings.v >= 3) {
+    return normalizeInlineDab(settings.dab);
+  }
+  if (settings && settings.v >= 2) {
+    return getDab(settings.brush);
+  }
+  return null;
+}
+
+const stampCache = new Map(); // stampId -> { image, dataUrl, ready, promise }
+const tintedStampCache = new Map(); // `${stampId}|${color}` -> canvas
+
+function stampEntryFor(dab) {
+  const normalized = normalizeInlineDab(dab);
+  if (!normalized || normalized.shape !== "stamp") {
+    return null;
+  }
+  const existing = stampCache.get(normalized.stampId);
+  if (existing && existing.dataUrl === normalized.stampDataUrl) {
+    return existing;
+  }
+  const entry = { image: null, dataUrl: normalized.stampDataUrl, ready: false, promise: null };
+  stampCache.set(normalized.stampId, entry);
+  return entry;
+}
+
+export function preloadBrushStamp(dab) {
+  const normalized = normalizeInlineDab(dab);
+  if (!normalized || normalized.shape !== "stamp") {
+    return Promise.resolve(false);
+  }
+  const entry = stampEntryFor(normalized);
+  if (!entry) {
+    return Promise.resolve(false);
+  }
+  if (entry.ready) {
+    return Promise.resolve(true);
+  }
+  if (entry.promise) {
+    return entry.promise;
+  }
+  entry.promise = new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      entry.image = image;
+      entry.ready = true;
+      resolve(true);
+    };
+    image.onerror = () => {
+      entry.ready = false;
+      resolve(false);
+    };
+    image.src = normalized.stampDataUrl;
+  });
+  return entry.promise;
+}
+
+export function isBrushStampReady(dab) {
+  const normalized = normalizeInlineDab(dab);
+  if (!normalized || normalized.shape !== "stamp") {
+    return true;
+  }
+  const entry = stampCache.get(normalized.stampId);
+  return !!entry?.ready;
+}
+
+function getStampImage(dab) {
+  const entry = stampCache.get(dab.stampId);
+  return entry?.ready ? entry.image : null;
+}
+
+function getTintedStamp(dab, color) {
+  const image = getStampImage(dab);
+  if (!image) {
+    return null;
+  }
+  const key = `${dab.stampId}|${color}`;
+  const cached = tintedStampCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, image.naturalWidth || image.width || 1);
+  canvas.height = Math.max(1, image.naturalHeight || image.height || 1);
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "source-in";
+  context.fillStyle = color;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "source-over";
+  tintedStampCache.set(key, canvas);
+  return canvas;
 }
 
 export const paperTextures = [
@@ -494,7 +711,7 @@ const DAB_CAP = 600; // dabs per addPoints call before the step doubles
 // cross-client differences in the sampled values (canvas AA) are accepted —
 // bounded and cosmetic.
 export function makeStrokeRenderer(settings, getMix) {
-  const dab = getDab(settings.brush) || {};
+  const dab = getStrokeDab(settings) || {};
   const color = settings.color;
   const seed = settings.seed;
   const size = clamp(settings.size || 24, 1, 160);
@@ -518,6 +735,13 @@ export function makeStrokeRenderer(settings, getMix) {
   const rotJitter = dab.rotJitter || 0;
   const shape = dab.shape || "round";
   const stretchK = dab.stretch || 1;
+  const loadedPaint = shape === "bristle" && dab.loaded > 0;
+  const bristleMemory = loadedPaint ? dab.bristleMemory || 0 : 0;
+  const laneWobble = loadedPaint ? dab.laneWobble || 0 : 0;
+  const tooth = loadedPaint ? dab.tooth || 0 : 0;
+  const depletion = loadedPaint ? dab.depletion || 0 : 0;
+  const reload = loadedPaint ? dab.reload || 0 : 0;
+  const initialLoad = loadedPaint ? dab.load || 1 : 1;
 
   // Oil/acrylic bristle table: each bristle's lane / length / width / alpha /
   // tint is rolled ONCE here from the stroke seed (mulberry32(seed ^ index)),
@@ -540,6 +764,13 @@ export function makeStrokeRenderer(settings, getMix) {
         alpha: 0.55 + roll() * 0.45, // per-bristle paint load
         tint: (roll() * 2 - 1) * 0.08, // ±8% lightness
       };
+      if (loadedPaint) {
+        entry.wobblePhase = roll() * TWO_PI;
+        entry.wobbleRate = 0.65 + roll() * 0.7;
+        entry.paintLoad = clamp(initialLoad * (0.75 + roll() * 0.45), 0.05, 1.5);
+        entry.lastX = null;
+        entry.lastY = null;
+      }
       // Pre-built string for the dry path; the wet path re-tints per dab.
       entry.color = shiftLightness(color, entry.tint);
       bristleTable.push(entry);
@@ -596,7 +827,19 @@ export function makeStrokeRenderer(settings, getMix) {
       dabColor = `rgb(${Math.round(wetR)},${Math.round(wetG)},${Math.round(wetB)})`;
     }
     ctx.fillStyle = dabColor;
-    if (shape === "ellipse") {
+    if (shape === "stamp") {
+      const stamp = getTintedStamp(dab, dabColor);
+      if (!stamp) {
+        return;
+      }
+      ctx.globalAlpha = flowAlpha;
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(rot);
+      ctx.scale(dab.roundness || 1, 1);
+      ctx.drawImage(stamp, -radius, -radius, radius * 2, radius * 2);
+      ctx.restore();
+    } else if (shape === "ellipse") {
       // Loaded-brush paint: elongated 1.6x along the stroke tangent.
       ctx.globalAlpha = flowAlpha;
       ctx.save();
@@ -658,28 +901,89 @@ export function makeStrokeRenderer(settings, getMix) {
       // tangent, stretched `stretchK` along it. All per-bristle variation
       // comes from the construction-time bristleTable (seed-stable), so the
       // streaks track the stroke instead of shimmering.
-      ctx.save();
-      ctx.translate(dx, dy);
-      ctx.rotate(rot);
       const ribbonHalf = (radius * 1.7) / bristleTable.length;
-      for (const bristle of bristleTable) {
-        // Wet dabs re-tint the blended colour per bristle (numeric, cheap);
-        // dry dabs reuse the strings pre-built at construction.
-        ctx.fillStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
-        ctx.globalAlpha = flowAlpha * bristle.alpha;
-        ctx.beginPath();
-        ctx.ellipse(
-          0,
-          bristle.offset * radius,
-          Math.max(0.5, radius * stretchK * bristle.length),
-          Math.max(0.35, ribbonHalf * bristle.width),
-          0,
-          0,
-          TWO_PI,
-        );
-        ctx.fill();
+      if (loadedPaint) {
+        const tx = Math.cos(rot);
+        const ty = Math.sin(rot);
+        const nx = -Math.sin(rot);
+        const ny = Math.cos(rot);
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        for (let i = 0; i < bristleTable.length; i += 1) {
+          const bristle = bristleTable[i];
+          const wobble = Math.sin((x + y) * 0.006 * bristle.wobbleRate + bristle.wobblePhase) * laneWobble * radius;
+          const lane = bristle.offset * radius + wobble;
+          const bx = dx + nx * lane;
+          const by = dy + ny * lane;
+          const load = clamp(bristle.paintLoad, 0, 1.5);
+          const dry = clamp(1 - load, 0, 1);
+          const gapRoll = pointRand((seed == null ? 0 : seed) ^ Math.imul(i + 17, 1597334677), bx, by)();
+          const skipChance = tooth * dry * (0.35 + 0.45 * (1 - pressure));
+          if (gapRoll < skipChance) {
+            bristle.paintLoad = clamp(load + reload * pressure, 0.02, 1.5);
+            continue;
+          }
+
+          const toothAlpha = 1 - tooth * dry * (0.25 + gapRoll * 0.45);
+          const width = Math.max(0.35, ribbonHalf * bristle.width * (0.45 + load * 0.65));
+          const length = Math.max(0.8, radius * stretchK * bristle.length * (0.35 + load * 0.55));
+          const alpha = clamp(flowAlpha * bristle.alpha * toothAlpha * (0.2 + Math.min(load, 1) * 0.85), 0.01, 1);
+
+          ctx.strokeStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.globalAlpha = alpha;
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          if (bristle.lastX == null || bristleMemory <= 0) {
+            ctx.moveTo(bx - tx * length * 0.5, by - ty * length * 0.5);
+          } else {
+            ctx.moveTo(bristle.lastX, bristle.lastY);
+          }
+          ctx.lineTo(bx + tx * length * 0.5, by + ty * length * 0.5);
+          ctx.stroke();
+
+          ctx.globalAlpha = alpha * 0.55;
+          ctx.beginPath();
+          ctx.ellipse(
+            bx,
+            by,
+            Math.max(0.5, length * 0.32),
+            Math.max(0.3, width * 0.55),
+            rot,
+            0,
+            TWO_PI,
+          );
+          ctx.fill();
+
+          bristle.lastX = bristle.lastX == null ? bx : bristle.lastX * bristleMemory + bx * (1 - bristleMemory);
+          bristle.lastY = bristle.lastY == null ? by : bristle.lastY * bristleMemory + by * (1 - bristleMemory);
+          bristle.paintLoad = clamp(load - depletion * (0.35 + pressure * 0.9) + reload * pressure * (1.5 - load), 0.02, 1.5);
+        }
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.translate(dx, dy);
+        ctx.rotate(rot);
+        for (const bristle of bristleTable) {
+          // Wet dabs re-tint the blended colour per bristle (numeric, cheap);
+          // dry dabs reuse the strings pre-built at construction.
+          ctx.fillStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
+          ctx.globalAlpha = flowAlpha * bristle.alpha;
+          ctx.beginPath();
+          ctx.ellipse(
+            0,
+            bristle.offset * radius,
+            Math.max(0.5, radius * stretchK * bristle.length),
+            Math.max(0.35, ribbonHalf * bristle.width),
+            0,
+            0,
+            TWO_PI,
+          );
+          ctx.fill();
+        }
+        ctx.restore();
       }
-      ctx.restore();
     } else if (shape === "water") {
       // Watercolor: a faint full-size wash under a denser core — a soft-edged
       // round dab without shadowBlur cost. Low flow means each pass lays a

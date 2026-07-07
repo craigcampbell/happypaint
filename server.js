@@ -129,6 +129,639 @@ function notePeak() {
   }
 }
 
+// ---- Lightweight product analytics ---------------------------------------
+// Admin-only, bounded, and privacy-light: no raw IPs or user agents are stored.
+// Location is a coarse deploy-provided country code when present; otherwise the
+// client timezone/locale gives a rough "where in the world" hint.
+const ANALYTICS_FILE = join(DATA_DIR, '.analytics.json');
+const ANALYTICS_SESSION_CAP = Number(process.env.ANALYTICS_SESSION_CAP || 2000);
+const ANALYTICS_USER_CAP = Number(process.env.ANALYTICS_USER_CAP || 1000);
+const ANALYTICS_ROOM_CAP = Number(process.env.ANALYTICS_ROOM_CAP || 500);
+const ANALYTICS_GALLERY_CAP = Number(process.env.ANALYTICS_GALLERY_CAP || 500);
+const analyticsActiveSessions = new Map();
+let analyticsPersistTimer = null;
+
+function blankAnalytics() {
+  return {
+    version: 1,
+    totals: {
+      sessions: 0,
+      signedInSessions: 0,
+      anonymousSessions: 0,
+      roomClears: 0,
+      adminRoomClears: 0,
+      gallerySaves: 0,
+      signedInGallerySaves: 0,
+      anonymousGallerySaves: 0,
+      strokes: 0,
+      drawOps: 0,
+      points: 0,
+      chats: 0,
+    },
+    users: {},
+    rooms: {},
+    brushes: {},
+    countries: {},
+    timezones: {},
+    gallerySaves: [],
+    sessions: [],
+  };
+}
+
+let analytics = blankAnalytics();
+try {
+  const loaded = JSON.parse(readFileSync(ANALYTICS_FILE, 'utf8'));
+  analytics = { ...blankAnalytics(), ...loaded };
+  analytics.totals = { ...blankAnalytics().totals, ...(loaded.totals || {}) };
+  analytics.users = loaded.users && typeof loaded.users === 'object' ? loaded.users : {};
+  analytics.rooms = loaded.rooms && typeof loaded.rooms === 'object' ? loaded.rooms : {};
+  analytics.brushes = loaded.brushes && typeof loaded.brushes === 'object' ? loaded.brushes : {};
+  analytics.countries = loaded.countries && typeof loaded.countries === 'object' ? loaded.countries : {};
+  analytics.timezones = loaded.timezones && typeof loaded.timezones === 'object' ? loaded.timezones : {};
+  analytics.gallerySaves = Array.isArray(loaded.gallerySaves) ? loaded.gallerySaves : [];
+  analytics.sessions = Array.isArray(loaded.sessions) ? loaded.sessions : [];
+} catch {
+  analytics = blankAnalytics();
+}
+
+function topKey(bag) {
+  let winner = null;
+  let best = 0;
+  if (!bag || typeof bag !== 'object') return null;
+  for (const [key, value] of Object.entries(bag)) {
+    const n = Number(value) || 0;
+    if (n > best) {
+      winner = key;
+      best = n;
+    }
+  }
+  return winner;
+}
+
+function bagList(bag, limit = 20) {
+  if (!bag || typeof bag !== 'object') return [];
+  return Object.entries(bag)
+    .map(([id, count]) => ({ id, count: Number(count) || 0 }))
+    .filter((item) => item.id && item.count > 0)
+    .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id))
+    .slice(0, limit);
+}
+
+function bumpBag(bag, key, amount = 1) {
+  const clean = typeof key === 'string' ? key.trim().slice(0, 80) : '';
+  if (!clean) return;
+  bag[clean] = (Number(bag[clean]) || 0) + amount;
+}
+
+function normalizeAnalytics() {
+  const now = Date.now();
+  analytics.sessions = analytics.sessions
+    .filter((s) => s && typeof s === 'object' && s.id)
+    .map((s) => {
+      if (!s.leftAt) {
+        const last = Number(s.lastSeen || s.joinedAt || now);
+        return { ...s, active: false, leftAt: last, durationSec: Math.max(0, Math.round((last - (s.joinedAt || last)) / 1000)) };
+      }
+      return { ...s, active: false };
+    });
+  for (const user of Object.values(analytics.users)) {
+    if (user && typeof user === 'object') user.activeSessions = 0;
+  }
+  for (const room of Object.values(analytics.rooms)) {
+    if (room && typeof room === 'object') room.activeSessions = 0;
+  }
+}
+normalizeAnalytics();
+
+function trimAnalytics() {
+  analytics.sessions.sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
+  if (analytics.sessions.length > ANALYTICS_SESSION_CAP) analytics.sessions.length = ANALYTICS_SESSION_CAP;
+
+  const userEntries = Object.entries(analytics.users)
+    .sort((a, b) => (b[1].lastSeen || 0) - (a[1].lastSeen || 0));
+  if (userEntries.length > ANALYTICS_USER_CAP) {
+    analytics.users = Object.fromEntries(userEntries.slice(0, ANALYTICS_USER_CAP));
+  }
+
+  const roomEntries = Object.entries(analytics.rooms)
+    .sort((a, b) => (b[1].lastSeen || 0) - (a[1].lastSeen || 0));
+  if (roomEntries.length > ANALYTICS_ROOM_CAP) {
+    analytics.rooms = Object.fromEntries(roomEntries.slice(0, ANALYTICS_ROOM_CAP));
+  }
+
+  if (analytics.gallerySaves.length > ANALYTICS_GALLERY_CAP) {
+    analytics.gallerySaves.length = ANALYTICS_GALLERY_CAP;
+  }
+}
+
+function persistAnalyticsNow() {
+  trimAnalytics();
+  try {
+    writeFileSync(ANALYTICS_FILE, JSON.stringify(analytics));
+  } catch {
+    // Analytics must never break painting.
+  }
+}
+
+function scheduleAnalyticsPersist() {
+  if (analyticsPersistTimer) return;
+  analyticsPersistTimer = setTimeout(() => {
+    analyticsPersistTimer = null;
+    persistAnalyticsNow();
+  }, 3000);
+  if (analyticsPersistTimer.unref) analyticsPersistTimer.unref();
+}
+
+function cleanCountry(value) {
+  const cc = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? cc : null;
+}
+
+function countryFromReq(req) {
+  return cleanCountry(
+    req.headers['cf-ipcountry']
+    || req.headers['x-vercel-ip-country']
+    || req.headers['x-country-code']
+    || req.headers['cloudfront-viewer-country'],
+  );
+}
+
+function deviceTypeFromReq(req) {
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  if (/(ipad|tablet|kindle|silk)/.test(ua)) return 'tablet';
+  if (/(mobile|android|iphone|ipod)/.test(ua)) return 'mobile';
+  if (ua) return 'desktop';
+  return 'unknown';
+}
+
+function analyticsUserKey(user) {
+  return user.profileId ? `pb:${user.profileId}` : `anon:${user.id}`;
+}
+
+function ensureAnalyticsRoom(roomId) {
+  const id = String(roomId || 'UNKNOWN').slice(0, 32);
+  let room = analytics.rooms[id];
+  if (!room) {
+    room = {
+      id,
+      firstSeen: Date.now(),
+      lastSeen: 0,
+      sessions: 0,
+      activeSessions: 0,
+      totalDurationSec: 0,
+      strokes: 0,
+      drawOps: 0,
+      points: 0,
+      clears: 0,
+      chats: 0,
+      gallerySaves: 0,
+      brushes: {},
+      countries: {},
+      timezones: {},
+    };
+    analytics.rooms[id] = room;
+  }
+  return room;
+}
+
+function ensureAnalyticsUserFromKey(userKey, profileId = null, signedIn = false) {
+  let user = analytics.users[userKey];
+  if (!user) {
+    user = {
+      userKey,
+      profileId: profileId || null,
+      signedIn: !!signedIn,
+      firstSeen: Date.now(),
+      lastSeen: 0,
+      sessions: 0,
+      activeSessions: 0,
+      totalDurationSec: 0,
+      rooms: {},
+      brushes: {},
+      countries: {},
+      timezones: {},
+      strokes: 0,
+      drawOps: 0,
+      points: 0,
+      clears: 0,
+      chats: 0,
+      gallerySaves: 0,
+      lastRoom: null,
+      lastDeviceType: null,
+      lastLocale: null,
+      displayName: null,
+    };
+    analytics.users[userKey] = user;
+  }
+  if (profileId) {
+    user.profileId = profileId;
+    user.signedIn = true;
+  }
+  return user;
+}
+
+function ensureAnalyticsUser(user) {
+  const key = analyticsUserKey(user);
+  const record = ensureAnalyticsUserFromKey(key, user.profileId || null, !!user.profileId);
+  if (!user.profileId && user.name) {
+    record.displayName = String(user.name).slice(0, 24);
+  }
+  return record;
+}
+
+function findAnalyticsSession(user) {
+  const sid = user && user.analyticsSessionId;
+  return sid ? analyticsActiveSessions.get(sid) : null;
+}
+
+function analyticsStartSession(roomId, user, req) {
+  const now = Date.now();
+  const userKey = analyticsUserKey(user);
+  const signedIn = !!user.profileId;
+  const country = countryFromReq(req);
+  const deviceType = deviceTypeFromReq(req);
+  const id = `ses_${now.toString(36)}_${randomBytes(4).toString('hex')}`;
+  const session = {
+    id,
+    userKey,
+    profileId: user.profileId || null,
+    signedIn,
+    displayName: signedIn ? null : String(user.name || 'Guest').slice(0, 24),
+    room: roomId,
+    joinedAt: now,
+    lastSeen: now,
+    leftAt: null,
+    durationSec: 0,
+    active: true,
+    country,
+    timezone: null,
+    locale: null,
+    deviceType,
+    pointer: null,
+    viewportBucket: null,
+    strokes: 0,
+    drawOps: 0,
+    points: 0,
+    clears: 0,
+    chats: 0,
+    brushes: {},
+  };
+  analytics.sessions.unshift(session);
+  analyticsActiveSessions.set(id, session);
+  user.analyticsSessionId = id;
+  user.analyticsStrokeIds = new Set();
+
+  analytics.totals.sessions += 1;
+  if (signedIn) analytics.totals.signedInSessions += 1;
+  else analytics.totals.anonymousSessions += 1;
+  if (country) bumpBag(analytics.countries, country);
+
+  const userRecord = ensureAnalyticsUser(user);
+  userRecord.sessions += 1;
+  userRecord.activeSessions = (Number(userRecord.activeSessions) || 0) + 1;
+  userRecord.lastSeen = now;
+  userRecord.lastRoom = roomId;
+  userRecord.lastDeviceType = deviceType;
+  bumpBag(userRecord.rooms, roomId);
+  if (country) bumpBag(userRecord.countries, country);
+
+  const roomRecord = ensureAnalyticsRoom(roomId);
+  roomRecord.sessions += 1;
+  roomRecord.activeSessions = (Number(roomRecord.activeSessions) || 0) + 1;
+  roomRecord.lastSeen = now;
+  if (country) bumpBag(roomRecord.countries, country);
+
+  scheduleAnalyticsPersist();
+}
+
+function cleanLocale(value) {
+  const v = String(value || '').trim().slice(0, 24);
+  return /^[a-z]{2,3}(-[A-Z0-9]{2,8})?$/i.test(v) ? v : null;
+}
+
+function cleanTimezone(value) {
+  const v = String(value || '').trim().slice(0, 48);
+  return /^[A-Za-z_]+\/[A-Za-z0-9_+-]+(?:\/[A-Za-z0-9_+-]+)?$/.test(v) || v === 'UTC' ? v : null;
+}
+
+function bucketNumber(value, step) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n / step) * step;
+}
+
+function analyticsUpdateClientInfo(user, data) {
+  const session = findAnalyticsSession(user);
+  if (!session) return;
+  const now = Date.now();
+  const timezone = cleanTimezone(data.timezone);
+  const locale = cleanLocale(data.locale);
+  const pointer = ['coarse', 'fine', 'none'].includes(data.pointer) ? data.pointer : null;
+  const vw = bucketNumber(data.viewportW, 100);
+  const vh = bucketNumber(data.viewportH, 100);
+  session.lastSeen = now;
+  if (timezone) session.timezone = timezone;
+  if (locale) session.locale = locale;
+  if (pointer) session.pointer = pointer;
+  if (vw && vh) session.viewportBucket = `${vw}x${vh}`;
+
+  const userRecord = analytics.users[session.userKey];
+  if (userRecord) {
+    userRecord.lastSeen = now;
+    if (timezone) bumpBag(userRecord.timezones, timezone);
+    if (locale) userRecord.lastLocale = locale;
+  }
+  const roomRecord = analytics.rooms[session.room];
+  if (roomRecord) {
+    roomRecord.lastSeen = now;
+    if (timezone) bumpBag(roomRecord.timezones, timezone);
+  }
+  if (timezone) bumpBag(analytics.timezones, timezone);
+  scheduleAnalyticsPersist();
+}
+
+function brushNameFromOp(op) {
+  const settings = op && op.settings;
+  if (!settings || typeof settings !== 'object') return null;
+  if (typeof settings.brush === 'string' && settings.brush.trim()) return settings.brush.trim().slice(0, 40);
+  if (settings.dab && settings.dab.shape === 'stamp') return 'imported stamp';
+  return 'unknown';
+}
+
+function analyticsRecordDraw(roomId, user, op) {
+  const session = findAnalyticsSession(user);
+  if (!session || !op || op.kind !== 'draw') return;
+  const now = Date.now();
+  const points = Array.isArray(op.points) ? op.points.length : 0;
+  const userRecord = analytics.users[session.userKey];
+  const roomRecord = ensureAnalyticsRoom(roomId);
+  session.lastSeen = now;
+  session.drawOps += 1;
+  session.points += points;
+  analytics.totals.drawOps += 1;
+  analytics.totals.points += points;
+  roomRecord.lastSeen = now;
+  roomRecord.drawOps += 1;
+  roomRecord.points += points;
+  if (userRecord) {
+    userRecord.lastSeen = now;
+    userRecord.drawOps += 1;
+    userRecord.points += points;
+  }
+
+  const strokeId = op.strokeId ? String(op.strokeId).slice(0, 80) : null;
+  const seen = user.analyticsStrokeIds || (user.analyticsStrokeIds = new Set());
+  const shouldCountStroke = strokeId ? !seen.has(strokeId) : !!op.settings;
+  if (strokeId && shouldCountStroke) {
+    seen.add(strokeId);
+    if (seen.size > 4000) seen.clear();
+  }
+  if (shouldCountStroke) {
+    const brush = brushNameFromOp(op) || 'unknown';
+    session.strokes += 1;
+    bumpBag(session.brushes, brush);
+    analytics.totals.strokes += 1;
+    bumpBag(analytics.brushes, brush);
+    roomRecord.strokes += 1;
+    bumpBag(roomRecord.brushes, brush);
+    if (userRecord) {
+      userRecord.strokes += 1;
+      bumpBag(userRecord.brushes, brush);
+    }
+  }
+  scheduleAnalyticsPersist();
+}
+
+function analyticsRecordChat(roomId, user) {
+  const session = findAnalyticsSession(user);
+  if (!session) return;
+  const userRecord = analytics.users[session.userKey];
+  const roomRecord = ensureAnalyticsRoom(roomId);
+  session.chats += 1;
+  session.lastSeen = Date.now();
+  analytics.totals.chats += 1;
+  roomRecord.chats += 1;
+  if (userRecord) {
+    userRecord.chats += 1;
+    userRecord.lastSeen = session.lastSeen;
+  }
+  scheduleAnalyticsPersist();
+}
+
+function analyticsRecordClear(roomId, user, source = 'user') {
+  const session = user ? findAnalyticsSession(user) : null;
+  const userRecord = session ? analytics.users[session.userKey] : null;
+  const roomRecord = ensureAnalyticsRoom(roomId);
+  const now = Date.now();
+  analytics.totals.roomClears += 1;
+  if (source === 'admin') analytics.totals.adminRoomClears += 1;
+  roomRecord.clears += 1;
+  roomRecord.lastSeen = now;
+  if (session) {
+    session.clears += 1;
+    session.lastSeen = now;
+  }
+  if (userRecord) {
+    userRecord.clears += 1;
+    userRecord.lastSeen = now;
+  }
+  scheduleAnalyticsPersist();
+}
+
+function analyticsRecordGallerySave(key, req) {
+  const now = Date.now();
+  const signedIn = String(key || '').startsWith('pb_');
+  const profileId = signedIn ? String(key).slice(3) : null;
+  const country = countryFromReq(req);
+  analytics.totals.gallerySaves += 1;
+  if (signedIn) analytics.totals.signedInGallerySaves += 1;
+  else analytics.totals.anonymousGallerySaves += 1;
+  if (country) bumpBag(analytics.countries, country);
+  analytics.gallerySaves.unshift({
+    ts: now,
+    signedIn,
+    profileId: profileId || null,
+    country,
+  });
+  if (profileId) {
+    const userRecord = ensureAnalyticsUserFromKey(`pb:${profileId}`, profileId, true);
+    userRecord.gallerySaves += 1;
+    userRecord.lastSeen = now;
+    if (country) bumpBag(userRecord.countries, country);
+  }
+  scheduleAnalyticsPersist();
+}
+
+function analyticsEndSession(user) {
+  const session = findAnalyticsSession(user);
+  if (!session) return;
+  const now = Date.now();
+  const durationSec = Math.max(0, Math.round((now - (session.joinedAt || now)) / 1000));
+  session.leftAt = now;
+  session.lastSeen = now;
+  session.durationSec = durationSec;
+  session.active = false;
+  analyticsActiveSessions.delete(session.id);
+
+  const userRecord = analytics.users[session.userKey];
+  if (userRecord) {
+    userRecord.activeSessions = Math.max(0, (Number(userRecord.activeSessions) || 0) - 1);
+    userRecord.totalDurationSec += durationSec;
+    userRecord.lastSeen = now;
+  }
+  const roomRecord = analytics.rooms[session.room];
+  if (roomRecord) {
+    roomRecord.activeSessions = Math.max(0, (Number(roomRecord.activeSessions) || 0) - 1);
+    roomRecord.totalDurationSec += durationSec;
+    roomRecord.lastSeen = now;
+  }
+  user.analyticsSessionId = null;
+  user.analyticsStrokeIds = null;
+  scheduleAnalyticsPersist();
+}
+
+function analyticsScrubProfile(profileId) {
+  const pid = String(profileId || '');
+  if (!pid) return 0;
+  let scrubbed = 0;
+  for (const session of analytics.sessions) {
+    if (session.profileId === pid) {
+      session.profileId = null;
+      session.userKey = 'deleted';
+      session.signedIn = false;
+      session.displayName = '[deleted]';
+      scrubbed += 1;
+    }
+  }
+  for (const save of analytics.gallerySaves) {
+    if (save.profileId === pid) {
+      save.profileId = null;
+      save.signedIn = false;
+      scrubbed += 1;
+    }
+  }
+  const key = `pb:${pid}`;
+  if (analytics.users[key]) {
+    delete analytics.users[key];
+    scrubbed += 1;
+  }
+  if (scrubbed) scheduleAnalyticsPersist();
+  return scrubbed;
+}
+
+function analyticsSnapshot() {
+  const now = Date.now();
+  const sessions = analytics.sessions
+    .map((s) => {
+      const active = analyticsActiveSessions.has(s.id);
+      return {
+        id: s.id,
+        signedIn: !!s.signedIn,
+        displayName: s.displayName || null,
+        account: s.profileId ? s.profileId.slice(0, 8) : null,
+        room: s.room,
+        joinedAt: s.joinedAt || 0,
+        leftAt: active ? null : s.leftAt || null,
+        active,
+        durationSec: active ? Math.max(0, Math.round((now - (s.joinedAt || now)) / 1000)) : Number(s.durationSec) || 0,
+        country: s.country || null,
+        timezone: s.timezone || null,
+        locale: s.locale || null,
+        deviceType: s.deviceType || 'unknown',
+        pointer: s.pointer || null,
+        viewportBucket: s.viewportBucket || null,
+        strokes: Number(s.strokes) || 0,
+        drawOps: Number(s.drawOps) || 0,
+        points: Number(s.points) || 0,
+        clears: Number(s.clears) || 0,
+        chats: Number(s.chats) || 0,
+        topBrush: topKey(s.brushes),
+      };
+    })
+    .sort((a, b) => Number(b.active) - Number(a.active) || b.joinedAt - a.joinedAt)
+    .slice(0, 120);
+
+  const users = Object.values(analytics.users)
+    .map((u) => ({
+      label: u.signedIn && u.profileId ? `Account ${u.profileId.slice(0, 8)}` : u.displayName || 'Anonymous guest',
+      signedIn: !!u.signedIn,
+      active: (Number(u.activeSessions) || 0) > 0,
+      activeSessions: Number(u.activeSessions) || 0,
+      sessions: Number(u.sessions) || 0,
+      firstSeen: u.firstSeen || 0,
+      lastSeen: u.lastSeen || 0,
+      totalDurationSec: Number(u.totalDurationSec) || 0,
+      lastRoom: u.lastRoom || null,
+      country: topKey(u.countries),
+      timezone: topKey(u.timezones),
+      deviceType: u.lastDeviceType || 'unknown',
+      locale: u.lastLocale || null,
+      topBrush: topKey(u.brushes),
+      strokes: Number(u.strokes) || 0,
+      drawOps: Number(u.drawOps) || 0,
+      points: Number(u.points) || 0,
+      clears: Number(u.clears) || 0,
+      chats: Number(u.chats) || 0,
+      gallerySaves: Number(u.gallerySaves) || 0,
+    }))
+    .sort((a, b) => Number(b.active) - Number(a.active) || b.lastSeen - a.lastSeen)
+    .slice(0, 120);
+
+  const roomStats = Object.values(analytics.rooms)
+    .map((r) => ({
+      id: r.id,
+      activeSessions: Number(r.activeSessions) || 0,
+      sessions: Number(r.sessions) || 0,
+      totalDurationSec: Number(r.totalDurationSec) || 0,
+      lastSeen: r.lastSeen || 0,
+      strokes: Number(r.strokes) || 0,
+      drawOps: Number(r.drawOps) || 0,
+      points: Number(r.points) || 0,
+      clears: Number(r.clears) || 0,
+      chats: Number(r.chats) || 0,
+      gallerySaves: Number(r.gallerySaves) || 0,
+      topBrush: topKey(r.brushes),
+      country: topKey(r.countries),
+      timezone: topKey(r.timezones),
+    }))
+    .sort((a, b) => b.activeSessions - a.activeSessions || b.lastSeen - a.lastSeen || b.sessions - a.sessions)
+    .slice(0, 100);
+
+  const signedInUsers = users.filter((u) => u.signedIn).length;
+  const anonymousUsers = users.filter((u) => !u.signedIn).length;
+  const totalDurationSec = sessions.reduce((sum, s) => sum + s.durationSec, 0);
+  const completedSessions = sessions.filter((s) => !s.active && s.durationSec > 0).length;
+
+  return {
+    totals: {
+      ...analytics.totals,
+      activeSessions: analyticsActiveSessions.size,
+      knownUsers: users.length,
+      signedInUsers,
+      anonymousUsers,
+      avgSessionSec: completedSessions ? Math.round(totalDurationSec / completedSessions) : 0,
+    },
+    users,
+    sessions,
+    rooms: roomStats,
+    brushes: bagList(analytics.brushes, 30),
+    countries: bagList(analytics.countries, 30),
+    timezones: bagList(analytics.timezones, 30),
+    gallerySaves: analytics.gallerySaves.slice(0, 80).map((save) => ({
+      ts: save.ts,
+      signedIn: !!save.signedIn,
+      account: save.profileId ? save.profileId.slice(0, 8) : null,
+      country: save.country || null,
+    })),
+    caps: {
+      sessions: ANALYTICS_SESSION_CAP,
+      users: ANALYTICS_USER_CAP,
+      rooms: ANALYTICS_ROOM_CAP,
+      gallerySaves: ANALYTICS_GALLERY_CAP,
+    },
+  };
+}
+
 // Per-room mural persistence: the op history is written to disk (debounced) and
 // reloaded on startup, so a server restart doesn't wipe the painting and late
 // joiners always replay the full mural.
@@ -192,13 +825,14 @@ function loadRoom(roomId) {
       // Wet-canvas toggle + the last theme-vote winner both survive restarts.
       wetCanvas: !!data.wetCanvas,
       customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
-      // Shared-animation state: the frame list + whether the room has the film
-      // strip enabled (private rooms opt in; FLIPBOOK is always on).
+      // Shared-animation state: the frame list, its scenes, and whether the
+      // room has the film strip enabled (private rooms opt in; FLIPBOOK is on).
       frames: Array.isArray(data.frames) ? data.frames : null,
+      scenes: Array.isArray(data.scenes) ? data.scenes : null,
       animation: !!data.animation,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, animation: false };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -236,6 +870,7 @@ async function saveRoomNow(roomId) {
       wetCanvas: !!room.wetCanvas,
       customPrompt: room.customPrompt || null,
       frames: room.frames,
+      scenes: room.scenes,
       animation: !!room.animationEnabled,
       savedAt: Date.now(),
     });
@@ -287,10 +922,14 @@ const FEATURED_ROOMS = [
   // The ONE public animation room. Everywhere else, the film strip is a
   // private-room setting (set_animation) — never on in public drawing rooms.
   { code: 'FLIPBOOK', title: 'Animation Studio', emoji: '🎬', animation: true, prompts: ['Animate a bouncing ball', 'Make a flower bloom frame by frame', 'A stick figure does a trick', 'Loop some rain falling'] },
+  // The little-kids room: finger painting only. Wet canvas is always on,
+  // smudging is the whole point, and there is NO chat (pre-readers).
+  { code: 'FINGERS', title: 'Finger Paints', emoji: '🖐️', fingerPaint: true, prompts: ['Squish some colors together!', 'Paint with all ten fingers', 'Make the biggest rainbow smudge', 'Squishy squishy paint!'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
+const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
 
 // ---- Shared animation frames -----------------------------------------------
 // In an animation room the frames themselves are shared state (Google-Docs
@@ -306,19 +945,75 @@ const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 8)
 // Bound a single op's serialized weight (image ops embed dataURLs — a photo
 // import is a few MB; nothing legitimate approaches this).
 const MAX_OP_DATAURL_CHARS = Number(process.env.MAX_OP_DATAURL_CHARS || 8_000_000);
+const MAX_DRAW_MESSAGE_CHARS = Number(process.env.MAX_DRAW_MESSAGE_CHARS || 128_000);
+const MAX_DRAW_POINTS_PER_OP = Number(process.env.MAX_DRAW_POINTS_PER_OP || 2048);
 const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
+// Scenes break the per-room frame ceiling without breaking the memory budget:
+// an animation room is one ~30-second SEGMENT — up to MAX_SCENES scenes of up
+// to 8 frames each (20 x 8 = 160 frames) — but clients only ever HYDRATE one
+// scene's frames, so RAM stays at a scene's worth. Scene creation is
+// host-only — which also means the public FLIPBOOK playground (hostless by
+// design) stays single-scene. Multi-segment "productions" (several linked
+// rooms stitched into one film) build on top of this: see
+// docs/animation-rooms-spec.md.
+const MAX_SCENES = Number(process.env.MAX_SCENES || 20);
+// A whole segment's op budget (protects the room file + join/fetch payloads;
+// per-frame caps alone would allow 160 x 1500 = 240k ops ≈ 260MB JSON).
+const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 40000);
 
 function sanitizeFrames(list) {
   if (!Array.isArray(list)) return null;
   const frames = list
     .filter((f) => f && typeof f.id === 'string' && f.id.length <= 24)
-    .map((f) => ({ id: f.id, durationMs: Math.max(40, Math.min(2000, Number(f.durationMs) || 120)) }));
+    .map((f) => ({
+      id: f.id,
+      durationMs: Math.max(40, Math.min(2000, Number(f.durationMs) || 120)),
+      sceneId: typeof f.sceneId === 'string' && f.sceneId.length <= 24 ? f.sceneId : null,
+    }));
   return frames.length ? frames : null;
+}
+
+function sanitizeScenes(list) {
+  if (!Array.isArray(list)) return null;
+  const scenes = list
+    .filter((s) => s && typeof s.id === 'string' && s.id.length <= 24)
+    .map((s) => ({ id: s.id, name: typeof s.name === 'string' ? s.name.slice(0, 30) : 'Scene' }));
+  return scenes.length ? scenes : null;
 }
 
 // The frame an op belongs to (legacy untagged ops live on the first frame).
 function opFrameId(room, op) {
   return op.frameId || (room.frames[0] && room.frames[0].id) || 'f0';
+}
+
+// A scene's frames, in flat-array order (scene blocks stay contiguous).
+function framesOfScene(room, sceneId) {
+  return room.frames.filter((f) => f.sceneId === sceneId);
+}
+
+// Light scene metadata for pagers: ids, names, and per-frame timing (durations
+// ride along so a stitched film export knows every frame's length up front).
+function scenesMeta(room) {
+  return room.scenes.map((s) => ({
+    id: s.id,
+    name: s.name,
+    frames: framesOfScene(room, s.id).map((f) => ({ id: f.id, durationMs: f.durationMs })),
+  }));
+}
+
+// One scene's shareable state: its frame list + the visible ops that live on
+// those frames. This is what joins, scene switches, and resyncs deliver —
+// never the whole movie, so client memory stays at one scene's worth.
+function sceneHistoryMsg(room, sceneId) {
+  const frames = framesOfScene(room, sceneId);
+  const ids = new Set(frames.map((f) => f.id));
+  return {
+    type: 'history',
+    sceneId,
+    scenes: scenesMeta(room),
+    frames,
+    ops: visibleHistory(room).filter((op) => ids.has(opFrameId(room, op))),
+  };
 }
 
 // Rebuild the per-frame op counts (after bulk history mutations: moderation
@@ -353,11 +1048,15 @@ function getRoom(roomId) {
     for (const op of saved.history) {
       if (op && typeof op.opId === 'number' && op.opId > opSeq) opSeq = op.opId;
     }
-    // Frame ids mint from the SAME counter (`f<opSeq>`) and can outlive the
-    // highest history opId (blank frames, per-frame clears) — scan them too or
-    // a restart could mint a duplicate frame id.
+    // Frame AND scene ids mint from the SAME counter (`f<opSeq>` / `s<opSeq>`)
+    // and can outlive the highest history opId (blank frames, per-frame
+    // clears) — scan them too or a restart could mint a duplicate id.
     for (const f of Array.isArray(saved.frames) ? saved.frames : []) {
       const m = /^f(\d+)$/.exec((f && f.id) || '');
+      if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
+    }
+    for (const s of Array.isArray(saved.scenes) ? saved.scenes : []) {
+      const m = /^s(\d+)$/.exec((s && s.id) || '');
       if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
     }
     rooms.set(roomId, {
@@ -393,14 +1092,28 @@ function getRoom(roomId) {
       voteTimer: null, // the vote-close timeout (cleared with the room)
       lastVoteAt: 0, // vote_start cooldown anchor (in-memory)
       // Shared-animation state. Every room carries a frames list (legacy
-      // untagged ops live on frames[0]); only animation-enabled rooms may grow
-      // it. Public rooms can NEVER opt in — only FLIPBOOK ships the strip.
-      frames: sanitizeFrames(saved.frames) || [{ id: 'f0', durationMs: 120 }],
+      // untagged ops live on frames[0]) grouped into scenes; only
+      // animation-enabled rooms may grow either. Public rooms can NEVER opt
+      // in — only FLIPBOOK ships the strip.
+      frames: sanitizeFrames(saved.frames) || [{ id: 'f0', durationMs: 120, sceneId: null }],
+      scenes: sanitizeScenes(saved.scenes) || [{ id: 's0', name: 'Scene 1' }],
       animationEnabled: ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation),
+      // Finger-paint mode: smudge allowed despite kid_safe, chat disabled,
+      // wet canvas on. Only the featured FINGERS room carries it.
+      fingerPaint: FINGER_PAINT_CODES.has(roomId),
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
       lastActivity: Date.now(),
     });
-    recountFrameOps(rooms.get(roomId));
+    const created = rooms.get(roomId);
+    // Backfill: every frame belongs to a real scene (legacy files predate
+    // scenes; a frame whose scene was deleted folds into the first one).
+    const sceneIds = new Set(created.scenes.map((s) => s.id));
+    for (const frame of created.frames) {
+      if (!frame.sceneId || !sceneIds.has(frame.sceneId)) {
+        frame.sceneId = created.scenes[0].id;
+      }
+    }
+    recountFrameOps(created);
   }
   return rooms.get(roomId);
 }
@@ -417,6 +1130,10 @@ function seedFeaturedRooms() {
     // Animation is a per-room capability: always on for FLIPBOOK, always OFF
     // for every other public room (re-asserted each boot so it can't drift).
     room.animationEnabled = ANIMATION_ROOM_CODES.has(f.code);
+    room.fingerPaint = FINGER_PAINT_CODES.has(f.code);
+    if (room.fingerPaint) {
+      room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
+    }
   }
 }
 seedFeaturedRooms();
@@ -914,6 +1631,7 @@ wss.on('connection', async (ws, req) => {
   room.users.set(id, user);
   room.lastActivity = Date.now();
   notePeak();
+  analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
   ws.userId = id;
 
@@ -959,6 +1677,8 @@ wss.on('connection', async (ws, req) => {
     watched: room.watchers.size > 0,
     // Shared animation: whether this room has the film strip, and its frames.
     animation: !!room.animationEnabled,
+    // Finger-paint room: smudge-friendly, always wet, chat-free (pre-readers).
+    fingerPaint: !!room.fingerPaint,
     // Any vote already running rides the handshake so late joiners can vote.
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
   }));
@@ -968,7 +1688,13 @@ wss.on('connection', async (ws, req) => {
   // joining an empty room reliably shows a blank canvas instead of whatever the
   // client had locally. `frames` makes the flipbook part of that same catch-up:
   // leave, come back, and you see everything your friends did (Google-Docs model).
-  ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
+  // Animation rooms deliver ONE scene at a time (the first, on join) — clients
+  // page between scenes with scene_fetch, keeping memory at a scene's worth.
+  if (room.animationEnabled) {
+    ws.send(JSON.stringify(sceneHistoryMsg(room, room.scenes[0].id)));
+  } else {
+    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
+  }
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
   }
@@ -988,6 +1714,9 @@ wss.on('connection', async (ws, req) => {
     room.lastActivity = Date.now();
 
     switch (data.type) {
+      case 'client_info':
+        analyticsUpdateClientInfo(user, data);
+        break;
       case 'op': {
         if (!data.op) break;
         // When a host locks the room, only hosts may keep drawing. This is the
@@ -1003,8 +1732,19 @@ wss.on('connection', async (ws, req) => {
             break;
           }
         }
-        // Smudge is a private-room brush: never let its ops land in a public room.
-        if (room.audience === 'kid_safe' && data.op.kind === 'draw' && data.op.settings && data.op.settings.brush === 'smudge') break;
+        // Smudge is a private-room brush: never let its ops land in a public
+        // room — EXCEPT the finger-paint room, where smearing is the toy.
+        if (room.audience === 'kid_safe' && !room.fingerPaint && data.op.kind === 'draw' && data.op.settings && data.op.settings.brush === 'smudge') break;
+        // Imported stamp tips are arbitrary user media. Keep public kid-safe
+        // rooms on reviewed catalog brushes until brush assets have moderation.
+        if (room.audience === 'kid_safe' && data.op.kind === 'draw' && data.op.settings?.dab?.shape === 'stamp') break;
+        // Draw ops should stay tiny: brush settings plus a short point batch.
+        // This protects v3 inline brush params from becoming a history/memory
+        // abuse vector while still allowing large image imports via image ops.
+        if (data.op.kind === 'draw') {
+          if (raw.length > MAX_DRAW_MESSAGE_CHARS) break;
+          if (!Array.isArray(data.op.points) || data.op.points.length > MAX_DRAW_POINTS_PER_OP) break;
+        }
         // Bound single-op weight: image ops embed dataURLs; nothing legitimate
         // approaches this cap, and unbounded ops multiply across history/joins.
         if (typeof data.op.dataUrl === 'string' && data.op.dataUrl.length > MAX_OP_DATAURL_CHARS) break;
@@ -1024,7 +1764,7 @@ wss.on('connection', async (ws, req) => {
         const multiFrame = room.animationEnabled || room.frames.length > 1;
         const countKey = frameId || room.frames[0].id;
         const frameCount = room.frameOpCounts.get(countKey) || 0;
-        if (multiFrame && frameCount >= FRAME_OP_CAP) {
+        if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= MAX_ANIM_ROOM_OPS)) {
           if (data.op.kind === 'draw' && data.op.end) {
             // Relay the end marker so peers close their stroke buffers, but
             // don't grow history/counts — the cap is a hard ceiling for EVERY
@@ -1043,6 +1783,7 @@ wss.on('connection', async (ws, req) => {
         if (room.animationEnabled && !op.frameId) {
           op.frameId = room.frames[0].id;
         }
+        analyticsRecordDraw(roomId, user, op);
         room.history.push(op);
         room.frameOpCounts.set(countKey, frameCount + 1);
         if (!multiFrame && room.history.length > MAX_HISTORY) {
@@ -1130,6 +1871,7 @@ wss.on('connection', async (ws, req) => {
           room.lastClearedSheet = null;
           room.history = room.history.filter((op) => !belongs(op));
           room.frameOpCounts.set(clearFrameId, 0);
+          analyticsRecordClear(roomId, user, 'user');
           broadcast(roomId, { type: 'clear', userId: id, name: user.name, frameId: clearFrameId }, id);
           persistRoom(roomId);
           break;
@@ -1140,6 +1882,7 @@ wss.on('connection', async (ws, req) => {
         room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
         room.history = [];
         recountFrameOps(room);
+        analyticsRecordClear(roomId, user, 'user');
         broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
         // A full clear blanks the canvas completely — drop the coloring sheet too.
         // Sheet state is separate from stroke history, so without this the sheet
@@ -1171,7 +1914,13 @@ wss.on('connection', async (ws, req) => {
               room.history = room.lastCleared.filter((op) => live.has(opFrameId(room, op)));
             }
             recountFrameOps(room);
-            broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+            if (room.animationEnabled) {
+              // Scene-paged clients can't take a whole-movie history frame —
+              // each refetches its own active scene instead.
+              broadcast(roomId, { type: 'resync', restored: true });
+            } else {
+              broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+            }
           }
           room.lastCleared = null;
           if (room.lastClearedSheet) {
@@ -1183,6 +1932,7 @@ wss.on('connection', async (ws, req) => {
         }
         break;
       case 'chat': {
+        if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
         if (user.muted) break; // a host muted this user
         if (typeof data.message !== 'string' || !data.message.trim()) break;
         let message = String(data.message).slice(0, 300);
@@ -1207,6 +1957,7 @@ wss.on('connection', async (ws, req) => {
         // 2) durable append-only audit log (keeps the profileId for deletion scrubs)
         appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message });
         broadcast(roomId, { type: 'chat', user: entry.user, message, ts: chatTs });
+        analyticsRecordChat(roomId, user);
         // Ping cross-room watchers who are @mentioned here (see notifyMentions).
         notifyMentions(room, roomId, user.name, message, chatTs);
         persistRoom(roomId);
@@ -1237,50 +1988,140 @@ wss.on('connection', async (ws, req) => {
         persistRoom(roomId);
         break;
       }
+      // Clients page between scenes: send them ONE scene's frames + ops.
+      case 'scene_fetch': {
+        if (!room.animationEnabled) break;
+        const fetchId = String(data.sceneId || '').slice(0, 24);
+        if (!room.scenes.some((s) => s.id === fetchId)) break;
+        ws.send(JSON.stringify(sceneHistoryMsg(room, fetchId)));
+        break;
+      }
+      // Scenes are HOST-only: the host directs the film's structure ("you take
+      // scene 2"); members animate within scenes. FLIPBOOK has no host, so the
+      // public playground stays single-scene by design.
+      case 'scene_add': {
+        if (!room.animationEnabled) break;
+        if (!isHost(room, user)) break;
+        if (room.scenes.length >= MAX_SCENES) {
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_SCENES} scenes` }));
+          break;
+        }
+        const scene = { id: `s${(room.opSeq = (room.opSeq || 0) + 1)}`, name: `Scene ${room.scenes.length + 1}` };
+        const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId: scene.id };
+        room.scenes.push(scene);
+        room.frames.push(firstFrame); // scene blocks stay contiguous: appended at the end
+        room.frameOpCounts.set(firstFrame.id, 0);
+        broadcast(roomId, { type: 'scene_add', scene, scenes: scenesMeta(room), byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'scene_del': {
+        if (!room.animationEnabled) break;
+        if (!isHost(room, user)) break;
+        if (room.scenes.length <= 1) break;
+        const delSceneId = String(data.sceneId || '').slice(0, 24);
+        const sceneIndex = room.scenes.findIndex((s) => s.id === delSceneId);
+        if (sceneIndex < 0) break;
+        // Resolve doomed ops BEFORE mutating (untagged ops bind to frames[0]).
+        const doomedFrames = new Set(framesOfScene(room, delSceneId).map((f) => f.id));
+        const removeOpIds = new Set(
+          room.history.filter((op) => doomedFrames.has(opFrameId(room, op))).map((op) => op.opId),
+        );
+        // If this scene owns the CURRENT first frame, pin any untagged ops in
+        // the full-mural undo backup to it now — restoring later must not
+        // re-bind them to whichever frame becomes first (same guard as
+        // frame_move).
+        if (room.lastCleared && !room.lastClearedFrameId && room.frames[0] && doomedFrames.has(room.frames[0].id)) {
+          const firstId = room.frames[0].id;
+          for (const op of room.lastCleared) {
+            if (!op.frameId) op.frameId = firstId;
+          }
+        }
+        room.scenes.splice(sceneIndex, 1);
+        room.frames = room.frames.filter((f) => !doomedFrames.has(f.id));
+        room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
+        doomedFrames.forEach((fid) => room.frameOpCounts.delete(fid));
+        if (doomedFrames.has(room.lastClearedFrameId)) {
+          room.lastCleared = null;
+          room.lastClearedFrameId = null;
+        }
+        broadcast(roomId, { type: 'scene_del', sceneId: delSceneId, scenes: scenesMeta(room), byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
       case 'frame_add': {
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
+        const afterId = data.afterFrameId != null ? String(data.afterFrameId).slice(0, 24) : null;
+        const afterFrame = afterId ? room.frames.find((f) => f.id === afterId) : null;
+        const dupId = data.duplicateOf != null ? String(data.duplicateOf).slice(0, 24) : null;
+        const dupFrame = dupId ? room.frames.find((f) => f.id === dupId) : null;
+        // Which scene does the new frame join? Its anchor's scene, else the
+        // requested scene, else the first — and caps apply PER SCENE now.
+        const requestedScene = data.sceneId != null ? String(data.sceneId).slice(0, 24) : null;
+        const sceneId =
+          (afterFrame && afterFrame.sceneId) ||
+          (dupFrame && dupFrame.sceneId) ||
+          (requestedScene && room.scenes.some((s) => s.id === requestedScene) ? requestedScene : room.scenes[0].id);
         const maxFrames = room.audience === 'kid_safe' ? MAX_ANIM_FRAMES_PUBLIC : MAX_ANIM_FRAMES_PRIVATE;
-        if (room.frames.length >= maxFrames) {
-          ws.send(JSON.stringify({ type: 'frame_denied', reason: `This room is capped at ${maxFrames} frames` }));
+        if (framesOfScene(room, sceneId).length >= maxFrames) {
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Scenes are capped at ${maxFrames} frames — add a new scene!` }));
           break;
         }
-        const afterId = data.afterFrameId != null ? String(data.afterFrameId).slice(0, 24) : null;
-        const afterIndex = afterId ? room.frames.findIndex((f) => f.id === afterId) : room.frames.length - 1;
-        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120 };
+        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId };
         // Duplicate: copy the source frame's visible ops under fresh opIds so
         // rejoiners replay the copy identically (the engine is deterministic —
         // same ops, same seeds, same pixels). Clients clone pixels locally.
-        const dupId = data.duplicateOf != null ? String(data.duplicateOf).slice(0, 24) : null;
-        if (dupId && room.frames.some((f) => f.id === dupId)) {
+        if (dupFrame) {
           const copies = visibleHistory(room)
             .filter((op) => opFrameId(room, op) === dupId)
             .map((op) => ({ ...op, frameId: frame.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
+          // Duplicates count against the room's op budget too — otherwise
+          // repeated Duplicate taps grow history past the ceiling ordinary
+          // draws are already being rejected at.
+          if (room.history.length + copies.length > MAX_ANIM_ROOM_OPS) {
+            ws.send(JSON.stringify({ type: 'frame_denied', reason: 'This segment is out of drawing space — start a new one!' }));
+            break;
+          }
           room.history = room.history.concat(copies);
           room.frameOpCounts.set(frame.id, copies.length);
-          const src = room.frames.find((f) => f.id === dupId);
-          if (src) frame.durationMs = src.durationMs;
+          frame.durationMs = dupFrame.durationMs;
         } else {
           room.frameOpCounts.set(frame.id, 0);
         }
-        room.frames.splice(afterIndex >= 0 ? afterIndex + 1 : room.frames.length, 0, frame);
-        broadcast(roomId, { type: 'frame_add', frame, afterFrameId: afterId, duplicateOf: dupId, byUserId: id });
+        // Insert after the anchor, else at the END of the scene's block (keeps
+        // scene blocks contiguous in the flat array).
+        let insertAt = room.frames.length;
+        if (afterFrame) {
+          insertAt = room.frames.indexOf(afterFrame) + 1;
+        } else {
+          for (let i = room.frames.length - 1; i >= 0; i -= 1) {
+            if (room.frames[i].sceneId === sceneId) {
+              insertAt = i + 1;
+              break;
+            }
+          }
+        }
+        room.frames.splice(insertAt, 0, frame);
+        broadcast(roomId, { type: 'frame_add', frame, afterFrameId: afterId, duplicateOf: dupId, sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
       }
       case 'frame_del': {
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
-        if (room.frames.length <= 1) break;
         const delId = String(data.frameId || '').slice(0, 24);
         const delIndex = room.frames.findIndex((f) => f.id === delId);
         if (delIndex < 0) break;
+        // Every scene keeps at least one frame (delete the SCENE to drop it).
+        if (framesOfScene(room, room.frames[delIndex].sceneId).length <= 1) break;
         // Resolve which ops belong to this frame BEFORE the splice — untagged
         // legacy ops resolve to the CURRENT first frame, and mutating the list
         // first would silently migrate them to whichever frame becomes first.
         const removeOpIds = new Set(
           room.history.filter((op) => opFrameId(room, op) === delId).map((op) => op.opId),
         );
+        const delSceneId = room.frames[delIndex].sceneId;
         room.frames.splice(delIndex, 1);
         // The frame's ops leave history for good (this is not undo-clearable).
         room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
@@ -1289,7 +2130,7 @@ wss.on('connection', async (ws, req) => {
           room.lastCleared = null;
           room.lastClearedFrameId = null;
         }
-        broadcast(roomId, { type: 'frame_del', frameId: delId, byUserId: id });
+        broadcast(roomId, { type: 'frame_del', frameId: delId, sceneId: delSceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
       }
@@ -1297,9 +2138,16 @@ wss.on('connection', async (ws, req) => {
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
         const moveId = String(data.frameId || '').slice(0, 24);
-        const fromIndex = room.frames.findIndex((f) => f.id === moveId);
-        const toIndex = Math.max(0, Math.min(room.frames.length - 1, Number(data.toIndex) || 0));
-        if (fromIndex < 0 || fromIndex === toIndex) break;
+        const movedFrame = room.frames.find((f) => f.id === moveId);
+        if (!movedFrame) break;
+        // toIndex is SCENE-relative (clients only see their scene's frames);
+        // map it into the flat array while keeping the scene block contiguous.
+        const sceneFrames = framesOfScene(room, movedFrame.sceneId);
+        const sceneFrom = sceneFrames.indexOf(movedFrame);
+        const sceneTo = Math.max(0, Math.min(sceneFrames.length - 1, Number(data.toIndex) || 0));
+        if (sceneFrom === sceneTo) break;
+        const fromIndex = room.frames.indexOf(movedFrame);
+        const toIndex = room.frames.indexOf(sceneFrames[sceneTo]);
         // Untagged legacy ops resolve to "whichever frame is first" — if this
         // move changes frames[0], pin them to the frame they belong to NOW or
         // they'd silently migrate onto the new first frame.
@@ -1316,7 +2164,7 @@ wss.on('connection', async (ws, req) => {
         }
         const [moved] = room.frames.splice(fromIndex, 1);
         room.frames.splice(toIndex, 0, moved);
-        broadcast(roomId, { type: 'frame_move', frameId: moveId, toIndex, byUserId: id });
+        broadcast(roomId, { type: 'frame_move', frameId: moveId, toIndex: sceneTo, sceneId: movedFrame.sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
       }
@@ -1327,7 +2175,7 @@ wss.on('connection', async (ws, req) => {
         const target = room.frames.find((f) => f.id === durId);
         if (!target) break;
         target.durationMs = Math.max(40, Math.min(2000, Number(data.durationMs) || 120));
-        broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, byUserId: id });
+        broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, sceneId: target.sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
       }
@@ -1440,7 +2288,11 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.add(opId));
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+        if (room.animationEnabled) {
+          broadcast(roomId, { type: 'resync' });
+        } else {
+          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+        }
         persistRoom(roomId);
         break;
       }
@@ -1449,7 +2301,11 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+        if (room.animationEnabled) {
+          broadcast(roomId, { type: 'resync', restored: true });
+        } else {
+          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+        }
         persistRoom(roomId);
         break;
       }
@@ -1460,7 +2316,11 @@ wss.on('connection', async (ws, req) => {
         room.history = room.history.filter((op) => !ids.has(op.opId));
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
         recountFrameOps(room);
-        broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+        if (room.animationEnabled) {
+          broadcast(roomId, { type: 'resync' });
+        } else {
+          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+        }
         persistRoom(roomId);
         break;
       }
@@ -1514,7 +2374,11 @@ wss.on('connection', async (ws, req) => {
             toHide.forEach((opId) => room.hiddenOpIds.add(opId));
             const authorIds = new Set(room.history.filter((op) => toHide.includes(op.opId)).map((op) => op.userId));
             authorIds.forEach((uid) => { const au = room.users.get(uid); if (au) au.muted = true; });
-            broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+            if (room.animationEnabled) {
+              broadcast(roomId, { type: 'resync' });
+            } else {
+              broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+            }
             alertHosts(room, {
               level: 'warn', reason: 'auto-hidden pending review', opIds: toHide,
               author: offender ? offender.name : null, source: 'auto', hidden: true,
@@ -1536,6 +2400,7 @@ wss.on('connection', async (ws, req) => {
   ws.on('close', () => {
     // Accrue this user's time in the room — engagement extends the auto-close TTL.
     room.userSeconds = (room.userSeconds || 0) + Math.max(0, (Date.now() - user.connectedAt) / 1000);
+    analyticsEndSession(user);
     room.users.delete(id);
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
@@ -1662,6 +2527,7 @@ app.post('/api/artworks', async (req, res) => {
   };
   arr.unshift(item);
   saveUserArt(key, arr);
+  analyticsRecordGallerySave(key, req);
   res.json({ ok: true, id: item.id, count: arr.length, max: MAX_SAVES });
 });
 
@@ -1840,12 +2706,18 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       }
     }
   }
-  res.json({ ok: true, scrubbed });
+  const analyticsScrubbed = analyticsScrubProfile(pid);
+  res.json({ ok: true, scrubbed, analyticsScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
   if (!adminGuard(req, res)) return;
   res.json({ ok: true });
+});
+
+app.get('/api/admin/analytics', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json(analyticsSnapshot());
 });
 
 app.get('/api/admin/rooms', (req, res) => {
@@ -1897,6 +2769,7 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
     room.lastClearedFrameId = null;
     room.history = [];
     recountFrameOps(room);
+    analyticsRecordClear(id, null, 'admin');
     broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
     persistRoom(id);
   }

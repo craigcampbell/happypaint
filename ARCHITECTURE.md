@@ -139,7 +139,7 @@ in Docker) so one volume persists everything:
 - `.rooms/<ID>.json` — per-room mural history, owner, coHosts, locked, mutes, sheet.
 - `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
-- `.admin-key`, `.reports.json`, `.metrics.json`.
+- `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
 
 Separate, large, read-only: **`coloring-library/`** (its own volume). PocketBase
 data: **`pb_data/`** (its own volume). All three folders are git-ignored.

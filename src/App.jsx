@@ -3,13 +3,16 @@ import {
   brushCatalog,
   clamp,
   drawBrushSegment,
-  getDab,
+  getAuthoringDab,
+  getStrokeDab,
   getTexture,
   makeSmudgeRenderer,
   makeStrokeRenderer,
   paletteCatalog,
   paperTextures,
   pointRand,
+  preloadBrushStamp,
+  isBrushStampReady,
   prepareStrokeCommit,
 } from "./utils/brushes";
 import { createStrokeBuffer } from "./utils/strokeBuffer";
@@ -163,6 +166,10 @@ const FRAME_THUMB_HEIGHT = 60;
 // full-res (40MB) composite allocation on every recomposite.
 const ONION_PROXY_WIDTH = CANVAS_WIDTH / 2;
 const ONION_PROXY_HEIGHT = CANVAS_HEIGHT / 2;
+
+// The toddler finger-paint room shows only chunky, wet, smeary brushes — no
+// pencils, no tech. Everything else about the studio hides there too.
+const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge"]);
 
 // Defer non-urgent work (thumbnail PNG encodes) off the stroke-commit path.
 // Safari has no requestIdleCallback; a short timeout is close enough there.
@@ -507,6 +514,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
   const strokeNetRef = useRef(null); // outgoing in-progress brush stroke buffer
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
+  const remoteStampQueueRef = useRef(new Map()); // strokeId -> { ops, loading }
+  const applyRemoteOpRef = useRef(null);
+  const sentStampIdsRef = useRef(new Set()); // imported brush tips already sent with full data this session
   // Stage-1 brush engine (#62): the local in-progress NON-eraser stroke paints
   // into a bbox-capped offscreen buffer and lands on its layer once, at the
   // stroke's opacity, at pen-up. Null while idle / while erasing.
@@ -637,6 +647,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const [selectedTool, setSelectedTool] = useState("brush");
   const [selectedBrush, setSelectedBrush] = useState("marker");
+  const [activeBrushRecipe, setActiveBrushRecipe] = useState(null);
   const [selectedColor, setSelectedColor] = useState("#111827");
   const [selectedTexture, setSelectedTexture] = useState("linen");
   const [brushSize, setBrushSize] = useState(24);
@@ -705,7 +716,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // so everyone sees the same flipbook and rejoiners catch up like a document.
   const [roomAnimation, setRoomAnimation] = useState(false);
   const roomAnimationRef = useRef(false);
+  // Finger-paint room (FINGERS): smudge allowed, always wet, no chat, chunky
+  // wet brushes only.
+  const [roomFingerPaint, setRoomFingerPaint] = useState(false);
+  const roomFingerPaintRef = useRef(false);
   const [isExportingVideo, setIsExportingVideo] = useState(false);
+  // Multi-scene export pages scenes UNDER the user — freeze drawing + frame/
+  // scene navigation while it runs so strokes can't land in scenes the artist
+  // never opened (guards read this ref, not state, on the hot paths).
+  const isExportingVideoRef = useRef(false);
+  // Async op assets (image dataURLs) still decoding when a scene's history
+  // finishes replaying — hydration isn't "done" until these settle.
+  const pendingAssetLoadsRef = useRef([]);
+  // Scenes: a film is pages ("scenes") of up to 8 frames; only the ACTIVE
+  // scene's frames are hydrated as canvases — paging swaps them via
+  // scene_fetch, so memory stays at one scene's worth (~30s of film per room).
+  const [scenes, setScenes] = useState([]); // [{id, name, frames:[{id,durationMs}]}]
+  const scenesRef = useRef([]);
+  const [activeSceneId, setActiveSceneId] = useState(null);
+  const activeSceneIdRef = useRef(null);
+  const sceneWaitersRef = useRef(new Map());
   // Our own session id (from the connected handshake) — used to recognise our
   // echoed frame mutations without depending on the mp hook object.
   const myUserIdRef = useRef(null);
@@ -777,9 +807,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return thumbs;
       });
       // Structural changes are a housekeeping moment for the per-frame caches
-      // and the eyeball-hidden set (drop ids that no longer exist).
+      // and the eyeball-hidden set (drop ids that no longer exist). In a
+      // scene-paged room "exists" means ANY scene's frame — eyeball marks must
+      // survive paging away and back.
       pruneOnionCache();
       const liveIds = new Set(framesRef.current.map((frame) => frame.id));
+      if (roomAnimationRef.current) {
+        for (const scene of scenesRef.current) {
+          for (const meta of scene.frames || []) {
+            liveIds.add(meta.id);
+          }
+        }
+      }
       if ([...hiddenFramesRef.current].some((id) => !liveIds.has(id))) {
         const pruned = new Set([...hiddenFramesRef.current].filter((id) => liveIds.has(id)));
         hiddenFramesRef.current = pruned;
@@ -914,19 +953,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, []);
 
   useEffect(() => {
+    const recipeSettings = activeBrushRecipe ? recipeToBrushSettings(activeBrushRecipe, { color: selectedColor }) : null;
     settingsRef.current = {
       tool: selectedTool,
-      brush: selectedBrush,
+      brush: recipeSettings?.brush || selectedBrush,
       color: selectedColor,
       opacity: brushOpacity,
       size: brushSize,
       variation: brushVariation,
+      v: recipeSettings?.v,
+      dab: recipeSettings?.dab,
       texture: selectedTexture,
       fillShape,
       textSize,
       studioUnlocked,
     };
   }, [
+    activeBrushRecipe,
     brushOpacity,
     brushSize,
     brushVariation,
@@ -938,6 +981,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     studioUnlocked,
     textSize,
   ]);
+
+  useEffect(() => {
+    sentStampIdsRef.current.clear();
+  }, [roomId]);
 
   const updateHistoryCounts = useCallback(() => {
     setHistoryCount(historyRef.current.length);
@@ -1254,6 +1301,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       entry.buf?.dispose();
     }
     remoteStrokesRef.current.clear();
+    remoteStampQueueRef.current.clear();
   }, []);
 
   const renderDisplay = useCallback(() => {
@@ -1441,6 +1489,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       syncZoomLabel();
     }
     blitToDisplay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blitToDisplay]);
 
   // Push an undo entry. Brush/fill/shape/text ops only touch the ACTIVE layer,
@@ -2130,7 +2179,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         showToast("Couldn't open that drawing");
       }
     },
-    [markChanged, renderDisplay, showToast, syncFrameState, syncLayerState],
+    [markChanged, pushHistory, renderDisplay, showToast, syncFrameState, syncLayerState],
   );
 
   const deleteDrawing = useCallback(
@@ -2292,13 +2341,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       // Private-room-only brushes (smudge) are ghosted in public rooms; the
-      // picker routes their taps to a toast, but guard here too.
-      if (brush?.privateOnly && roomAudienceRef.current === "kid_safe") {
+      // picker routes their taps to a toast, but guard here too. The
+      // finger-paint room is the exception — smearing is the toy there.
+      if (brush?.privateOnly && roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
         showToast("Smudge works in private rooms — start one from Rooms!");
         return;
       }
 
       setSelectedBrush(brushId);
+      setActiveBrushRecipe(null);
       setSelectedTool("brush");
       // Picking a brush means you want to draw — drop out of the pan/hand tool.
       handToolRef.current = false;
@@ -2417,7 +2468,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (!animated && activeFrameIndexRef.current !== 0) {
       return;
     }
-    const op = { kind: "draw", strokeId: net.id, settings: net.settings, points };
+    const stampId = net.settings?.dab?.stampId;
+    const hasInlineStamp = !!net.settings?.dab?.stampDataUrl && !!stampId;
+    // Scene histories are fetched independently — someone who pages into
+    // scene 3 never replays scene 1's ops, so the full tip pixels must ride
+    // at least once PER SCENE (not per session) or their replay of this
+    // brush bakes a plain line into the cel.
+    const stampScope = hasInlineStamp ? `${stampId}::${(animated && activeSceneIdRef.current) || "main"}` : null;
+    const sendFullStamp = hasInlineStamp && !sentStampIdsRef.current.has(stampScope);
+    const settingsOnce = hasInlineStamp;
+    const op = { kind: "draw", strokeId: net.id, points };
+    if (!settingsOnce || !net.sentSettings) {
+      op.settings = sendFullStamp
+        ? net.settings
+        : hasInlineStamp
+          ? { ...net.settings, dab: { ...net.settings.dab, stampDataUrl: undefined } }
+          : net.settings;
+      net.sentSettings = true;
+      if (sendFullStamp) {
+        sentStampIdsRef.current.add(stampScope);
+      }
+    }
     if (animated) {
       op.frameId = framesRef.current[activeFrameIndexRef.current]?.id;
     }
@@ -2749,6 +2820,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Smudge is private-room only. The picker ghosts it in kid_safe rooms;
       // this guards restored drafts / audience races by falling back to marker.
       const brushId = settings.brush === "smudge" && roomAudienceRef.current === "kid_safe" ? "marker" : settings.brush;
+      if (roomAudienceRef.current === "kid_safe" && settings.dab?.shape === "stamp") {
+        setStatus("Imported brushes work in private rooms");
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+        activePointerRef.current = null;
+        activeCanvasRectRef.current = null;
+        return;
+      }
+      const authoringDab = settings.v >= 3 && settings.dab
+        ? { version: 3, dab: settings.dab }
+        : brushId === "eraser" || brushId === "smudge" ? null : getAuthoringDab(brushId);
+      const dab = authoringDab?.dab || null;
+      if (dab?.shape === "stamp" && !isBrushStampReady(dab)) {
+        setStatus("Brush tip is still loading");
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+        activePointerRef.current = null;
+        activeCanvasRectRef.current = null;
+        return;
+      }
       // Velocity-pressure synthesis (#63) starts fresh on every stroke.
       velocityRef.current.lastT = null;
       velocityRef.current.ema = null;
@@ -2766,7 +2855,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Spray/eraser/anything without dab params stays legacy, and legacy
       // history ops (no v) replay pixel-stable forever. (Smudge is routed BY
       // BRUSH ID in every consumer, not via the dab table.)
-      const dab = brushId === "eraser" || brushId === "smudge" ? null : getDab(brushId);
       const netSettings = {
         brush: brushId,
         color: settings.color,
@@ -2775,8 +2863,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         variation: settings.variation,
         seed,
       };
-      if (dab) {
-        netSettings.v = 2;
+      if (authoringDab) {
+        netSettings.v = authoringDab.version;
+        if (authoringDab.version >= 3) {
+          netSettings.dab = authoringDab.dab;
+        }
         // The room's wet state is captured INTO the op at pen-down: replay
         // stays deterministic no matter how the toggle flips later.
         if (roomWetRef.current) {
@@ -2789,6 +2880,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         settings: netSettings,
         pending: [],
         lastSent: 0,
+        sentSettings: false,
         last: null, // last appended net point (wire-level dedupe)
       };
       // Stage-1 buffered stroke (#62) for everything but the eraser and
@@ -2868,7 +2960,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
       drawBrushFromEvent(event);
     },
-    [drawBrushFromEvent, getPoint],
+    [drawBrushFromEvent, getPoint, sendCursorThrottled],
   );
 
   const finishStroke = useCallback(
@@ -2945,7 +3037,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Play-money reward: a finished stroke earns a Drop (throttled internally).
       earnPaintDropsRef.current?.();
     },
-    [commitLocalStroke, flushStrokeFrame, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
 
   // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
@@ -3045,6 +3137,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   const handleCanvasPointerDown = (event) => {
+    if (isExportingVideoRef.current) {
+      return; // film export is paging scenes — don't stroke into them
+    }
     // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
     // slides off-canvas or a system gesture interrupts. Without this, a lost
@@ -3602,6 +3697,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleSelectFrame = useCallback(
     (index) => {
+      if (isExportingVideoRef.current) {
+        return; // navigation is frozen while the film renders
+      }
       if (index === activeFrameIndexRef.current) {
         return;
       }
@@ -3614,14 +3712,71 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [activateFrame, markChanged, stopPlayback],
   );
 
-  // Frame structure edits: in an animation room these are SHARED mutations —
-  // the request goes to the server, which validates (caps, locks) and echoes
-  // the mutation to everyone including us; the message handler applies it.
-  // Outside animation rooms (strip hidden; kept for safety) they stay local.
+  // Page to another scene: ask the server for its frames+ops; the history
+  // handler swaps the flipbook when it lands. Old canvases are dropped by
+  // reconcileFrames, so memory stays at one scene's worth.
+  const switchScene = useCallback(
+    (sceneId) => {
+      if (!sceneId) {
+        return Promise.resolve(false);
+      }
+      if (sceneId === activeSceneIdRef.current) {
+        return Promise.resolve(true);
+      }
+      abortActiveStroke();
+      if (playTimerRef.current) {
+        stopPlayback();
+      }
+      commitLayersToFrame();
+      return new Promise((resolve) => {
+        const waiters = sceneWaitersRef.current;
+        const done = () => resolve(true); // hydrated
+        const list = waiters.get(sceneId) || [];
+        list.push(done);
+        waiters.set(sceneId, list);
+        mpRef.current?.sendSceneFetch?.(sceneId);
+        // Never wedge an awaiting export if the socket drops mid-switch — but
+        // report the timeout as FAILURE (and drop the stale waiter) so the
+        // exporter aborts instead of silently encoding blank scenes.
+        window.setTimeout(() => {
+          const current = waiters.get(sceneId);
+          if (current) {
+            const index = current.indexOf(done);
+            if (index >= 0) current.splice(index, 1);
+            if (current.length === 0) waiters.delete(sceneId);
+          }
+          resolve(false);
+        }, 8000);
+      });
+    },
+    [abortActiveStroke, commitLayersToFrame, stopPlayback],
+  );
+
+  const handleSelectScene = useCallback(
+    (sceneId) => {
+      if (isExportingVideoRef.current) {
+        return; // navigation is frozen while the film renders
+      }
+      switchScene(sceneId);
+      const index = scenesRef.current.findIndex((scene) => scene.id === sceneId);
+      if (index >= 0) {
+        setStatus(`Scene ${index + 1}`);
+      }
+    },
+    [switchScene],
+  );
+
+  // Frame structure edits: in an animation room these are SHARED mutations.
+  // The request goes to the server, which validates caps/locks and echoes it.
   const handleAddFrame = useCallback(() => {
+    if (isExportingVideoRef.current) {
+      return;
+    }
     if (roomAnimationRef.current) {
       commitLayersToFrame();
-      mpRef.current?.sendFrameAdd?.(framesRef.current[activeFrameIndexRef.current]?.id, null);
+      // The anchor frame could have raced a delete server-side — the sceneId
+      // makes the server fall back to OUR scene, never scenes[0].
+      mpRef.current?.sendFrameAdd?.(framesRef.current[activeFrameIndexRef.current]?.id, null, activeSceneIdRef.current);
       return; // applied on the server echo
     }
     if (framesRef.current.length >= MAX_FRAMES) {
@@ -3639,13 +3794,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleDuplicateFrame = useCallback(
     (index) => {
+      if (isExportingVideoRef.current) {
+        return;
+      }
       const source = framesRef.current[index];
       if (!source) {
         return;
       }
       if (roomAnimationRef.current) {
         commitLayersToFrame();
-        mpRef.current?.sendFrameAdd?.(source.id, source.id);
+        mpRef.current?.sendFrameAdd?.(source.id, source.id, activeSceneIdRef.current);
         return; // applied on the server echo (pixel-cloned there)
       }
       if (framesRef.current.length >= MAX_FRAMES) {
@@ -3664,7 +3822,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleDeleteFrame = useCallback(
     (index) => {
-      if (framesRef.current.length <= 1) {
+      if (isExportingVideoRef.current || framesRef.current.length <= 1) {
         return;
       }
       if (roomAnimationRef.current) {
@@ -3682,6 +3840,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleMoveFrame = useCallback(
     (index, direction) => {
+      if (isExportingVideoRef.current) {
+        return;
+      }
       const target = index + direction;
       if (target < 0 || target >= framesRef.current.length) {
         return;
@@ -3761,6 +3922,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // playback already proved at 25fps). pointer-up lands on handleScrubEnd.
   const handleScrub = useCallback(
     (index) => {
+      if (isExportingVideoRef.current) {
+        return; // the film renderer owns the display while encoding
+      }
       const scrub = scrubStateRef.current;
       if (!scrub.active) {
         // A second finger can start scrubbing mid-stroke — terminate the
@@ -3933,14 +4097,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       stopPlayback();
     }
     commitLayersToFrame();
-    // Snapshot the list: a friend's frame_add/del/move mid-export must not
-    // shrink or reorder what we're encoding (deleted frames' canvases stay
-    // alive and drawable, so a shallow copy is enough).
-    const exportFrames = framesRef.current.slice();
-    if (exportFrames.length === 0) {
+    // Multi-scene films stitch EVERY scene into one video: the draw callback
+    // pages scenes in via switchScene (memory stays at a scene's worth) and
+    // frames resolve by id after each hydration. Single-scene exports snapshot
+    // the frame list so remote edits mid-export can't shrink or reorder it.
+    // (The real-time MediaRecorder fallback can't pause for scene switches, so
+    // browsers without WebCodecs export the current scene only.)
+    const multiScene =
+      roomAnimationRef.current && scenesRef.current.length > 1 && typeof window.VideoEncoder === "function";
+    const originalSceneId = activeSceneIdRef.current;
+    let plan;
+    if (multiScene) {
+      plan = [];
+      for (const scene of scenesRef.current) {
+        for (const meta of scene.frames || []) {
+          plan.push({ sceneId: scene.id, frameId: meta.id, durationMs: meta.durationMs });
+        }
+      }
+    } else {
+      plan = framesRef.current
+        .slice()
+        .map((frame) => ({ sceneId: activeSceneIdRef.current, frameId: frame.id, durationMs: frame.durationMs, frame }));
+    }
+    if (plan.length === 0) {
       return;
     }
     setIsExportingVideo(true);
+    isExportingVideoRef.current = true;
     setStatus("Encoding video…");
     try {
       const width = 1600;
@@ -3948,26 +4131,48 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const { blob, ext } = await encodeAnimationVideo({
         width,
         height,
-        count: exportFrames.length,
-        durationMsAt: (i) => exportFrames[i]?.durationMs || DEFAULT_FRAME_DURATION,
+        count: plan.length,
+        durationMsAt: (i) => plan[i]?.durationMs || DEFAULT_FRAME_DURATION,
         draw: async (context, i) => {
-          const frame = exportFrames[i];
-          if (!frame) {
+          const item = plan[i];
+          if (!item) {
             return;
           }
+          if (multiScene && item.sceneId !== activeSceneIdRef.current) {
+            const hydrated = await switchScene(item.sceneId);
+            if (!hydrated || activeSceneIdRef.current !== item.sceneId) {
+              // A failed/hijacked hydration must ABORT the export — never
+              // report "Film exported 🎬" with silently blank scenes.
+              throw new Error("scene hydration failed");
+            }
+          }
+          const frame = item.frame || framesRef.current.find((f) => f.id === item.frameId);
+          if (multiScene && !frame) {
+            throw new Error("frame missing after scene switch");
+          }
           await renderPaper(context, { width, height, textureId: selectedTexture });
-          compositeLayers(context, frame.layers, { width, height });
+          if (frame) {
+            compositeLayers(context, frame.layers, { width, height });
+          }
         },
-        onProgress: (pct) => setStatus(`Encoding video… ${Math.round(pct * 100)}%`),
+        onProgress: (pct) => setStatus(`Encoding film… ${Math.round(pct * 100)}%`),
       });
       downloadBlob(blob, `drawesome-${Date.now()}.${ext}`);
-      setStatus(`Video exported (.${ext}) 🎬`);
+      if (!multiScene && roomAnimationRef.current && scenesRef.current.length > 1) {
+        setStatus(`Exported this scene (.${ext}) — full-film export needs a newer browser`);
+      } else {
+        setStatus(`Film exported (.${ext}) 🎬`);
+      }
     } catch {
       setStatus("Video export failed on this browser — try Export GIF");
     } finally {
       setIsExportingVideo(false);
+      isExportingVideoRef.current = false;
+      if (multiScene && originalSceneId && originalSceneId !== activeSceneIdRef.current) {
+        switchScene(originalSceneId); // land back where the artist was working
+      }
     }
-  }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback]);
+  }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
 
   // ---- Replay & Timelapse ----
 
@@ -4297,6 +4502,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         setStatus("That recipe uses a studio brush — unlock with the Creator Brushes pack");
         return;
       }
+      setActiveBrushRecipe(null);
       setSelectedBrush(settings.brush);
       setSelectedTool("brush");
       setBrushSize(settings.size);
@@ -4318,7 +4524,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   // Apply a brush recipe (from the studio or a saved card) to the current brush.
   const handleApplyBrushRecipe = useCallback(
-    (recipe) => {
+    async (recipe) => {
       if (!recipe) {
         return;
       }
@@ -4328,6 +4534,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         setShowStore(true);
         setStatus("That brush uses a studio base — unlock with the Creator Brushes pack");
         return;
+      }
+      if (settings.dab?.shape === "stamp") {
+        setStatus("Loading brush tip...");
+        const ready = await preloadBrushStamp(settings.dab);
+        if (!ready) {
+          setStatus("Couldn't load that brush tip");
+          return;
+        }
+        setActiveBrushRecipe(recipe);
+      } else {
+        setActiveBrushRecipe(null);
       }
       setSelectedBrush(settings.brush);
       setSelectedTool("brush");
@@ -4354,6 +4571,42 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (await persistPaintSpace((current) => addAsset(current, asset))) {
         setStatus("Saved brush to Paint Space");
       }
+    },
+    [persistPaintSpace],
+  );
+
+  const handleSaveImportedBrushes = useCallback(
+    async (tips, { fileName } = {}) => {
+      const baseName = (fileName || "ABR Brushes").replace(/\.[^.]+$/i, "");
+      const assets = tips.map((tip, index) => {
+        const recipe = {
+          baseBrush: "stamp",
+          size: 36,
+          opacity: 0.9,
+          variation: 0.12,
+          glow: false,
+          textured: true,
+          tipDataUrl: tip.tipDataUrl,
+          tipId: "",
+        };
+        const fields = buildBrushAssetFields(recipe, { tags: ["ABR", tip.source || "Photoshop"] });
+        return createAsset({
+          kind: "brush",
+          title: tips.length === 1 ? baseName : `${baseName} ${index + 1}`,
+          payload: fields.payload,
+          brush_recipe: fields.brush_recipe,
+          visibility: fields.visibility,
+          moderation_status: fields.moderation_status,
+        });
+      });
+      if (assets.length === 0) {
+        return 0;
+      }
+      if (await persistPaintSpace((current) => [...assets, ...current])) {
+        setStatus(`Imported ${assets.length} ABR brush tip${assets.length === 1 ? "" : "s"} to Paint Space`);
+        return assets.length;
+      }
+      return 0;
     },
     [persistPaintSpace],
   );
@@ -4652,7 +4905,40 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       if (op.kind === "draw") {
-        const settings = op.settings || {};
+        const strokes = remoteStrokesRef.current;
+        let entry = strokes.get(op.strokeId);
+        const settings = op.settings || entry?.settings || {};
+        if (!op.settings && !entry) {
+          const queued = remoteStampQueueRef.current.get(op.strokeId);
+          if (queued) {
+            queued.ops.push(op);
+          }
+          return;
+        }
+        const pendingDab = settings.v >= 3 ? getStrokeDab(settings) : null;
+        if (pendingDab?.shape === "stamp" && !isBrushStampReady(pendingDab)) {
+          let queued = remoteStampQueueRef.current.get(op.strokeId);
+          if (!queued) {
+            queued = { ops: [], loading: false };
+            remoteStampQueueRef.current.set(op.strokeId, queued);
+          }
+          queued.ops.push(op);
+          if (!queued.loading) {
+            queued.loading = true;
+            preloadBrushStamp(pendingDab).then((ok) => {
+              const readyQueue = remoteStampQueueRef.current.get(op.strokeId);
+              remoteStampQueueRef.current.delete(op.strokeId);
+              if (!ok || !readyQueue) {
+                return;
+              }
+              for (const queuedOp of readyQueue.ops) {
+                applyRemoteOpRef.current?.(queuedOp);
+              }
+              scheduleRemoteRender();
+            });
+          }
+          return;
+        }
         const lastMap = remoteStrokeLastRef.current;
         let last = lastMap.get(op.strokeId);
         if (settings.brush === "eraser") {
@@ -4672,8 +4958,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         }
         if (settings.brush === "smudge") {
           // Ignore smudge in public rooms (the server drops these too — this
-          // is belt-and-braces against a hacked/stale client).
-          if (roomAudienceRef.current === "kid_safe") {
+          // is belt-and-braces against a hacked/stale client). The finger-
+          // paint room is the exception: smearing is the whole toy there.
+          if (roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
             return;
           }
           // Smudge sample-and-drags LAYER 0 directly — no stroke buffer.
@@ -4705,8 +4992,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           return;
         }
-        const strokes = remoteStrokesRef.current;
-        let entry = strokes.get(op.strokeId);
         if (!entry) {
           let buffered = 0;
           for (const open of strokes.values()) {
@@ -4720,7 +5005,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // per-stroke walk state makes the 40ms wire batching irrelevant to
           // dab placement. The renderer needs the full-alpha buffer, so the
           // rare past-the-cap (buf: null) fallback stays on legacy segments.
-          const dab = settings.v >= 2 ? getDab(settings.brush) : null;
+          const dab = getStrokeDab(settings);
+          if (settings.v >= 3 && !dab) {
+            return;
+          }
           // Past the cap, this stroke is flagged (buf: null) onto the legacy
           // direct per-segment path — its end-op then has nothing to commit.
           const buf = buffered < REMOTE_BUFFER_CAP ? createStrokeBuffer() : null;
@@ -4784,19 +5072,30 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
         const image = new Image();
-        image.onload = () => {
-          ctx.drawImage(image, op.x, op.y, op.w, op.h);
-          touchFrame(frame.id);
-          if (isActiveFrame(frame)) {
-            markMixDirty(frame.layers[0], { x0: op.x, y0: op.y, w: op.w, h: op.h });
-            renderDisplay();
-          }
-        };
+        // Track the decode: a scene hydration (and the film exporter waiting
+        // on it) isn't complete until embedded images have actually landed.
+        const settled = new Promise((resolve) => {
+          image.onload = () => {
+            ctx.drawImage(image, op.x, op.y, op.w, op.h);
+            touchFrame(frame.id);
+            if (isActiveFrame(frame)) {
+              markMixDirty(frame.layers[0], { x0: op.x, y0: op.y, w: op.w, h: op.h });
+              renderDisplay();
+            }
+            resolve();
+          };
+          image.onerror = () => resolve();
+        });
+        pendingAssetLoadsRef.current.push(settled);
         image.src = op.dataUrl;
       }
     },
-    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, isActiveFrame, markMixDirty, renderDisplay, sampleMix, touchFrame],
+    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
   );
+
+  useEffect(() => {
+    applyRemoteOpRef.current = applyRemoteOp;
+  }, [applyRemoteOp]);
 
   // Buffers are transient: drop the idle sweep and every open stroke buffer
   // (local + remote) when the studio unmounts (room hop / route change).
@@ -4810,6 +5109,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         entry.buf?.dispose();
       }
       remoteStrokesRef.current.clear();
+      remoteStampQueueRef.current.clear();
       localStrokeRef.current?.buf.dispose();
       localStrokeRef.current = null;
       localSmudgeRef.current = null;
@@ -4855,7 +5155,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // if this device is capable; the server decides who actually scans.
           roomAudienceRef.current = data.audience || null;
           setRoomAudience(data.audience || null);
-          if (data.audience === "kid_safe") {
+          roomFingerPaintRef.current = !!data.fingerPaint;
+          setRoomFingerPaint(!!data.fingerPaint);
+          if (data.fingerPaint) {
+            // Toddler room: land on a big wet paint brush, fingers-first.
+            setSelectedTool("brush");
+            setSelectedBrush((prev) => (FINGER_PAINT_BRUSHES.has(prev) ? prev : "paint"));
+            setBrushSize((prev) => Math.max(prev, 56));
+          } else if (data.audience === "kid_safe") {
             // Public rooms are brush-only (fill/shape/text hidden) — snap back
             // if one of the hidden tools was selected before the audience arrived.
             setSelectedTool((prev) => (prev === "brush" ? prev : "brush"));
@@ -4895,6 +5202,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // along: the whole flipbook rebuilds, so leaving and coming back
           // shows everything friends did in the meantime (Google-Docs model).
           const incomingOps = data.ops || [];
+          // Scene bookkeeping: a history frame may be one SCENE's slice of the
+          // film (join, page, resync). Track which scene we now hold.
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          if (data.sceneId) {
+            activeSceneIdRef.current = data.sceneId;
+            setActiveSceneId(data.sceneId);
+          }
           if (data.frames) {
             reconcileFrames(data.frames);
           }
@@ -4931,6 +5248,63 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (data.restored) {
             setClearBanner(null);
             setStatus("Canvas brought back 🎉");
+          }
+          // Wake anything awaiting this scene's hydration (export stitching) —
+          // but only after embedded image ops finish decoding, or the exporter
+          // would encode frames whose pictures haven't landed yet.
+          if (data.sceneId) {
+            const waiters = sceneWaitersRef.current.get(data.sceneId);
+            if (waiters) {
+              sceneWaitersRef.current.delete(data.sceneId);
+              const pendingLoads = pendingAssetLoadsRef.current.splice(0);
+              Promise.allSettled(pendingLoads).then(() => {
+                renderDisplay();
+                waiters.forEach((resolve) => resolve());
+              });
+            }
+          }
+          break;
+        }
+        case "resync": {
+          // Shared history changed in a way that can't be patched incrementally
+          // (moderation hide/restore, undo-clear) — refetch OUR scene. If a
+          // scene SWITCH is already in flight, refetch its target instead:
+          // re-requesting the old scene would answer LAST and revert the hop.
+          if (roomAnimationRef.current) {
+            const pending = [...sceneWaitersRef.current.keys()];
+            const target = pending.length ? pending[pending.length - 1] : activeSceneIdRef.current;
+            if (target) {
+              mpRef.current?.sendSceneFetch?.(target);
+            }
+          }
+          if (data.restored) {
+            setClearBanner(null);
+            setStatus("Canvas brought back 🎉");
+          }
+          break;
+        }
+        case "scene_add": {
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          if (data.byUserId === myUserIdRef.current && data.scene?.id) {
+            switchScene(data.scene.id); // the host lands in their new scene
+          }
+          break;
+        }
+        case "scene_del": {
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          if (data.sceneId === activeSceneIdRef.current) {
+            // Our scene was deleted under us — hop to the first surviving one.
+            const fallback = (data.scenes || [])[0];
+            if (fallback) {
+              activeSceneIdRef.current = null; // force the switch
+              switchScene(fallback.id);
+            }
           }
           break;
         }
@@ -5019,6 +5393,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         }
         case "frame_add": {
           if (!data.frame?.id) break;
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          // A frame added to a scene we're NOT viewing only updates the pager
+          // meta — its canvas hydrates when we page there.
+          if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
+            break;
+          }
           commitLayersToFrame();
           const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
           const frame = createFrame({ layers: createDefaultLayers(), durationMs: data.frame.durationMs || DEFAULT_FRAME_DURATION });
@@ -5046,6 +5429,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         }
         case "frame_del": {
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
+            break; // another scene's frame — meta update only
+          }
           const delIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
           if (delIndex < 0 || framesRef.current.length <= 1) break;
           const wasActive = delIndex === activeFrameIndexRef.current;
@@ -5067,6 +5457,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         }
         case "frame_move": {
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
+            break; // another scene's ordering — meta update only
+          }
           const fromIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
           if (fromIndex < 0) break;
           commitLayersToFrame();
@@ -5079,8 +5476,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         }
         case "frame_duration": {
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
           const durFrame = framesRef.current.find((f) => f.id === data.frameId);
-          if (!durFrame) break;
+          if (!durFrame) break; // another scene's frame — meta update only
           durFrame.durationMs = data.durationMs;
           setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
           break;
@@ -5185,7 +5586,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [abortActiveStroke, activateFrame, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast, stopPlayback, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -5286,8 +5687,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendFrameDel: mp.sendFrameDel,
       sendFrameMove: mp.sendFrameMove,
       sendFrameDuration: mp.sendFrameDuration,
+      sendSceneFetch: mp.sendSceneFetch,
+      sendSceneAdd: mp.sendSceneAdd,
+      sendSceneDel: mp.sendSceneDel,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel]);
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -5570,6 +5974,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "Backspace":
           event.preventDefault();
+          if (roomFingerPaintRef.current) break; // toddler room: no eraser
           handToolRef.current = false;
           setHandTool(false);
           setSelectedTool("brush");
@@ -5742,6 +6147,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // changes, and DPR changes (e.g. dragging the tab between monitors) — W6.
   useEffect(() => {
     let mediaQuery = null;
+    let resizeRaf = 0;
+    const scheduleResize = () => {
+      if (resizeRaf) {
+        return;
+      }
+      resizeRaf = window.requestAnimationFrame(() => {
+        resizeRaf = 0;
+        resizeDisplayCanvas();
+      });
+    };
     const handleDprChange = () => {
       resizeDisplayCanvas();
       // matchMedia('resolution') must be re-armed after each change.
@@ -5765,7 +6180,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     attachDprListener();
     resizeDisplayCanvas();
 
+    // The film strip is inserted after the websocket handshake, shrinking the
+    // canvas without a window resize. Observe the canvas box so pointer math and
+    // the backing store stay aligned with in-flow UI changes.
+    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(scheduleResize) : null;
+    if (resizeObserver) {
+      const display = displayCanvasRef.current;
+      if (display) {
+        resizeObserver.observe(display);
+        if (display.parentElement) {
+          resizeObserver.observe(display.parentElement);
+        }
+      }
+    }
+
     return () => {
+      if (resizeRaf) {
+        window.cancelAnimationFrame(resizeRaf);
+      }
+      resizeObserver?.disconnect();
       window.removeEventListener("resize", handleResize);
       if (mediaQuery) {
         if (mediaQuery.removeEventListener) {
@@ -5776,6 +6209,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
     };
   }, [resizeDisplayCanvas]);
+
+  useEffect(() => {
+    let frame = window.requestAnimationFrame(() => {
+      frame = 0;
+      resizeDisplayCanvas();
+    });
+    const settleTimer = window.setTimeout(() => {
+      resizeDisplayCanvas();
+    }, 150);
+    return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.clearTimeout(settleTimer);
+    };
+  }, [resizeDisplayCanvas, roomAnimation]);
 
   useEffect(() => {
     autosaveTimerRef.current = window.setInterval(() => {
@@ -5949,6 +6398,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   const activateEraser = () => {
+    if (roomFingerPaintRef.current) {
+      return; // toddler room: chunky wet brushes only — no eraser
+    }
     handToolRef.current = false;
     setHandTool(false);
     setSelectedTool("brush");
@@ -6164,7 +6616,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           {roomAudience && roomAudience !== "kid_safe" && isRoomHost ? (
             <button
               type="button"
-              className={`mp-wet-toggle${roomAnimation ? " is-on" : ""}`}
+              className={`mp-wet-toggle mp-anim-toggle${roomAnimation ? " is-on" : ""}`}
               onClick={() => mpRef.current?.sendSetAnimation?.(!roomAnimation)}
               aria-pressed={roomAnimation}
               title={
@@ -6440,7 +6892,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               isExporting={isExportingGif}
               isExportingVideo={isExportingVideo}
               hiddenFrameIds={hiddenFrameIds}
-              maxFrames={roomAudience === "kid_safe" ? 8 : 12}
+              maxFrames={MAX_FRAMES}
+              scenes={scenes}
+              activeSceneId={activeSceneId}
+              canManageScenes={isRoomHost}
+              onSelectScene={handleSelectScene}
+              onAddScene={() => mpRef.current?.sendSceneAdd?.()}
+              onDeleteScene={(sceneId) => mpRef.current?.sendSceneDel?.(sceneId)}
               onSelectFrame={handleSelectFrame}
               onAddFrame={handleAddFrame}
               onDuplicateFrame={handleDuplicateFrame}
@@ -6678,7 +7136,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         ) : null}
 
-        {showChat ? (
+        {/* The finger-paint room has NO chat — its audience can't read yet. */}
+        {roomFingerPaint ? null : showChat ? (
           <div
             className="mp-chat"
             style={chatPos ? { left: chatPos.left, top: chatPos.top, right: "auto", bottom: "auto" } : undefined}
@@ -7058,11 +7517,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         <section className="tool-section rail-top rail-top-1" ref={brushSectionRef}>
           <h2>Brushes</h2>
           <div className="brush-grid">
-            {brushCatalog.map((brush) => {
+            {(roomFingerPaint ? brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id)) : brushCatalog).map((brush) => {
               const locked = brush.tier === "studio" && !studioUnlocked;
               // Private-room-only brushes (smudge) render ghosted in public
-              // rooms: not selectable, tap explains where they DO work.
-              const privateGated = Boolean(brush.privateOnly) && roomAudience === "kid_safe";
+              // rooms: not selectable, tap explains where they DO work — except
+              // the finger-paint room, where smudge is a headline toy.
+              const privateGated = Boolean(brush.privateOnly) && roomAudience === "kid_safe" && !roomFingerPaint;
               return (
                 <button
                   type="button"
@@ -7269,15 +7729,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <span className="qb-ico" aria-hidden="true">✏️</span>
           <span className="qb-label">Paint</span>
         </button>
-        <button
-          type="button"
-          className={isEraserActive ? "qb-btn is-active" : "qb-btn"}
-          onClick={activateEraser}
-          aria-pressed={isEraserActive}
-        >
-          <span className="qb-ico" aria-hidden="true">🧽</span>
-          <span className="qb-label">Eraser</span>
-        </button>
+        {roomFingerPaint ? null : (
+          <button
+            type="button"
+            className={isEraserActive ? "qb-btn is-active" : "qb-btn"}
+            onClick={activateEraser}
+            aria-pressed={isEraserActive}
+          >
+            <span className="qb-ico" aria-hidden="true">🧽</span>
+            <span className="qb-label">Eraser</span>
+          </button>
+        )}
         <button
           type="button"
           className={handTool ? "qb-btn is-active" : "qb-btn"}
@@ -7296,15 +7758,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <span className="qb-ico" aria-hidden="true">🎨</span>
           <span className="qb-label">Tools</span>
         </button>
-        <button
-          type="button"
-          className={showChat ? "qb-btn is-active" : "qb-btn"}
-          onClick={() => setShowChat((open) => !open)}
-          aria-pressed={showChat}
-        >
-          <span className="qb-ico" aria-hidden="true">💬</span>
-          <span className="qb-label">Chat{mp.chat.length ? ` ${mp.chat.length}` : ""}</span>
-        </button>
+        {roomFingerPaint ? null : (
+          <button
+            type="button"
+            className={showChat ? "qb-btn is-active" : "qb-btn"}
+            onClick={() => setShowChat((open) => !open)}
+            aria-pressed={showChat}
+          >
+            <span className="qb-ico" aria-hidden="true">💬</span>
+            <span className="qb-label">Chat{mp.chat.length ? ` ${mp.chat.length}` : ""}</span>
+          </button>
+        )}
       </div>
       {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}
 
@@ -7490,6 +7954,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           savedBrushes={savedBrushAssets}
           onClose={() => setShowBrushStudio(false)}
           onSaveRecipe={handleSaveBrushRecipe}
+          onSaveImportedBrushes={handleSaveImportedBrushes}
           onApplyRecipe={handleApplyBrushRecipe}
         />
       ) : null}

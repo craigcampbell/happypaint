@@ -19,6 +19,12 @@ export default function FilmStrip({
   isExportingVideo,
   hiddenFrameIds,
   maxFrames,
+  scenes = [],
+  activeSceneId = null,
+  canManageScenes = false,
+  onSelectScene,
+  onAddScene,
+  onDeleteScene,
   onSelectFrame,
   onAddFrame,
   onDuplicateFrame,
@@ -43,6 +49,7 @@ export default function FilmStrip({
   const activeFrame = frames[activeFrameIndex];
   const multiFrame = frames.length > 1;
   const displayIndex = scrubIndex == null ? activeFrameIndex : scrubIndex;
+  const sceneIndex = scenes.findIndex((scene) => scene.id === activeSceneId);
 
   const indexFromEvent = (event) => {
     const rect = railRef.current?.getBoundingClientRect();
@@ -112,6 +119,42 @@ export default function FilmStrip({
         <span className="fs-counter" aria-live="off">
           {displayIndex + 1}/{frames.length}
         </span>
+        {scenes.length > 1 || canManageScenes ? (
+          <div className="fs-scenes" role="group" aria-label="Scenes">
+            <button
+              type="button"
+              onClick={() => onSelectScene?.(scenes[sceneIndex - 1]?.id)}
+              disabled={sceneIndex <= 0}
+              aria-label="Previous scene"
+              title="Previous scene"
+            >
+              ⏮
+            </button>
+            <span className="fs-scene-label" title={scenes[sceneIndex]?.name || "Scene"}>
+              🎬 {Math.max(1, sceneIndex + 1)}/{Math.max(1, scenes.length)}
+            </span>
+            <button
+              type="button"
+              onClick={() => onSelectScene?.(scenes[sceneIndex + 1]?.id)}
+              disabled={sceneIndex < 0 || sceneIndex >= scenes.length - 1}
+              aria-label="Next scene"
+              title="Next scene"
+            >
+              ⏭
+            </button>
+            {canManageScenes ? (
+              <button
+                type="button"
+                className="fs-scene-add"
+                onClick={onAddScene}
+                aria-label="New scene"
+                title="New scene (a fresh page of frames)"
+              >
+                +🎬
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="fs-reel" role="list">
@@ -213,7 +256,7 @@ export default function FilmStrip({
               Delete
             </button>
             <button type="button" onClick={closeMenuThen(onExportVideo)} disabled={isExportingVideo}>
-              {isExportingVideo ? "Encoding…" : "Export video"}
+              {isExportingVideo ? "Encoding…" : scenes.length > 1 ? "Export film" : "Export video"}
             </button>
             <button type="button" onClick={closeMenuThen(onExportGif)} disabled={isExporting}>
               {isExporting ? "Encoding…" : "Export GIF"}
@@ -221,6 +264,15 @@ export default function FilmStrip({
             <button type="button" onClick={closeMenuThen(onSaveLoop)}>
               Save loop
             </button>
+            {canManageScenes && scenes.length > 1 ? (
+              <button
+                type="button"
+                className="fs-menu-danger"
+                onClick={closeMenuThen(() => onDeleteScene?.(activeSceneId))}
+              >
+                Delete scene
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

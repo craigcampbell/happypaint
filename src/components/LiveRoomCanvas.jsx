@@ -5,7 +5,16 @@
 // framed to the drawn content so visitors immediately see art being made.
 
 import { useEffect, useRef } from "react";
-import { drawBrushSegment, getDab, makeSmudgeRenderer, makeStrokeRenderer, pointRand, prepareStrokeCommit } from "../utils/brushes";
+import {
+  drawBrushSegment,
+  getStrokeDab,
+  isBrushStampReady,
+  makeSmudgeRenderer,
+  makeStrokeRenderer,
+  pointRand,
+  preloadBrushStamp,
+  prepareStrokeCommit,
+} from "../utils/brushes";
 import { createStrokeBuffer } from "../utils/strokeBuffer";
 import { createMixMap } from "../utils/mixMap";
 import { drawShape, drawText } from "../utils/shapes";
@@ -22,10 +31,36 @@ const STROKE_IDLE_MS = 8000;
 // `strokes` holds the per-strokeId in-progress buffers (Stage 1, #62): non-
 // eraser draw ops build in a bbox-capped buffer at full opacity and land on
 // the paper ONCE, at the stroke's opacity, when their end-op arrives.
-function applyOp(ctx, op, lastMap, strokes, onImage, mix) {
+function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
   if (!op) return;
   if (op.kind === "draw") {
-    const settings = op.settings || {};
+    let entry = strokes.get(op.strokeId);
+    const settings = op.settings || entry?.settings || {};
+    if (!op.settings && !entry) {
+      const queued = deferred.get(op.strokeId);
+      if (queued) queued.ops.push(op);
+      return;
+    }
+    const pendingDab = settings.v >= 3 ? getStrokeDab(settings) : null;
+    if (pendingDab?.shape === "stamp" && !isBrushStampReady(pendingDab)) {
+      let queued = deferred.get(op.strokeId);
+      if (!queued) {
+        queued = { ops: [], loading: false };
+        deferred.set(op.strokeId, queued);
+      }
+      queued.ops.push(op);
+      if (!queued.loading) {
+        queued.loading = true;
+        preloadBrushStamp(pendingDab).then((ok) => {
+          const readyQueue = deferred.get(op.strokeId);
+          deferred.delete(op.strokeId);
+          if (!ok || !readyQueue) return;
+          for (const queuedOp of readyQueue.ops) applyOp(ctx, queuedOp, lastMap, strokes, onImage, mix, deferred);
+          onImage?.();
+        });
+      }
+      return;
+    }
     let last = lastMap.get(op.strokeId);
     if (settings.brush === "eraser") {
       // Eraser keeps cutting the paper directly (destination-out can't buffer).
@@ -53,7 +88,6 @@ function applyOp(ctx, op, lastMap, strokes, onImage, mix) {
       }
       return;
     }
-    let entry = strokes.get(op.strokeId);
     if (!entry) {
       let buffered = 0;
       for (const open of strokes.values()) if (open.buf) buffered += 1;
@@ -61,7 +95,8 @@ function applyOp(ctx, op, lastMap, strokes, onImage, mix) {
       // v >= 2 AND the brush has dab params → makeStrokeRenderer. The renderer
       // needs the full-alpha buffer, so the past-the-cap (buf: null) fallback
       // stays on legacy segments.
-      const dab = settings.v >= 2 ? getDab(settings.brush) : null;
+      const dab = getStrokeDab(settings);
+      if (settings.v >= 3 && !dab) return;
       const buf = buffered < MAX_STROKE_BUFFERS ? createStrokeBuffer() : null; // null → direct fallback
       entry = {
         buf,
@@ -208,9 +243,11 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
 
     // In-progress stroke buffers (strokeId -> entry), per room connection.
     const strokes = new Map();
+    const deferred = new Map();
     const dropStrokes = () => {
       for (const entry of strokes.values()) entry.buf?.dispose();
       strokes.clear();
+      deferred.clear();
     };
     // Commit every still-open stroke to the paper (history replay leaves
     // legacy strokes — ops with no end marker — open).
@@ -361,14 +398,14 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           mix.markAllDirty(); // the paper was rebuilt wholesale
           lastMapRef.current = new Map();
           dropStrokes(); // stale live buffers — the replay re-delivers their points
-          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit, mix);
+          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit, mix, deferred);
           commitAllStrokes(); // legacy / cut-off strokes with no end marker
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           blit();
           onActivity?.((data.ops || []).length);
         } else if (data.type === "op") {
-          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit, mix);
+          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit, mix, deferred);
           blit();
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);

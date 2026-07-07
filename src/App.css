@@ -2489,6 +2489,41 @@ button:disabled {
   gap: 10px;
 }
 
+.brush-tip-import input {
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.brush-tip-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #f7fafc;
+}
+
+.brush-tip-preview img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #ffffff;
+  border: 1px solid #d6e0ea;
+}
+
+.brush-tip-preview button {
+  flex: 1;
+}
+
+.brush-import-status {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #526270;
+}
+
 .brush-studio-save {
   display: grid;
   gap: 10px;
@@ -4444,6 +4479,7 @@ button:disabled {
   max-width: 920px;
   margin: 0 auto;
   padding: 18px;
+  overflow-x: hidden;
   color: #0f172a;
 }
 .admin-top {
@@ -4456,6 +4492,30 @@ button:disabled {
 }
 .admin-top h1 { margin: 0; }
 .admin-top-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.admin-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 18px;
+  padding: 4px;
+  border: 1px solid #dbe4ed;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.admin-tabs button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: transparent;
+  border-color: transparent;
+  color: #475569;
+  font-weight: 800;
+}
+.admin-tabs button.is-active {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
+}
 .admin-section { margin-bottom: 26px; }
 .admin-section h2 {
   display: flex;
@@ -4514,6 +4574,95 @@ button:disabled {
 .admin-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .admin-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
 .admin-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.admin-table {
+  display: grid;
+  gap: 8px;
+}
+.admin-table-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(90px, 0.8fr) minmax(96px, 0.8fr) minmax(110px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+.admin-table-head {
+  min-height: 0;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #64748b;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.admin-table-row span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.admin-table-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-table-row small {
+  color: #64748b;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.admin-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.admin-panel-lite {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.admin-panel-lite h3 {
+  margin: 0;
+  color: #334155;
+}
+.admin-mini-list {
+  display: grid;
+  gap: 8px;
+}
+.admin-mini-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+.admin-mini-list span {
+  color: #64748b;
+  font-weight: 700;
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .admin-table-head {
+    display: none;
+  }
+  .admin-table-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .admin-mini-list div {
+    display: grid;
+  }
+  .admin-mini-list span {
+    text-align: left;
+  }
+}
 
 @media (max-width: 1024px), (pointer: coarse) {
   /* Report/new-room buttons stay reachable in the chat on mobile. */
@@ -4576,6 +4725,14 @@ button:disabled {
   border: 1px dashed #94a3b8;
   border-radius: 12px;
   font-weight: 700;
+}
+.admin-upload input {
+  display: none;
+}
+.admin-upload span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 .admin-sheet-grid {
   display: grid;
@@ -5321,6 +5478,50 @@ textarea:focus-visible,
   font-size: 0.78rem;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
+}
+
+/* Scene pager: a film is pages ("scenes") of frames; only one is hydrated. */
+.fs-scenes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid #0d1319;
+}
+
+.fs-scenes button {
+  min-height: 34px;
+  min-width: 34px;
+  padding: 0 8px;
+  background: #26313c;
+  border: 1px solid #0d1319;
+  color: #e8eef4;
+  font-size: 0.85rem;
+}
+
+.fs-scenes button:disabled {
+  opacity: 0.4;
+}
+
+.fs-scene-label {
+  min-width: 52px;
+  text-align: center;
+  color: #e8eef4;
+  font-size: 0.78rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fs-scene-add {
+  border-color: #4a5662 !important;
+  border-style: dashed !important;
+}
+
+.fs-menu-danger {
+  border-color: #7f1d1d !important;
+  color: #fca5a5 !important;
 }
 
 /* The reel: horizontal scroll of cels between two sprocket-hole bands. */

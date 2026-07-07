@@ -20,11 +20,35 @@ function resolveSocketUrl(roomId, token) {
   }
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   let host = window.location.host;
-  // Vite dev server runs on 5173; the websocket lives on the node server (8787).
-  if (host.endsWith(":5173")) {
-    host = host.replace(":5173", ":8787");
+  // Vite dev can run on a few local ports; the websocket lives on the node
+  // server (8787). VITE_WS_URL remains the escape hatch for custom setups.
+  if (import.meta.env.DEV) {
+    const pageUrl = new URL(window.location.href);
+    if (pageUrl.port && pageUrl.port !== "8787") {
+      host = `${pageUrl.hostname}:8787`;
+    }
   }
   return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${tokenQs}`;
+}
+
+function clientInfoPayload() {
+  try {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    const nav = window.navigator || {};
+    let pointer = "none";
+    if (window.matchMedia?.("(pointer: coarse)").matches) pointer = "coarse";
+    else if (window.matchMedia?.("(pointer: fine)").matches) pointer = "fine";
+    return {
+      type: "client_info",
+      timezone: resolved.timeZone || null,
+      locale: nav.language || resolved.locale || null,
+      viewportW: window.innerWidth || null,
+      viewportH: window.innerHeight || null,
+      pointer,
+    };
+  } catch {
+    return { type: "client_info" };
+  }
 }
 
 export function useMultiplayer(roomId, onMessage, token) {
@@ -94,6 +118,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     ws.onopen = () => {
       setConnected(true);
       retryRef.current = 0;
+      ws.send(JSON.stringify(clientInfoPayload()));
       pingTimerRef.current = window.setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
       }, 25000);
@@ -176,12 +201,18 @@ export function useMultiplayer(roomId, onMessage, token) {
   // (including the sender) so all clients apply them in server order.
   const sendSetAnimation = useCallback((enabled) => send({ type: "set_animation", enabled }), [send]);
   const sendFrameAdd = useCallback(
-    (afterFrameId, duplicateOf) => send({ type: "frame_add", afterFrameId: afterFrameId || null, duplicateOf: duplicateOf || null }),
+    (afterFrameId, duplicateOf, sceneId) =>
+      send({ type: "frame_add", afterFrameId: afterFrameId || null, duplicateOf: duplicateOf || null, sceneId: sceneId || null }),
     [send],
   );
   const sendFrameDel = useCallback((frameId) => send({ type: "frame_del", frameId }), [send]);
   const sendFrameMove = useCallback((frameId, toIndex) => send({ type: "frame_move", frameId, toIndex }), [send]);
   const sendFrameDuration = useCallback((frameId, durationMs) => send({ type: "frame_duration", frameId, durationMs }), [send]);
+  // Scenes: page one scene's frames+ops in (memory stays at a scene's worth);
+  // scene creation/deletion is host-only (enforced server-side).
+  const sendSceneFetch = useCallback((sceneId) => send({ type: "scene_fetch", sceneId }), [send]);
+  const sendSceneAdd = useCallback(() => send({ type: "scene_add" }), [send]);
+  const sendSceneDel = useCallback((sceneId) => send({ type: "scene_del", sceneId }), [send]);
   // Ephemeral emoji reaction dropped at a world point (never persisted).
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
@@ -201,6 +232,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
+    sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,
   };
 }

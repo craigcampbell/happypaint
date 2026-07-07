@@ -22,6 +22,21 @@ function timeAgo(ts) {
   return `${h}h ago`;
 }
 
+function formatDuration(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
+function formatCount(value) {
+  return Math.round(Number(value) || 0).toLocaleString();
+}
+
 // Green / amber / red cue for "is the server straining?" numbers.
 function health(value, warn, bad) {
   if (value >= bad) return "is-bad";
@@ -44,6 +59,8 @@ export default function LiveAdmin({ onNavigate }) {
   const [reports, setReports] = useState([]);
   const [sheets, setSheets] = useState([]);
   const [metrics, setMetrics] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
+  const [page, setPage] = useState("overview");
   const [uploading, setUploading] = useState(false);
 
   // A unique query string per request defeats any stale service-worker / proxy
@@ -62,25 +79,27 @@ export default function LiveAdmin({ onNavigate }) {
   const refresh = useCallback(async () => {
     if (!adminKey) return;
     try {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, r3, r4] = await Promise.all([
         fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/analytics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
-      if (r1.status === 401 || r2.status === 401) {
+      if (r1.status === 401 || r2.status === 401 || r3.status === 401 || r4.status === 401) {
         setAuthed(false);
         return;
       }
       const d1 = await r1.json();
       const d2 = await r2.json();
+      const d3 = r3.ok ? await r3.json() : null;
+      const d4 = r4.ok ? await r4.json() : null;
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
+      if (d3) setAnalytics(d3);
+      if (d4) setMetrics(d4);
       setAuthed(true);
       const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
-      const m = await fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-      if (m) setMetrics(m);
     } catch {
       // leave as-is on a transient error
     }
@@ -224,6 +243,14 @@ export default function LiveAdmin({ onNavigate }) {
 
   const openReports = reports.filter((r) => r.status === "open");
   const doneReports = reports.filter((r) => r.status !== "open");
+  const totals = analytics?.totals || {};
+  const recentUsers = analytics?.users || [];
+  const recentSessions = analytics?.sessions || [];
+  const roomStats = analytics?.rooms || [];
+  const brushStats = analytics?.brushes || [];
+  const countryStats = analytics?.countries || [];
+  const timezoneStats = analytics?.timezones || [];
+  const gallerySaves = analytics?.gallerySaves || [];
 
   return (
     <main className="admin-portal">
@@ -242,6 +269,20 @@ export default function LiveAdmin({ onNavigate }) {
         </div>
       </header>
 
+      <nav className="admin-tabs" aria-label="Admin pages">
+        <button type="button" className={page === "overview" ? "is-active" : ""} onClick={() => setPage("overview")}>
+          Overview
+        </button>
+        <button type="button" className={page === "users" ? "is-active" : ""} onClick={() => setPage("users")}>
+          Users
+        </button>
+        <button type="button" className={page === "content" ? "is-active" : ""} onClick={() => setPage("content")}>
+          Content
+        </button>
+      </nav>
+
+      {page === "overview" ? (
+        <>
       {metrics ? (
         <section className="admin-section">
           <h2>Live metrics</h2>
@@ -371,6 +412,213 @@ export default function LiveAdmin({ onNavigate }) {
         )}
       </section>
 
+        </>
+      ) : null}
+
+      {page === "users" ? (
+        <>
+          <section className="admin-section">
+            <h2>User analytics</h2>
+            {!analytics ? (
+              <p className="admin-empty">Waiting for traffic to build the analytics view.</p>
+            ) : (
+              <div className="metric-grid">
+                <div className="metric">
+                  <span className="metric-num">{formatCount(totals.activeSessions)}</span>
+                  <span className="metric-label">Active sessions</span>
+                  <span className="metric-sub">{formatCount(totals.sessions)} recorded</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-num">{formatCount(totals.signedInUsers)}</span>
+                  <span className="metric-label">Signed-in users</span>
+                  <span className="metric-sub">{formatCount(totals.signedInSessions)} sessions</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-num">{formatCount(totals.anonymousUsers)}</span>
+                  <span className="metric-label">Anonymous guests</span>
+                  <span className="metric-sub">{formatCount(totals.anonymousSessions)} sessions</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-num">{formatDuration(totals.avgSessionSec)}</span>
+                  <span className="metric-label">Avg session</span>
+                  <span className="metric-sub">completed recent sessions</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-num">{formatCount(totals.strokes)}</span>
+                  <span className="metric-label">Brush uses</span>
+                  <span className="metric-sub">{formatCount(totals.drawOps)} draw packets</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-num">{formatCount(totals.points)}</span>
+                  <span className="metric-label">Paint points</span>
+                  <span className="metric-sub">networked dab samples</span>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="admin-section">
+            <h2>Users <span className="admin-badge">{recentUsers.length}</span></h2>
+            {recentUsers.length === 0 ? (
+              <p className="admin-empty">No user sessions have been recorded yet.</p>
+            ) : (
+              <div className="admin-table">
+                <div className="admin-table-row admin-table-head">
+                  <span>User</span>
+                  <span>Where</span>
+                  <span>Time</span>
+                  <span>Paint</span>
+                </div>
+                {recentUsers.map((user, i) => (
+                  <div key={`${user.label}-${user.lastSeen}-${i}`} className="admin-table-row">
+                    <span>
+                      <strong>{user.label}</strong>
+                      <small>{user.active ? "active now" : `last ${timeAgo(user.lastSeen)}`} · {user.signedIn ? "signed in" : "anonymous"}</small>
+                    </span>
+                    <span>
+                      {user.country || user.timezone || "unknown"}
+                      <small>{user.locale || user.deviceType || "unknown device"}</small>
+                    </span>
+                    <span>
+                      {formatDuration(user.totalDurationSec)}
+                      <small>{formatCount(user.sessions)} sessions · room {user.lastRoom || "?"}</small>
+                    </span>
+                    <span>
+                      {user.topBrush || "none"}
+                      <small>{formatCount(user.strokes)} uses · {formatCount(user.gallerySaves)} saves</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="admin-section">
+            <h2>Recent sessions <span className="admin-badge">{recentSessions.length}</span></h2>
+            {recentSessions.length === 0 ? (
+              <p className="admin-empty">No session history yet.</p>
+            ) : (
+              <div className="admin-table">
+                <div className="admin-table-row admin-table-head">
+                  <span>Session</span>
+                  <span>Room</span>
+                  <span>Duration</span>
+                  <span>Activity</span>
+                </div>
+                {recentSessions.map((session) => (
+                  <div key={session.id} className="admin-table-row">
+                    <span>
+                      <strong>{session.displayName || session.account || "Anonymous"}</strong>
+                      <small>{session.active ? "active now" : timeAgo(session.leftAt || session.joinedAt)} · {session.deviceType}</small>
+                    </span>
+                    <span>
+                      {session.room}
+                      <small>{session.country || session.timezone || "location unknown"}</small>
+                    </span>
+                    <span>
+                      {formatDuration(session.durationSec)}
+                      <small>joined {timeAgo(session.joinedAt)}</small>
+                    </span>
+                    <span>
+                      {session.topBrush || "none"}
+                      <small>{formatCount(session.strokes)} uses · {formatCount(session.chats)} chats</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="admin-section">
+            <h2>Rooms and brushes</h2>
+            <div className="admin-split">
+              <div className="admin-panel-lite">
+                <h3>Rooms</h3>
+                {roomStats.length === 0 ? (
+                  <p className="admin-empty">No room analytics yet.</p>
+                ) : (
+                  <div className="admin-mini-list">
+                    {roomStats.slice(0, 12).map((room) => (
+                      <div key={room.id}>
+                        <strong>{room.id}</strong>
+                        <span>{formatCount(room.sessions)} sessions · {formatDuration(room.totalDurationSec)} · {formatCount(room.clears)} wipes</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="admin-panel-lite">
+                <h3>Brushes</h3>
+                {brushStats.length === 0 ? (
+                  <p className="admin-empty">No brush usage yet.</p>
+                ) : (
+                  <div className="admin-mini-list">
+                    {brushStats.slice(0, 12).map((brush) => (
+                      <div key={brush.id}>
+                        <strong>{brush.id}</strong>
+                        <span>{formatCount(brush.count)} uses</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="admin-panel-lite">
+                <h3>Rough location</h3>
+                <div className="admin-mini-list">
+                  {[...countryStats.slice(0, 6), ...timezoneStats.slice(0, 6)].map((item) => (
+                    <div key={item.id}>
+                      <strong>{item.id}</strong>
+                      <span>{formatCount(item.count)} sessions</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {page === "content" ? (
+        <>
+          <section className="admin-section">
+            <h2>Content metrics</h2>
+            <div className="metric-grid">
+              <div className="metric">
+                <span className="metric-num">{formatCount(totals.gallerySaves)}</span>
+                <span className="metric-label">Gallery saves</span>
+                <span className="metric-sub">
+                  {formatCount(totals.signedInGallerySaves)} signed-in · {formatCount(totals.anonymousGallerySaves)} anon
+                </span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(totals.roomClears)}</span>
+                <span className="metric-label">Room wipes</span>
+                <span className="metric-sub">{formatCount(totals.adminRoomClears)} by admin</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(totals.chats)}</span>
+                <span className="metric-label">Chats</span>
+                <span className="metric-sub">accepted messages</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="admin-section">
+            <h2>Recent gallery saves <span className="admin-badge">{gallerySaves.length}</span></h2>
+            {gallerySaves.length === 0 ? (
+              <p className="admin-empty">No gallery saves recorded yet.</p>
+            ) : (
+              <div className="admin-mini-list">
+                {gallerySaves.slice(0, 30).map((save, i) => (
+                  <div key={`${save.ts}-${i}`}>
+                    <strong>{save.signedIn ? `Account ${save.account || ""}` : "Anonymous gallery"}</strong>
+                    <span>{timeAgo(save.ts)} · {save.country || "country unknown"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
       <section className="admin-section">
         <h2>
           Coloring sheets <span className="admin-badge">{sheets.length}</span>
@@ -418,6 +666,8 @@ export default function LiveAdmin({ onNavigate }) {
             ))}
           </div>
         </section>
+      ) : null}
+        </>
       ) : null}
     </main>
   );

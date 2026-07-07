@@ -93,6 +93,48 @@ film-splice reorder animation; scrub rail with waveform under it when audio exis
 8. **Real video export** (WebCodecs) + premium private rooms GA.
 9. **Vector ops** (commit-once immutable) in private/animation rooms — last.
 
+## Scenes & multi-room productions (added 2026-07-04, after Craig's 30s/2min ask)
+
+Hand-drawn animation runs 12-15 drawings/sec — a flat 8-frame room is ~⅔s. The
+scaling ladder, each step shipped/shippable independently:
+
+**1. Scenes (SHIPPED).** A room's film = up to **20 scenes × 8 frames = 160
+frames ≈ ~30s** — one room is one *segment* of animation. Only the ACTIVE
+scene's frames are hydrated client-side (scene_fetch pages them in; canvases
+drop on page-out), so device memory never exceeds one scene's worth while the
+server holds the whole segment. Scene creation/deletion is **host-only** (the
+host directs structure — "you take scene 2"); FLIPBOOK is hostless so the
+public playground stays single-scene. "Export film" stitches every scene into
+one video by hydrating scenes sequentially during the encode (memory-flat).
+Caps: MAX_SCENES=20, 8 frames/scene, FRAME_OP_CAP=1500, MAX_ANIM_ROOM_OPS=40k.
+
+**2. Productions: storyboard → linked segment rooms → one 2-minute film (NEXT).**
+A *production* ties up to ~4 segment rooms into one film (4 × 30s = 2 min):
+- **Data:** a `production` record owned by the creating host: `{ id, title,
+  segments: [roomCode…] }`, stored server-side (`.productions/<id>.json`) and
+  referenced from each member room (`room.productionId`). Segment rooms are
+  ordinary private animation rooms — all existing moderation/host/persistence
+  machinery applies untouched.
+- **Storyboard surface:** the production's face is a storyboard page: one
+  panel per segment (thumbnail = segment's first frame), each panel
+  "expounds" into its room (tap → join). Host adds a panel → server creates a
+  linked private animation room. This IS the "storyboard expands into rooms"
+  flow — teams split up by segment and work in parallel.
+- **Stitched 2-min export:** client-side, no server rendering:
+  `GET /api/rooms/:code/film` returns `{scenes, frames, ops}` (visible ops;
+  animation rooms only; room-code knowledge = access, same trust model as
+  invites). The exporter walks segment rooms → scenes → frames, replaying ops
+  into ONE reusable full-res canvas via a standalone op interpreter (extract
+  the spectator's `applyOp` — it's already the third parity-tested consumer),
+  feeding WebCodecs as it goes. Memory stays flat at any film length.
+- **Playback across segments** uses the same fetch + a proxy-res preview.
+- Increment order: (a) /film endpoint + offline replayer + cross-room export,
+  (b) production record + storyboard page + panel→room creation, (c) presence
+  roll-up on the storyboard ("3 friends in scene 2's room").
+
+**3. Longer segments later:** lazy in-scene hydration (proxies + on-demand op
+fetch) raises frames/scene; the smaller animation doc size raises everything.
+
 ## Open product decisions (Craig)
 1. Playground generosity: 12 frames / ~6s enough for the free taste?
 2. Conflict model: soft claims everywhere, or server-enforced claims in the public playground
