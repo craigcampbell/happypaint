@@ -5458,6 +5458,102 @@ textarea:focus-visible,
 .home-code { display: flex; gap: 6px; margin-left: auto; }
 .home-code input { width: min(220px, 50vw); }
 
+/* ---- Home: Fridge Wall nudge (community loop) ---- */
+.home-wall {
+  width: min(1040px, 100%);
+  margin: 22px auto 0;
+  padding: 18px;
+  border-radius: 20px;
+  background: linear-gradient(150deg, #fff7d6 0%, #ffe9f2 100%);
+  border: 1px solid #f6d98a;
+}
+.home-wall-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.home-wall-copy { flex: 1 1 300px; }
+.home-wall-copy h2 { margin: 2px 0 6px; font-size: clamp(1.2rem, 3vw, 1.6rem); color: #5b3d06; }
+.home-wall-sub { margin: 0; color: #6a5a3a; font-weight: 600; line-height: 1.45; max-width: 44ch; }
+.home-wall-sub strong { color: #7c3aed; }
+.home-wall-actions { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+.home-wall-actions .primary-action { min-height: 46px; white-space: nowrap; }
+.home-wall-make {
+  min-height: 42px;
+  border: 1px solid #e7b9cf;
+  background: #fff;
+  color: #b23a7a;
+  font-weight: 800;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+/* Peek strip: horizontally-scrollable tiles of real recent posts. The whole
+   strip is one button → the Wall. */
+.home-wall-strip {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 4px;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.home-wall-tile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 108px;
+  height: 108px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 3px solid #fff;
+  box-shadow: 0 4px 14px rgba(80, 60, 20, 0.16);
+  transform: rotate(var(--tilt, 0deg));
+  background: #fff;
+}
+.home-wall-strip .home-wall-tile:nth-child(2n) { --tilt: 1.6deg; }
+.home-wall-strip .home-wall-tile:nth-child(3n) { --tilt: -2deg; }
+.home-wall-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.home-wall-anim {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  font-size: 0.7rem;
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+  padding: 1px 5px;
+}
+.home-wall-more {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 14px;
+  color: #7c3aed;
+  font-weight: 800;
+  font-size: 0.9rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.home-wall-empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 2px dashed #f0c65a;
+}
+.home-wall-empty-emoji { font-size: 1.8rem; }
+.home-wall-empty p { margin: 0; flex: 1 1 200px; font-weight: 800; color: #6a5216; }
+.home-wall-empty .primary-action { min-height: 44px; white-space: nowrap; }
+
 /* ---- Home Join modal ---- */
 .home-join-modal { width: min(440px, 100%); text-align: center; position: relative; padding: 26px 22px 20px; }
 .home-join-close { position: absolute; top: 12px; right: 12px; min-width: 36px; min-height: 36px; border-radius: 999px; padding: 0; }
@@ -5515,6 +5611,8 @@ textarea:focus-visible,
   .home-code { margin-left: 0; width: 100%; }
   .home-code input { flex: 1; width: auto; }
   .home-room-meta { margin-left: 0; width: 100%; }
+  .home-wall-actions { width: 100%; }
+  .home-wall-actions > * { width: 100%; }
 }
 
 /* ---- Film strip (bottom animation timeline) --------------------------------

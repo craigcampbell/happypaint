@@ -18,6 +18,8 @@ export default function HomePage({ onNavigate }) {
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
+  const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art for the nudge
+  const [wallLoaded, setWallLoaded] = useState(false);
   const liveOpsRef = useRef(0);
   // Mirrored into refs so timers/callbacks read the latest without being deps.
   const roomsRef = useRef([]);
@@ -64,6 +66,24 @@ export default function HomePage({ onNavigate }) {
     }, 15000); // keep the lobby fresh
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  // A peek at the community wall drives the loop: see art → make art → post it.
+  // Fetched once (the wall changes slowly); wallLoaded gates the empty-state so
+  // it doesn't flash before the request lands.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/wall?sort=fresh&limit=8", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!active) return;
+        setWallPosts(Array.isArray(d?.posts) ? d.posts : []);
+        setWallLoaded(true);
+      })
+      .catch(() => active && setWallLoaded(true));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Stable so LiveRoomCanvas (which keys its socket effect on onActivity) doesn't
   // tear down + reopen the spectator WS on every parent re-render.
@@ -215,6 +235,58 @@ export default function HomePage({ onNavigate }) {
             </form>
           </div>
         </div>
+
+        {/* Fridge Wall nudge — the community loop's front door. Peeks real
+            recent art (or invites the first post when the wall is bare). */}
+        <section className="home-wall">
+          <div className="home-wall-head">
+            <div className="home-wall-copy">
+              <p className="eyebrow">🧲 The Fridge Wall</p>
+              <h2>Proud of a drawing? Hang it up.</h2>
+              <p className="home-wall-sub">
+                Pin your art to the community wall for everyone to see — animations actually move. Tap{" "}
+                <strong>🧲 Wall</strong> in the studio when you finish something.
+              </p>
+            </div>
+            <div className="home-wall-actions">
+              <button type="button" className="primary-action" onClick={() => onNavigate("/wall")}>
+                See the Wall →
+              </button>
+              <button type="button" className="home-wall-make" onClick={() => onNavigate("/studio")}>
+                🎨 Make something to post
+              </button>
+            </div>
+          </div>
+
+          {wallPosts.length > 0 ? (
+            <button
+              type="button"
+              className="home-wall-strip"
+              onClick={() => onNavigate("/wall")}
+              aria-label="Open the Fridge Wall"
+            >
+              {wallPosts.map((p) => (
+                <span className="home-wall-tile" key={p.id}>
+                  {/* Eager: only a handful of small thumbs, and the whole point
+                      of the strip is to be seen the moment you scroll to it. */}
+                  <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} />
+                  {p.frames > 1 ? <span className="home-wall-anim" aria-hidden="true">🎬</span> : null}
+                </span>
+              ))}
+              <span className="home-wall-more">
+                See more<br />on the Wall →
+              </span>
+            </button>
+          ) : wallLoaded ? (
+            <div className="home-wall-empty">
+              <span className="home-wall-empty-emoji" aria-hidden="true">🖼️</span>
+              <p>The wall is empty — be the first to pin your artwork!</p>
+              <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>
+                Start drawing 🖌️
+              </button>
+            </div>
+          ) : null}
+        </section>
       </main>
 
       {showJoin && joinRoom ? (
