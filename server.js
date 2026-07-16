@@ -15,8 +15,8 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
-import { randomBytes } from 'crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
+import { randomBytes, createHash } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { scan } from './server/moderation/textFilter.js';
@@ -3059,6 +3059,410 @@ app.post('/api/admin/reports/:id/resolve', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- The Fridge Wall: community gallery ------------------------------------
+// Kids pin finished drawings to a public wall: title + tags (profanity-gated),
+// hearts (one per person, toggle), search, and animated posts (up to 8 frame
+// PNGs the client captured — the wall cycles them). Metadata and frames are
+// stored in SEPARATE files so a vote never rewrites hundreds of KB of images.
+const WALL_DIR = process.env.WALL_DIR || join(DATA_DIR, '.wall');
+const MAX_WALL_POSTS = Number(process.env.MAX_WALL_POSTS || 500);
+const WALL_FRAME_LIMIT = 8;
+const WALL_FRAME_MAX_CHARS = 300_000; // ~220KB decoded per frame
+const WALL_HIDE_REPORTS = Number(process.env.WALL_HIDE_REPORTS || 3); // distinct reporters to auto-hide
+const WALL_MAX_VOTES = 100_000; // cap distinct hearts stored per post (disk bound)
+
+// Only real raster images may be posted. SVG is deliberately EXCLUDED: it is an
+// executable document, and serving it same-origin would be stored XSS. Every
+// value here is a fixed, safe Content-Type we control (never echoed from input).
+const WALL_IMAGE_MIME = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+
+// Sniff the decoded bytes — the data-URL's claimed MIME is not trusted. Returns
+// a safe Content-Type from the allowlist, or null (reject / 404).
+function sniffWallImage(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return 'image/gif';
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return 'image/webp';
+  return null;
+}
+
+// Decode a raster-image data URL to {mime, buffer}, or null if it isn't one we
+// accept (SVG, non-image, or bytes that don't match a known image header).
+function decodeWallFrame(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > WALL_FRAME_MAX_CHARS) return null;
+  const m = /^data:image\/([a-z+]+);base64,([a-z0-9+/=]+)$/i.exec(dataUrl);
+  if (!m || !WALL_IMAGE_MIME[m[1].toLowerCase()]) return null; // svg+xml etc. rejected here
+  let buffer;
+  try { buffer = Buffer.from(m[2], 'base64'); } catch { return null; }
+  const mime = sniffWallImage(buffer);
+  return mime ? { mime, buffer } : null;
+}
+
+const wallPosts = new Map(); // id -> meta (frames live on disk only)
+
+// Post ids are minted server-side as wp_<base36>. Validate before any id ever
+// reaches the filesystem so a crafted :id can't traverse out of WALL_DIR.
+function safeWallId(id) {
+  return typeof id === 'string' && /^wp_[a-z0-9]{1,40}$/i.test(id) ? id : null;
+}
+function wallMetaFile(id) { return join(WALL_DIR, `${id}.json`); }
+function wallFramesFile(id) { return join(WALL_DIR, `${id}.frames.json`); }
+
+function loadWallPosts() {
+  let files = [];
+  try { files = readdirSync(WALL_DIR).filter((f) => f.endsWith('.json') && !f.endsWith('.frames.json')); } catch { return; }
+  for (const f of files) {
+    try {
+      const meta = JSON.parse(readFileSync(join(WALL_DIR, f), 'utf8'));
+      if (meta && safeWallId(meta.id)) wallPosts.set(meta.id, meta);
+    } catch { /* one corrupt post never blocks the wall */ }
+  }
+}
+loadWallPosts();
+
+// Atomic write (temp + rename) so a crash/ENOSPC mid-write can't leave a
+// truncated JSON file that loadWallPosts would silently drop.
+function writeFileAtomic(file, data) {
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, file);
+}
+
+function persistWallMeta(meta) {
+  if (!safeWallId(meta.id)) return;
+  mkdirSync(WALL_DIR, { recursive: true });
+  writeFileAtomic(wallMetaFile(meta.id), JSON.stringify(meta));
+}
+
+function deleteWallPost(id) {
+  if (!safeWallId(id)) return;
+  wallPosts.delete(id);
+  try { unlinkSync(wallMetaFile(id)); } catch { /* gone */ }
+  try { unlinkSync(wallFramesFile(id)); } catch { /* gone */ }
+}
+
+// The app sits behind a Cloudflare tunnel, so req.ip is the tunnel's (constant)
+// address — using it as an identity would collapse every anonymous visitor into
+// ONE. Cloudflare puts the real client IP in CF-Connecting-IP (it overwrites any
+// client-sent value, so it can't be spoofed through the tunnel); fall back to
+// req.ip for local/dev where that header is absent.
+function clientIp(req) {
+  return req.get('cf-connecting-ip') || req.ip || 'anon';
+}
+
+// Voter identity on a post is a salted hash — the meta file never stores raw
+// device/account keys where a leak would link art to identities.
+function wallVoterHash(key) {
+  return createHash('sha256').update(`wall-vote:${key}`).digest('hex').slice(0, 16);
+}
+
+function sanitizeWallTag(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 24);
+}
+
+function publicWallPost(meta, viewerHash) {
+  return {
+    id: meta.id,
+    title: meta.title,
+    tags: meta.tags,
+    artist: meta.artist,
+    votes: Object.keys(meta.votedBy || {}).length,
+    frames: meta.frameCount,
+    durationMs: meta.durationMs,
+    createdAt: meta.createdAt,
+    liked: viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
+  };
+}
+
+// Deterministic within a day, different every day: the "fresh mix" order.
+function dailyShuffle(arr) {
+  const day = Math.floor(Date.now() / 86_400_000);
+  const a = arr.slice();
+  let seed = (day * 2654435761) % 2 ** 31;
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    seed = (seed * 48271) % 2147483647;
+    const j = seed % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Feed. `sort`: fresh (daily shuffle, default) | top (hearts) | new.
+// `q` searches title+tags+artist; `tag` filters exactly. Hidden posts (report
+// threshold / admin) never leave the server.
+app.get('/api/wall', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  // Viewer identity MUST match how a vote is recorded (account, else IP) so the
+  // heart the viewer just tapped shows as filled on their next feed load.
+  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${req.ip || 'anon'}`));
+  const q = String(req.query.q || '').toLowerCase().trim();
+  const tag = sanitizeWallTag(req.query.tag || '');
+  const sort = ['top', 'new', 'fresh'].includes(req.query.sort) ? req.query.sort : 'fresh';
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 40));
+
+  let list = [...wallPosts.values()].filter((p) => !p.hidden);
+  if (tag) list = list.filter((p) => p.tags.includes(tag));
+  if (q) {
+    const tokens = q.split(/\s+/).filter(Boolean);
+    list = list.filter((p) => {
+      const hay = `${p.title} ${p.tags.join(' ')} ${p.artist}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+  }
+  if (sort === 'top') {
+    list.sort((a, b) => Object.keys(b.votedBy || {}).length - Object.keys(a.votedBy || {}).length || b.createdAt - a.createdAt);
+  } else if (sort === 'new') {
+    list.sort((a, b) => b.createdAt - a.createdAt);
+  } else {
+    list = dailyShuffle(list);
+  }
+  const total = list.length;
+  const posts = list.slice(offset, offset + limit).map((p) => publicWallPost(p, viewerHash));
+  // Popular tags power the chip row client-side (from the WHOLE wall, not the page).
+  const tagCounts = {};
+  for (const p of wallPosts.values()) {
+    if (p.hidden) continue;
+    for (const t of p.tags) tagCounts[t] = (tagCounts[t] || 0) + 1;
+  }
+  const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t]) => t);
+  res.json({ posts, total, topTags });
+});
+
+// Frames are immutable once posted — serve decoded bytes with long caching.
+app.get('/api/wall/:id/frame/:n', (req, res) => {
+  const meta = wallPosts.get(req.params.id);
+  const n = Number(req.params.n);
+  if (!meta || meta.hidden || !Number.isInteger(n) || n < 0 || n >= meta.frameCount) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  let frames;
+  try {
+    frames = JSON.parse(readFileSync(wallFramesFile(meta.id), 'utf8'));
+  } catch {
+    return res.status(404).json({ error: 'not found' });
+  }
+  // Re-sniff on the way out and emit a Content-Type WE choose (never echoed
+  // from the stored URL), plus nosniff + a lockdown CSP. Even if a bad frame
+  // ever reached disk, the browser can't be tricked into running it.
+  const decoded = decodeWallFrame(frames[n]);
+  if (!decoded) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  res.set('Content-Type', decoded.mime);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.set('Cache-Control', 'public, max-age=86400, immutable');
+  res.send(decoded.buffer);
+});
+
+app.post('/api/wall', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ownerKey = await resolveArtOwner(req);
+  if (!ownerKey) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+  const ip = clientIp(req);
+  // Per-account/device cap stays tight (3/10min); the per-IP cap is looser
+  // because a classroom or family behind one NAT is many legitimate posters.
+  if (!rateOk(`wallpost:${ownerKey}`, 3, 10 * 60_000) || !rateOk(`wallpost:ip:${ip}`, 40, 10 * 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  const body = req.body || {};
+  const title = String(body.title || 'My drawing').replace(/\s+/g, ' ').trim().slice(0, 60) || 'My drawing';
+  const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
+  const tags = [...new Set(rawTags.map(sanitizeWallTag).filter(Boolean))];
+  const frames = Array.isArray(body.frames) ? body.frames.slice(0, WALL_FRAME_LIMIT) : [];
+  const durationMs = Math.min(2000, Math.max(80, Number(body.durationMs) || 400));
+  // Every frame must decode to a real raster image (magic-byte checked). This
+  // is what rejects SVG and any non-image payload before it ever touches disk.
+  if (!frames.length || !frames.every((f) => decodeWallFrame(f) !== null)) {
+    return res.status(400).json({ error: 'bad_frames' });
+  }
+
+  // The wall is for every kid — any flagged word in the text fields rejects
+  // the post (mild included), and severe terms auto-file a report so the
+  // admin sees who is probing the filter.
+  let artist = '';
+  const token = bearerToken(req);
+  if (token) {
+    const identity = await verifyAccessToken(token).catch(() => null);
+    artist = identity?.displayName || '';
+  }
+  if (!artist) artist = String(body.artist || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  if (!artist) artist = 'A Drawesome artist';
+  for (const text of [title, artist, ...tags]) {
+    const verdict = scan(text);
+    if (verdict.hit) {
+      if (verdict.severity === 'severe') {
+        fileReport({ room: 'WALL', reason: `wall post rejected for language: "${text}"`, reporterName: 'wall-filter', source: 'auto' });
+      }
+      return res.status(400).json({ error: 'language' });
+    }
+  }
+
+  if (wallPosts.size >= MAX_WALL_POSTS) {
+    // Prune the least-loved poster older than 48h to make room; a wall full of
+    // fresh loved art rejects instead of eating someone's post silently.
+    const cutoff = Date.now() - 48 * 3600_000;
+    const candidates = [...wallPosts.values()].filter((p) => p.createdAt < cutoff);
+    candidates.sort((a, b) =>
+      Object.keys(a.votedBy || {}).length - Object.keys(b.votedBy || {}).length || a.createdAt - b.createdAt);
+    if (!candidates.length) {
+      return res.status(409).json({ error: 'wall_full' });
+    }
+    deleteWallPost(candidates[0].id);
+  }
+
+  const meta = {
+    id: 'wp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    title,
+    tags,
+    artist,
+    ownerKey,
+    createdAt: Date.now(),
+    votedBy: {},
+    reportedBy: {},
+    frameCount: frames.length,
+    durationMs,
+    reports: 0,
+    hidden: false,
+  };
+  mkdirSync(WALL_DIR, { recursive: true });
+  writeFileAtomic(wallFramesFile(meta.id), JSON.stringify(frames));
+  persistWallMeta(meta);
+  wallPosts.set(meta.id, meta);
+  res.json({ ok: true, id: meta.id });
+});
+
+// The voter identity is SERVER-DERIVED: a signed-in account, else the request
+// IP. It is NOT the client-supplied device key — that is attacker-rotatable, so
+// keying votes/throttle on it let one caller forge unlimited hearts and grow
+// votedBy without bound. Both a per-identity and a per-IP cap apply.
+async function wallVoterIdentity(req) {
+  const token = bearerToken(req);
+  if (token) {
+    const identity = await verifyAccessToken(token).catch(() => null);
+    if (identity?.profileId) return `pb_${identity.profileId}`;
+  }
+  return `ip:${clientIp(req)}`;
+}
+
+app.post('/api/wall/:id/vote', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const voterId = await wallVoterIdentity(req);
+  const ip = clientIp(req);
+  if (!rateOk(`wallvote:${voterId}`, 40, 60_000) || !rateOk(`wallvote:ip:${ip}`, 40, 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  const meta = wallPosts.get(req.params.id);
+  if (!meta || meta.hidden) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const hash = wallVoterHash(voterId);
+  meta.votedBy = meta.votedBy || {};
+  const on = req.body?.on !== false;
+  if (on) {
+    // New distinct hearts are capped so votedBy (and the meta file) can't grow
+    // without bound; existing voters can always re-affirm.
+    if (!meta.votedBy[hash] && Object.keys(meta.votedBy).length >= WALL_MAX_VOTES) {
+      return res.json({ ok: true, votes: Object.keys(meta.votedBy).length, liked: false });
+    }
+    meta.votedBy[hash] = 1;
+  } else {
+    delete meta.votedBy[hash];
+  }
+  persistWallMeta(meta);
+  res.json({ ok: true, votes: Object.keys(meta.votedBy).length, liked: on });
+});
+
+app.post('/api/wall/:id/report', (req, res) => {
+  const ip = clientIp(req);
+  if (!rateOk(`wallreport:${ip}`, 5, 10 * 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  const meta = wallPosts.get(req.params.id);
+  if (!meta) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  // Auto-hide counts DISTINCT reporters (hashed IP), not raw clicks — otherwise
+  // one person could bury any drawing by tapping report three times. Repeat
+  // reports from the same IP are ignored for both the counter and the queue.
+  meta.reportedBy = meta.reportedBy || {};
+  const rhash = wallVoterHash(`report:${ip}`);
+  if (meta.reportedBy[rhash]) {
+    return res.json({ ok: true }); // already counted this reporter
+  }
+  meta.reportedBy[rhash] = 1;
+  meta.reports = Object.keys(meta.reportedBy).length;
+  if (meta.reports >= WALL_HIDE_REPORTS && !meta.hidden) {
+    meta.hidden = true; // off the wall until an admin rules on it
+  }
+  persistWallMeta(meta);
+  fileReport({
+    room: 'WALL',
+    reason: `[wall:${meta.id}] "${meta.title}" — ${String(req.body?.reason || 'reported').slice(0, 200)}`,
+    reporterName: String(req.body?.reporterName || 'Anonymous').slice(0, 40),
+    source: 'user',
+  });
+  res.json({ ok: true });
+});
+
+// A kid (or their parent, same device/account) can always take their art down.
+app.delete('/api/wall/:id', async (req, res) => {
+  const key = await resolveArtOwner(req);
+  const meta = wallPosts.get(req.params.id);
+  if (!meta) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  if (!key || meta.ownerKey !== key) {
+    return res.status(403).json({ error: 'not_yours' });
+  }
+  deleteWallPost(meta.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/wall', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const items = [...wallPosts.values()]
+    .sort((a, b) => (b.hidden ? 1 : 0) - (a.hidden ? 1 : 0) || b.createdAt - a.createdAt)
+    .map((p) => ({ ...publicWallPost(p, ''), hidden: p.hidden, reports: p.reports || 0, ownerKey: p.ownerKey }));
+  res.json({ items });
+});
+
+app.post('/api/admin/wall/:id/delete', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  // Only delete a post we actually know about — never let a crafted :id reach
+  // the filesystem (deleteWallPost also validates the id shape as defence in
+  // depth).
+  if (!wallPosts.has(req.params.id)) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  deleteWallPost(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/wall/:id/restore', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const meta = wallPosts.get(req.params.id);
+  if (meta) {
+    meta.hidden = false;
+    meta.reports = 0;
+    // Clear the distinct-reporter set too — otherwise reports is recomputed from
+    // it and a single new report instantly re-buries an admin-approved post.
+    meta.reportedBy = {};
+    persistWallMeta(meta);
+  }
+  res.json({ ok: true });
+});
+
 // ---- Rooms: audience + discovery ------------------------------------------
 // A signed-in grown-up creates a public (kid_safe) room that shows up in the
 // discovery lobby; invite-code rooms stay private ("friends") and are created
@@ -3088,6 +3492,15 @@ function rateOk(key, max = 8, windowMs = 60_000) {
   createHits.set(key, arr);
   return true;
 }
+// The wall's per-IP/per-voter buckets mint many short-lived keys; without a
+// sweep createHits would grow unbounded. Every 5 min, drop keys whose newest
+// hit is older than 10 min (past any window we use).
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60_000;
+  for (const [key, arr] of createHits) {
+    if (!arr.length || arr[arr.length - 1] < cutoff) createHits.delete(key);
+  }
+}, 5 * 60_000).unref?.();
 
 function bearerToken(req) {
   const auth = req.get('authorization') || '';

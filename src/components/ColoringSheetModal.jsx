@@ -42,6 +42,7 @@ export default function ColoringSheetModal({ onClose, onApply }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [selected, setSelected] = useState(null);
+  const [broken, setBroken] = useState(() => new Set());
 
   useEffect(() => {
     if (cachedSheets) return undefined;
@@ -132,15 +133,23 @@ export default function ColoringSheetModal({ onClose, onApply }) {
         </p>
 
         <div className="sheet-grid">
-          {results.map((s) => (
+          {results.map((s, i) => (
             <button
               key={s.id}
               type="button"
-              className={`sheet-card ${selected?.id === s.id ? "is-selected" : ""}`}
+              className={`sheet-card ${selected?.id === s.id ? "is-selected" : ""}${broken.has(s.id) ? " img-broken" : ""}`}
               onClick={() => setSelected(s)}
               title={s.title}
             >
-              <img src={`/coloring-sheets/thumbs/${encodeURIComponent(s.id)}.webp`} alt={s.title} loading="lazy" />
+              <img
+                src={`/coloring-sheets/thumbs/${encodeURIComponent(s.id)}.webp`}
+                alt={s.title}
+                // First screenful pops immediately; the rest stream in as the
+                // kid scrolls. A missing thumb collapses to a placeholder
+                // instead of the broken-image glyph.
+                loading={i < 12 ? "eager" : "lazy"}
+                onError={() => setBroken((prev) => (prev.has(s.id) ? prev : new Set(prev).add(s.id)))}
+              />
               <span>{s.title}</span>
             </button>
           ))}

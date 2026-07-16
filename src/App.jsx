@@ -106,6 +106,8 @@ import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import ColoringSheetModal from "./components/ColoringSheetModal";
+import WallPage from "./components/WallPage";
+import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import "./App.css";
@@ -161,6 +163,9 @@ const GALLERY_IDB_KEY = "gallery:v2";
 // silently squashing exports and thumbnails).
 const GIF_EXPORT_WIDTH = 320;
 const GIF_EXPORT_HEIGHT = 200;
+// Fridge Wall posts: same 8:5 ratio, a bit larger so the masonry stays crisp.
+const WALL_POST_WIDTH = 384;
+const WALL_POST_HEIGHT = 240;
 const FRAME_THUMB_WIDTH = 96;
 const FRAME_THUMB_HEIGHT = 60;
 // Onion-skin neighbour proxies render at half resolution: visually identical at
@@ -712,6 +717,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [promptDismissed, setPromptDismissed] = useState(false);
   const [privateNoticeDismissed, setPrivateNoticeDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
+  // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
+  const [wallPostDraft, setWallPostDraft] = useState(null);
   // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
   // pointer handlers: startStroke captures it INTO the op settings, so a
   // stroke's wetness is frozen at pen-down and replays deterministically.
@@ -2168,6 +2175,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       setSavingArt(false);
     }
   }, [composeCanvas, loadMyDrawings, savesMax, savingArt, showToast]);
+
+  // Capture what's on the easel as Fridge Wall frames: one composed PNG for a
+  // drawing (coloring sheet included), or up to 8 frame PNGs for an animation
+  // so the wall can play it. Capture happens here (not in the modal) because
+  // only the studio owns the layer/frame refs.
+  const openWallPost = useCallback(async () => {
+    commitLayersToFrame();
+    try {
+      let frames;
+      let durationMs = 400;
+      if (roomAnimationRef.current && framesRef.current.length > 1) {
+        frames = [];
+        for (const f of framesRef.current.slice(0, 8)) {
+          const canvas = document.createElement("canvas");
+          canvas.width = WALL_POST_WIDTH;
+          canvas.height = WALL_POST_HEIGHT;
+          const context = canvas.getContext("2d");
+          await renderPaper(context, { width: WALL_POST_WIDTH, height: WALL_POST_HEIGHT, textureId: selectedTexture });
+          compositeLayers(context, f.layers, { width: WALL_POST_WIDTH, height: WALL_POST_HEIGHT });
+          frames.push(await canvasToDataUrl(canvas));
+        }
+        durationMs = framesRef.current[0]?.durationMs || 400;
+      } else {
+        const canvas = await composeCanvas({ width: WALL_POST_WIDTH, height: WALL_POST_HEIGHT });
+        frames = [await canvasToDataUrl(canvas)];
+      }
+      setWallPostDraft({ frames, durationMs });
+    } catch {
+      showToast("Couldn't get your art ready for the wall — try again");
+    }
+  }, [commitLayersToFrame, composeCanvas, renderPaper, selectedTexture, showToast]);
 
   const openDrawing = useCallback(
     async (id) => {
@@ -6769,7 +6807,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   return (
-    <main className="studio-shell">
+    <main className="studio-shell" translate="no">
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
         <div className="topbar">
           <div>
@@ -6811,6 +6849,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               }}
             >
               🖼️ Gallery
+            </button>
+            <button type="button" onClick={openWallPost} title="Pin your art on the community Fridge Wall">
+              🧲 Wall
             </button>
             <button type="button" onClick={sharePng} title="Share your art + an invite link">
               📤 Share
@@ -7097,8 +7138,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </div>
             ) : null}
 
-            {/* Reaction picker — cheer on your friends. */}
-            <div className="reaction-picker">
+            {/* Reaction picker — cheer on your friends. In paint rooms the
+                canvas reaches the viewport bottom, so the fixed mobile
+                quickbar (z 70) covered this button; qb-clear lifts it above
+                the bar. Animation rooms keep bottom:12 — the film strip
+                already holds the canvas clear of the bar. */}
+            <div className={`reaction-picker${roomAnimation ? "" : " qb-clear"}`}>
               <button
                 type="button"
                 className="reaction-toggle"
@@ -7673,6 +7718,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             >
               🖼️ Gallery
             </button>
+            <button type="button" onClick={openWallPost} title="Pin your art on the community Fridge Wall">
+              🧲 Wall
+            </button>
             <button type="button" onClick={sharePng} title="Share your art + an invite link">
               📤 Share
             </button>
@@ -8226,6 +8274,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
       ) : null}
 
+      {wallPostDraft ? (
+        <WallPostModal
+          draft={wallPostDraft}
+          defaultArtist={nameDraft || mp.self?.name || ""}
+          onClose={() => setWallPostDraft(null)}
+          onPosted={() => {
+            setWallPostDraft(null);
+            showToast("On the wall! 🧲 See it at drawesome.art/wall");
+          }}
+        />
+      ) : null}
+
       {showWallet && economy ? (
         <WalletPanel
           economy={economy}
@@ -8362,6 +8422,10 @@ export default function App() {
 
   if (path.startsWith("/rooms")) {
     return <RoomFinderPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/wall")) {
+    return <WallPage onNavigate={navigate} />;
   }
 
   return <HomePage onNavigate={navigate} />;

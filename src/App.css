@@ -4184,6 +4184,13 @@ button:disabled {
     z-index: 70;
     max-width: 96vw;
   }
+  /* In paint rooms the canvas fills to the viewport bottom and the fixed
+     quickbar sat on top of the 😀 button (z 30 vs 70), blocking its taps.
+     qb-clear (set when there's no film strip below the canvas) lifts it
+     above the bar. */
+  .reaction-picker.qb-clear {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
   .qb-btn {
     display: flex;
     flex-direction: column;
@@ -4943,9 +4950,21 @@ button:disabled {
 }
 .sheet-modal {
   width: min(960px, 96vw);
-  max-height: 88vh;
+  /* dvh so the soft keyboard shrinks the modal instead of pushing the
+     footer (Use this sheet) off-screen on phones. */
+  max-height: min(88vh, calc(100dvh - 20px));
   display: flex;
   flex-direction: column;
+}
+/* The modal is a height-capped flex column: every row EXCEPT the scrolling
+   grid must refuse to shrink, or flexbox crushes them (the category chips
+   were collapsing to ~11px and bleeding over the count text). */
+.sheet-modal .modal-title-row,
+.sheet-modal .sheet-search,
+.sheet-modal .sheet-cats,
+.sheet-modal .sheet-count,
+.sheet-modal .sheet-footer {
+  flex-shrink: 0;
 }
 .sheet-search {
   width: 100%;
@@ -5001,7 +5020,13 @@ button:disabled {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  justify-content: flex-start;
   gap: 4px;
+  /* The card owns the shape. An aspect-ratio on the IMG (with width:100%)
+     never reached the button's intrinsic height — %-width children are cut
+     out of intrinsic sizing — so every card collapsed to the global button
+     min-height (42px) and the thumbnails spilled over their neighbours. */
+  aspect-ratio: 3 / 4.35;
   padding: 6px;
   border: 2px solid #e2e8f0;
   border-radius: 12px;
@@ -5011,10 +5036,26 @@ button:disabled {
 }
 .sheet-card img {
   width: 100%;
-  aspect-ratio: 3 / 4;
+  flex: 1 1 auto;
+  min-height: 0;
   object-fit: contain;
   background: #fff;
   border: 1px solid #eef2f7;
+  border-radius: 8px;
+}
+.sheet-card.img-broken img {
+  display: none;
+}
+.sheet-card.img-broken::before {
+  content: "🖼️";
+  display: grid;
+  place-items: center;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  font-size: 1.6rem;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
   border-radius: 8px;
 }
 .sheet-card span {
@@ -5053,12 +5094,14 @@ button:disabled {
   min-width: 0;
 }
 .sheet-preview img {
-  width: 56px;
-  height: 56px;
+  /* A real look at the sheet, not a 56px speck — sheets are portrait 3:4. */
+  width: 96px;
+  height: 128px;
   object-fit: contain;
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 .sheet-selected-name {
   font-weight: 700;
@@ -5071,6 +5114,41 @@ button:disabled {
 .sheet-hint {
   color: #64748b;
   font-size: 0.85rem;
+}
+/* Phones: denser grid, keyboard-safe height. (Width stays the base
+   min(960px, 96vw) — a percentage here re-resolves against the backdrop's
+   auto-sized grid track and balloons the modal to its content width.) */
+@media (max-width: 640px) {
+  /* NOTE: no max-height override here. The base min(88vh, calc(100dvh - 20px))
+     is a real cap so the grid scrolls and the footer stays pinned; a `100%`
+     here resolves against the backdrop's indefinite grid area → `none`, which
+     uncaps the modal and pushes the footer off-screen. */
+  .sheet-modal .sheet-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px;
+  }
+  .sheet-preview img {
+    width: 72px;
+    height: 96px;
+  }
+}
+/* Short / landscape viewports: the header + search + chips + count + footer are
+   flex-shrink:0, so on a low viewport they can sum past the modal height and
+   push "Use this sheet" below the clip. Keep the grid as the single scroll
+   region (footer stays pinned + visible) and trim the chrome so it all fits:
+   tighter padding/gap, no count line, a smaller footer preview. */
+@media (max-height: 560px) {
+  .sheet-modal {
+    padding: 10px;
+    gap: 8px;
+  }
+  .sheet-modal .sheet-count {
+    display: none;
+  }
+  .sheet-preview img {
+    width: 52px;
+    height: 68px;
+  }
 }
 
 /* ---- Mobile polish: smaller color chips, denser tools drawer (perf audit) -- */
@@ -6186,5 +6264,322 @@ textarea:focus-visible,
   .fs-add {
     width: 38px;
     height: 48px;
+  }
+}
+
+/* ============================= The Fridge Wall ============================= */
+/* Pinterest-style masonry of community art. CSS columns give the staggered
+   look without a JS layout engine; cards must avoid column breaks. */
+.wall-page {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #fdf6e3 0%, #f2f6fa 240px);
+}
+.wall-main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 18px 16px 64px;
+}
+.wall-hero {
+  text-align: center;
+  padding: 18px 0 8px;
+}
+.wall-hero h1 {
+  margin: 0 0 6px;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+}
+.wall-hero p {
+  margin: 0;
+  color: #5b6770;
+  font-weight: 600;
+}
+.wall-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 14px 0 8px;
+}
+.wall-search {
+  flex: 1;
+  min-width: 200px;
+  font-size: 1rem;
+  padding: 11px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: #fff;
+}
+.wall-sorts {
+  display: inline-flex;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 3px;
+}
+.wall-sorts button {
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-weight: 800;
+  font-size: 0.82rem;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wall-sorts button.is-active {
+  background: #7c3aed;
+  color: #fff;
+}
+.wall-tagrow {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.wall-tagchip {
+  flex: 0 0 auto;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  border-radius: 999px;
+  min-height: 34px;
+  padding: 0 12px;
+  font-weight: 800;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wall-tagchip.is-active {
+  border-color: #7c3aed;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+.wall-status {
+  text-align: center;
+  color: #64748b;
+  font-weight: 600;
+  padding: 28px 0;
+}
+.wall-masonry {
+  columns: 4 240px;
+  column-gap: 14px;
+}
+.wall-card {
+  break-inside: avoid;
+  margin: 0 0 14px;
+  background: #fff;
+  border: 1px solid #e6ebf1;
+  border-radius: 16px;
+  padding: 10px;
+  box-shadow: 0 4px 16px rgba(32, 47, 58, 0.07);
+}
+.wall-art {
+  position: relative;
+}
+.wall-art img {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid #eef2f7;
+  background: #fff;
+}
+.wall-anim-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.wall-card figcaption {
+  padding: 8px 2px 2px;
+}
+.wall-caption-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wall-title {
+  font-size: 0.92rem;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wall-heart {
+  flex: 0 0 auto;
+  border: 1px solid #fecdd3;
+  background: #fff;
+  border-radius: 999px;
+  min-height: 34px;
+  min-width: 44px;
+  padding: 0 10px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.wall-heart.is-liked {
+  background: #fff1f2;
+  border-color: #fb7185;
+}
+.wall-heart:active {
+  transform: scale(1.15);
+}
+.wall-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+.wall-artist {
+  font-size: 0.76rem;
+  color: #64748b;
+  font-weight: 600;
+}
+.wall-report {
+  border: 0;
+  background: transparent;
+  color: #b6c2cd;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 4px 6px;
+}
+.wall-report:hover {
+  color: #ef4444;
+}
+.wall-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.wall-tag {
+  background: #f1f5f9;
+  color: #475569;
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.wall-cta {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 22px 14px;
+  background: linear-gradient(160deg, #fff7d6, #ffe9f2);
+  border: 2px dashed #f6c445;
+}
+.wall-cta-emoji {
+  font-size: 2rem;
+}
+.wall-cta p {
+  margin: 0;
+  font-weight: 800;
+  color: #513c06;
+}
+.wall-toast {
+  position: fixed;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-weight: 700;
+  z-index: 120;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.35);
+}
+
+/* Post dialog (in the studio) */
+.wall-post-modal {
+  width: min(460px, 96vw);
+  max-height: min(90vh, calc(100dvh - 20px));
+  overflow-y: auto;
+}
+.wall-post-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.wall-post-preview img {
+  width: min(320px, 100%);
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+.wall-post-preview .wall-anim-badge {
+  position: absolute;
+  bottom: 8px;
+  right: calc(50% - 150px);
+}
+.wall-post-field {
+  display: grid;
+  gap: 4px;
+}
+.wall-post-field > span {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #475569;
+}
+.wall-post-field input {
+  font-size: 1rem;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+}
+.wall-post-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.wall-post-tags input {
+  flex: 1;
+  min-width: 130px;
+}
+.wall-post-tags .wall-tag {
+  cursor: pointer;
+  min-height: 30px;
+}
+.wall-post-error {
+  margin: 0;
+  color: #b91c1c;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+.wall-post-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wall-post-note {
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .wall-masonry {
+    columns: 2 150px;
+    column-gap: 10px;
+  }
+  .wall-card {
+    margin-bottom: 10px;
+    padding: 8px;
+  }
+  .wall-sorts {
+    width: 100%;
+    justify-content: space-between;
   }
 }
