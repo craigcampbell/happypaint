@@ -20,6 +20,7 @@ import { randomBytes, createHash } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { scan } from './server/moderation/textFilter.js';
+import { pickWordChoices } from './server/gameWords.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -830,10 +831,11 @@ function loadRoom(roomId) {
       frames: Array.isArray(data.frames) ? data.frames : null,
       scenes: Array.isArray(data.scenes) ? data.scenes : null,
       animation: !!data.animation,
+      game: !!data.game, // private-room Draw & Guess opt-in survives restarts
       productionId: typeof data.productionId === 'string' ? data.productionId.slice(0, 32) : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, productionId: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, productionId: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -873,6 +875,7 @@ async function saveRoomNow(roomId) {
       frames: room.frames,
       scenes: room.scenes,
       animation: !!room.animationEnabled,
+      game: !!room.gameEnabled,
       productionId: room.productionId || null,
       savedAt: Date.now(),
     });
@@ -927,11 +930,15 @@ const FEATURED_ROOMS = [
   // The little-kids room: finger painting only. Wet canvas is always on,
   // smudging is the whole point, and there is NO chat (pre-readers).
   { code: 'FINGERS', title: 'Finger Paints', emoji: '🖐️', fingerPaint: true, prompts: ['Squish some colors together!', 'Paint with all ten fingers', 'Make the biggest rainbow smudge', 'Squishy squishy paint!'] },
+  // Draw & Guess: one player draws a secret word, everyone else races to guess
+  // it in chat. Always-on public game room; private rooms can flip it on too.
+  { code: 'GUESS', title: 'Draw & Guess', emoji: '🎮', game: true, prompts: ['Guess what everyone is drawing!', 'Draw your word — no letters or numbers!', 'Race to guess it first'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
 const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
+const GAME_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.game).map((r) => r.code));
 
 // ---- Shared animation frames -----------------------------------------------
 // In an animation room the frames themselves are shared state (Google-Docs
@@ -1189,6 +1196,11 @@ function getRoom(roomId) {
       // Finger-paint mode: smudge allowed despite kid_safe, chat disabled,
       // wet canvas on. Only the featured FINGERS room carries it.
       fingerPaint: FINGER_PAINT_CODES.has(roomId),
+      // Draw & Guess: the GUESS room always has it; private rooms opt in via
+      // set_game. `game` is the ephemeral live round (never persisted).
+      gameEnabled: GAME_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.game),
+      game: null, // live round: { phase, drawerId, word, endsAt, scores, guessed, ... }
+      gameTimers: null, // { round, hint, intermission } setTimeout handles
       // Which multi-room production (film) this room is a segment of, if any.
       productionId: saved.productionId || null,
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
@@ -1221,6 +1233,7 @@ function seedFeaturedRooms() {
     // for every other public room (re-asserted each boot so it can't drift).
     room.animationEnabled = ANIMATION_ROOM_CODES.has(f.code);
     room.fingerPaint = FINGER_PAINT_CODES.has(f.code);
+    room.gameEnabled = GAME_ROOM_CODES.has(f.code);
     if (room.fingerPaint) {
       room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
     }
@@ -1262,6 +1275,7 @@ function closeRoom(roomId, reason) {
     const t = persistTimers.get(roomId);
     if (t) { clearTimeout(t); persistTimers.delete(roomId); }
     if (room.voteTimer) { clearTimeout(room.voteTimer); room.voteTimer = null; }
+    clearGameTimers(room); // never leave a Draw & Guess round timer firing on a closed room
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
@@ -1445,6 +1459,221 @@ function broadcast(roomId, message, exceptId = null) {
       if (sws.readyState === 1) sws.send(data);
     });
   }
+}
+
+// ---- Draw & Guess game engine ---------------------------------------------
+// One drawer per round gets a secret word; everyone else races to type it in
+// chat. The WORD is the only secret — draw ops relay as normal ops, so replay
+// stays deterministic. All live state is on room.game (ephemeral, NEVER
+// persisted — like room.vote); timers on room.gameTimers.
+const GAME_ROUND_MS = 75_000; // drawing time per round
+const GAME_INTERMISSION_MS = 6_000; // reveal + scoreboard pause between rounds
+const GAME_MIN_PLAYERS = 2;
+
+function normalizeGuess(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+// Space-stripped form for the LEAK guard: "c a t" / "c-a-t" / "cats" all
+// collapse so a message can't smuggle the word past the suppressor.
+function squishGuess(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+// Stable scoring identity: a signed-in player keeps their score across
+// reconnects (session ids are minted per socket); anonymous falls back to the
+// session id.
+function gameKey(user) {
+  return user.profileId ? `pb_${user.profileId}` : user.id;
+}
+function gamePlayers(room) {
+  return [...room.users.values()]; // join order (Map preserves insertion) = drawer rotation
+}
+function clearGameTimers(room) {
+  if (!room.gameTimers) return;
+  for (const t of Object.values(room.gameTimers)) if (t) clearTimeout(t);
+  room.gameTimers = null;
+}
+// Length + revealed hint letters as "_ a _ _" (spaces preserved).
+function maskWord(word, revealed) {
+  return word.split('').map((ch, i) => (ch === ' ' ? '  ' : revealed.has(i) ? ch : '_')).join(' ');
+}
+// The PUBLIC snapshot — never carries the word for guessers.
+function publicGame(room) {
+  const g = room.game;
+  if (!g) return null;
+  const scores = gamePlayers(room)
+    .map((u) => ({ id: u.id, name: u.name, score: (g.scores && g.scores[gameKey(u)]) || 0, guessed: g.guessed ? g.guessed.has(gameKey(u)) : false }))
+    .sort((a, b) => b.score - a.score);
+  return {
+    phase: g.phase,
+    roundNo: g.roundNo,
+    drawerId: g.drawerId,
+    drawerName: g.drawerName,
+    endsAt: g.endsAt,
+    wordMask: g.wordMask || '',
+    wordLen: g.word ? g.word.length : 0,
+    scores,
+  };
+}
+function broadcastGame(roomId) {
+  const room = rooms.get(roomId);
+  if (room) broadcast(roomId, { type: 'game_state', game: publicGame(room) });
+}
+function pushGameChat(room, roomId, message, color) {
+  const line = { user: { id: 'system', name: 'Draw & Guess', color: color || '#7c3aed' }, message, ts: Date.now(), system: true };
+  room.chat.push(line);
+  if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
+  broadcast(roomId, { type: 'chat', user: line.user, message, ts: line.ts, system: true });
+}
+
+function startGameRound(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.gameEnabled) return;
+  clearGameTimers(room);
+  const players = gamePlayers(room);
+  if (players.length < GAME_MIN_PLAYERS) {
+    room.game = { phase: 'waiting', roundNo: room.game ? room.game.roundNo : 0, scores: (room.game && room.game.scores) || {}, guessed: new Set(), drawerId: null, drawerName: '', word: null, wordMask: '', endsAt: 0 };
+    broadcastGame(roomId);
+    return;
+  }
+  // Rotate drawer round-robin by join order (prev not found → first player).
+  const prevIdx = players.findIndex((u) => u.id === (room.game && room.game.drawerId));
+  const drawer = players[(prevIdx + 1) % players.length];
+  const word = pickWordChoices(Math.random, 1)[0];
+  const now = Date.now();
+  room.game = {
+    phase: 'playing',
+    roundNo: (room.game ? room.game.roundNo : 0) + 1,
+    drawerId: drawer.id,
+    drawerKey: gameKey(drawer), // stable identity for the drawer's per-guess bonus
+    drawerName: drawer.name,
+    word,
+    revealed: new Set(),
+    wordMask: maskWord(word, new Set()),
+    endsAt: now + GAME_ROUND_MS,
+    scores: (room.game && room.game.scores) || {},
+    guessed: new Set(),
+  };
+  // Blank the canvas for the fresh drawing (reuse the clear semantics). Reset
+  // the undo-clear backup too, or "Bring it back" would resurrect a previous
+  // round's drawing onto the live canvas.
+  room.history = [];
+  recountFrameOps(room);
+  room.sheetId = null;
+  room.lastCleared = null;
+  room.lastClearedFrameId = null;
+  room.lastClearedSheet = null;
+  broadcast(roomId, { type: 'clear', userId: 'system', name: 'Draw & Guess', gameRound: true });
+  broadcast(roomId, { type: 'sheet', sheetId: null });
+  // Secret word to the DRAWER ONLY (send-to-one); everyone else gets guesser.
+  if (drawer.ws.readyState === 1) {
+    drawer.ws.send(JSON.stringify({ type: 'game_role', role: 'drawer', word, roundNo: room.game.roundNo }));
+  }
+  broadcast(roomId, { type: 'game_role', role: 'guesser', roundNo: room.game.roundNo }, drawer.id);
+  pushGameChat(room, roomId, `${drawer.name} is drawing! Guess the word.`, '#7c3aed');
+  broadcastGame(roomId);
+  room.gameTimers = {
+    round: setTimeout(() => endGameRound(roomId, 'timeup'), GAME_ROUND_MS),
+    hint: setTimeout(() => revealHint(roomId), Math.round(GAME_ROUND_MS * 0.55)),
+    intermission: null,
+  };
+  persistRoom(roomId); // the blanked canvas must survive a restart mid-round
+}
+
+function revealHint(roomId) {
+  const room = rooms.get(roomId);
+  const g = room && room.game;
+  if (!g || g.phase !== 'playing' || !g.word) return;
+  const candidates = [];
+  for (let i = 0; i < g.word.length; i += 1) {
+    if (g.word[i] !== ' ' && !g.revealed.has(i)) candidates.push(i);
+  }
+  if (candidates.length <= 1) return; // never reveal the last letter
+  g.revealed.add(candidates[Math.floor(Math.random() * candidates.length)]);
+  g.wordMask = maskWord(g.word, g.revealed);
+  broadcastGame(roomId);
+}
+
+function endGameRound(roomId, reason) {
+  const room = rooms.get(roomId);
+  const g = room && room.game;
+  if (!g || g.phase !== 'playing') return;
+  clearGameTimers(room);
+  g.phase = 'intermission';
+  broadcast(roomId, { type: 'game_end', word: g.word, reason, game: publicGame(room) });
+  pushGameChat(room, roomId, `The word was "${g.word}". Next round starting…`, '#7c3aed');
+  broadcastGame(roomId);
+  room.gameTimers = { round: null, hint: null, intermission: setTimeout(() => startGameRound(roomId), GAME_INTERMISSION_MS) };
+}
+
+function stopGame(roomId, reason) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  clearGameTimers(room);
+  room.game = null;
+  broadcast(roomId, { type: 'game_state', game: null, stopped: reason || true });
+}
+
+// Auto-run the featured game room / opted-in private rooms: start when a 2nd
+// player arrives and the game is idle; otherwise show a "waiting" HUD so even a
+// solo joiner sees the game exists and knows a friend is needed.
+function maybeStartGame(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.gameEnabled) return;
+  const enough = gamePlayers(room).length >= GAME_MIN_PLAYERS;
+  const idle = !room.game || room.game.phase === 'waiting';
+  if (enough && idle) {
+    startGameRound(roomId);
+  } else if (!enough && (!room.game || room.game.phase !== 'waiting')) {
+    room.game = { phase: 'waiting', roundNo: room.game ? room.game.roundNo : 0, scores: (room.game && room.game.scores) || {}, guessed: new Set(), drawerId: null, drawerName: '', word: null, wordMask: '', endsAt: 0 };
+    broadcastGame(roomId);
+  }
+}
+
+// End the round early once every remaining guesser has solved it. Called both
+// on a correct guess AND when a not-yet-guessed guesser leaves (their departure
+// can complete the "everyone guessed" condition).
+function checkAllGuessed(roomId) {
+  const room = rooms.get(roomId);
+  const g = room && room.game;
+  if (!g || g.phase !== 'playing') return;
+  const guessers = gamePlayers(room).filter((u) => u.id !== g.drawerId);
+  if (guessers.length > 0 && guessers.every((u) => g.guessed.has(gameKey(u)))) {
+    endGameRound(roomId, 'allguessed');
+  }
+}
+
+// A chat line during a live round. Returns 'correct' | 'spoiler' | null.
+//  - 'correct': an exact/token match from a fresh guesser → scored + announced.
+//  - 'spoiler': the message CONTAINS the word (letter-spaced "c a t", a
+//    superstring "cats", or the drawer/an already-correct guesser typing it) →
+//    suppressed with no score, so the answer never reaches the room.
+//  - null: ordinary chat → broadcast normally.
+function handleGuess(room, roomId, user, rawMessage) {
+  const g = room.game;
+  if (!g || g.phase !== 'playing' || !g.word) return null;
+  const guess = normalizeGuess(rawMessage);
+  const target = normalizeGuess(g.word);
+  if (!target) return null;
+  const exact = guess === target || guess.split(' ').includes(target) || (target.includes(' ') && guess.includes(target));
+  // Leak guard: any message whose letters contain the word (spaces stripped)
+  // must not be echoed, even if it isn't an exact scoring match.
+  const targetSquished = squishGuess(g.word);
+  const contains = !!targetSquished && squishGuess(rawMessage).includes(targetSquished);
+  if (!exact && !contains) return null;
+  const gk = gameKey(user);
+  // Not a fresh scoring guess (drawer, already-correct, or a non-exact
+  // word-containing message) → suppress it, award nothing.
+  if (!exact || user.id === g.drawerId || g.guessed.has(gk)) return 'spoiler';
+  const frac = Math.max(0, Math.min(1, (g.endsAt - Date.now()) / GAME_ROUND_MS));
+  const points = 50 + Math.round(50 * frac);
+  g.scores[gk] = (g.scores[gk] || 0) + points;
+  if (g.drawerKey) g.scores[g.drawerKey] = (g.scores[g.drawerKey] || 0) + 25; // drawer earns per correct guesser
+  g.guessed.add(gk);
+  broadcast(roomId, { type: 'game_correct', userId: user.id, name: user.name, points });
+  pushGameChat(room, roomId, `${user.name} guessed it! +${points}`, '#16a34a');
+  broadcastGame(roomId);
+  checkAllGuessed(roomId);
+  return 'correct';
 }
 
 // Fan a chat message out to cross-room "notifier" sockets watching this room
@@ -1781,6 +2010,8 @@ wss.on('connection', async (ws, req) => {
       : null,
     // Any vote already running rides the handshake so late joiners can vote.
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
+    // Draw & Guess: whether this room plays the game (HUD, start button, etc.).
+    game: !!room.gameEnabled,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -1817,6 +2048,12 @@ wss.on('connection', async (ws, req) => {
   if (room.productionId) {
     const joinProduction = getProduction(room.productionId);
     if (joinProduction) broadcastProduction(joinProduction);
+  }
+  // Draw & Guess: catch the joiner up on any live round, then (if the room was
+  // idle and now has enough players) kick a round off.
+  if (room.gameEnabled) {
+    if (room.game) ws.send(JSON.stringify({ type: 'game_state', game: publicGame(room) }));
+    maybeStartGame(roomId);
   }
 
   ws.on('message', (raw) => {
@@ -2128,6 +2365,17 @@ wss.on('connection', async (ws, req) => {
           }
           if (verdict.hit && room.audience === 'kid_safe') message = maskMessage(message);
         }
+        // Draw & Guess: a message that is (or contains) the secret word is a
+        // guess — score it and SUPPRESS the raw text so the word never leaks to
+        // the room. Non-matching chat falls through and shows normally.
+        if (room.gameEnabled && room.game && room.game.phase === 'playing') {
+          const outcome = handleGuess(room, roomId, user, message);
+          if (outcome === 'correct') break; // scored + announced; don't echo the word
+          if (outcome === 'spoiler') {
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'game_spoiler' }));
+            break; // drawer / already-correct typed the word — swallow it
+          }
+        }
         const chatTs = Date.now();
         const entry = { user: { id, name: user.name, color: user.color }, message, ts: chatTs };
         // 1) capped buffer (late-joiner context + report context), persisted with the room
@@ -2163,8 +2411,45 @@ wss.on('connection', async (ws, req) => {
         if (room.audience === 'kid_safe') break;
         if (!isHost(room, user)) break;
         room.animationEnabled = !!data.enabled;
+        // Animation and Draw & Guess are mutually exclusive: the game blanks
+        // the canvas frame-agnostically each round, which would desync a
+        // multi-frame flipbook. Enabling one turns the other off.
+        if (room.animationEnabled && room.gameEnabled) {
+          room.gameEnabled = false;
+          stopGame(roomId, 'animation_on');
+          broadcast(roomId, { type: 'room_game', enabled: false });
+        }
         broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled });
         persistRoom(roomId);
+        break;
+      }
+      // ---- Draw & Guess -----------------------------------------------------
+      // Private-room host toggles game mode (the featured GUESS room is always
+      // on and can't be toggled off). Turning it on auto-starts if enough
+      // players are present; off stops any live round.
+      case 'set_game': {
+        if (GAME_ROOM_CODES.has(roomId)) break; // featured game room is fixed on
+        if (room.audience === 'kid_safe') break; // public drawing rooms never opt in
+        if (!isHost(room, user)) break;
+        room.gameEnabled = !!data.enabled;
+        // Mutually exclusive with animation (see set_animation): the per-round
+        // canvas wipe would desync a flipbook.
+        if (room.gameEnabled && room.animationEnabled) {
+          room.animationEnabled = false;
+          broadcast(roomId, { type: 'room_animation', enabled: false });
+        }
+        broadcast(roomId, { type: 'room_game', enabled: room.gameEnabled });
+        if (room.gameEnabled) maybeStartGame(roomId);
+        else stopGame(roomId, 'host_off');
+        persistRoom(roomId); // the opt-in must survive a restart (like animation)
+        break;
+      }
+      // End the current round now → reveal + rotate. Allowed by the drawer
+      // (skip my turn) or a host. No-op when nothing's playing.
+      case 'game_skip': {
+        if (!room.gameEnabled || !room.game || room.game.phase !== 'playing') break;
+        if (user.id !== room.game.drawerId && !isHost(room, user)) break;
+        endGameRound(roomId, 'skipped');
         break;
       }
       // Clients page between scenes: send them ONE scene's frames + ops.
@@ -2655,6 +2940,25 @@ wss.on('connection', async (ws, req) => {
     room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
+    // Draw & Guess: if the drawer bailed mid-round, end the round now (it'll
+    // rotate to the next player). If the room dropped below the minimum, park
+    // the game in "waiting" so it resumes when someone rejoins.
+    if (room.gameEnabled && room.game) {
+      if (room.game.phase === 'playing' && id === room.game.drawerId) {
+        endGameRound(roomId, 'drawer_left');
+      } else if (gamePlayers(room).length < GAME_MIN_PLAYERS && room.game.phase !== 'waiting') {
+        clearGameTimers(room);
+        room.game.phase = 'waiting';
+        room.game.drawerId = null;
+        broadcastGame(roomId);
+      } else if (room.game.phase === 'playing') {
+        // A guesser left — if the remaining guessers have all solved it, the
+        // round is done (their departure completed the "everyone guessed"
+        // condition, which is otherwise only checked on a guess).
+        checkAllGuessed(roomId);
+        broadcastGame(roomId); // refresh the scoreboard without the departed player
+      }
+    }
     // A film's storyboard shows live crew chips per Part — refresh so this
     // painter's chip vanishes from the board the moment they leave.
     if (room.productionId) {

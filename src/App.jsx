@@ -83,6 +83,7 @@ import {
 import { buildBrushAssetFields, recipeToBrushSettings } from "./utils/brushStudio";
 import { publishPack } from "./utils/brushPacks";
 import LayerPanel from "./components/LayerPanel";
+import BrandMark from "./components/BrandMark";
 import FilmStrip from "./components/FilmStrip";
 import PaintSpacePanel from "./components/PaintSpacePanel";
 import ReplayPlayer from "./components/ReplayPlayer";
@@ -104,13 +105,17 @@ import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
+import StepBackPreview from "./components/StepBackPreview";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import ColoringSheetModal from "./components/ColoringSheetModal";
+import GameHud from "./components/GameHud";
 import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
 import { useMultiplayer } from "./hooks/useMultiplayer";
+import { extractCanvasPalette, resolvePreviewTheme } from "./utils/artPreview";
 import "./App.css";
+import "./drawesome-theme.css";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
 // 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
@@ -275,9 +280,9 @@ function createImageFromBlob(blob) {
   });
 }
 
-function canvasToBlob(canvas) {
+function canvasToBlob(canvas, type = "image/png", quality = 0.95) {
   return new Promise((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), "image/png", 0.95);
+    canvas.toBlob((blob) => resolve(blob), type, quality);
   });
 }
 
@@ -601,6 +606,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
+  const [desktopHeaderOpen, setDesktopHeaderOpen] = useState(false);
+  const [stepBackPreview, setStepBackPreview] = useState(null);
+  const [isPreparingStepBack, setIsPreparingStepBack] = useState(false);
+  const stepBackUrlRef = useRef(null);
+  const stepBackBusyRef = useRef(false);
   const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
   const [showReport, setShowReport] = useState(false);
   const [showLobby, setShowLobby] = useState(false);
@@ -734,6 +744,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // wet brushes only.
   const [roomFingerPaint, setRoomFingerPaint] = useState(false);
   const roomFingerPaintRef = useRef(false);
+  // Draw & Guess: `roomGame` = this room plays the game; `game` = the live
+  // public round (phase/drawer/timer/scores, NO word); `myWord` = the secret,
+  // present only while I'm the drawer; `gamePop` = a transient "guessed it!"
+  // celebration. All ephemeral, server-authoritative.
+  const [roomGame, setRoomGame] = useState(false);
+  const roomGameRef = useRef(false);
+  const [game, setGame] = useState(null);
+  const gameRef = useRef(null);
+  const [myWord, setMyWord] = useState(null);
+  const [gamePop, setGamePop] = useState(null); // { name, points } | { reveal, word }
+  const gamePopTimer = useRef(null);
   const [isExportingVideo, setIsExportingVideo] = useState(false);
   // Multi-scene export pages scenes UNDER the user — freeze drawing + frame/
   // scene navigation while it runs so strokes can't land in scenes the artist
@@ -2081,6 +2102,59 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
   }, []);
+
+  const closeStepBackPreview = useCallback(() => {
+    if (stepBackUrlRef.current) {
+      URL.revokeObjectURL(stepBackUrlRef.current);
+      stepBackUrlRef.current = null;
+    }
+    setStepBackPreview(null);
+  }, []);
+
+  useEffect(() => () => {
+    if (stepBackUrlRef.current) {
+      URL.revokeObjectURL(stepBackUrlRef.current);
+    }
+  }, []);
+
+  // "Step back" uses one downscaled WebP snapshot, not another full-size
+  // canvas. The live editable layers stay exactly where they are underneath.
+  const openStepBackPreview = useCallback(async () => {
+    if (stepBackBusyRef.current || layersRef.current.length === 0) {
+      return;
+    }
+
+    stepBackBusyRef.current = true;
+    setIsPreparingStepBack(true);
+    try {
+      const canvas = await composeCanvas({ width: 1280, height: 800 });
+      const palette = extractCanvasPalette(canvas);
+      const blob = await canvasToBlob(canvas, "image/webp", 0.9);
+      if (!blob) {
+        throw new Error("Preview encoding failed");
+      }
+
+      if (stepBackUrlRef.current) {
+        URL.revokeObjectURL(stepBackUrlRef.current);
+      }
+      const src = URL.createObjectURL(blob);
+      stepBackUrlRef.current = src;
+      setStepBackPreview({
+        src,
+        palette,
+        roomTitle,
+        roomPrompt,
+        theme: resolvePreviewTheme({ roomId, roomTitle, roomPrompt }),
+      });
+      setDesktopHeaderOpen(false);
+      setToolsOpen(false);
+    } catch {
+      showToast("Couldn't open the full-art view");
+    } finally {
+      stepBackBusyRef.current = false;
+      setIsPreparingStepBack(false);
+    }
+  }, [composeCanvas, roomId, roomPrompt, roomTitle, showToast]);
 
   // Jump OUR canvas to a friend's last cursor position and pulse it for a moment.
   // Wired to the tappable participant chips in chat. Each person keeps their own
@@ -5332,6 +5406,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setRoomAudience(data.audience || null);
           roomFingerPaintRef.current = !!data.fingerPaint;
           setRoomFingerPaint(!!data.fingerPaint);
+          // Draw & Guess room? Reset any stale round from a previous room; the
+          // live game_state (if a round is running) arrives right after.
+          roomGameRef.current = !!data.game;
+          setRoomGame(!!data.game);
+          gameRef.current = null;
+          setGame(null);
+          setMyWord(null);
           if (data.fingerPaint) {
             // Toddler room: land on a big wet paint brush, fingers-first.
             setSelectedTool("brush");
@@ -5556,7 +5637,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             renderDisplay();
             refreshActiveThumbnail();
           }
-          showClearBanner(data.name || "Someone");
+          // A Draw & Guess round clears the canvas every turn — that's expected,
+          // so skip the "Someone cleared" banner (the HUD already narrates it).
+          if (!data.gameRound) showClearBanner(data.name || "Someone");
+          break;
+        }
+        // Private-room host toggled Draw & Guess on/off.
+        case "room_game": {
+          roomGameRef.current = !!data.enabled;
+          setRoomGame(!!data.enabled);
+          if (!data.enabled) { gameRef.current = null; setGame(null); setMyWord(null); }
           break;
         }
         // ---- Shared animation frames (server-ordered; echoed to sender too) --
@@ -5756,6 +5846,40 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           window.setTimeout(() => setCheers((list) => list.filter((c) => c.id !== cid)), 1600);
           break;
         }
+        // ---- Draw & Guess ------------------------------------------------
+        case "game_state": {
+          // The public round snapshot (never carries the word). null = stopped.
+          gameRef.current = data.game || null;
+          setGame(data.game || null);
+          if (!data.game || data.game.drawerId !== myUserIdRef.current) {
+            setMyWord(null); // I'm not the drawer (or the game ended)
+          }
+          break;
+        }
+        case "game_role": {
+          // Delivered to ME only: the secret word if I'm this round's drawer.
+          setMyWord(data.role === "drawer" ? data.word || null : null);
+          break;
+        }
+        case "game_correct": {
+          // Someone (maybe me) guessed it — celebratory pop + a confetti burst.
+          const mine = data.userId === myUserIdRef.current;
+          setGamePop({ kind: "correct", name: mine ? "You" : data.name, points: data.points, mine });
+          window.clearTimeout(gamePopTimer.current);
+          gamePopTimer.current = window.setTimeout(() => setGamePop(null), 2600);
+          break;
+        }
+        case "game_end": {
+          // Round over — reveal the word for the intermission, drop my drawer word.
+          setMyWord(null);
+          setGamePop({ kind: "reveal", word: data.word });
+          window.clearTimeout(gamePopTimer.current);
+          gamePopTimer.current = window.setTimeout(() => setGamePop(null), 4200);
+          break;
+        }
+        case "game_spoiler":
+          showToast("🤫 No spoilers — you already know the word!");
+          break;
         case "reaction": {
           // Ephemeral floating emoji from someone (or our own echo). Placed at the
           // world point, mapped to screen once; it floats up + fades via CSS.
@@ -5938,8 +6062,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendFramePresence: mp.sendFramePresence,
       sendBeacon: mp.sendBeacon,
       sendCheer: mp.sendCheer,
+      sendGameSkip: mp.sendGameSkip,
+      sendSetGame: mp.sendSetGame,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame]);
 
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
@@ -6809,10 +6935,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   return (
     <main className="studio-shell" translate="no">
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
-        <div className="topbar">
-          <div>
-            <p className="eyebrow">paint together, live ✨</p>
-            <h1>Drawesome 🎨</h1>
+        <button
+          type="button"
+          className="desktop-studio-toggle"
+          onClick={() => setDesktopHeaderOpen((open) => !open)}
+          aria-expanded={desktopHeaderOpen}
+          aria-controls="desktop-studio-menu"
+          title="Open studio actions"
+        >
+          <BrandMark showName={false} />
+          <span>Studio</span>
+          <span className="desktop-studio-toggle-icon" aria-hidden="true">&#8942;</span>
+        </button>
+        <div
+          id="desktop-studio-menu"
+          className={`topbar${desktopHeaderOpen ? " is-open" : ""}`}
+          aria-hidden={!desktopHeaderOpen}
+        >
+          <div className="topbar-brand">
+            <p className="eyebrow">Open studio / live</p>
+            <h1><BrandMark /></h1>
           </div>
           <div className="topbar-actions">
             <button type="button" onClick={undo} disabled={historyCount === 0}>
@@ -6820,6 +6962,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </button>
             <button type="button" onClick={redo} disabled={redoCount === 0}>
               Redo
+            </button>
+            <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
+              {isPreparingStepBack ? "Framing..." : "Step back"}
             </button>
             <button type="button" onClick={() => setShowClearConfirm(true)}>
               Clear
@@ -6859,8 +7004,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={exportPng}>
               Export
             </button>
-            <button type="button" onClick={exportTransparentPng}>
+            <button type="button" className="topbar-transparent-export" onClick={exportTransparentPng}>
               Export PNG (transparent)
+            </button>
+            <button
+              type="button"
+              className="topbar-close"
+              onClick={() => setDesktopHeaderOpen(false)}
+              aria-label="Close studio actions"
+              title="Close"
+            >
+              &times;
             </button>
           </div>
         </div>
@@ -6878,6 +7032,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </button>
           <button type="button" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
             🚪 Rooms
+          </button>
+          <button
+            type="button"
+            className="fab-step-back"
+            onClick={openStepBackPreview}
+            disabled={isPreparingStepBack}
+            title="Step back and view the whole artwork"
+            aria-label="Step back and view the whole artwork"
+          >
+            <span aria-hidden="true">&#9635;</span>
           </button>
           <button
             type="button"
@@ -7185,7 +7349,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </button>
             </div>
 
-            {roomPrompt && !promptDismissed ? (
+            {roomPrompt && !promptDismissed && !(roomGame && game) ? (
               <div className="room-prompt-chip" role="note">
                 <span>🎯 {roomPrompt}</span>
                 <button type="button" onClick={() => setPromptDismissed(true)} aria-label="Dismiss prompt">
@@ -7219,6 +7383,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   ✕
                 </button>
               </div>
+            ) : null}
+
+            {/* Draw & Guess HUD — word/timer/scoreboard over the canvas. */}
+            {roomGame && game ? (
+              <GameHud
+                game={game}
+                myWord={myWord}
+                myId={myUserIdRef.current}
+                isHost={isRoomHost}
+                pop={gamePop}
+                onSkip={() => mpRef.current?.sendGameSkip?.()}
+              />
             ) : null}
           </div>
 
@@ -7436,7 +7612,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               aria-labelledby="welcome-title"
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="welcome-art" aria-hidden="true">🖍️ 🎨 ✨</div>
+              <div className="welcome-art"><BrandMark showName={false} /></div>
               <h2 id="welcome-title">Welcome to Drawesome!</h2>
               <ol className="welcome-steps">
                 <li>
@@ -7699,6 +7875,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </button>
             <button type="button" onClick={redo} disabled={redoCount === 0}>
               ↷ Redo
+            </button>
+            <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
+              {isPreparingStepBack ? "Framing..." : "Preview"}
             </button>
             <button type="button" onClick={() => setShowClearConfirm(true)}>
               Clear
@@ -8167,6 +8346,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         )}
       </div>
       {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}
+
+      {stepBackPreview ? <StepBackPreview preview={stepBackPreview} onClose={closeStepBackPreview} /> : null}
 
       {showPaintSpace ? (
         <PaintSpacePanel

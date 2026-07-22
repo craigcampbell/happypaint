@@ -1,5 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import '@fontsource-variable/fredoka/wght.css'
+import '@fontsource-variable/nunito-sans/wght.css'
 import App from './App.jsx'
 import './index.css'
 

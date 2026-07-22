@@ -164,7 +164,15 @@ const run = async () => {
   check("A rejoins: sees art B drew while A was away", rejoinArt > 50, `darkPixels=${rejoinArt}`);
 
   // 7) Per-frame clear: A clears frame 3 for everyone; frame 2 survives.
-  await pageA.locator("button", { hasText: "Clear" }).first().click();
+  // On desktop the studio actions live in the "Studio ⋮" dropdown, which
+  // animates its visibility — click a direct .first() Clear can race that
+  // transition. Deterministically ensure the dropdown is open, then click.
+  const studioToggle = pageA.locator(".desktop-studio-toggle");
+  if (await studioToggle.isVisible().catch(() => false)) {
+    const opened = await pageA.evaluate(() => document.querySelector(".topbar")?.className.includes("is-open"));
+    if (!opened) { await studioToggle.click(); await sleep(320); }
+  }
+  await pageA.locator(".topbar-actions button", { hasText: "Clear" }).click();
   await sleep(400);
   await pageA.getByRole("button", { name: /yes, clear it/i }).click();
   await sleep(900);

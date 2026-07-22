@@ -227,6 +227,11 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
   const sendVote = useCallback((choice) => send({ type: "vote", choice }), [send]);
+  // Draw & Guess: guesses ride normal sendChat (server checks them). These
+  // control the round: the drawer/host can skip, a private-room host toggles the
+  // game on/off. Incoming game_* messages auto-forward to the App dispatcher.
+  const sendGameSkip = useCallback(() => send({ type: "game_skip" }), [send]);
+  const sendSetGame = useCallback((enabled) => send({ type: "set_game", enabled }), [send]);
 
   // Moderation: report whether we can run the in-browser watcher, flag a region,
   // and (host-only, enforced server-side) reversibly hide / restore / remove ops.
@@ -240,7 +245,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     connected, users, self, chat, disconnect,
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
-    sendSetWet, sendVoteStart, sendVote, sendReaction,
+    sendSetWet, sendVoteStart, sendVote, sendReaction, sendGameSkip, sendSetGame,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,

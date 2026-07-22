@@ -258,7 +258,14 @@ const run = async () => {
   }
   await page.mouse.up();
   await sleep(600);
-  await page.locator("button", { hasText: "🧲 Wall" }).first().click();
+  // The 🧲 Wall button lives in the desktop "Studio ⋮" dropdown (visibility
+  // animates) — open it deterministically before clicking so we don't race it.
+  const wallToggle = page.locator(".desktop-studio-toggle");
+  if (await wallToggle.isVisible().catch(() => false)) {
+    const opened = await page.evaluate(() => document.querySelector(".topbar")?.className.includes("is-open"));
+    if (!opened) { await wallToggle.click(); await sleep(320); }
+  }
+  await page.locator(".topbar-actions button", { hasText: "🧲 Wall" }).click();
   await sleep(900);
   check("wall post dialog opens with a preview", await page.locator(".wall-post-modal .wall-post-preview img").isVisible().catch(() => false));
   await page.locator(".wall-post-modal input[placeholder='What did you make?']").fill("Harness Scribble");

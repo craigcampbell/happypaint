@@ -161,6 +161,8 @@ async function checkLayoutMode(page) {
       quickbarVisible: vis('.mobile-quickbar'),
       hasTopbar: !!document.querySelector('.topbar'),
       topbarVisible: vis('.topbar'),
+      hasDesktopToggle: !!document.querySelector('.desktop-studio-toggle'),
+      desktopToggleVisible: vis('.desktop-studio-toggle'),
     };
   });
 }
@@ -268,13 +270,18 @@ async function auditOne(browser, device, route) {
           screenshot: `screenshots/${tag}.png`,
         });
       }
-      if (!device.mobileUX && lay.hasTopbar && !lay.topbarVisible) {
+      if (
+        !device.mobileUX
+        && lay.hasTopbar
+        && !lay.topbarVisible
+        && (!lay.hasDesktopToggle || !lay.desktopToggleVisible)
+      ) {
         addFinding({
           ...base,
           type: 'desktop-ux-missing',
           severity: 'medium',
-          selector: '.topbar',
-          detail: `Desktop (${device.width}px) is showing the mobile layout (top bar hidden).`,
+          selector: '.topbar, .desktop-studio-toggle',
+          detail: `Desktop (${device.width}px) has neither the studio command bar nor its desktop launcher visible.`,
           screenshot: `screenshots/${tag}.png`,
         });
       }

@@ -1,19 +1,33 @@
 // The new homepage: a live, read-only window into an active public room so every
 // visitor immediately sees art being made. A top nav links to the other pages;
-// a search dropdown switches which public room you're watching; a room-code box
-// jumps straight in; clicking the canvas opens a Join modal.
+// the in-flow room directory shows every public room; a room-code box jumps
+// straight in; clicking the canvas or a room thumbnail opens a Join modal.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import LiveRoomCanvas from "./LiveRoomCanvas";
+import BrandMark from "./BrandMark";
 import { getSession, onAuthStateChange } from "../utils/auth";
+import { resolvePreviewTheme } from "../utils/artPreview";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+const ROOM_TONES = ["coral", "blue", "mint", "lilac", "yellow", "pink"];
+const compactNumber = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+
+function roomTone(code) {
+  const score = [...String(code || "")].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return ROOM_TONES[score % ROOM_TONES.length];
+}
+
+function roomActivity(room) {
+  if (room.users === 1) return "1 painting";
+  if (room.users > 1) return `${room.users} painting`;
+  return "Open";
+}
 
 export default function HomePage({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [activeCode, setActiveCode] = useState(null);
-  const [browseOpen, setBrowseOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
@@ -92,11 +106,11 @@ export default function HomePage({ onNavigate }) {
   }, []);
 
   // Auto-tour open rooms: every 30s hop the live viewport to another public room
-  // so the homepage always feels active. Pauses while the join modal or the
-  // browse dropdown is open. Reads rooms via a ref so the 15s refresh() (which
+  // so the homepage always feels active. Pauses while the join modal is open.
+  // Reads rooms via a ref so the 15s refresh() (which
   // replaces the rooms array every poll) can't restart/starve this 30s timer.
   useEffect(() => {
-    if (showJoin || browseOpen) return undefined;
+    if (showJoin) return undefined;
     const t = window.setInterval(() => {
       if (document.hidden) return; // no point touring a hidden tab
       const list = roomsRef.current;
@@ -112,9 +126,9 @@ export default function HomePage({ onNavigate }) {
       });
     }, 30000);
     return () => window.clearInterval(t);
-  }, [showJoin, browseOpen]);
+  }, [showJoin]);
 
-  const touring = rooms.length >= 2 && !showJoin && !browseOpen;
+  const touring = rooms.length >= 2 && !showJoin;
 
   const active = useMemo(() => rooms.find((r) => r.code === activeCode) || null, [rooms, activeCode]);
 
@@ -147,12 +161,15 @@ export default function HomePage({ onNavigate }) {
 
       <main className="home-main">
         <div className="home-headline">
-          <p className="eyebrow">🟢 Live now — no account needed</p>
-          <h1>Watch the studio, then jump in.</h1>
-          <p className="home-sub">
-            Real people painting together, live. Tap the canvas to jump in — or start a room just for
-            you and your friends.
-          </p>
+          <BrandMark className="home-brand-art" showName={false} />
+          <div className="home-headline-copy">
+            <p className="eyebrow">Live studio / no account needed</p>
+            <h1>Drawesome</h1>
+            <p className="home-kicker">Paint together, right now.</p>
+            <p className="home-sub">
+              Watch a room come alive, jump into the canvas, or open a fresh space for your friends.
+            </p>
+          </div>
         </div>
 
         <div className="home-stage">
@@ -188,40 +205,6 @@ export default function HomePage({ onNavigate }) {
             <button type="button" className="primary-action home-start-room" onClick={startRoom}>
               🎪 Start a room with friends
             </button>
-            <div className="home-browse">
-              <button type="button" className="home-browse-btn" onClick={() => setBrowseOpen((o) => !o)} aria-expanded={browseOpen}>
-                🔍 Browse rooms ({rooms.length})
-              </button>
-              {browseOpen ? (
-                <div className="home-browse-panel">
-                  <input
-                    type="search"
-                    autoFocus
-                    value={query}
-                    placeholder="Search rooms or prompts…"
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                  <div className="home-browse-list">
-                    {filtered.length === 0 ? <p className="home-browse-empty">No rooms match.</p> : null}
-                    {filtered.map((r) => (
-                      <button
-                        type="button"
-                        key={r.code}
-                        className={r.code === activeCode ? "is-active" : ""}
-                        onClick={() => {
-                          setActiveCode(r.code);
-                          setBrowseOpen(false);
-                        }}
-                      >
-                        <span className="home-browse-emoji" aria-hidden="true">{r.emoji || "🎨"}</span>
-                        <span className="home-browse-name">{r.title || r.code}</span>
-                        <span className="home-browse-count">{r.users > 0 ? `${r.users} 🖌️` : "open"}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
 
             <form className="home-code" onSubmit={goByCode}>
               <input
@@ -286,6 +269,79 @@ export default function HomePage({ onNavigate }) {
               </button>
             </div>
           ) : null}
+        </section>
+
+        <section className="home-room-directory" aria-labelledby="home-room-directory-title">
+          <div className="home-room-directory-inner">
+            <div className="home-room-directory-head">
+              <div>
+                <p className="eyebrow">Public studios</p>
+                <h2 id="home-room-directory-title">
+                  Open rooms <span>{rooms.length}</span>
+                </h2>
+              </div>
+              <input
+                className="home-room-search"
+                type="search"
+                value={query}
+                placeholder="Search rooms or prompts…"
+                aria-label="Search open rooms"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+
+            {rooms.length === 0 ? <p className="home-room-directory-empty">Finding open rooms…</p> : null}
+            {rooms.length > 0 && filtered.length === 0 ? (
+              <p className="home-room-directory-empty">No rooms match that search.</p>
+            ) : null}
+
+            <div className="home-room-grid">
+              {filtered.map((room) => {
+                const theme = resolvePreviewTheme({
+                  roomId: room.code,
+                  roomTitle: room.title,
+                  roomPrompt: room.prompt,
+                });
+                const activity = roomActivity(room);
+                const watching = room.code === activeCode;
+                return (
+                  <button
+                    type="button"
+                    key={room.code}
+                    className={`home-room-card${watching ? " is-active" : ""}`}
+                    aria-label={`${room.title || room.code}: ${activity}, ${room.ops || 0} marks`}
+                    onClick={() => {
+                      setActiveCode(room.code);
+                      setJoinRoom(room);
+                      setShowJoin(true);
+                    }}
+                  >
+                    <span className={`home-room-thumb room-tone-${roomTone(room.code)}${theme ? " has-image" : ""}`}>
+                      {theme ? <img src={theme.asset} alt="" loading="lazy" /> : null}
+                      <span className="home-room-thumb-squiggle is-one" aria-hidden="true">~~~~</span>
+                      <span className="home-room-thumb-squiggle is-two" aria-hidden="true">~~~</span>
+                      <span className="home-room-card-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
+                      <span className={`home-room-card-status${room.users > 0 ? " is-live" : ""}`}>
+                        <i aria-hidden="true" />
+                        {watching ? "On screen" : room.users > 0 ? "Live" : "Open"}
+                      </span>
+                    </span>
+                    <span className="home-room-card-body">
+                      <span className="home-room-card-title">
+                        <strong>{room.title || room.code}</strong>
+                        <small>{room.code}</small>
+                      </span>
+                      <span className="home-room-card-prompt">{room.prompt || "Free draw"}</span>
+                      <span className="home-room-card-meta">
+                        <span>{activity}</span>
+                        <span>{compactNumber.format(room.ops || 0)} marks</span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </section>
       </main>
 

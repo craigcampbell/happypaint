@@ -1,21 +1,20 @@
-// Top navigation shared by the homepage and the About/Privacy/Sign-up/Room-finder
-// pages. `current` highlights the active link. When signed in, the "Sign up"
-// button is replaced by the account name so returning visitors can see they're
-// already logged in (clicking it lands on /signup, which shows the signed-in
-// state + "Go paint").
+// Top navigation shared by the homepage and the supporting site pages.
 
 import { useEffect, useState } from "react";
+import BrandMark from "./BrandMark";
 import { getSession, onAuthStateChange, sessionLabel } from "../utils/auth";
 
 export default function SiteNav({ onNavigate, current }) {
   const [session, setSession] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
   useEffect(() => {
     let active = true;
-    getSession().then((v) => active && setSession(v));
-    const unsub = onAuthStateChange((v) => active && setSession(v));
+    getSession().then((value) => active && setSession(value));
+    const unsubscribe = onAuthStateChange((value) => active && setSession(value));
     return () => {
       active = false;
-      unsub();
+      unsubscribe();
     };
   }, []);
 
@@ -26,40 +25,60 @@ export default function SiteNav({ onNavigate, current }) {
     { href: "/faq", label: "Safety & FAQ" },
     { href: "/privacy", label: "Privacy" },
   ];
+
+  const navigate = (href) => {
+    setMenuOpen(false);
+    onNavigate(href);
+  };
+
   return (
     <header className="site-nav">
-      <button type="button" className="site-brand" onClick={() => onNavigate("/")}>
-        Drawesome <span aria-hidden="true">🎨</span>
+      <button type="button" className="site-brand" onClick={() => navigate("/")} aria-label="Drawesome home">
+        <BrandMark />
       </button>
-      <nav className="site-nav-links" aria-label="Site navigation">
-        {links.map((l) => (
+
+      <nav className={`site-nav-links${menuOpen ? " is-open" : ""}`} aria-label="Site navigation">
+        {links.map((link) => (
           <button
-            key={l.href}
+            key={link.href}
             type="button"
-            className={current === l.href ? "is-current" : ""}
-            onClick={() => onNavigate(l.href)}
+            className={current === link.href ? "is-current" : ""}
+            onClick={() => navigate(link.href)}
           >
-            {l.label}
+            {link.label}
           </button>
         ))}
         {session ? (
           <button
             type="button"
             className={`site-nav-account${current === "/signup" ? " is-current" : ""}`}
-            onClick={() => onNavigate("/signup")}
+            onClick={() => navigate("/signup")}
             title="Your account"
           >
-            <span aria-hidden="true">👤</span> {sessionLabel(session)}
+            {sessionLabel(session)}
           </button>
         ) : (
-          <button type="button" className="site-nav-signup" onClick={() => onNavigate("/signup")}>
+          <button type="button" className="site-nav-signup" onClick={() => navigate("/signup")}>
             Sign up
           </button>
         )}
-        <button type="button" className="site-nav-paint primary-action" onClick={() => onNavigate("/studio")}>
-          🎨 Paint now
-        </button>
       </nav>
+
+      <div className="site-nav-actions">
+        <button type="button" className="site-nav-paint primary-action" onClick={() => navigate("/studio")}>
+          <span className="site-nav-paint-dot" aria-hidden="true" />
+          Paint now
+        </button>
+        <button
+          type="button"
+          className="site-nav-toggle"
+          onClick={() => setMenuOpen((open) => !open)}
+          aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+          aria-expanded={menuOpen}
+        >
+          <span aria-hidden="true">{menuOpen ? "×" : "☰"}</span>
+        </button>
+      </div>
     </header>
   );
 }
