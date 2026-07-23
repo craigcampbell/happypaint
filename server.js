@@ -3311,7 +3311,20 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     }
   }
   const analyticsScrubbed = analyticsScrubProfile(pid);
-  res.json({ ok: true, scrubbed, analyticsScrubbed });
+  // 3) the account's SAVED ARTWORK — a deleted child's drawings must not linger
+  //    on disk (COPPA erasure). Their gallery is one file keyed by the account.
+  let artScrubbed = 0;
+  try {
+    const artFile = userArtFile(`pb_${pid}`);
+    if (existsSync(artFile)) { unlinkSync(artFile); artScrubbed = 1; }
+  } catch { /* best effort */ }
+  // 4) the account's FRIDGE WALL posts (metadata + frame images).
+  let wallScrubbed = 0;
+  const accountKey = sanitizeKey(`pb_${pid}`);
+  for (const post of [...wallPosts.values()]) {
+    if (post.ownerKey === accountKey) { deleteWallPost(post.id); wallScrubbed += 1; }
+  }
+  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
