@@ -2386,6 +2386,12 @@ button:disabled {
   min-width: 120px;
 }
 
+/* The share CTA leads — full width above the secondary actions. */
+.replay-actions .replay-share {
+  flex-basis: 100%;
+  font-size: 1.05rem;
+}
+
 /* AI Assist */
 .ai-assist-body,
 .ai-consent {

@@ -4534,6 +4534,43 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, [encodeTimelapseBytes, isExportingTimelapse]);
 
+  // Share the timelapse GIF straight to the OS share sheet (socials, iMessage,
+  // etc.) — the shareable "watch it draw" artifact is the growth loop. Falls
+  // back to a plain download where file-sharing isn't supported (most desktops).
+  const shareTimelapse = useCallback(async () => {
+    if (isExportingTimelapse) return;
+    setIsExportingTimelapse(true);
+    setStatus("Making your timelapse…");
+    try {
+      const bytes = await encodeTimelapseBytes();
+      if (!bytes) {
+        setStatus("Draw a bit first — no timelapse yet!");
+        return;
+      }
+      const blob = new Blob([bytes], { type: "image/gif" });
+      const file = new File([blob], "drawesome-timelapse.gif", { type: "image/gif" });
+      const shareData = {
+        files: [file],
+        title: "Watch my drawing come together! 🎨",
+        text: "I made this on Drawesome — watch it draw itself!",
+        url: `${window.location.origin}/join/${roomId}`,
+      };
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share(shareData);
+        setStatus("Shared your timelapse! 🎉");
+      } else {
+        // Desktop / unsupported: download the GIF so it can still be shared.
+        downloadBlob(blob, `drawesome-timelapse-${Date.now()}.gif`);
+        setStatus("Saved your timelapse GIF — share it anywhere!");
+      }
+    } catch (err) {
+      // AbortError = the user dismissed the share sheet; not a failure.
+      if (err?.name !== "AbortError") setStatus("Couldn't make the timelapse — try again");
+    } finally {
+      setIsExportingTimelapse(false);
+    }
+  }, [encodeTimelapseBytes, isExportingTimelapse, roomId]);
+
   // ---- Paint Space locker ----
 
   // Apply an updater to the locker, persist it (IndexedDB, else localStorage),
@@ -7054,6 +7091,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={sharePng} title="Share your art + an invite link">
               📤 Share
             </button>
+            <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
+              🎬 Timelapse
+            </button>
             <button type="button" onClick={exportPng}>
               Export
             </button>
@@ -7956,6 +7996,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={sharePng} title="Share your art + an invite link">
               📤 Share
             </button>
+            <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
+              🎬 Timelapse
+            </button>
             <button type="button" onClick={exportPng}>
               Export
             </button>
@@ -8585,6 +8628,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           isExporting={isExportingTimelapse}
           onClose={() => setShowReplay(false)}
           onRemixFromHere={remixFromSnapshot}
+          onShareTimelapse={shareTimelapse}
           onExportTimelapse={exportTimelapse}
           onSaveTimelapse={saveTimelapseToSpace}
         />

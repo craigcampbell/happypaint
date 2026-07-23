@@ -20,6 +20,7 @@ export default function ReplayPlayer({
   snapshots,
   onClose,
   onRemixFromHere,
+  onShareTimelapse,
   onExportTimelapse,
   onSaveTimelapse,
   isExporting,
@@ -203,6 +204,17 @@ export default function ReplayPlayer({
             </div>
 
             <div className="replay-actions">
+              {onShareTimelapse ? (
+                <button
+                  type="button"
+                  className="replay-share primary-action"
+                  onClick={() => onShareTimelapse()}
+                  disabled={isExporting}
+                  title="Share the watch-it-draw GIF"
+                >
+                  {isExporting ? "Making it…" : "📤 Share my timelapse"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => onRemixFromHere?.(selectedSnapshot)}
@@ -216,7 +228,7 @@ export default function ReplayPlayer({
                 disabled={isExporting}
                 title="Encode the snapshots into a GIF timelapse"
               >
-                {isExporting ? "Encoding…" : "Export timelapse"}
+                {isExporting ? "Encoding…" : "Save GIF"}
               </button>
               <button
                 type="button"
