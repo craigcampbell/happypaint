@@ -110,6 +110,7 @@ import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import GameHud from "./components/GameHud";
+import DrawPhonePanel from "./components/DrawPhonePanel";
 import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
@@ -759,6 +760,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [myWord, setMyWord] = useState(null);
   const [gamePop, setGamePop] = useState(null); // { name, points } | { reveal, word }
   const gamePopTimer = useRef(null);
+  // Draw Phone (telephone): whether this room plays it, the public game state,
+  // my PRIVATE task this round (draw a prompt / describe a drawing), whether I
+  // submitted, my current guess text, and the reveal books once the game ends.
+  const [roomPhone, setRoomPhone] = useState(false);
+  const roomPhoneRef = useRef(false);
+  const [phone, setPhone] = useState(null);
+  const phoneRef = useRef(null);
+  const [phoneTask, setPhoneTask] = useState(null); // { phase, round, prompt|image, deadline }
+  const phoneTaskRef = useRef(null);
+  const [phoneSubmitted, setPhoneSubmitted] = useState(false);
+  const [phoneGuess, setPhoneGuess] = useState("");
+  const [phoneReveal, setPhoneReveal] = useState(null); // [{ ownerName, pages:[...] }]
   const [isExportingVideo, setIsExportingVideo] = useState(false);
   // Multi-scene export pages scenes UNDER the user — freeze drawing + frame/
   // scene navigation while it runs so strokes can't land in scenes the artist
@@ -5494,6 +5507,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           gameRef.current = null;
           setGame(null);
           setMyWord(null);
+          // Draw Phone room? Reset any stale telephone state from a prior room;
+          // the live phone_state / phone_task (if any) arrive right after.
+          roomPhoneRef.current = !!data.phone;
+          setRoomPhone(!!data.phone);
+          phoneRef.current = null;
+          setPhone(null);
+          phoneTaskRef.current = null;
+          setPhoneTask(null);
+          setPhoneSubmitted(false);
+          setPhoneGuess("");
+          setPhoneReveal(null);
           if (data.fingerPaint) {
             // Toddler room: land on a big wet paint brush, fingers-first.
             setSelectedTool("brush");
@@ -5728,6 +5752,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           roomGameRef.current = !!data.enabled;
           setRoomGame(!!data.enabled);
           if (!data.enabled) { gameRef.current = null; setGame(null); setMyWord(null); }
+          break;
+        }
+        case "room_phone": {
+          roomPhoneRef.current = !!data.enabled;
+          setRoomPhone(!!data.enabled);
+          if (!data.enabled) {
+            phoneRef.current = null; setPhone(null);
+            phoneTaskRef.current = null; setPhoneTask(null);
+            setPhoneSubmitted(false); setPhoneGuess(""); setPhoneReveal(null);
+          }
           break;
         }
         // ---- Shared animation frames (server-ordered; echoed to sender too) --
@@ -5969,6 +6003,46 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "game_spoiler":
           showToast("🤫 No spoilers — you already know the word!");
           break;
+        // ---- Draw Phone (telephone) ----------------------------------------
+        case "phone_state": {
+          // Public game snapshot (phase/round/roster/timer) — no page contents.
+          phoneRef.current = data.phone || null;
+          setPhone(data.phone || null);
+          if (!data.phone) {
+            phoneTaskRef.current = null; setPhoneTask(null);
+            setPhoneReveal(null); setPhoneSubmitted(false);
+          } else if (data.phone.phase !== "reveal") {
+            // Any non-reveal phase means the reveal is over — clear it so a
+            // spectator (who never gets a phone_task) isn't stuck behind the
+            // previous game's full-screen reveal for the whole next game.
+            setPhoneReveal(null);
+            if (data.phone.phase === "waiting") { phoneTaskRef.current = null; setPhoneTask(null); }
+          }
+          break;
+        }
+        case "phone_task": {
+          // Delivered to ME only: my private job this round (draw the prompt, or
+          // describe the drawing). A fresh round → clear my last submission/guess.
+          const task = { phase: data.phase, round: data.round, totalRounds: data.totalRounds, deadline: data.deadline, prompt: data.prompt || null, image: data.image || null };
+          phoneTaskRef.current = task;
+          setPhoneTask(task);
+          setPhoneSubmitted(false);
+          setPhoneGuess("");
+          setPhoneReveal(null);
+          break;
+        }
+        case "phone_reveal": {
+          setPhoneReveal(Array.isArray(data.books) ? data.books : []);
+          phoneTaskRef.current = null;
+          setPhoneTask(null);
+          setPhoneSubmitted(false);
+          break;
+        }
+        case "phone_rejected": {
+          showToast(data.reason === "text" ? "Let's keep it kind — try another word." : "Couldn't use that drawing — try again.");
+          setPhoneSubmitted(false);
+          break;
+        }
         case "reaction": {
           // Ephemeral floating emoji from someone (or our own echo). Placed at the
           // world point, mapped to screen once; it floats up + fades via CSS.
@@ -6118,10 +6192,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     </div>
   );
 
+  // Draw Phone suppresses op relay while a game runs (drawing is private); this
+  // gate wraps the raw sender so every draw call site respects it. The server
+  // also drops these ops — this just saves the wire.
+  const relayOp = useCallback((op) => {
+    const ph = phoneRef.current;
+    if (ph && (ph.phase === "starting" || ph.phase === "drawing" || ph.phase === "guessing")) return;
+    mp.sendOp(op);
+    // mp.sendOp is a stable useCallback; the plugin over-broadly wants `mp`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mp.sendOp]);
+
   // The imperative draw handlers (defined earlier) reach the senders via a ref.
   useEffect(() => {
     mpRef.current = {
-      sendOp: mp.sendOp,
+      sendOp: relayOp,
       sendCursor: mp.sendCursor,
       sendClear: mp.sendClear,
       sendRestore: mp.sendRestore,
@@ -6154,9 +6239,38 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendCheer: mp.sendCheer,
       sendGameSkip: mp.sendGameSkip,
       sendSetGame: mp.sendSetGame,
+      sendSetPhone: mp.sendSetPhone,
+      sendPhoneStart: mp.sendPhoneStart,
+      sendPhoneSubmit: mp.sendPhoneSubmit,
+      sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame]);
+  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip]);
 
+
+  // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
+  // JPEG (private — never relayed as ops) and send it as this round's page.
+  const submitPhoneDrawing = useCallback(async () => {
+    const task = phoneTaskRef.current;
+    if (!task || task.phase !== "drawing" || phoneSubmitted) return;
+    setPhoneSubmitted(true); // optimistic; a phone_rejected flips it back
+    try {
+      const canvas = await composeCanvas({ width: 800, height: 500 });
+      const image = canvas.toDataURL("image/jpeg", 0.82);
+      mpRef.current?.sendPhoneSubmit?.({ round: task.round, image });
+      showToast("Sent! Waiting for the others… ✏️");
+    } catch {
+      setPhoneSubmitted(false);
+      showToast("Couldn't send your drawing — try again");
+    }
+  }, [composeCanvas, phoneSubmitted, showToast]);
+
+  // Draw Phone: submit my text guess for the drawing I was handed.
+  const submitPhoneGuess = useCallback(() => {
+    const task = phoneTaskRef.current;
+    if (!task || task.phase !== "guessing" || phoneSubmitted) return;
+    setPhoneSubmitted(true);
+    mpRef.current?.sendPhoneSubmit?.({ round: task.round, text: phoneGuess.trim() || "(no guess)" });
+  }, [phoneGuess, phoneSubmitted]);
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -7206,6 +7320,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             </button>
           ) : null}
 
+          {roomAudience && roomAudience !== "kid_safe" && isRoomHost ? (
+            <button
+              type="button"
+              className={`mp-wet-toggle mp-phone-toggle${roomPhone ? " is-on" : ""}`}
+              onClick={() => mpRef.current?.sendSetPhone?.(!roomPhone)}
+              aria-pressed={roomPhone}
+              title={
+                roomPhone
+                  ? "Draw Phone is ON — the telephone game for this room. Tap to turn off."
+                  : "Draw Phone — play telephone: draw a prompt, pass it on, watch it drift"
+              }
+            >
+              📞
+            </button>
+          ) : null}
+
           <button
             type="button"
             className={`mp-wet-toggle${roomWet ? " is-on" : ""}`}
@@ -7442,7 +7572,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </button>
             </div>
 
-            {roomPrompt && !promptDismissed && !(roomGame && game) ? (
+            {roomPrompt && !promptDismissed && !(roomGame && game) && !(roomPhone && phone) ? (
               <div className="room-prompt-chip" role="note">
                 <span>🎯 {roomPrompt}</span>
                 <button type="button" onClick={() => setPromptDismissed(true)} aria-label="Dismiss prompt">
@@ -7487,6 +7617,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 isHost={isRoomHost}
                 pop={gamePop}
                 onSkip={() => mpRef.current?.sendGameSkip?.()}
+              />
+            ) : null}
+            {roomPhone && (phone || phoneReveal) ? (
+              <DrawPhonePanel
+                phone={phone}
+                task={phoneTask}
+                submitted={phoneSubmitted}
+                reveal={phoneReveal}
+                isHost={isRoomHost}
+                guess={phoneGuess}
+                setGuess={setPhoneGuess}
+                onSubmitDrawing={submitPhoneDrawing}
+                onSubmitGuess={submitPhoneGuess}
+                onStart={() => mpRef.current?.sendPhoneStart?.()}
+                onSkip={() => mpRef.current?.sendPhoneSkip?.()}
               />
             ) : null}
           </div>

@@ -832,10 +832,11 @@ function loadRoom(roomId) {
       scenes: Array.isArray(data.scenes) ? data.scenes : null,
       animation: !!data.animation,
       game: !!data.game, // private-room Draw & Guess opt-in survives restarts
+      phone: !!data.phone, // private-room Draw Phone opt-in survives restarts
       productionId: typeof data.productionId === 'string' ? data.productionId.slice(0, 32) : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, productionId: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, productionId: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -876,6 +877,7 @@ async function saveRoomNow(roomId) {
       scenes: room.scenes,
       animation: !!room.animationEnabled,
       game: !!room.gameEnabled,
+      phone: !!room.phoneEnabled,
       productionId: room.productionId || null,
       savedAt: Date.now(),
     });
@@ -933,12 +935,17 @@ const FEATURED_ROOMS = [
   // Draw & Guess: one player draws a secret word, everyone else races to guess
   // it in chat. Always-on public game room; private rooms can flip it on too.
   { code: 'GUESS', title: 'Draw & Guess', emoji: '🎮', game: true, prompts: ['Guess what everyone is drawing!', 'Draw your word — no letters or numbers!', 'Race to guess it first'] },
+  // Draw Phone: the telephone game. Everyone draws a secret prompt at once, then
+  // passes it on — the next player guesses, the next draws the guess, and so on
+  // until the whole silly chain reveals. Always-on public room; private rooms opt in.
+  { code: 'PHONE', title: 'Draw Phone', emoji: '📞', phone: true, prompts: ['Draw the prompt, then pass it on!', 'Guess the drawing — then watch it drift', 'Telephone, but with doodles'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
 const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
 const GAME_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.game).map((r) => r.code));
+const PHONE_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.phone).map((r) => r.code));
 
 // ---- Shared animation frames -----------------------------------------------
 // In an animation room the frames themselves are shared state (Google-Docs
@@ -1201,6 +1208,11 @@ function getRoom(roomId) {
       gameEnabled: GAME_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.game),
       game: null, // live round: { phase, drawerId, word, endsAt, scores, guessed, ... }
       gameTimers: null, // { round, hint, intermission } setTimeout handles
+      // Draw Phone (telephone): DRAWPHONE is always on; private rooms opt in via
+      // set_phone. `phone` is the ephemeral live game (books/rounds; never persisted).
+      phoneEnabled: PHONE_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.phone),
+      phone: null, // live game: { phase, round, totalRounds, players, books, ... }
+      phoneTimers: null, // { round } setTimeout handle for the round deadline
       // Which multi-room production (film) this room is a segment of, if any.
       productionId: saved.productionId || null,
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
@@ -1234,6 +1246,7 @@ function seedFeaturedRooms() {
     room.animationEnabled = ANIMATION_ROOM_CODES.has(f.code);
     room.fingerPaint = FINGER_PAINT_CODES.has(f.code);
     room.gameEnabled = GAME_ROOM_CODES.has(f.code);
+    room.phoneEnabled = PHONE_ROOM_CODES.has(f.code);
     if (room.fingerPaint) {
       room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
     }
@@ -1276,6 +1289,8 @@ function closeRoom(roomId, reason) {
     if (t) { clearTimeout(t); persistTimers.delete(roomId); }
     if (room.voteTimer) { clearTimeout(room.voteTimer); room.voteTimer = null; }
     clearGameTimers(room); // never leave a Draw & Guess round timer firing on a closed room
+    clearPhoneTimers(room); // same for a Draw Phone round/intermission timer
+    dropRoomPhonePages(room); // free any Draw Phone page images
     dropRoomTracePhoto(room); // free any uploaded trace photo when the room dies
     rooms.delete(roomId);
   }
@@ -1677,6 +1692,242 @@ function handleGuess(room, roomId, user, rawMessage) {
   return 'correct';
 }
 
+// ---- Draw Phone (telephone / Gartic) --------------------------------------
+// Everyone gets a secret prompt "book". Each round the books rotate one seat
+// around the circle, alternating DRAW (draw the text at the top of your held
+// book) and GUESS (describe the drawing at the top). After N rounds the books
+// reveal, showing the drift. Unlike Draw & Guess this uses NO shared canvas —
+// each player draws PRIVATELY on their own local canvas and submits a finished
+// PNG page, so draw ops are suppressed while a game runs (see the `op` case).
+// All live state is on room.phone (ephemeral, NEVER persisted); the round timer
+// on room.phoneTimers. Only room.phoneEnabled (the opt-in) persists.
+const PHONE_MIN_PLAYERS = 3;
+const PHONE_MAX_PLAYERS = 8;
+const PHONE_MAX_ROUNDS = 8; // books never grow past this even with a huge room
+const PHONE_DRAW_MS = 80_000; // draw-a-page time per round
+const PHONE_GUESS_MS = 45_000; // describe-the-drawing time per round
+const PHONE_INTERMISSION_MS = 45_000; // reveal pause before a public room re-starts
+const PHONE_GUESS_MAX = 120; // per-guess character cap (chat caps at 300)
+
+function clearPhoneTimers(room) {
+  if (!room.phoneTimers) return;
+  for (const t of Object.values(room.phoneTimers)) if (t) clearTimeout(t);
+  room.phoneTimers = null;
+}
+// True while a Draw Phone game owns the canvas (pages are private). During these
+// phases the shared canvas is OFF: draw ops, clears, restores, sheet-swaps and
+// live cursors are all suppressed so one player can't see or wreck another's page.
+function phoneActive(room) {
+  const p = room && room.phone;
+  return !!p && (p.phase === 'starting' || p.phase === 'drawing' || p.phase === 'guessing');
+}
+// The frozen players who are still connected (by stable game key), in seat order.
+function phonePresentKeys(room) {
+  if (!room.phone) return [];
+  const live = new Set([...room.users.values()].map(gameKey));
+  return room.phone.players.filter((k) => live.has(k));
+}
+function phoneUniquePresent(room) {
+  return new Set([...room.users.values()].map(gameKey)).size;
+}
+// Which book (index) a seat holds this round: books shift one seat per round.
+function phoneBookForSeat(seat, round, n) {
+  return ((seat - round) % n + n) % n;
+}
+// PUBLIC snapshot — no page contents, no raw keys (names only).
+function publicPhone(room) {
+  const p = room.phone;
+  if (!p) return null;
+  return {
+    phase: p.phase,
+    round: p.round,
+    totalRounds: p.totalRounds,
+    deadline: p.deadline || 0,
+    players: p.players.map((k) => p.names[k] || 'Someone'),
+    submittedCount: p.submitted ? p.submitted.size : 0,
+    // While waiting/revealing there's no frozen roster yet — show how many are
+    // actually in the room (that's the "need 3 to start" count).
+    presentCount: (p.phase === 'waiting' || p.phase === 'reveal')
+      ? phoneUniquePresent(room)
+      : phonePresentKeys(room).length,
+    minPlayers: PHONE_MIN_PLAYERS,
+    hostControlled: !PHONE_ROOM_CODES.has(room.code),
+  };
+}
+function broadcastPhone(roomId) {
+  const room = rooms.get(roomId);
+  if (room) broadcast(roomId, { type: 'phone_state', phone: publicPhone(room) });
+}
+function pushPhoneChat(room, roomId, message) {
+  const line = { user: { id: 'system', name: 'Draw Phone', color: '#0ea5e9' }, message, ts: Date.now(), system: true };
+  room.chat.push(line);
+  if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
+  broadcast(roomId, { type: 'chat', user: line.user, message, ts: line.ts, system: true });
+}
+// Park a "need more players" waiting HUD (mirrors Draw & Guess's waiting state).
+function phoneWaiting(room) {
+  room.phone = { phase: 'waiting', round: 0, totalRounds: 0, players: [], names: {}, books: [], deadline: 0, submitted: new Set() };
+}
+
+function startPhoneGame(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.phoneEnabled) return;
+  clearPhoneTimers(room);
+  // Freeze the roster (unique by stable key, capped, join order) at kickoff.
+  const seen = new Set();
+  const players = [];
+  const names = {};
+  for (const u of room.users.values()) {
+    const k = gameKey(u);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    players.push(k);
+    names[k] = u.name;
+    if (players.length >= PHONE_MAX_PLAYERS) break;
+  }
+  if (players.length < PHONE_MIN_PLAYERS) {
+    phoneWaiting(room);
+    broadcastPhone(roomId);
+    return;
+  }
+  const totalRounds = Math.min(players.length, PHONE_MAX_ROUNDS);
+  const books = players.map((k) => {
+    const seed = pickWordChoices(Math.random, 1)[0];
+    return { ownerKey: k, ownerName: names[k], pages: [{ type: 'prompt', by: 'system', byName: 'Prompt', content: seed }] };
+  });
+  room.phone = { phase: 'starting', round: 0, totalRounds, players, names, books, deadline: 0, submitted: new Set() };
+  // The shared canvas is off for the whole game — clear its server state so any
+  // pre-game doodles don't resurrect for a late joiner (ops are dropped while
+  // the game runs; see the `op` case).
+  room.history = [];
+  recountFrameOps(room);
+  room.sheetId = null;
+  room.lastCleared = null;
+  room.lastClearedFrameId = null;
+  room.lastClearedSheet = null;
+  pushPhoneChat(room, roomId, `Draw Phone! ${players.length} playing — draw your secret prompt, then pass it on. 📞`);
+  startPhoneRound(roomId);
+}
+
+function startPhoneRound(roomId) {
+  const room = rooms.get(roomId);
+  const p = room && room.phone;
+  if (!p) return;
+  const n = p.players.length;
+  p.phase = p.round % 2 === 0 ? 'drawing' : 'guessing';
+  p.submitted = new Set();
+  const dur = p.phase === 'drawing' ? PHONE_DRAW_MS : PHONE_GUESS_MS;
+  p.roundStartedAt = Date.now();
+  p.deadline = p.roundStartedAt + dur;
+  // Blank every player's local canvas for a fresh page (drawing rounds only).
+  // The client `clear` handler already suppresses its banner on `gameRound`.
+  if (p.phase === 'drawing') {
+    broadcast(roomId, { type: 'clear', userId: 'system', name: 'Draw Phone', gameRound: true });
+    broadcast(roomId, { type: 'sheet', sheetId: null });
+  }
+  // Hand each present player their PRIVATE task: the top page of their held book.
+  for (const u of room.users.values()) {
+    const seat = p.players.indexOf(gameKey(u));
+    if (seat < 0) continue; // spectator / late joiner — watches, no task
+    const book = p.books[phoneBookForSeat(seat, p.round, n)];
+    const top = book.pages[book.pages.length - 1];
+    const task = p.phase === 'drawing'
+      ? { type: 'phone_task', phase: 'drawing', round: p.round, totalRounds: p.totalRounds, deadline: p.deadline, prompt: String(top.content || '') }
+      : { type: 'phone_task', phase: 'guessing', round: p.round, totalRounds: p.totalRounds, deadline: p.deadline, image: String(top.content || '') };
+    if (u.ws.readyState === 1) u.ws.send(JSON.stringify(task));
+  }
+  broadcastPhone(roomId);
+  clearPhoneTimers(room);
+  room.phoneTimers = { round: setTimeout(() => fillMissingAndAdvance(roomId), dur) };
+  persistRoom(roomId);
+}
+
+// End of round: any book missing this round's page (holder absent or idle) gets
+// a placeholder, then advance — to the next round or the reveal.
+function fillMissingAndAdvance(roomId) {
+  const room = rooms.get(roomId);
+  const p = room && room.phone;
+  if (!p || (p.phase !== 'drawing' && p.phase !== 'guessing')) return;
+  clearPhoneTimers(room);
+  const n = p.players.length;
+  const want = p.round + 2; // pages a book should have AFTER this round
+  for (let seat = 0; seat < n; seat += 1) {
+    const book = p.books[phoneBookForSeat(seat, p.round, n)];
+    if (book.pages.length >= want) continue;
+    const holderKey = p.players[seat];
+    if (p.phase === 'drawing') {
+      book.pages.push({ type: 'draw', by: holderKey, byName: p.names[holderKey] || '?', content: null, skipped: true });
+    } else {
+      book.pages.push({ type: 'guess', by: holderKey, byName: p.names[holderKey] || '?', content: '(ran out of time)', skipped: true });
+    }
+  }
+  p.round += 1;
+  if (p.round >= p.totalRounds) {
+    startPhoneReveal(roomId);
+  } else {
+    startPhoneRound(roomId);
+  }
+}
+
+// Advance early once every present player has submitted this round.
+function checkPhoneRoundComplete(roomId) {
+  const room = rooms.get(roomId);
+  const p = room && room.phone;
+  if (!p || (p.phase !== 'drawing' && p.phase !== 'guessing')) return;
+  const present = phonePresentKeys(room);
+  if (present.length && present.every((k) => p.submitted.has(k))) {
+    fillMissingAndAdvance(roomId);
+  }
+}
+
+function startPhoneReveal(roomId) {
+  const room = rooms.get(roomId);
+  const p = room && room.phone;
+  if (!p) return;
+  clearPhoneTimers(room);
+  p.phase = 'reveal';
+  p.deadline = 0;
+  const books = p.books.map((b) => ({
+    ownerName: b.ownerName,
+    pages: b.pages.map((pg) => ({ type: pg.type, byName: pg.byName, content: pg.content, skipped: !!pg.skipped })),
+  }));
+  broadcast(roomId, { type: 'phone_reveal', books });
+  broadcastPhone(roomId);
+  pushPhoneChat(room, roomId, 'The books are in! See how your prompt drifted. 🎉');
+  // Public rooms auto-start a fresh game after a reading pause; private rooms
+  // wait for the host to hit "Play again".
+  if (PHONE_ROOM_CODES.has(roomId)) {
+    room.phoneTimers = { round: setTimeout(() => maybePhoneStart(roomId), PHONE_INTERMISSION_MS) };
+  }
+  persistRoom(roomId);
+}
+
+function stopPhone(roomId, reason) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  clearPhoneTimers(room);
+  dropRoomPhonePages(room);
+  room.phone = null;
+  broadcast(roomId, { type: 'phone_state', phone: null, stopped: reason || true });
+}
+
+// Auto-run the featured room / opted-in private room: start when enough players
+// are present and the game is idle; otherwise park a waiting HUD.
+function maybePhoneStart(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.phoneEnabled) return;
+  const active = room.phone && !['waiting', 'reveal'].includes(room.phone.phase);
+  if (active) return; // a game is mid-flight
+  // Reveal pages are freed once we leave the reveal (a new game or a waiting park).
+  if (room.phone && room.phone.phase === 'reveal') dropRoomPhonePages(room);
+  if (phoneUniquePresent(room) >= PHONE_MIN_PLAYERS) {
+    startPhoneGame(roomId);
+  } else {
+    phoneWaiting(room);
+    broadcastPhone(roomId);
+  }
+}
+
 // Fan a chat message out to cross-room "notifier" sockets watching this room
 // whose display name is @mentioned in the message. Lets a painter get pinged
 // about mentions in OTHER rooms they're in without a heavy full connection.
@@ -2015,6 +2266,8 @@ wss.on('connection', async (ws, req) => {
     vote: room.vote ? { options: room.vote.options, endsAt: room.vote.endsAt, counts: voteCounts(room.vote) } : null,
     // Draw & Guess: whether this room plays the game (HUD, start button, etc.).
     game: !!room.gameEnabled,
+    // Draw Phone: whether this room plays the telephone game.
+    phone: !!room.phoneEnabled,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -2063,6 +2316,38 @@ wss.on('connection', async (ws, req) => {
     if (room.game) ws.send(JSON.stringify({ type: 'game_state', game: publicGame(room) }));
     maybeStartGame(roomId);
   }
+  // Draw Phone: catch the joiner up on state (+ the reveal if one's showing so
+  // they can watch), then start/park a game now that a player may have arrived.
+  // A mid-game joiner spectates until the current game reaches its reveal.
+  if (room.phoneEnabled) {
+    if (room.phone) ws.send(JSON.stringify({ type: 'phone_state', phone: publicPhone(room) }));
+    if (room.phone && room.phone.phase === 'reveal') {
+      const books = room.phone.books.map((b) => ({
+        ownerName: b.ownerName,
+        pages: b.pages.map((pg) => ({ type: pg.type, byName: pg.byName, content: pg.content, skipped: !!pg.skipped })),
+      }));
+      ws.send(JSON.stringify({ type: 'phone_reveal', books }));
+    }
+    // A seated player who refreshed / dropped mid-round re-enters with no task
+    // (the client clears it on 'connected'). Re-deliver their private task so
+    // they can still submit — otherwise they're locked out AND their un-submitted
+    // seat stalls the whole round to the deadline. If they already submitted,
+    // the public phone_state alone renders the "waiting" HUD (no task needed).
+    if (phoneActive(room)) {
+      const p = room.phone;
+      const seat = p.players.indexOf(gameKey(user));
+      if (seat >= 0 && !p.submitted.has(gameKey(user))) {
+        const book = p.books[phoneBookForSeat(seat, p.round, p.players.length)];
+        const top = book.pages[book.pages.length - 1];
+        const task = p.phase === 'drawing'
+          ? { type: 'phone_task', phase: 'drawing', round: p.round, totalRounds: p.totalRounds, deadline: p.deadline, prompt: String(top.content || '') }
+          : { type: 'phone_task', phase: 'guessing', round: p.round, totalRounds: p.totalRounds, deadline: p.deadline, image: String(top.content || '') };
+        ws.send(JSON.stringify(task));
+      }
+    }
+    // Only kick off from idle/waiting — never cut a live game or a reveal short.
+    if (!room.phone || room.phone.phase === 'waiting') maybePhoneStart(roomId);
+  }
 
   ws.on('message', (raw) => {
     let data;
@@ -2083,6 +2368,11 @@ wss.on('connection', async (ws, req) => {
         // When a host locks the room, only hosts may keep drawing. This is the
         // real boundary — clients also disable the canvas, but this enforces it.
         if (room.locked && !isHost(room, user)) break;
+        // Draw Phone: while a game is running the shared canvas is OFF — every
+        // player draws their own PRIVATE page. Drop (never relay) draw ops so
+        // pages can't collide or leak before their guess round. This is the
+        // authoritative boundary; the client also suppresses sending.
+        if (room.phone && (room.phone.phase === 'starting' || room.phone.phase === 'drawing' || room.phone.phase === 'guessing')) break;
         // Public-room text moderation: block severe drawn text before it lands on
         // the shared mural. Imagery is handled by the watcher/flag path. O(small),
         // synchronous — adds no latency to the normal draw-op relay below.
@@ -2156,6 +2446,9 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'cursor':
+        // Draw Phone: cursors are private too — don't telegraph where a player
+        // is drawing their secret page.
+        if (phoneActive(room)) break;
         broadcast(roomId, {
           type: 'cursor', userId: id, name: user.name, color: user.color,
           x: data.x, y: data.y, drawing: !!data.drawing,
@@ -2165,11 +2458,12 @@ wss.on('connection', async (ws, req) => {
         // Setting the shared coloring sheet is a host decision once the room is
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
+        if (phoneActive(room)) break; // the sheet is locked while a phone game runs
         const nextSheet = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
-        // Trace photos can ONLY be set via set_trace_photo (which mints an id
-        // bound to this room). Rejecting trace_ ids here stops a host from
-        // re-broadcasting another room's private photo by its id.
-        if (nextSheet && nextSheet.startsWith('trace_')) break;
+        // Trace photos and Draw Phone pages can ONLY be set by their own minting
+        // handlers (each binds an id to this room). Rejecting trace_/pp_ ids here
+        // stops re-broadcasting another room's — or another player's — private image.
+        if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
         dropRoomTracePhoto(room); // replacing/clearing frees the old photo
         room.sheetId = nextSheet;
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
@@ -2320,6 +2614,9 @@ wss.on('connection', async (ws, req) => {
         // In an owned room only a host may wipe the shared mural; unowned public
         // rooms keep the original free-for-all behavior.
         if (room.ownerProfileId && !isHost(room, user)) break;
+        // Draw Phone: each player's page is private and independent — a shared
+        // clear would wipe everyone's in-progress drawing. Only the engine blanks.
+        if (phoneActive(room)) break;
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
         if (room.animationEnabled && clearFrameId && room.frames.some((f) => f.id === clearFrameId)) {
           // Animation rooms: Clear wipes ONE frame for everyone (never the whole
@@ -2356,6 +2653,7 @@ wss.on('connection', async (ws, req) => {
       }
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
+        if (phoneActive(room)) break; // no resurrecting the pre-game canvas mid-game
         // Restore the most recently cleared mural/frame AND any sheet it removed.
         if ((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet) {
           if (room.lastCleared && room.lastCleared.length) {
@@ -2462,6 +2760,12 @@ wss.on('connection', async (ws, req) => {
           stopGame(roomId, 'animation_on');
           broadcast(roomId, { type: 'room_game', enabled: false });
         }
+        // Draw Phone likewise blanks the canvas per round — same exclusivity.
+        if (room.animationEnabled && room.phoneEnabled) {
+          room.phoneEnabled = false;
+          stopPhone(roomId, 'animation_on');
+          broadcast(roomId, { type: 'room_phone', enabled: false });
+        }
         broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled });
         persistRoom(roomId);
         break;
@@ -2481,6 +2785,12 @@ wss.on('connection', async (ws, req) => {
           room.animationEnabled = false;
           broadcast(roomId, { type: 'room_animation', enabled: false });
         }
+        // Only one game mode at a time: turning Draw & Guess on stops Draw Phone.
+        if (room.gameEnabled && room.phoneEnabled) {
+          room.phoneEnabled = false;
+          stopPhone(roomId, 'game_on');
+          broadcast(roomId, { type: 'room_phone', enabled: false });
+        }
         broadcast(roomId, { type: 'room_game', enabled: room.gameEnabled });
         if (room.gameEnabled) maybeStartGame(roomId);
         else stopGame(roomId, 'host_off');
@@ -2493,6 +2803,94 @@ wss.on('connection', async (ws, req) => {
         if (!room.gameEnabled || !room.game || room.game.phase !== 'playing') break;
         if (user.id !== room.game.drawerId && !isHost(room, user)) break;
         endGameRound(roomId, 'skipped');
+        break;
+      }
+      // ---- Draw Phone -------------------------------------------------------
+      // Private-room host toggles the telephone game (featured DRAWPHONE is
+      // fixed on). Turning it on parks a waiting HUD / auto-starts if enough
+      // players are present; off stops any live game and frees its pages.
+      case 'set_phone': {
+        if (PHONE_ROOM_CODES.has(roomId)) break; // featured phone room is fixed on
+        if (room.audience === 'kid_safe') break; // public drawing rooms never opt in
+        if (!isHost(room, user)) break;
+        room.phoneEnabled = !!data.enabled;
+        if (room.phoneEnabled && room.animationEnabled) {
+          room.animationEnabled = false;
+          broadcast(roomId, { type: 'room_animation', enabled: false });
+        }
+        if (room.phoneEnabled && room.gameEnabled) {
+          room.gameEnabled = false;
+          stopGame(roomId, 'phone_on');
+          broadcast(roomId, { type: 'room_game', enabled: false });
+        }
+        broadcast(roomId, { type: 'room_phone', enabled: room.phoneEnabled });
+        if (room.phoneEnabled) maybePhoneStart(roomId);
+        else stopPhone(roomId, 'host_off');
+        persistRoom(roomId);
+        break;
+      }
+      // A host kicks off / restarts a Draw Phone game (private rooms). The
+      // hostless featured PHONE room auto-runs via maybePhoneStart + the
+      // intermission timer, so it needs no client start — and isHost is false
+      // there, which is exactly what blocks a stranger from driving it.
+      case 'phone_start': {
+        if (!room.phoneEnabled) break;
+        if (!isHost(room, user) || user.muted) break;
+        if (room.phone && !['waiting', 'reveal'].includes(room.phone.phase)) break; // already running
+        if (room.phone && room.phone.phase === 'reveal') dropRoomPhonePages(room);
+        if (phoneUniquePresent(room) < PHONE_MIN_PLAYERS) { maybePhoneStart(roomId); break; }
+        startPhoneGame(roomId);
+        break;
+      }
+      // A player submits their page for the current round: a drawn PNG (drawing
+      // round) or a text guess (guessing round). One per player per round.
+      case 'phone_submit': {
+        if (!room.phoneEnabled || !room.phone) break;
+        const p = room.phone;
+        if (p.phase !== 'drawing' && p.phase !== 'guessing') break;
+        if (user.muted) break;
+        const key = gameKey(user);
+        const seat = p.players.indexOf(key);
+        if (seat < 0) break; // not a player in this game (spectator/late joiner)
+        if (Number(data.round) !== p.round) break; // stale client (previous round)
+        if (p.submitted.has(key)) break; // already submitted this round
+        const n = p.players.length;
+        const book = p.books[phoneBookForSeat(seat, p.round, n)];
+        if (book.pages.length !== p.round + 1) break; // integrity: exactly one page behind
+        if (p.phase === 'drawing') {
+          if (!rateOk(`phone:${user.id}`, 16, 60_000)) break;
+          const clean = validatePhonePage(data.image);
+          if (!clean) { if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'phone_rejected', reason: 'image' })); break; }
+          const pid = storePhonePage(roomId, clean);
+          book.pages.push({ type: 'draw', by: key, byName: p.names[key] || user.name, content: pid });
+        } else {
+          // Strip control chars (intentional) → collapse to a space, then cap.
+          // eslint-disable-next-line no-control-regex
+          let text = String(data.text || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, PHONE_GUESS_MAX).trim();
+          const verdict = scan(text);
+          if (verdict.severity === 'severe') {
+            autoModerate(room, user, `phone guess: ${verdict.terms.join(', ')}`);
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'phone_rejected', reason: 'text' }));
+            break;
+          }
+          if (verdict.hit) text = maskMessage(text);
+          if (!text) text = '(no guess)';
+          book.pages.push({ type: 'guess', by: key, byName: p.names[key] || user.name, content: text });
+        }
+        p.submitted.add(key);
+        broadcastPhone(roomId);
+        checkPhoneRoundComplete(roomId);
+        break;
+      }
+      // A host force-advances the current round (private rooms; hostless
+      // featured rooms rely on the deadline timer). Debounced so a double-click
+      // can't cascade through several rounds in one burst.
+      case 'phone_skip': {
+        if (!room.phoneEnabled || !room.phone) break;
+        if (!isHost(room, user) || user.muted) break;
+        if (room.phone.phase !== 'drawing' && room.phone.phase !== 'guessing') break;
+        if (Date.now() - (room.phone.roundStartedAt || 0) < 1000) break; // ignore a rapid second skip
+        fillMissingAndAdvance(roomId);
         break;
       }
       // Clients page between scenes: send them ONE scene's frames + ops.
@@ -3000,6 +3398,20 @@ wss.on('connection', async (ws, req) => {
         // condition, which is otherwise only checked on a guess).
         checkAllGuessed(roomId);
         broadcastGame(roomId); // refresh the scoreboard without the departed player
+      }
+    }
+    // Draw Phone: a leaver's book gets a placeholder at round-advance. Their
+    // departure may complete the "everyone submitted" check; if too few remain
+    // to make a game, jump to the reveal so nobody's stuck waiting.
+    if (room.phoneEnabled && room.phone) {
+      const phase = room.phone.phase;
+      if (phase === 'drawing' || phase === 'guessing') {
+        // Count SEATED players still present, not spectators — else a room with
+        // a couple of watchers grinds every remaining round out to its deadline.
+        if (phonePresentKeys(room).length < 2) startPhoneReveal(roomId);
+        else { broadcastPhone(roomId); checkPhoneRoundComplete(roomId); }
+      } else if (phase === 'waiting') {
+        broadcastPhone(roomId);
       }
     }
     // A film's storyboard shows live crew chips per Part — refresh so this
@@ -3942,7 +4354,7 @@ app.get('/api/rooms/public', (_req, res) => {
       ops: room.history.length, // "things done" — drawn ops, for the join modal
       // NEVER leak a trace-photo id here: the id is the access token, so an
       // unauthenticated lobby scrape must not expose a room's uploaded photo.
-      sheetId: room.sheetId && !room.sheetId.startsWith('trace_') ? room.sheetId : null,
+      sheetId: room.sheetId && !room.sheetId.startsWith('trace_') && !room.sheetId.startsWith('pp_') ? room.sheetId : null,
       lastActivity: room.lastActivity || 0,
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
       featured,
@@ -3988,6 +4400,13 @@ app.get('/api/sheets/:id', (req, res) => {
     const photo = tracePhotos.get(req.params.id);
     if (!photo) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Trace photo', image: photo.image });
+  }
+  // Draw Phone pages ride the same route (id "pp_…") — the id is an unguessable
+  // token handed only to the next guesser (and, at reveal, the whole room).
+  if (req.params.id.startsWith('pp_')) {
+    const page = phonePages.get(req.params.id);
+    if (!page) return res.status(404).json({ error: 'not found' });
+    return res.json({ id: req.params.id, name: 'Draw Phone page', image: page.image });
   }
   const sheet = sheets.find((s) => s.id === req.params.id);
   if (!sheet) {
@@ -4084,6 +4503,60 @@ function storeTracePhoto(roomId, dataUrl) {
 function dropRoomTracePhoto(room) {
   if (room && room.sheetId && room.sheetId.startsWith('trace_')) {
     tracePhotos.delete(room.sheetId);
+  }
+}
+
+// ---- Draw Phone page images ----------------------------------------------
+// A player's drawn page (a downscaled PNG/JPEG) is held in memory, keyed by an
+// unguessable id, and served through the SAME /api/sheets path (id "pp_…") so
+// the client just loads it like a sheet. Pages are validated exactly like trace
+// photos (real raster only — never SVG/scripts) and freed when the game ends or
+// the room closes; ids are never leaked in the public lobby (room.sheetId is
+// null during a game). One image only ever reaches its next guesser until the
+// reveal, when the whole room sees the books.
+const phonePages = new Map(); // id -> { image, roomId, ts }
+const PHONE_PAGE_MAX = 800; // ~ a few full games' worth of pages
+const PHONE_PAGE_MAX_CHARS = 900_000; // a downscaled page, well under a photo
+
+function validatePhonePage(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > PHONE_PAGE_MAX_CHARS) return null;
+  const m = /^data:image\/([a-z+]+);base64,([a-z0-9+/=]+)$/i.exec(dataUrl);
+  if (!m || !WALL_IMAGE_MIME[m[1].toLowerCase()]) return null; // svg+xml etc. rejected
+  let buf;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+  return sniffWallImage(buf) ? dataUrl : null;
+}
+
+// The set of page ids belonging to any room's LIVE game — never evicted.
+function livePhonePageIds() {
+  const active = new Set();
+  for (const r of rooms.values()) {
+    if (!r.phone || !Array.isArray(r.phone.books)) continue;
+    for (const b of r.phone.books) for (const pg of b.pages) {
+      if (pg.type === 'draw' && typeof pg.content === 'string' && pg.content.startsWith('pp_')) active.add(pg.content);
+    }
+  }
+  return active;
+}
+
+function storePhonePage(roomId, dataUrl) {
+  const id = 'pp_' + randomBytes(12).toString('hex'); // unguessable — the id is the token
+  phonePages.set(id, { image: dataUrl, roomId, ts: Date.now() });
+  if (phonePages.size > PHONE_PAGE_MAX) {
+    const active = livePhonePageIds();
+    for (const key of phonePages.keys()) {
+      if (phonePages.size <= PHONE_PAGE_MAX) break;
+      if (key !== id && !active.has(key)) phonePages.delete(key);
+    }
+  }
+  return id;
+}
+
+// Free every page image a room's game produced (on stop / reveal-end / close).
+function dropRoomPhonePages(room) {
+  if (!room || !room.phone || !Array.isArray(room.phone.books)) return;
+  for (const b of room.phone.books) for (const pg of b.pages) {
+    if (pg.type === 'draw' && typeof pg.content === 'string' && pg.content.startsWith('pp_')) phonePages.delete(pg.content);
   }
 }
 

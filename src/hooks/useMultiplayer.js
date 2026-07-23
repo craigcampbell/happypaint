@@ -236,6 +236,13 @@ export function useMultiplayer(roomId, onMessage, token) {
   // game on/off. Incoming game_* messages auto-forward to the App dispatcher.
   const sendGameSkip = useCallback(() => send({ type: "game_skip" }), [send]);
   const sendSetGame = useCallback((enabled) => send({ type: "set_game", enabled }), [send]);
+  // Draw Phone (telephone): a private-room host toggles it / starts a game; each
+  // player submits their page (a drawn PNG or a text guess) per round; the host
+  // can force-advance. Incoming phone_* messages auto-forward to the dispatcher.
+  const sendSetPhone = useCallback((enabled) => send({ type: "set_phone", enabled }), [send]);
+  const sendPhoneStart = useCallback(() => send({ type: "phone_start" }), [send]);
+  const sendPhoneSubmit = useCallback((payload) => send({ type: "phone_submit", ...payload }), [send]);
+  const sendPhoneSkip = useCallback(() => send({ type: "phone_skip" }), [send]);
 
   // Moderation: report whether we can run the in-browser watcher, flag a region,
   // and (host-only, enforced server-side) reversibly hide / restore / remove ops.
@@ -250,6 +257,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction, sendGameSkip, sendSetGame,
+    sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,

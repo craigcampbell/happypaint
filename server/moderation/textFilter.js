@@ -72,6 +72,10 @@ function collapseSeparators(s) {
 export function normalize(s) {
   if (typeof s !== 'string' || !s) return '';
   let out = s.toLowerCase();
+  // Strip zero-width / invisible format chars (ZWSP, ZWNJ, ZWJ, word joiner,
+  // BOM) and C1 controls so "f<zwsp>uck" can't slip a slur past the whole-token
+  // boundary match. These carry no meaning in a guess/chat message.
+  out = out.replace(/[\u200b-\u200f\u202a-\u202e\u2060\ufeff\u0080-\u009f]/g, '');
   out = stripDiacritics(out);
   out = foldInteriorBang(out);
   out = foldLeet(out);
