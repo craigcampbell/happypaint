@@ -1276,6 +1276,7 @@ function closeRoom(roomId, reason) {
     if (t) { clearTimeout(t); persistTimers.delete(roomId); }
     if (room.voteTimer) { clearTimeout(room.voteTimer); room.voteTimer = null; }
     clearGameTimers(room); // never leave a Draw & Guess round timer firing on a closed room
+    dropRoomTracePhoto(room); // free any uploaded trace photo when the room dies
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
@@ -1901,7 +1902,9 @@ wss.on('connection', async (ws, req) => {
       ? visibleHistory(room).filter((op) => opFrameId(room, op) === room.frames[0].id)
       : visibleHistory(room);
     ws.send(JSON.stringify({ type: 'history', ops: spectatorOps.slice(-1500) }));
-    if (room.sheetId) {
+    // Don't point a spectator at a trace-photo id whose in-memory image is gone
+    // (e.g. after a restart) — same guard as the member join path.
+    if (room.sheetId && (!room.sheetId.startsWith('trace_') || tracePhotos.has(room.sheetId))) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
     }
     ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
@@ -2036,6 +2039,11 @@ wss.on('connection', async (ws, req) => {
   } else {
     ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
   }
+  // A persisted trace-photo id whose in-memory image is gone (server restart)
+  // resolves to nothing — drop it rather than pointing joiners at a 404.
+  if (room.sheetId && room.sheetId.startsWith('trace_') && !tracePhotos.has(room.sheetId)) {
+    room.sheetId = null;
+  }
   if (room.sheetId) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
   }
@@ -2153,15 +2161,50 @@ wss.on('connection', async (ws, req) => {
           x: data.x, y: data.y, drawing: !!data.drawing,
         }, id);
         break;
-      case 'set_sheet':
+      case 'set_sheet': {
         // Setting the shared coloring sheet is a host decision once the room is
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
-        // Set (or clear) the room's coloring sheet for everyone.
-        room.sheetId = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
+        const nextSheet = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
+        // Trace photos can ONLY be set via set_trace_photo (which mints an id
+        // bound to this room). Rejecting trace_ ids here stops a host from
+        // re-broadcasting another room's private photo by its id.
+        if (nextSheet && nextSheet.startsWith('trace_')) break;
+        dropRoomTracePhoto(room); // replacing/clearing frees the old photo
+        room.sheetId = nextSheet;
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
         persistRoom(roomId);
         break;
+      }
+      // Upload a user PHOTO as the room's traced underlay for everyone. SAFETY
+      // GATE: a photo shows on every screen instantly, so it needs an
+      // accountable uploader — allowed only in PRIVATE rooms (a known friend
+      // group) or when the sender is the HOST of an owned public room; the
+      // hostless public drawing rooms can NEVER accept one. The client also
+      // runs an NSFW pre-check, but the gate is the real control.
+      case 'set_trace_photo': {
+        if (user.muted) break; // a muted member can't push a photo either
+        if (room.locked && !isHost(room, user)) break; // locked room = host-only
+        if (room.audience === 'kid_safe') {
+          // Public room: must be owned AND the sender must be its host.
+          if (!room.ownerProfileId || !isHost(room, user)) break;
+        }
+        // (Private "friends" rooms: any member may set it.)
+        // Rate-limit: each accepted photo is a synchronous decode + a fan-out to
+        // every user AND spectator, so cap it hard per uploader.
+        if (!rateOk(`trace:${id}`, 6, 60_000)) break;
+        const clean = validateTracePhoto(data.image);
+        if (!clean) {
+          if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'trace_rejected' }));
+          break;
+        }
+        dropRoomTracePhoto(room); // free the photo this one replaces
+        const traceId = storeTracePhoto(roomId, clean);
+        room.sheetId = traceId;
+        broadcast(roomId, { type: 'sheet', sheetId: traceId });
+        persistRoom(roomId);
+        break;
+      }
       case 'rename': {
         if (typeof data.name === 'string' && data.name.trim()) {
           const proposed = data.name.trim().slice(0, 20);
@@ -3884,7 +3927,9 @@ app.get('/api/rooms/public', (_req, res) => {
       title: room.title || (f ? f.title : null),
       users,
       ops: room.history.length, // "things done" — drawn ops, for the join modal
-      sheetId: room.sheetId || null,
+      // NEVER leak a trace-photo id here: the id is the access token, so an
+      // unauthenticated lobby scrape must not expose a room's uploaded photo.
+      sheetId: room.sheetId && !room.sheetId.startsWith('trace_') ? room.sheetId : null,
       lastActivity: room.lastActivity || 0,
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
       featured,
@@ -3924,6 +3969,13 @@ app.get('/api/sheets', (_req, res) => {
 
 app.get('/api/sheets/:id', (req, res) => {
   res.set('Cache-Control', 'no-store');
+  // User trace photos ride the same route (id "trace_…") so the client loader
+  // needs no new branch.
+  if (req.params.id.startsWith('trace_')) {
+    const photo = tracePhotos.get(req.params.id);
+    if (!photo) return res.status(404).json({ error: 'not found' });
+    return res.json({ id: req.params.id, name: 'Trace photo', image: photo.image });
+  }
   const sheet = sheets.find((s) => s.id === req.params.id);
   if (!sheet) {
     return res.status(404).json({ error: 'not found' });
@@ -3956,6 +4008,71 @@ app.delete('/api/admin/sheets/:id', (req, res) => {
   persistSheets();
   res.json({ ok: true });
 });
+
+// Takedown for a reported trace photo: delete the image AND clear it from
+// whichever live room is displaying it (broadcasting sheet:null to everyone).
+app.post('/api/admin/trace/:id/remove', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = req.params.id;
+  tracePhotos.delete(id);
+  for (const [code, room] of rooms) {
+    if (room.sheetId === id) {
+      room.sheetId = null;
+      broadcast(code, { type: 'sheet', sheetId: null });
+      persistRoom(code);
+    }
+  }
+  res.json({ ok: true });
+});
+
+// ---- Trace-a-photo -------------------------------------------------------
+// A user-uploaded photo becomes the room's traced underlay for everyone. Held
+// in memory only (ephemeral, capped) and served through the SAME /api/sheets
+// path so the client's loadSheetImage needs no new branch. SAFETY: uploads are
+// host-gated in owned rooms and blocked in the hostless public rooms (see the
+// set_trace_photo WS handler); the payload is validated to be a real raster
+// image (never SVG/scripts) here.
+const tracePhotos = new Map(); // id -> { image, roomId, ts }
+const TRACE_MAX = 240;
+const TRACE_MAX_CHARS = 2_400_000; // ~1.8MB decoded photo
+
+// Decode a raster data URL to a data URL we trust, or null. Reuses the wall's
+// magic-byte sniff so SVG / non-image / mismatched bytes are rejected.
+function validateTracePhoto(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > TRACE_MAX_CHARS) return null;
+  const m = /^data:image\/([a-z+]+);base64,([a-z0-9+/=]+)$/i.exec(dataUrl);
+  if (!m || !WALL_IMAGE_MIME[m[1].toLowerCase()]) return null; // svg+xml etc. rejected
+  let buf;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+  return sniffWallImage(buf) ? dataUrl : null; // real PNG/JPEG/GIF/WEBP header required
+}
+
+function storeTracePhoto(roomId, dataUrl) {
+  // A long RANDOM id — the id IS the access token (only room members ever
+  // receive it via the sheet broadcast), so it must be unguessable and never
+  // leaked in the public lobby (see the /api/rooms/public sanitize).
+  const id = 'trace_' + randomBytes(12).toString('hex');
+  tracePhotos.set(id, { image: dataUrl, roomId, ts: Date.now() });
+  // Cap so a busy server can't accumulate photos forever — but NEVER evict a
+  // photo that is some live room's active underlay.
+  if (tracePhotos.size > TRACE_MAX) {
+    const active = new Set();
+    for (const r of rooms.values()) if (r.sheetId && r.sheetId.startsWith('trace_')) active.add(r.sheetId);
+    for (const key of tracePhotos.keys()) {
+      if (tracePhotos.size <= TRACE_MAX) break;
+      if (key !== id && !active.has(key)) tracePhotos.delete(key);
+    }
+  }
+  return id;
+}
+
+// Drop a room's current trace photo (on replace / clear / close) so old images
+// don't linger fetchable and orphans don't fill the cap.
+function dropRoomTracePhoto(room) {
+  if (room && room.sheetId && room.sheetId.startsWith('trace_')) {
+    tracePhotos.delete(room.sheetId);
+  }
+}
 
 // ---- Live metrics (admin) -------------------------------------------------
 const serverStart = Date.now();

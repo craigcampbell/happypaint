@@ -174,6 +174,10 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendClear = useCallback((frameId) => send(frameId ? { type: "clear", frameId } : { type: "clear" }), [send]);
   const sendRestore = useCallback(() => send({ type: "undo_clear" }), [send]);
   const sendSheet = useCallback((sheetId) => send({ type: "set_sheet", sheetId }), [send]);
+  // Trace-a-photo: upload a user photo as the room's traced underlay. The image
+  // rides the WS once (host/private-gated + validated server-side); everyone
+  // then loads it through the normal sheet path.
+  const sendTracePhoto = useCallback((image) => send({ type: "set_trace_photo", image }), [send]);
   const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
   const sendRename = useCallback(
     (name, color) => {
@@ -243,7 +247,7 @@ export function useMultiplayer(roomId, onMessage, token) {
 
   return {
     connected, users, self, chat, disconnect,
-    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendRename, sendChat,
+    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction, sendGameSkip, sendSetGame,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,

@@ -7794,3 +7794,12 @@ select {
   .game-blanks { font-size: 1.15rem; letter-spacing: 0.18em; }
   .game-pop-big { font-size: 1.35rem; }
 }
+
+/* Trace-a-photo button sits under Browse in the Coloring sheet section. */
+.sheet-trace-btn {
+  margin-top: 8px;
+  background: #eef6ff;
+  border-color: #b9dcff;
+  color: #1e5aa8;
+}
+.sheet-trace-btn:disabled { opacity: 0.7; cursor: progress; }

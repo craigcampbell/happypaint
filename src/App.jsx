@@ -107,6 +107,7 @@ import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
 import StepBackPreview from "./components/StepBackPreview";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
+import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import GameHud from "./components/GameHud";
 import WallPage from "./components/WallPage";
@@ -641,6 +642,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [sheetId, setSheetId] = useState(null);
   const [sheetMode, setSheetMode] = useState("over");
   const [, setSheets] = useState([]);
+  // Trace-a-photo: upload a photo as the room's traced underlay.
+  const tracePhotoInputRef = useRef(null);
+  const [traceBusy, setTraceBusy] = useState(false);
   const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
   const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
@@ -5043,7 +5047,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         applySrc(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
         return;
       }
-      // Custom admin uploads come back as a data URL from the API.
+      // Custom admin uploads AND user trace photos come back as a data URL.
       fetch(`/api/sheets/${id}`, { cache: "no-store" })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
@@ -5052,6 +5056,46 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         .catch(() => {});
     },
     [renderDisplay],
+  );
+
+  // Trace-a-photo: read a chosen photo, downscale it, run a best-effort NSFW
+  // pre-check, then hand it to the server (which host-gates + validates it) as
+  // the room's traced underlay. Defaults the overlay to "under" (trace on top).
+  const handleTracePhotoFile = useCallback(
+    async (file) => {
+      if (!file || !file.type.startsWith("image/")) return;
+      setTraceBusy(true);
+      try {
+        // Downscale to a sane max so the WS payload + everyone's decode stay light.
+        const bmp = await createImageBitmap(file).catch(() => null);
+        if (!bmp) { showToast("Couldn't read that photo — try another."); return; }
+        const maxDim = 1400;
+        const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+        bmp.close?.();
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        // Best-effort content check before it ever leaves this device. The
+        // server host-gate is the real control; this catches obvious mistakes.
+        const score = await classifyImageNsfw(dataUrl);
+        if (score != null && score >= 0.5) {
+          showToast("🚫 That photo can't be used here. Try a different one.");
+          return;
+        }
+        setSheetMode("under"); // a photo is a tracing underlay, not line-art on top
+        mpRef.current?.sendTracePhoto?.(dataUrl);
+        showToast("📷 Photo added — trace away! Everyone can draw over it.");
+      } catch {
+        showToast("Couldn't add that photo — try again.");
+      } finally {
+        setTraceBusy(false);
+      }
+    },
+    [showToast],
   );
 
   // Remote ops land on the frame they were DRAWN on (op.frameId; untagged =
@@ -5782,6 +5826,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "sheet":
           setSheetId(data.sheetId || null);
           loadSheetImage(data.sheetId || null);
+          // A newly-set underlay (esp. a user trace photo) becomes part of the
+          // composited canvas — nudge the ambient NSFW watcher to sample it.
+          nsfwWatcherRef.current?.markDirty();
+          break;
+        case "trace_rejected":
+          // Server refused the uploaded photo (not a valid image, or too big).
+          setTraceBusy(false);
+          showToast("Couldn't add that photo — try a different one.");
           break;
         case "cursor":
           remoteCursorsRef.current.set(data.userId, {
@@ -6038,6 +6090,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendRestore: mp.sendRestore,
       sendRename: mp.sendRename,
       sendSheet: mp.sendSheet,
+      sendTracePhoto: mp.sendTracePhoto,
       disconnect: mp.disconnect,
       sendWatcherAck: mp.sendWatcherAck,
       sendFlag: mp.sendFlag,
@@ -6065,7 +6118,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendGameSkip: mp.sendGameSkip,
       sendSetGame: mp.sendSetGame,
     };
-  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame]);
+  }, [mp.sendOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame]);
 
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
@@ -8048,6 +8101,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
             🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
           </button>
+          {/* Trace-a-photo: private rooms (friends) or the host of an owned
+              public room. The hostless public drawing rooms never see it — a
+              photo shows on every screen instantly, so it needs an accountable
+              uploader. */}
+          {roomAudience !== "kid_safe" || isRoomHost ? (
+            <>
+              <button
+                type="button"
+                className="sheet-browse-btn sheet-trace-btn"
+                onClick={() => tracePhotoInputRef.current?.click()}
+                disabled={traceBusy}
+              >
+                {traceBusy ? "Checking photo…" : "📷 Trace a photo"}
+              </button>
+              <input
+                ref={tracePhotoInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) handleTracePhotoFile(file);
+                  event.target.value = "";
+                }}
+              />
+            </>
+          ) : null}
           {sheetId ? (
             <label className="color-picker sheet-toggle">
               <span>Lines on top (colour under)</span>
