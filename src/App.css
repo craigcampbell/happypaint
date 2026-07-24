@@ -5465,6 +5465,48 @@ textarea:focus-visible,
 .home-code input { width: min(220px, 50vw); }
 
 /* ---- Home: Fridge Wall nudge (community loop) ---- */
+/* Today's Challenge — the daily come-back loop. Warm sunny card so it pops
+   against the cool wall section below it. */
+.home-daily {
+  width: min(1040px, 100%);
+  margin: 22px auto 0;
+  padding: 18px;
+  border-radius: 20px;
+  background: #fff8e8;
+  border: 1px solid #f3dfae;
+}
+.home-daily-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.home-daily-copy { flex: 1 1 300px; }
+.home-daily-copy h2 {
+  margin: 2px 0 6px;
+  font-size: clamp(1.3rem, 3.4vw, 1.8rem);
+  color: #101010;
+  line-height: 1.2;
+}
+.home-daily-emoji { font-size: 0.95em; margin-right: 2px; }
+.home-daily-sub { margin: 0; color: #6b5820; font-weight: 600; line-height: 1.45; max-width: 52ch; }
+.home-daily-sub strong { color: #b45309; }
+.home-daily-actions { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+.home-daily-go { min-height: 50px; font-size: 1.05rem; white-space: nowrap; }
+.home-streak {
+  margin-left: 10px;
+  background: #ffedd5;
+  border: 1px solid #fdba74;
+  color: #c2410c;
+  font-weight: 800;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.home-daily-strip { margin-top: 12px; }
+
 .home-wall {
   width: min(1040px, 100%);
   margin: 22px auto 0;

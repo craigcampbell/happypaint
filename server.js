@@ -21,6 +21,7 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { scan } from './server/moderation/textFilter.js';
 import { pickWordChoices } from './server/gameWords.js';
+import { dailyChallenge } from './server/dailyChallenges.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -833,10 +834,11 @@ function loadRoom(roomId) {
       animation: !!data.animation,
       game: !!data.game, // private-room Draw & Guess opt-in survives restarts
       phone: !!data.phone, // private-room Draw Phone opt-in survives restarts
+      dailyDate: /^\d{4}-\d{2}-\d{2}$/.test(String(data.dailyDate || '')) ? data.dailyDate : null,
       productionId: typeof data.productionId === 'string' ? data.productionId.slice(0, 32) : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, productionId: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -878,6 +880,7 @@ async function saveRoomNow(roomId) {
       animation: !!room.animationEnabled,
       game: !!room.gameEnabled,
       phone: !!room.phoneEnabled,
+      dailyDate: room.dailyDate || null,
       productionId: room.productionId || null,
       savedAt: Date.now(),
     });
@@ -939,6 +942,11 @@ const FEATURED_ROOMS = [
   // passes it on — the next player guesses, the next draws the guess, and so on
   // until the whole silly chain reveals. Always-on public room; private rooms opt in.
   { code: 'PHONE', title: 'Draw Phone', emoji: '📞', phone: true, prompts: ['Draw the prompt, then pass it on!', 'Guess the drawing — then watch it drift', 'Telephone, but with doodles'] },
+  // The Daily Challenge room: its prompt IS the day's challenge (see
+  // server/dailyChallenges.js) and its canvas wipes fresh at UTC midnight —
+  // the homepage's "come back tomorrow" loop. Wall posts made from this room
+  // are auto-tagged into today's gallery.
+  { code: 'DAILY', title: "Today's Challenge", emoji: '🗓️', daily: true, prompts: ['(daily challenge)'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
@@ -1128,6 +1136,12 @@ function recountFrameOps(room) {
 // The prompt shown today for a featured room (deterministic daily rotation, UTC).
 function dailyPromptFor(featured) {
   if (!featured || !featured.prompts || !featured.prompts.length) return null;
+  // The DAILY room's prompt is the day's challenge itself. Evaluated ONCE — a
+  // call pair straddling midnight would pair one day's emoji with another's prompt.
+  if (featured.daily) {
+    const c = dailyChallenge();
+    return `${c.emoji} ${c.prompt}`;
+  }
   const day = Math.floor(Date.now() / 86400000);
   return featured.prompts[day % featured.prompts.length];
 }
@@ -1208,6 +1222,9 @@ function getRoom(roomId) {
       gameEnabled: GAME_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.game),
       game: null, // live round: { phase, drawerId, word, endsAt, scores, guessed, ... }
       gameTimers: null, // { round, hint, intermission } setTimeout handles
+      // Daily Challenge: which challenge date this room's canvas belongs to
+      // (only meaningful for DAILY; drives the derived midnight wipe).
+      dailyDate: saved.dailyDate || null,
       // Draw Phone (telephone): DRAWPHONE is always on; private rooms opt in via
       // set_phone. `phone` is the ephemeral live game (books/rounds; never persisted).
       phoneEnabled: PHONE_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.phone),
@@ -1331,6 +1348,42 @@ if (AUTO_CLOSE_ENABLED) {
   const sweepTimer = setInterval(autoCloseSweep, AUTO_CLOSE_SWEEP_MS);
   if (sweepTimer.unref) sweepTimer.unref();
 }
+
+// ---- Daily Challenge rollover ----------------------------------------------
+// The DAILY room's canvas belongs to ONE challenge date, stamped on the room
+// and persisted (room.dailyDate). Whenever the stamp disagrees with today the
+// canvas is wiped and the fresh prompt pushed — DERIVED from the date exactly
+// like the prompt itself, so a restart or downtime spanning midnight can never
+// leave yesterday's mural under today's challenge (deploys restart this
+// server!). Idempotent + cheap (one string compare), so it runs at boot, on
+// every DAILY join, from /api/daily, and on a once-a-minute tick.
+function ensureDailyFresh() {
+  const room = rooms.get('DAILY');
+  if (!room) return;
+  const fresh = dailyChallenge();
+  if (room.dailyDate === fresh.date) return;
+  room.dailyDate = fresh.date;
+  room.customPrompt = null; // a theme vote never outlives the day
+  room.history = [];
+  recountFrameOps(room);
+  room.sheetId = null;
+  room.lastCleared = null;
+  room.lastClearedFrameId = null;
+  room.lastClearedSheet = null;
+  // Yesterday's ops are gone — stale moderation state on them is pure liability
+  // (recycled opIds would silently hide innocent new-day strokes).
+  room.hiddenOpIds.clear();
+  room.flaggedOps.clear();
+  broadcast('DAILY', { type: 'clear', userId: 'system', name: 'Daily Challenge', gameRound: true });
+  broadcast('DAILY', { type: 'sheet', sheetId: null });
+  // vote_result is the client's existing "here's the new prompt" path (toast +
+  // un-hidden chip) — reuse it rather than inventing a new message type.
+  broadcast('DAILY', { type: 'vote_result', prompt: `${fresh.emoji} ${fresh.prompt}`, counts: [0, 0, 0] });
+  persistRoom('DAILY');
+}
+ensureDailyFresh(); // boot: wipe a stale canvas loaded from disk (restart spanning midnight)
+const dailyRolloverTimer = setInterval(ensureDailyFresh, 60_000);
+if (dailyRolloverTimer.unref) dailyRolloverTimer.unref();
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
 // lewd" that an image flag implicates.
@@ -2109,6 +2162,11 @@ wss.on('connection', async (ws, req) => {
   }
 
   const room = getRoom(roomId);
+
+  // DAILY: flip the day on first contact, not the next 60s tick — otherwise a
+  // just-past-midnight joiner would see yesterday's mural under today's prompt
+  // and then lose their first strokes to the delayed wipe.
+  if (roomId === 'DAILY') ensureDailyFresh();
 
   // The prompt shown in the handshake: a theme-vote winner (customPrompt)
   // beats the daily rotation; featured rooms otherwise carry the same daily
@@ -3160,6 +3218,11 @@ wss.on('connection', async (ws, req) => {
       case 'vote_start': {
         // Same power model as set_wet: host-only in public rooms, open in private.
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
+        // The DAILY room's theme IS the daily challenge — no voting it away.
+        if (roomId === 'DAILY') {
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: "Today's Challenge is the theme — new one tomorrow!" }));
+          break;
+        }
         const now = Date.now();
         if (room.vote) {
           ws.send(JSON.stringify({ type: 'vote_denied', reason: 'A vote is already running!' }));
@@ -3967,6 +4030,20 @@ function dailyShuffle(arr) {
 }
 
 // Feed. `sort`: fresh (daily shuffle, default) | top (hearts) | new.
+// The Daily Challenge: today's prompt, when the next one lands, and how many
+// entries hang in today's gallery. Everything is derived (date-seeded), so this
+// is stateless and always agrees with the DAILY room + the wall tags.
+app.get('/api/daily', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  ensureDailyFresh(); // day flips on contact, not on the next 60s tick
+  const c = dailyChallenge();
+  let entries = 0;
+  for (const p of wallPosts.values()) {
+    if (!p.hidden && p.challenge === c.date) entries += 1;
+  }
+  res.json({ ...c, entries });
+});
+
 // `q` searches title+tags+artist; `tag` filters exactly. Hidden posts (report
 // threshold / admin) never leave the server.
 app.get('/api/wall', async (req, res) => {
@@ -3979,8 +4056,11 @@ app.get('/api/wall', async (req, res) => {
   const sort = ['top', 'new', 'fresh'].includes(req.query.sort) ? req.query.sort : 'fresh';
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 40));
+  // Daily Challenge gallery: filter to posts stamped with one challenge date.
+  const challenge = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.challenge || '')) ? String(req.query.challenge) : null;
 
   let list = [...wallPosts.values()].filter((p) => !p.hidden);
+  if (challenge) list = list.filter((p) => p.challenge === challenge);
   if (tag) list = list.filter((p) => p.tags.includes(tag));
   if (q) {
     const tokens = q.split(/\s+/).filter(Boolean);
@@ -4051,6 +4131,11 @@ app.post('/api/wall', async (req, res) => {
   const title = String(body.title || 'My drawing').replace(/\s+/g, ' ').trim().slice(0, 60) || 'My drawing';
   const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
   const tags = [...new Set(rawTags.map(sanitizeWallTag).filter(Boolean))];
+  // Posts made from the Daily Challenge room join today's gallery: stamp the
+  // challenge date + a browsable tag. Client-declared room — "spoofing" it just
+  // means opting your art into today's gallery, which is harmless by design.
+  const challengeDate = String(body.room || '').toUpperCase() === 'DAILY' ? dailyChallenge().date : null;
+  if (challengeDate && !tags.includes('daily challenge')) tags.push('daily challenge');
   const frames = Array.isArray(body.frames) ? body.frames.slice(0, WALL_FRAME_LIMIT) : [];
   const durationMs = Math.min(2000, Math.max(80, Number(body.durationMs) || 400));
   // Every frame must decode to a real raster image (magic-byte checked). This
@@ -4106,6 +4191,7 @@ app.post('/api/wall', async (req, res) => {
     durationMs,
     reports: 0,
     hidden: false,
+    challenge: challengeDate, // 'YYYY-MM-DD' when posted from the DAILY room
   };
   mkdirSync(WALL_DIR, { recursive: true });
   writeFileAtomic(wallFramesFile(meta.id), JSON.stringify(frames));

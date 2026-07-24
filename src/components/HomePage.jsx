@@ -25,6 +25,32 @@ function roomActivity(room) {
   return "Open";
 }
 
+// The device-local drawing streak (written by the studio on the first stroke of
+// each day). Shown only while it's alive: last drew today, or yesterday (still
+// extendable today). Older = quietly expired, show nothing.
+function readStreak() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("drawesome:streak:v1") || "null");
+    if (!saved || !saved.count) return 0;
+    const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const now = new Date();
+    const today = day(now);
+    // Calendar arithmetic (DST-proof) — see bumpDrawingStreak in App.jsx.
+    const yesterday = day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    return saved.last === today || saved.last === yesterday ? Number(saved.count) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// "New challenge in 9h 32m" — minute precision is plenty for a daily timer.
+function untilLabel(endsAt) {
+  const ms = Math.max(0, endsAt - Date.now());
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 export default function HomePage({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [activeCode, setActiveCode] = useState(null);
@@ -34,6 +60,13 @@ export default function HomePage({ onNavigate }) {
   const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
   const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art for the nudge
   const [wallLoaded, setWallLoaded] = useState(false);
+  // The Daily Challenge: today's prompt + gallery of entries + a countdown tick.
+  const [daily, setDaily] = useState(null);
+  const [dailyEntries, setDailyEntries] = useState([]);
+  const [, setCountTick] = useState(0); // re-render for the countdown label
+  // State (not a one-shot memo) so a tab left open across midnight can refresh
+  // the chip when the challenge rolls over below.
+  const [streak, setStreak] = useState(readStreak);
   const liveOpsRef = useRef(0);
   // Mirrored into refs so timers/callbacks read the latest without being deps.
   const roomsRef = useRef([]);
@@ -98,6 +131,53 @@ export default function HomePage({ onNavigate }) {
       active = false;
     };
   }, []);
+
+  // Today's challenge + its gallery. Refetched when the countdown crosses
+  // midnight (the tick effect below re-runs this when daily.endsAt passes).
+  useEffect(() => {
+    let active = true;
+    fetch("/api/daily", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!active || !d || !d.prompt) return;
+        setDaily(d);
+        return fetch(`/api/wall?challenge=${d.date}&sort=new&limit=10`, { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((g) => active && setDailyEntries(Array.isArray(g?.posts) ? g.posts : []));
+      })
+      .catch(() => { /* offline — the card just doesn't render */ });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Tick the countdown label once a minute; if midnight passed, pull the fresh
+  // challenge so a long-lived tab rolls over on its own. Rollover is accepted
+  // only when the DATE actually changed — a client clock running fast would
+  // otherwise wipe the gallery strip and refetch-loop every minute until real
+  // (server) midnight.
+  useEffect(() => {
+    if (!daily) return undefined;
+    const t = window.setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() >= daily.endsAt) {
+        fetch("/api/daily", { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (!d || !d.prompt || d.date === daily.date) return; // not actually a new day yet
+            setDaily(d);
+            setStreak(readStreak()); // the chip's "alive" window shifted too
+            return fetch(`/api/wall?challenge=${d.date}&sort=new&limit=10`, { cache: "no-store" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((g) => setDailyEntries(Array.isArray(g?.posts) ? g.posts : []));
+          })
+          .catch(() => { /* retry next tick */ });
+      } else {
+        setCountTick((n) => n + 1);
+      }
+    }, 60_000);
+    return () => window.clearInterval(t);
+  }, [daily]);
 
   // Stable so LiveRoomCanvas (which keys its socket effect on onActivity) doesn't
   // tear down + reopen the spectator WS on every parent re-render.
@@ -218,6 +298,51 @@ export default function HomePage({ onNavigate }) {
             </form>
           </div>
         </div>
+
+        {/* Today's Challenge — the reason to come back tomorrow. One fresh
+            prompt a day; entries hang in today's gallery right here. */}
+        {daily ? (
+          <section className="home-daily" aria-labelledby="home-daily-title">
+            <div className="home-daily-head">
+              <div className="home-daily-copy">
+                <p className="eyebrow">
+                  🗓️ Today&rsquo;s Challenge
+                  {streak >= 2 ? <span className="home-streak" title="Days in a row you've drawn">🔥 {streak}-day streak</span> : null}
+                </p>
+                <h2 id="home-daily-title">
+                  <span className="home-daily-emoji" aria-hidden="true">{daily.emoji}</span> {daily.prompt}
+                </h2>
+                <p className="home-daily-sub">
+                  {daily.entries > 0
+                    ? `${compactNumber.format(daily.entries)} ${daily.entries === 1 ? "drawing hangs" : "drawings hang"} in today's gallery.`
+                    : "Nobody has drawn it yet — be the first!"}{" "}
+                  New challenge in <strong>{untilLabel(daily.endsAt)}</strong>.
+                </p>
+              </div>
+              <div className="home-daily-actions">
+                <button type="button" className="primary-action home-daily-go" onClick={() => join("DAILY")}>
+                  ✏️ Draw it now
+                </button>
+              </div>
+            </div>
+            {dailyEntries.length > 0 ? (
+              <button
+                type="button"
+                className="home-wall-strip home-daily-strip"
+                onClick={() => onNavigate("/wall")}
+                aria-label="See today's challenge gallery on the Wall"
+              >
+                {dailyEntries.map((p) => (
+                  <span className="home-wall-tile" key={p.id}>
+                    {/* Below the fold — lazy keeps them off the first paint. */}
+                    <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" />
+                  </span>
+                ))}
+                <span className="home-wall-more">Today&rsquo;s<br />gallery →</span>
+              </button>
+            ) : null}
+          </section>
+        ) : null}
 
         {/* Fridge Wall nudge — the community loop's front door. Peeks real
             recent art (or invites the first post when the wall is bare). */}

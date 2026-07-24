@@ -145,6 +145,30 @@ const AVATAR_COLORS = [
 
 const PROFILE_STORAGE_KEY = "drawesome:profile:v1";
 
+// Drawing streak — device-local (localStorage only; nothing leaves the browser,
+// COPPA-clean). Counts LOCAL calendar days on which the user finished at least
+// one real stroke. No loss-aversion mechanics on purpose: a missed day just
+// resets the count quietly next time.
+const STREAK_KEY = "drawesome:streak:v1";
+function localDayString(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// Record "drew today". Returns the streak count if this is the FIRST stroke of
+// a new day (caller may celebrate), or null when today was already counted.
+function bumpDrawingStreak() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STREAK_KEY) || "null"); } catch { /* fresh */ }
+  const today = localDayString();
+  if (saved && saved.last === today) return null; // already counted today
+  // Calendar arithmetic, not epoch-24h: a spring-forward day is 23h long and
+  // now-86400000 would land two calendar days back, wrongly resetting a streak.
+  const now = new Date();
+  const yesterday = localDayString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const count = saved && saved.last === yesterday ? (Number(saved.count) || 0) + 1 : 1;
+  try { localStorage.setItem(STREAK_KEY, JSON.stringify({ last: today, count })); } catch { /* private mode */ }
+  return count;
+}
+
 const STORAGE_KEYS = {
   draft: "happypaint:draft:v3",
   gallery: "happypaint:gallery:v2",
@@ -691,6 +715,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [economy, setEconomy] = useState(null);
   const economyRef = useRef(null); // latest economy, for the earn-by-painting hook
   const earnPaintDropsRef = useRef(null); // set below; called from deep in endStroke
+  const bumpStreakRef = useRef(null); // drawing-streak tick; same pattern
+  const streakDoneRef = useRef(null); // day string once today's streak is counted
   const lastPaintEarnRef = useRef(0); // throttle: at most one earned Drop / few seconds
   const [showWallet, setShowWallet] = useState(false);
   const [showStore, setShowStore] = useState(false);
@@ -3208,6 +3234,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       recordReplay(false);
       // Play-money reward: a finished stroke earns a Drop (throttled internally).
       earnPaintDropsRef.current?.();
+      // Drawing streak: the first real stroke of the day ticks it (day-guarded).
+      bumpStreakRef.current?.();
     },
     [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
   );
@@ -6975,6 +7003,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, [persistEconomy]);
   earnPaintDropsRef.current = earnPaintDrops;
 
+  // Drawing streak: the day's FIRST finished stroke ticks it (device-local).
+  // Session-guarded so the localStorage read happens once per day, not per
+  // stroke — nothing rides the drawing hot path. Celebrate day 2+ only.
+  const bumpStreak = useCallback(() => {
+    if (streakDoneRef.current === localDayString()) return;
+    streakDoneRef.current = localDayString();
+    const count = bumpDrawingStreak();
+    if (count && count >= 2) showToast(`🔥 Day ${count} of your drawing streak!`);
+  }, [showToast]);
+  bumpStreakRef.current = bumpStreak;
+
   // Keep the economy ref authoritative even for the async initial load.
   useEffect(() => {
     economyRef.current = economy;
@@ -8727,10 +8766,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         <WallPostModal
           draft={wallPostDraft}
           defaultArtist={nameDraft || mp.self?.name || ""}
+          room={roomId}
           onClose={() => setWallPostDraft(null)}
           onPosted={() => {
             setWallPostDraft(null);
-            showToast("On the wall! 🧲 See it at drawesome.art/wall");
+            showToast(roomId === "DAILY" ? "In today's gallery! 🗓️ It's on the homepage" : "On the wall! 🧲 See it at drawesome.art/wall");
           }}
         />
       ) : null}

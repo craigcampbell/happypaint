@@ -15,7 +15,7 @@ function deviceKey() {
   }
 }
 
-export default function WallPostModal({ draft, defaultArtist, onClose, onPosted }) {
+export default function WallPostModal({ draft, defaultArtist, room, onClose, onPosted }) {
   const [title, setTitle] = useState("My drawing");
   const [artist, setArtist] = useState(defaultArtist || "");
   const [tags, setTags] = useState([]);
@@ -62,6 +62,9 @@ export default function WallPostModal({ draft, defaultArtist, onClose, onPosted 
           frames,
           durationMs: draft.durationMs,
           userKey: deviceKey(),
+          // Which room this was drawn in — posts from the DAILY room join
+          // today's challenge gallery on the homepage.
+          room: room || null,
         }),
       });
       if (res.ok) {
