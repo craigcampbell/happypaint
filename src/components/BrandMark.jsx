@@ -3,7 +3,7 @@ export default function BrandMark({ className = "", showName = true }) {
 
   return (
     <span className={classes} aria-hidden={showName ? undefined : "true"}>
-      <img className="brand-mark" src="/drawesome-doodle-mark.png" alt="" draggable="false" />
+      <img className="brand-mark" src="/brand-mark.svg" alt="" draggable="false" />
       {showName ? <span className="brand-name">Drawesome</span> : null}
     </span>
   );

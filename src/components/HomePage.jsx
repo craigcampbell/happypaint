@@ -243,12 +243,17 @@ export default function HomePage({ onNavigate }) {
         <div className="home-headline">
           <BrandMark className="home-brand-art" showName={false} />
           <div className="home-headline-copy">
-            <p className="eyebrow">Live studio / no account needed</p>
-            <h1>Drawesome</h1>
-            <p className="home-kicker">Paint together, right now.</p>
+            <p className="eyebrow"><span aria-hidden="true">●</span> Live creative rooms</p>
+            <h1>Draw it. Remix it. <span>Make it yours.</span></h1>
+            <p className="home-kicker">A live canvas for your people.</p>
             <p className="home-sub">
-              Watch a room come alive, jump into the canvas, or open a fresh space for your friends.
+              Made for your pencil, your group chat, and ideas that refuse to sit still. Jump in—no account needed.
             </p>
+            <div className="home-proof-row" aria-label="Drawesome highlights">
+              <span>✦ Pen-ready</span>
+              <span>↗ Draw live</span>
+              <span>⚡ Start in seconds</span>
+            </div>
           </div>
         </div>
 
@@ -256,7 +261,7 @@ export default function HomePage({ onNavigate }) {
           <div className="home-viewer-head">
             <span className="home-viewing">
               <span className="live-dot" aria-hidden="true" />{" "}
-              {touring ? "Touring open rooms" : "Viewing public room"}
+              {touring ? "Room tour" : "Live now"}
             </span>
             <strong className="home-room-name">
               {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Finding an open room…"}
@@ -278,12 +283,15 @@ export default function HomePage({ onNavigate }) {
             ) : (
               <div className="home-viewer-empty">Loading live artwork…</div>
             )}
-            <span className="home-viewer-cta">✏️ Tap to join &amp; paint</span>
+            <span className="home-viewer-cta">Jump into this canvas →</span>
           </button>
 
           <div className="home-controls">
-            <button type="button" className="primary-action home-start-room" onClick={startRoom}>
-              🎪 Start a room with friends
+            <button type="button" className="primary-action home-open-studio" onClick={() => onNavigate("/studio")}>
+              Start drawing
+            </button>
+            <button type="button" className="home-start-room" onClick={startRoom}>
+              Create a room
             </button>
 
             <form className="home-code" onSubmit={goByCode}>
@@ -306,7 +314,7 @@ export default function HomePage({ onNavigate }) {
             <div className="home-daily-head">
               <div className="home-daily-copy">
                 <p className="eyebrow">
-                  🗓️ Today&rsquo;s Challenge
+                  ✦ Daily drop
                   {streak >= 2 ? <span className="home-streak" title="Days in a row you've drawn">🔥 {streak}-day streak</span> : null}
                 </p>
                 <h2 id="home-daily-title">
@@ -321,7 +329,7 @@ export default function HomePage({ onNavigate }) {
               </div>
               <div className="home-daily-actions">
                 <button type="button" className="primary-action home-daily-go" onClick={() => join("DAILY")}>
-                  ✏️ Draw it now
+                  Draw today&rsquo;s prompt →
                 </button>
               </div>
             </div>
@@ -349,19 +357,18 @@ export default function HomePage({ onNavigate }) {
         <section className="home-wall">
           <div className="home-wall-head">
             <div className="home-wall-copy">
-              <p className="eyebrow">🧲 The Fridge Wall</p>
-              <h2>Proud of a drawing? Hang it up.</h2>
+              <p className="eyebrow">✦ Fresh from the community</p>
+              <h2>Your art deserves the spotlight.</h2>
               <p className="home-wall-sub">
-                Pin your art to the community wall for everyone to see — animations actually move. Tap{" "}
-                <strong>🧲 Wall</strong> in the studio when you finish something.
+                Post a drawing or animation for everyone to see. No follower counts, no popularity contest—just art.
               </p>
             </div>
             <div className="home-wall-actions">
               <button type="button" className="primary-action" onClick={() => onNavigate("/wall")}>
-                See the Wall →
+                Explore the Wall →
               </button>
               <button type="button" className="home-wall-make" onClick={() => onNavigate("/studio")}>
-                🎨 Make something to post
+                Make something
               </button>
             </div>
           </div>
@@ -400,9 +407,9 @@ export default function HomePage({ onNavigate }) {
           <div className="home-room-directory-inner">
             <div className="home-room-directory-head">
               <div>
-                <p className="eyebrow">Public studios</p>
+                <p className="eyebrow">Find your next canvas</p>
                 <h2 id="home-room-directory-title">
-                  Open rooms <span>{rooms.length}</span>
+                  Live rooms <span>{rooms.length}</span>
                 </h2>
               </div>
               <input

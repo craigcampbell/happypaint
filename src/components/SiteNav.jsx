@@ -19,10 +19,10 @@ export default function SiteNav({ onNavigate, current }) {
   }, []);
 
   const links = [
-    { href: "/rooms", label: "Rooms" },
-    { href: "/wall", label: "The Wall" },
+    { href: "/rooms", label: "Live rooms" },
+    { href: "/wall", label: "Wall" },
     { href: "/about", label: "About" },
-    { href: "/faq", label: "Safety & FAQ" },
+    { href: "/faq", label: "Safety" },
     { href: "/privacy", label: "Privacy" },
   ];
 
@@ -59,7 +59,7 @@ export default function SiteNav({ onNavigate, current }) {
           </button>
         ) : (
           <button type="button" className="site-nav-signup" onClick={() => navigate("/signup")}>
-            Sign up
+            Save my art
           </button>
         )}
       </nav>
@@ -67,7 +67,7 @@ export default function SiteNav({ onNavigate, current }) {
       <div className="site-nav-actions">
         <button type="button" className="site-nav-paint primary-action" onClick={() => navigate("/studio")}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
-          Paint now
+          Create
         </button>
         <button
           type="button"

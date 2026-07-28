@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FF54"/>
+      <stop offset=".55" stop-color="#FFE85C"/>
+      <stop offset="1" stop-color="#55E6D7"/>
+    </linearGradient>
+    <linearGradient id="word" x1="382" y1="220" x2="1040" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C4DFF"/>
+      <stop offset="1" stop-color="#FF587A"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" rx="42" fill="url(#bg)"/>
+  <circle cx="1070" cy="90" r="170" fill="#FF587A" opacity=".22"/>
+  <circle cx="104" cy="560" r="210" fill="#7C4DFF" opacity=".20"/>
+  <path d="M0 500c190-86 293-74 440 12 157 92 307 93 476 0 102-57 197-68 284-35v153H0V500Z" fill="#fff" opacity=".34"/>
+  <g transform="translate(90 142) scale(3.6)">
+    <path d="M19 7h58c7 0 12 5 12 12v58c0 7-5 12-12 12H19C12 89 7 84 7 77V19C7 12 12 7 19 7Z" fill="#17131F"/>
+    <path d="M19 4h58c8 0 15 7 15 15v58c0 8-7 15-15 15H19C11 92 4 85 4 77V19C4 11 11 4 19 4Z" fill="#F7FF54" stroke="#17131F" stroke-width="5"/>
+    <path d="M27 24v48h17c19 0 30-9 30-24S63 24 44 24H27Z" fill="#fff" stroke="#17131F" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M39 38v20h6c8 0 13-3 13-10s-5-10-13-10h-6Z" fill="#55E6D7" stroke="#17131F" stroke-width="5" stroke-linejoin="round"/>
+    <path d="m47 66 7-17 18-23 8 6-18 23-15 11Z" fill="#7C4DFF" stroke="#17131F" stroke-width="5" stroke-linejoin="round"/>
+    <path d="m72 26 4-5c1-2 4-2 6 0l3 2c2 2 2 4 0 6l-5 4-8-7Z" fill="#fff" stroke="#17131F" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+  <text x="458" y="272" fill="#17131F" font-family="Arial Rounded MT Bold, Arial, sans-serif" font-size="72" font-weight="800">Drawesome</text>
+  <text x="458" y="370" fill="url(#word)" font-family="Arial Rounded MT Bold, Arial, sans-serif" font-size="76" font-weight="900">Make it together.</text>
+  <text x="463" y="433" fill="#17131F" font-family="Arial, sans-serif" font-size="30" font-weight="700">A live canvas for your people. No account needed.</text>
+  <g transform="translate(463 478)">
+    <rect width="178" height="56" rx="28" fill="#17131F"/>
+    <text x="89" y="37" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="23" font-weight="800">PEN-READY</text>
+    <rect x="194" width="166" height="56" rx="28" fill="#fff"/>
+    <text x="277" y="37" text-anchor="middle" fill="#17131F" font-family="Arial, sans-serif" font-size="23" font-weight="800">LIVE ROOMS</text>
+  </g>
+</svg>
