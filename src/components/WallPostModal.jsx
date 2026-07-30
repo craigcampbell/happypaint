@@ -15,7 +15,7 @@ function deviceKey() {
   }
 }
 
-export default function WallPostModal({ draft, defaultArtist, room, onClose, onPosted }) {
+export default function WallPostModal({ draft, defaultArtist, room, remixSource, onClose, onPosted }) {
   const [title, setTitle] = useState("My drawing");
   const [artist, setArtist] = useState(defaultArtist || "");
   const [tags, setTags] = useState([]);
@@ -23,6 +23,7 @@ export default function WallPostModal({ draft, defaultArtist, room, onClose, onP
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [frame, setFrame] = useState(0);
+  const [allowRemix, setAllowRemix] = useState(false);
   const cycleRef = useRef(null);
 
   const frames = draft?.frames || [];
@@ -65,6 +66,8 @@ export default function WallPostModal({ draft, defaultArtist, room, onClose, onP
           // Which room this was drawn in — posts from the DAILY room join
           // today's challenge gallery on the homepage.
           room: room || null,
+          allowRemix,
+          parentPostId: remixSource?.id || null,
         }),
       });
       if (res.ok) {
@@ -163,6 +166,18 @@ export default function WallPostModal({ draft, defaultArtist, room, onClose, onP
             ) : null}
           </div>
         </div>
+
+        {remixSource ? (
+          <p className="wall-post-remix-note">🧬 This will be linked as a remix of “{remixSource.title}”.</p>
+        ) : null}
+        <label className="wall-post-remix-toggle">
+          <input
+            type="checkbox"
+            checked={allowRemix}
+            onChange={(event) => setAllowRemix(event.target.checked)}
+          />
+          Let other artists remix this drawing
+        </label>
 
         {error ? <p className="wall-post-error" role="alert">{error}</p> : null}
 

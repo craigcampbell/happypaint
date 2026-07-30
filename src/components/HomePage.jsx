@@ -229,6 +229,23 @@ export default function HomePage({ onNavigate }) {
     join(c);
   };
 
+  const startStorybook = async () => {
+    try {
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audience: "friends", mode: "storybook", title: "Our Story" }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.code) throw new Error("create failed");
+      join(data.code);
+    } catch {
+      // A normal private room is still a useful anonymous fallback if the
+      // mode endpoint is unavailable during a rolling deploy.
+      startRoom();
+    }
+  };
+
   const goByCode = (event) => {
     event.preventDefault();
     const c = normalizeCode(code);
@@ -292,6 +309,9 @@ export default function HomePage({ onNavigate }) {
             </button>
             <button type="button" className="home-start-room" onClick={startRoom}>
               Create a room
+            </button>
+            <button type="button" className="home-start-room" onClick={startStorybook}>
+              📖 Start a storybook
             </button>
 
             <form className="home-code" onSubmit={goByCode}>

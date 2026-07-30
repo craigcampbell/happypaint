@@ -61,6 +61,7 @@ import {
   TIP_PRESETS,
   creditDrops,
   earnDropsForPainting,
+  earnDropsForQuest,
   hasEntitlement,
   loadEconomy,
   migrateLegacyStudioPass,
@@ -116,6 +117,15 @@ import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import { extractCanvasPalette, resolvePreviewTheme } from "./utils/artPreview";
+import {
+  normalizeSymmetry,
+  transformPointBySymmetry,
+  transformPointsBySymmetry,
+} from "./utils/symmetry";
+import { createPaintOrchestra } from "./utils/paintOrchestra";
+import QuestPanel from "./components/QuestPanel";
+import StorybookPanel from "./components/StorybookPanel";
+import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
 import "./App.css";
 import "./drawesome-theme.css";
 
@@ -715,6 +725,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [economy, setEconomy] = useState(null);
   const economyRef = useRef(null); // latest economy, for the earn-by-painting hook
   const earnPaintDropsRef = useRef(null); // set below; called from deep in endStroke
+  const earnQuestDropsRef = useRef(null);
   const bumpStreakRef = useRef(null); // drawing-streak tick; same pattern
   const streakDoneRef = useRef(null); // day string once today's streak is counted
   const lastPaintEarnRef = useRef(0); // throttle: at most one earned Drop / few seconds
@@ -760,11 +771,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [showSheetModal, setShowSheetModal] = useState(false);
   // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
   const [wallPostDraft, setWallPostDraft] = useState(null);
+  const [remixSource, setRemixSource] = useState(null);
   // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
   // pointer handlers: startStroke captures it INTO the op settings, so a
   // stroke's wetness is frozen at pen-down and replays deterministically.
   const [roomWet, setRoomWet] = useState(false);
   const roomWetRef = useRef(false);
+  const [roomSymmetry, setRoomSymmetry] = useState(() => normalizeSymmetry("none"));
+  const roomSymmetryRef = useRef(normalizeSymmetry("none"));
+  const [roomOrchestra, setRoomOrchestra] = useState(false);
+  const [orchestraEnabled, setOrchestraEnabled] = useState(false);
+  const [orchestraMuted, setOrchestraMuted] = useState(false);
+  const [orchestraVolume, setOrchestraVolume] = useState(0.55);
+  const orchestraRef = useRef(null);
+  if (!orchestraRef.current) orchestraRef.current = createPaintOrchestra();
+  const [roomQuest, setRoomQuest] = useState(null);
+  const [storybook, setStorybook] = useState(null);
+  useEffect(() => () => {
+    void orchestraRef.current?.dispose();
+  }, []);
   // Shared animation: whether THIS room has the film strip (the FLIPBOOK
   // public room, or a private room whose host enabled it). When on, frames are
   // shared state — ops carry frameId and frame CRUD relays through the server,
@@ -2441,54 +2466,32 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [getActiveLayer, markChanged, markMixDirty, pushHistory, refreshActiveThumbnail, renderDisplay],
   );
 
-  const sharePng = useCallback(async () => {
-    setStatus("Getting your art ready…");
-    const exportCanvas = await composeCanvas();
-    const blob = await canvasToBlob(exportCanvas);
-    if (!blob) {
-      showToast("Couldn't prepare the image");
-      return;
-    }
-    // The image doubles as an invite: a "come paint with me" link back to THIS
-    // room, so whoever receives the art is one tap from joining.
-    const joinUrl = `${window.location.origin}/join/${roomId}`;
-    const text = `Come paint with me on Drawesome! 🎨 Room ${roomTitle || roomId}`;
-    const file = new File([blob], "drawesome.png", { type: "image/png" });
+  const shareRoomLink = useCallback(async () => {
+    const joinUrl = `${window.location.origin}/join/${encodeURIComponent(roomId)}`;
+    const title = roomTitle || `Drawesome room ${roomId}`;
+    const text = `Come paint with me on Drawesome! 🎨 ${joinUrl}`;
 
-    // 1) Native share sheet (phones/tablets → iMessage / WhatsApp / Snap …).
-    if (navigator.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: "Made on Drawesome 🎨", text, url: joinUrl });
-        showToast("Shared! 🎨");
-      } catch (err) {
-        if (err?.name !== "AbortError") showToast("Share was cancelled");
-      }
-      return;
-    }
-    // 2) Older mobile browsers without file-share: share the invite link at least.
+    // Call the native share sheet directly from the button tap. In particular,
+    // iPadOS can drop a URL when a file is shared alongside it, so Share is
+    // deliberately link-only; Export remains available for the artwork itself.
     if (navigator.share) {
       try {
-        await navigator.share({ title: "Made on Drawesome 🎨", text, url: joinUrl });
-        showToast("Shared!");
+        await navigator.share({ title, text, url: joinUrl });
+        showToast("Invite shared! 🎨");
         return;
       } catch (err) {
         if (err?.name === "AbortError") return;
+        // If the share sheet fails, fall through and copy the same link.
       }
     }
-    // 3) Desktop: copy the image to the clipboard (paste into any chat) + save a
-    // copy, so it's still one action to get the art out.
-    let note = "Saved as a PNG";
-    if (navigator.clipboard?.write && window.ClipboardItem) {
-      try {
-        await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
-        note = "Copied! Paste it anywhere — also saved as a PNG.";
-      } catch {
-        // clipboard image copy not allowed — the download below still works
-      }
+
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      showToast("Invite link copied — paste it into a text or social post!");
+    } catch {
+      window.prompt("Copy this invite link:", joinUrl);
     }
-    downloadBlob(blob, `drawesome-${Date.now()}.png`);
-    showToast(note);
-  }, [composeCanvas, roomId, roomTitle, showToast]);
+  }, [roomId, roomTitle, showToast]);
 
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
@@ -2694,6 +2697,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
     localStrokeRef.current = null;
+    if (stroke.copies) {
+      for (const copy of stroke.copies) {
+        if (copy.buf.has()) {
+          prepareStrokeCommit(copy.buf, copy.renderer, copy.fx);
+          copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+          markMixDirty(stroke.layer, copy.buf.bounds());
+        }
+        copy.buf.dispose();
+      }
+      return;
+    }
     if (stroke.buf.has()) {
       // Stage-2/3: flush the dab renderer + run the brush's commit passes
       // (wet edge / impasto / paper grain) INSIDE the buffer, then stamp once
@@ -2750,7 +2764,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
-        if (stroke) {
+        const activeSymmetry = normalizeSymmetry(net?.settings?.symmetry || "none");
+        const symmetricPoints = transformPointBySymmetry(point, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+        const symmetricLastPoints = transformPointBySymmetry(lastPoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+        if (stroke?.copies) {
+          stroke.copies.forEach((copy, copyIndex) => {
+            const copyPoint = symmetricPoints[copyIndex];
+            const copyLast = symmetricLastPoints[copyIndex] || copyPoint;
+            if (copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad).overflow) {
+              prepareStrokeCommit(copy.buf, null, copy.fx);
+              copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+              markMixDirty(stroke.layer, copy.buf.bounds());
+              copy.buf.reset();
+              copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad);
+            }
+            if (copy.renderer) {
+              copy.renderer.addPoints(copy.buf.getCtx(), [copyPoint]);
+            } else {
+              drawBrushSegment(copy.buf.getCtx(), copyLast, copyPoint, stroke.drawSettings, pointRand(stroke.seed + copyIndex, copyPoint.x, copyPoint.y));
+            }
+          });
+        } else if (stroke) {
           if (stroke.buf.ensure(point.x, point.y, stroke.pad).overflow) {
             // The stroke outgrew the 2048² buffer cap: bank what we have into
             // the layer and restart the buffer here (a rare, visually-minor
@@ -2781,7 +2815,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             smudge.addPoints(layer0.canvas.getContext("2d"), [point]);
           }
         } else {
-          drawBrushSegment(context, lastPoint, point, settings);
+          symmetricPoints.forEach((copyPoint, copyIndex) => {
+            drawBrushSegment(context, symmetricLastPoints[copyIndex] || copyPoint, copyPoint, settings);
+          });
+        }
+        if (roomOrchestra) {
+          orchestraRef.current?.playStroke({
+            x: point.x / CANVAS_WIDTH,
+            y: point.y / CANVAS_HEIGHT,
+            velocity: point.velocity || 0.45,
+            pressure: point.pressure,
+            brushId: net?.settings?.brush || settings.brush,
+            sourceId: "local",
+          });
         }
         lastPointRef.current = point;
         if (net) {
@@ -2826,7 +2872,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // below + active + above composite per painted frame.
       scheduleStrokeFrame();
     },
-    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markMixDirty, scheduleStrokeFrame],
+    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markMixDirty, roomOrchestra, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -2842,6 +2888,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // and then vanish on the next history replay.)
       if (roomLocked && !isRoomHost) {
         setStatus("🔒 A host locked the canvas");
+        return false;
+      }
+      const storyPage = storybook?.pages?.find((page) => page.sceneId === activeSceneIdRef.current);
+      if (storyPage?.locked && !isRoomHost) {
+        setStatus("🔒 This story page is finished");
         return false;
       }
 
@@ -2870,7 +2921,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
       return true;
     },
-    [getActiveLayer, roomLocked, isRoomHost],
+    [getActiveLayer, roomLocked, isRoomHost, storybook],
   );
 
   // Decide whether to ignore a pointerdown for palm rejection / pen priority
@@ -3054,6 +3105,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         variation: settings.variation,
         seed,
       };
+      const strokeSymmetry = brushId === "smudge"
+        ? normalizeSymmetry("none")
+        : normalizeSymmetry(roomSymmetryRef.current);
+      if (strokeSymmetry.copies > 1) {
+        netSettings.symmetry = strokeSymmetry;
+      }
       // Smudge's Strength (per-dab blend alpha) rides the wire so the local
       // renderer honours the slider AND every remote/replay/spectator client
       // smears with the identical alpha — deterministic parity. Only smudge
@@ -3091,8 +3148,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         const layer0 = layersRef.current[0];
         localSmudgeRef.current = layer0 ? makeSmudgeRenderer(netSettings, layer0.canvas) : null;
       } else if (brushId !== "eraser") {
-        localStrokeRef.current = {
-          buf: createStrokeBuffer(),
+        const sharedStroke = {
           layer: getActiveLayer(),
           settings: netSettings,
           drawSettings: { ...netSettings, opacity: 1 },
@@ -3100,8 +3156,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           pad: settings.size * 3 + 40, // covers glow shadowBlur + spray scatter
           // Stage-2 dab renderer: holds lastPoint/residual PER STROKE so wire
           // batching can't move dabs. Null → legacy segment path.
-          renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
-          fx: dab || null, // commit passes: wet edge / impasto / paper grain
+        };
+        localStrokeRef.current = strokeSymmetry.copies > 1
+          ? {
+            ...sharedStroke,
+            copies: Array.from({ length: strokeSymmetry.copies }, () => ({
+              buf: createStrokeBuffer(),
+              renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
+              fx: dab || null,
+            })),
+          }
+          : {
+            ...sharedStroke,
+            buf: createStrokeBuffer(),
+            renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
+            fx: dab || null, // commit passes: wet edge / impasto / paper grain
         };
       } else {
         localStrokeRef.current = null;
@@ -4384,6 +4453,80 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
 
+  const exportStorybook = useCallback(async () => {
+    if (!storybook || isExportingVideo) return;
+    const preview = window.open("", "_blank", "noopener");
+    if (!preview) {
+      showToast("Allow pop-ups to open the printable storybook.");
+      return;
+    }
+    preview.document.title = storybook.title || "Our Story";
+    preview.document.body.textContent = "Building your storybook…";
+    setIsExportingVideo(true);
+    try {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/film`, { cache: "no-store" });
+      if (!response.ok) throw new Error("book fetch failed");
+      const film = await response.json();
+      const firstFrameId = film.scenes?.[0]?.frames?.[0]?.id;
+      const opsByFrame = new Map();
+      for (const op of film.ops || []) {
+        const frameId = op.frameId || firstFrameId;
+        const list = opsByFrame.get(frameId) || [];
+        list.push(op);
+        opsByFrame.set(frameId, list);
+      }
+      const world = document.createElement("canvas");
+      world.width = CANVAS_WIDTH;
+      world.height = CANVAS_HEIGHT;
+      const pages = [];
+      for (const page of storybook.pages) {
+        const scene = (film.scenes || []).find((item) => item.id === page.sceneId);
+        const frameId = scene?.frames?.[0]?.id;
+        await replayFrameOnto(world, frameId ? (opsByFrame.get(frameId) || []) : []);
+        const output = document.createElement("canvas");
+        output.width = 1200;
+        output.height = 750;
+        const context = output.getContext("2d");
+        await renderPaper(context, { width: output.width, height: output.height, textureId: selectedTexture });
+        context.drawImage(world, 0, 0, output.width, output.height);
+        pages.push({ image: output.toDataURL("image/jpeg", 0.88), caption: page.caption || "", title: page.title || "" });
+      }
+      world.width = 1;
+      world.height = 1;
+      const doc = preview.document;
+      doc.body.textContent = "";
+      const style = doc.createElement("style");
+      style.textContent = "body{font-family:system-ui;margin:24px;color:#30140a}h1{text-align:center}.page{break-after:page;margin:0 auto 28px;max-width:900px}.page img{width:100%;border-radius:16px}.page h2,.page p{text-align:center}@media print{button{display:none}.page{break-after:page}}";
+      doc.head.appendChild(style);
+      const heading = doc.createElement("h1");
+      heading.textContent = storybook.title || "Our Story";
+      doc.body.appendChild(heading);
+      pages.forEach((page, index) => {
+        const section = doc.createElement("section");
+        section.className = "page";
+        const title = doc.createElement("h2");
+        title.textContent = `Page ${index + 1}: ${page.title}`;
+        const image = doc.createElement("img");
+        image.src = page.image;
+        image.alt = title.textContent;
+        const caption = doc.createElement("p");
+        caption.textContent = page.caption;
+        section.append(title, image, caption);
+        doc.body.appendChild(section);
+      });
+      const print = doc.createElement("button");
+      print.textContent = "Print or save as PDF";
+      print.onclick = () => preview.print();
+      doc.body.appendChild(print);
+      setStatus("Storybook ready to print");
+    } catch {
+      preview.document.body.textContent = "Couldn't build this storybook. Close this tab and try again.";
+      setStatus("Storybook export failed");
+    } finally {
+      setIsExportingVideo(false);
+    }
+  }, [isExportingVideo, renderPaper, roomId, selectedTexture, showToast, storybook]);
+
   // Export the WHOLE production — every part, in order, as one movie. Fully
   // offline: each segment's ops come from /api/rooms/:code/film and replay
   // through the shared op interpreter into ONE reusable world canvas, so a
@@ -5125,6 +5268,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         applySrc(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
         return;
       }
+      if (id.startsWith("remix:")) {
+        const postId = id.slice(6);
+        if (/^wp_[a-z0-9]{1,40}$/i.test(postId)) {
+          setSheetMode("under");
+          applySrc(`/api/wall/${encodeURIComponent(postId)}/frame/0`);
+        }
+        return;
+      }
       // Custom admin uploads AND user trace photos come back as a data URL.
       fetch(`/api/sheets/${id}`, { cache: "no-store" })
         .then((res) => (res.ok ? res.json() : null))
@@ -5276,6 +5427,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         const strokes = remoteStrokesRef.current;
         let entry = strokes.get(op.strokeId);
         const settings = op.settings || entry?.settings || {};
+        const opSymmetry = normalizeSymmetry(settings.symmetry || "none");
+        if (!op.symmetryExpanded && opSymmetry.copies > 1) {
+          const paths = transformPointsBySymmetry(op.points || [], opSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+          paths.forEach((points, copyIndex) => {
+            applyRemoteOpRef.current?.({
+              ...op,
+              strokeId: `${op.strokeId}:sym${copyIndex}`,
+              points,
+              settings: { ...settings, symmetry: normalizeSymmetry("none") },
+              symmetryExpanded: true,
+            });
+          });
+          return;
+        }
         if (!op.settings && !entry) {
           const queued = remoteStampQueueRef.current.get(op.strokeId);
           if (queued) {
@@ -5478,7 +5643,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
       remoteStrokesRef.current.clear();
       remoteStampQueueRef.current.clear();
-      localStrokeRef.current?.buf.dispose();
+      localStrokeRef.current?.buf?.dispose();
+      for (const copy of localStrokeRef.current?.copies || []) copy.buf?.dispose();
       localStrokeRef.current = null;
       localSmudgeRef.current = null;
     },
@@ -5515,6 +5681,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // handshake, so late joiners (and reconnects) sync both.
           roomWetRef.current = !!data.wetCanvas;
           setRoomWet(!!data.wetCanvas);
+          roomSymmetryRef.current = normalizeSymmetry(data.symmetry || "none");
+          setRoomSymmetry(roomSymmetryRef.current);
+          setRoomOrchestra(!!data.orchestra);
+          setRoomQuest(data.quests || null);
+          setStorybook(data.storybook || null);
+          setRemixSource(data.remixSource || null);
           setRoomVote(data.vote ? { options: data.vote.options || [], endsAt: data.vote.endsAt || 0, counts: data.vote.counts || [0, 0, 0], myChoice: null } : null);
           // Remember this room (with its friendly title) so it shows up under
           // "Your rooms" in the switcher for quick hopping back.
@@ -5718,6 +5890,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         }
         case "op": {
+          if (roomOrchestra && data.op?.kind === "draw" && data.op.points?.length) {
+            const point = data.op.points[data.op.points.length - 1];
+            orchestraRef.current?.playStroke({
+              x: point.x / CANVAS_WIDTH,
+              y: point.y / CANVAS_HEIGHT,
+              velocity: 0.45,
+              pressure: point.pressure,
+              brushId: data.op.settings?.brush || "marker",
+              sourceId: data.op.userId || "remote",
+            });
+          }
           applyRemoteOp(data.op);
           if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
             lastOpIdRef.current = data.op.opId;
@@ -5736,6 +5919,28 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           break;
         }
+        case "symmetry_state":
+          roomSymmetryRef.current = normalizeSymmetry(data.symmetry || "none");
+          setRoomSymmetry(roomSymmetryRef.current);
+          showToast(`🌀 Symmetry: ${roomSymmetryRef.current.mode}`);
+          break;
+        case "quest_state":
+          setRoomQuest(data.quest || null);
+          if (data.justCompleted) {
+            earnQuestDropsRef.current?.(data.quest?.setId, data.justCompleted);
+            showToast("🧭 Quest complete! Everyone earned 3 play Drops.");
+          }
+          break;
+        case "storybook_state":
+          setStorybook(data.storybook || null);
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          break;
+        case "storybook_rejected":
+          showToast("That caption needs a kinder rewrite.");
+          break;
         case "clear": {
           // A room clear wipes the shared frame it names. Without a frameId it
           // is a FULL wipe: every frame in an animation room (admin clears the
@@ -6143,7 +6348,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
@@ -6251,6 +6456,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendVoteStart: mp.sendVoteStart,
       sendVote: mp.sendVote,
       sendReaction: mp.sendReaction,
+      sendSetSymmetry: mp.sendSetSymmetry,
+      sendQuestNominate: mp.sendQuestNominate,
+      sendQuestReset: mp.sendQuestReset,
+      sendStorybookCaption: mp.sendStorybookCaption,
+      sendStorybookLock: mp.sendStorybookLock,
+      sendStorybookMove: mp.sendStorybookMove,
       sendSetAnimation: mp.sendSetAnimation,
       sendFrameAdd: mp.sendFrameAdd,
       sendFrameDel: mp.sendFrameDel,
@@ -6272,7 +6483,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip]);
+  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -7003,6 +7214,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, [persistEconomy]);
   earnPaintDropsRef.current = earnPaintDrops;
 
+  const earnQuestDrops = useCallback((setId, missionId) => {
+    const current = economyRef.current;
+    if (!current || !setId || !missionId) return;
+    const next = earnDropsForQuest(current, setId, missionId, 3);
+    if (next !== current) persistEconomy(next);
+  }, [persistEconomy]);
+  earnQuestDropsRef.current = earnQuestDrops;
+
   // Drawing streak: the day's FIRST finished stroke ticks it (device-local).
   // Session-guarded so the localStorage read happens once per day, not per
   // stroke — nothing rides the drawing hot path. Celebrate day 2+ only.
@@ -7117,23 +7336,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     window.location.href = `/join/${code}`;
   };
 
-  // Invite friends: the native share sheet where it exists (phones/tablets),
-  // clipboard as the fallback for desktop browsers without navigator.share.
-  const inviteFriends = () => {
-    const link = `${window.location.origin}/join/${roomId}`;
-    if (navigator.share) {
-      navigator
-        .share({ title: roomTitle || `Room ${roomId}`, text: "Come draw with me on Drawesome!", url: link })
-        .catch(() => {
-          /* user closed the share sheet */
-        });
-      return;
-    }
-    navigator.clipboard?.writeText(link).then(
-      () => showToast("Invite link copied — send it to a friend!"),
-      () => showToast(link),
-    );
-  };
+  const inviteFriends = shareRoomLink;
 
   const submitReport = async () => {
     try {
@@ -7173,6 +7376,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  };
+
+  const toggleOrchestra = async (enabled) => {
+    const ok = await orchestraRef.current?.setEnabled(enabled);
+    setOrchestraEnabled(Boolean(enabled && ok));
+    if (enabled && !ok) showToast("Sound isn't available in this browser, but painting still works.");
+  };
+
+  const changeOrchestraMute = (muted) => {
+    orchestraRef.current?.setMuted(muted);
+    setOrchestraMuted(muted);
+  };
+
+  const changeOrchestraVolume = (volume) => {
+    orchestraRef.current?.setVolume(volume);
+    setOrchestraVolume(volume);
   };
 
   return (
@@ -7241,7 +7460,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={openWallPost} title="Pin your art on the community Fridge Wall">
               🧲 Wall
             </button>
-            <button type="button" onClick={sharePng} title="Share your art + an invite link">
+            <button type="button" onClick={shareRoomLink} title="Share a link to this room">
               📤 Share
             </button>
             <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
@@ -7343,7 +7562,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             Invite friends
           </button>
 
-          {roomAudience && roomAudience !== "kid_safe" && isRoomHost ? (
+          {roomAudience && roomAudience !== "kid_safe" && isRoomHost && !storybook ? (
             <button
               type="button"
               className={`mp-wet-toggle mp-anim-toggle${roomAnimation ? " is-on" : ""}`}
@@ -7502,7 +7721,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         </div>
 
         <div className="canvas-stage">
-          <div className="canvas-paper">
+          <div className={`canvas-paper${roomSymmetry.copies > 1 ? " is-symmetry" : ""}`}>
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
             <canvas
               ref={overlayCanvasRef}
@@ -7620,6 +7839,43 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               </div>
             ) : null}
 
+            {(roomId === "KALEIDO" || (roomAudience && roomAudience !== "kid_safe" && isRoomHost)) ? (
+              <div className="symmetry-panel" aria-label="Kaleido symmetry">
+                <span aria-hidden="true">🌀</span>
+                <select
+                  value={roomSymmetry.mode}
+                  disabled={roomAudience === "kid_safe"}
+                  onChange={(event) => mpRef.current?.sendSetSymmetry?.(event.target.value)}
+                  aria-label="Symmetry mode"
+                  title={roomAudience === "kid_safe" ? "Kaleido Jam uses four-way symmetry" : "Choose symmetry mode"}
+                >
+                  <option value="none">Normal</option>
+                  <option value="mirror">Mirror</option>
+                  <option value="quad">Four-way</option>
+                  <option value="radial">Eight-way</option>
+                </select>
+              </div>
+            ) : null}
+
+            {roomQuest ? (
+              <QuestPanel
+                quest={roomQuest}
+                onNominate={(missionId) => mpRef.current?.sendQuestNominate?.(missionId)}
+              />
+            ) : null}
+
+            {roomOrchestra ? (
+              <PaintOrchestraPanel
+                enabled={orchestraEnabled}
+                muted={orchestraMuted}
+                volume={orchestraVolume}
+                supported={orchestraRef.current?.isSupported() !== false}
+                onEnabledChange={toggleOrchestra}
+                onMutedChange={changeOrchestraMute}
+                onVolumeChange={changeOrchestraVolume}
+              />
+            ) : null}
+
             {roomAudience && roomAudience !== "kid_safe" && !privateNoticeDismissed ? (
               <div
                 className="room-prompt-chip"
@@ -7675,7 +7931,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             ) : null}
           </div>
 
-          {roomAnimation ? (
+          {storybook ? (
+            <StorybookPanel
+              storybook={storybook}
+              scenes={scenes}
+              activeSceneId={activeSceneId}
+              isHost={isRoomHost}
+              onSelectPage={handleSelectScene}
+              onCaption={(sceneId, caption) => mpRef.current?.sendStorybookCaption?.(sceneId, caption)}
+              onToggleLock={(sceneId, locked) => mpRef.current?.sendStorybookLock?.(sceneId, locked)}
+              onMove={(sceneId, toIndex) => mpRef.current?.sendStorybookMove?.(sceneId, toIndex)}
+              onExport={exportStorybook}
+            />
+          ) : null}
+
+          {roomAnimation && !storybook ? (
             <FilmStrip
               frames={frames}
               activeFrameIndex={activeFrameIndex}
@@ -8177,7 +8447,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <button type="button" onClick={openWallPost} title="Pin your art on the community Fridge Wall">
               🧲 Wall
             </button>
-            <button type="button" onClick={sharePng} title="Share your art + an invite link">
+            <button type="button" onClick={shareRoomLink} title="Share a link to this room">
               📤 Share
             </button>
             <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
@@ -8767,6 +9037,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           draft={wallPostDraft}
           defaultArtist={nameDraft || mp.self?.name || ""}
           room={roomId}
+          remixSource={remixSource}
           onClose={() => setWallPostDraft(null)}
           onPosted={() => {
             setWallPostDraft(null);

@@ -33,7 +33,7 @@ const CTA_MESSAGES = [
 // One animated card. Frames are served as immutable URLs; we preload them all
 // once, then cycle with an interval only while the card is on screen (the
 // IntersectionObserver keeps a wall of GIF-like posts from burning battery).
-function WallCard({ post, onVote, onReport }) {
+function WallCard({ post, onVote, onReport, onRemix }) {
   const [frame, setFrame] = useState(0);
   const [visible, setVisible] = useState(false);
   const rootRef = useRef(null);
@@ -93,12 +93,22 @@ function WallCard({ post, onVote, onReport }) {
             ⚑
           </button>
         </div>
+        {post.parentPostId ? (
+          <p className="wall-remix-line">
+            🧬 {post.parent ? `Remixed from “${post.parent.title}”` : "Remixed from an unavailable source"}
+          </p>
+        ) : null}
         {post.tags.length ? (
           <div className="wall-tags">
             {post.tags.map((t) => (
               <span key={t} className="wall-tag">#{t}</span>
             ))}
           </div>
+        ) : null}
+        {post.allowRemix ? (
+          <button type="button" className="wall-remix-btn" onClick={() => onRemix(post)}>
+            Remix this 🧬
+          </button>
         ) : null}
       </figcaption>
     </figure>
@@ -230,6 +240,17 @@ export default function WallPage({ onNavigate }) {
     }
   }, [say]);
 
+  const remix = useCallback(async (post) => {
+    try {
+      const res = await fetch(`/api/wall/${encodeURIComponent(post.id)}/remix-room`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.code) throw new Error("remix failed");
+      window.location.href = `/join/${data.code}`;
+    } catch {
+      say("Couldn't start that remix — try again.");
+    }
+  }, [say]);
+
   // Mix CTA cards into the masonry: one up top when the wall is thin, then
   // one roughly every 7 posts.
   const cells = useMemo(() => {
@@ -303,7 +324,7 @@ export default function WallPage({ onNavigate }) {
           <div className="wall-masonry">
             {cells.map((cell, i) =>
               cell.post ? (
-                <WallCard key={cell.post.id} post={cell.post} onVote={vote} onReport={report} />
+                <WallCard key={cell.post.id} post={cell.post} onVote={vote} onReport={report} onRemix={remix} />
               ) : (
                 <CtaCard key={`cta-${i}`} index={cell.cta} onNavigate={onNavigate} />
               ),

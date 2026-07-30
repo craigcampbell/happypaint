@@ -182,6 +182,7 @@ function emptyState() {
     entitlements: [], // grant keys, e.g. "studio"
     // Tips received (mirror backend `tips`), accumulating into locked creator balance.
     tipsReceived: [],
+    questReceipts: [],
   };
 }
 
@@ -256,6 +257,7 @@ function normalize(raw) {
     owned: Array.isArray(raw.owned) ? raw.owned : [],
     entitlements: Array.isArray(raw.entitlements) ? raw.entitlements : [],
     tipsReceived: Array.isArray(raw.tipsReceived) ? raw.tipsReceived : [],
+    questReceipts: Array.isArray(raw.questReceipts) ? raw.questReceipts.slice(0, 50) : [],
   };
   return withDerivedWallet(state);
 }
@@ -364,6 +366,24 @@ export function earnDropsForPainting(state, amount = 1) {
     source: "paint_earn",
   });
   return appendEntries(state, [entry]);
+}
+
+// Cooperative quest reward. Idempotent per device/set/mission and bounded in
+// the existing economy record (which account deletion already wipes).
+export function earnDropsForQuest(state, setId, missionId, amount = 3) {
+  const receipt = `${String(setId || "").slice(0, 48)}:${String(missionId || "").slice(0, 48)}`;
+  if (!setId || !missionId || state.questReceipts?.includes(receipt)) return state;
+  const entry = makeLedgerEntry({
+    amount: Math.max(1, Math.min(5, Math.round(amount || 3))),
+    currency_type: CURRENCY.drops,
+    direction: DIRECTION.credit,
+    source: "quest_earn",
+    source_id: receipt,
+  });
+  return {
+    ...appendEntries(state, [entry]),
+    questReceipts: [receipt, ...(state.questReceipts || [])].slice(0, 50),
+  };
 }
 
 // Send a Drops tip. Spends Drops from the sender and records the tip into the

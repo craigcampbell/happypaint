@@ -22,6 +22,8 @@ import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { scan } from './server/moderation/textFilter.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
+import { questMissions, questSetFor } from './server/questDeck.js';
+import { defaultStorybook, storybookPrompt } from './server/storybookPrompts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -836,9 +838,13 @@ function loadRoom(roomId) {
       phone: !!data.phone, // private-room Draw Phone opt-in survives restarts
       dailyDate: /^\d{4}-\d{2}-\d{2}$/.test(String(data.dailyDate || '')) ? data.dailyDate : null,
       productionId: typeof data.productionId === 'string' ? data.productionId.slice(0, 32) : null,
+      symmetry: data.symmetry && typeof data.symmetry === 'object' ? data.symmetry : null,
+      quests: data.quests && typeof data.quests === 'object' ? data.quests : null,
+      storybook: data.storybook && typeof data.storybook === 'object' ? data.storybook : null,
+      remixSource: data.remixSource && typeof data.remixSource === 'object' ? data.remixSource : null,
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -882,6 +888,14 @@ async function saveRoomNow(roomId) {
       phone: !!room.phoneEnabled,
       dailyDate: room.dailyDate || null,
       productionId: room.productionId || null,
+      symmetry: room.symmetry,
+      quests: room.quests ? {
+        setId: room.quests.setId,
+        missionIds: room.quests.missionIds,
+        completedIds: Array.from(room.quests.completedIds || []),
+      } : null,
+      storybook: room.storybook || null,
+      remixSource: room.remixSource || null,
       savedAt: Date.now(),
     });
     // Temp-file + rename so a crash mid-write never leaves a truncated room file.
@@ -947,6 +961,9 @@ const FEATURED_ROOMS = [
   // the homepage's "come back tomorrow" loop. Wall posts made from this room
   // are auto-tagged into today's gallery.
   { code: 'DAILY', title: "Today's Challenge", emoji: '🗓️', daily: true, prompts: ['(daily challenge)'] },
+  { code: 'KALEIDO', title: 'Kaleido Jam', emoji: '🌀', symmetry: 'quad', prompts: ['Build a shared mandala', 'Turn one line into a magical pattern', 'Make a creature from symmetry'] },
+  { code: 'QUEST', title: 'Canvas Quests', emoji: '🧭', quests: true, prompts: ['Complete three creative missions together', 'Team up on today’s art quests', 'Every artist helps finish the quest'] },
+  { code: 'ORCHSTRA', title: 'Paint Orchestra', emoji: '🎵', orchestra: true, prompts: ['Paint a song together', 'Make color sound like music', 'Jam with brushes and shapes'] },
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
@@ -954,6 +971,56 @@ const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).m
 const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
 const GAME_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.game).map((r) => r.code));
 const PHONE_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.phone).map((r) => r.code));
+
+const SYMMETRY_MODES = Object.freeze({
+  none: { mode: 'none', copies: 1 },
+  mirror: { mode: 'mirror', copies: 2 },
+  quad: { mode: 'quad', copies: 4 },
+  radial: { mode: 'radial', copies: 8 },
+});
+
+function normalizeRoomSymmetry(value) {
+  const mode = typeof value === 'string' ? value : value?.mode;
+  return SYMMETRY_MODES[mode] || SYMMETRY_MODES.none;
+}
+
+function normalizeQuestState(value, roomId) {
+  const daily = questSetFor(roomId);
+  const currentValue = roomId === 'QUEST' && value?.setId !== daily.setId ? null : value;
+  const ids = Array.isArray(currentValue?.missionIds) ? currentValue.missionIds.slice(0, 3) : daily.missions.map((mission) => mission.id);
+  const valid = questMissions(ids);
+  const missionIds = valid.length === 3 ? valid.map((mission) => mission.id) : daily.missions.map((mission) => mission.id);
+  return {
+    setId: typeof currentValue?.setId === 'string' ? currentValue.setId.slice(0, 48) : daily.setId,
+    missionIds,
+    completedIds: new Set(Array.isArray(currentValue?.completedIds) ? currentValue.completedIds.filter((id) => missionIds.includes(id)) : []),
+    nominations: new Map(),
+  };
+}
+
+function questPayload(room) {
+  if (!room.quests) return null;
+  const counts = {};
+  for (const id of room.quests.missionIds) counts[id] = room.quests.nominations.get(id)?.size || 0;
+  return {
+    setId: room.quests.setId,
+    missions: questMissions(room.quests.missionIds),
+    completedIds: Array.from(room.quests.completedIds),
+    counts,
+    needed: Math.max(1, Math.floor(room.users.size / 2) + 1),
+  };
+}
+
+function storybookPayload(room) {
+  if (!room.storybook?.enabled) return null;
+  return {
+    ...room.storybook,
+    pages: room.storybook.pages.map((page) => {
+      const prompt = storybookPrompt(page.promptId);
+      return { ...page, title: prompt.title, prompt: prompt.prompt };
+    }),
+  };
+}
 
 // ---- Shared animation frames -----------------------------------------------
 // In an animation room the frames themselves are shared state (Google-Docs
@@ -1204,6 +1271,11 @@ function getRoom(roomId) {
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
       customPrompt: saved.customPrompt, // theme-vote winner; beats the daily prompt
+      symmetry: roomId === 'KALEIDO' ? SYMMETRY_MODES.quad : normalizeRoomSymmetry(saved.symmetry),
+      orchestraEnabled: roomId === 'ORCHSTRA',
+      quests: roomId === 'QUEST' || saved.quests ? normalizeQuestState(saved.quests, roomId) : null,
+      storybook: saved.storybook || null,
+      remixSource: saved.remixSource || null,
       vote: null, // open theme vote: { options, votes: {userId: 0|1|2}, endsAt }
       voteTimer: null, // the vote-close timeout (cleared with the room)
       lastVoteAt: 0, // vote_start cooldown anchor (in-memory)
@@ -1236,6 +1308,9 @@ function getRoom(roomId) {
       lastActivity: Date.now(),
     });
     const created = rooms.get(roomId);
+    // Storybooks reuse the paged animation scene model: one scene is one page.
+    // Preserve any pre-existing first scene/art, then add blank pages up to four.
+    if (saved.storybook?.enabled) enableStorybookRoom(created);
     // Backfill: every frame belongs to a real scene (legacy files predate
     // scenes; a frame whose scene was deleted folds into the first one).
     const sceneIds = new Set(created.scenes.map((s) => s.id));
@@ -1247,6 +1322,20 @@ function getRoom(roomId) {
     recountFrameOps(created);
   }
   return rooms.get(roomId);
+}
+
+function enableStorybookRoom(room) {
+  room.animationEnabled = true;
+  while (room.scenes.length < 4) {
+    room.opSeq += 1;
+    const sceneId = `s${room.opSeq}`;
+    room.scenes.push({ id: sceneId, name: `Page ${room.scenes.length + 1}` });
+    room.opSeq += 1;
+    room.frames.push({ id: `f${room.opSeq}`, durationMs: 120, sceneId });
+  }
+  if (!room.storybook?.enabled || !Array.isArray(room.storybook.pages)) {
+    room.storybook = defaultStorybook(room.scenes.slice(0, 4));
+  }
 }
 
 // Materialize the featured prompt rooms so they always exist, stay kid_safe +
@@ -1264,6 +1353,9 @@ function seedFeaturedRooms() {
     room.fingerPaint = FINGER_PAINT_CODES.has(f.code);
     room.gameEnabled = GAME_ROOM_CODES.has(f.code);
     room.phoneEnabled = PHONE_ROOM_CODES.has(f.code);
+    room.symmetry = f.symmetry ? normalizeRoomSymmetry(f.symmetry) : SYMMETRY_MODES.none;
+    room.orchestraEnabled = !!f.orchestra;
+    room.quests = f.quests ? (room.quests || normalizeQuestState(null, f.code)) : null;
     if (room.fingerPaint) {
       room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
     }
@@ -2167,6 +2259,14 @@ wss.on('connection', async (ws, req) => {
   // just-past-midnight joiner would see yesterday's mural under today's prompt
   // and then lose their first strokes to the delayed wipe.
   if (roomId === 'DAILY') ensureDailyFresh();
+  if (roomId === 'QUEST') {
+    const fresh = questSetFor(roomId);
+    if (room.quests?.setId !== fresh.setId) {
+      room.quests = normalizeQuestState(null, roomId);
+      persistRoom(roomId);
+      broadcast(roomId, { type: 'quest_state', quest: questPayload(room), reset: true });
+    }
+  }
 
   // The prompt shown in the handshake: a theme-vote winner (customPrompt)
   // beats the daily rotation; featured rooms otherwise carry the same daily
@@ -2326,6 +2426,11 @@ wss.on('connection', async (ws, req) => {
     game: !!room.gameEnabled,
     // Draw Phone: whether this room plays the telephone game.
     phone: !!room.phoneEnabled,
+    symmetry: room.symmetry,
+    orchestra: !!room.orchestraEnabled,
+    quests: questPayload(room),
+    storybook: storybookPayload(room),
+    remixSource: room.remixSource || null,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -2362,6 +2467,9 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify(chatHistoryMsg(room))); // catch the late joiner up on the conversation
   }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
+  if (room.quests) {
+    broadcast(roomId, { type: 'quest_state', quest: questPayload(room) });
+  }
   // If this room is a film segment, refresh every member's storyboard so the
   // new painter's crew chip appears on this Part right away.
   if (room.productionId) {
@@ -2453,6 +2561,12 @@ wss.on('connection', async (ws, req) => {
         if (data.op.kind === 'draw') {
           if (raw.length > MAX_DRAW_MESSAGE_CHARS) break;
           if (!Array.isArray(data.op.points) || data.op.points.length > MAX_DRAW_POINTS_PER_OP) break;
+          if (data.op.settings?.symmetry) {
+            data.op = {
+              ...data.op,
+              settings: { ...data.op.settings, symmetry: normalizeRoomSymmetry(data.op.settings.symmetry) },
+            };
+          }
         }
         // Bound single-op weight: image ops embed dataURLs; nothing legitimate
         // approaches this cap, and unbounded ops multiply across history/joins.
@@ -2466,6 +2580,11 @@ wss.on('connection', async (ws, req) => {
           if (!room.frames.some((f) => f.id === frameId)) break;
           // Rooms without animation only ever accept ops for their first frame.
           if (!room.animationEnabled && frameId !== room.frames[0].id) break;
+        }
+        if (room.storybook?.enabled) {
+          const targetFrame = room.frames.find((item) => item.id === (frameId || room.frames[0].id));
+          const targetPage = room.storybook.pages.find((item) => item.sceneId === targetFrame?.sceneId);
+          if (targetPage?.locked && !isHost(room, user)) break;
         }
         // Multi-frame rooms (animation on, or a preserved flipbook with the
         // toggle off) live under per-frame caps — the global FIFO trim would
@@ -2517,6 +2636,7 @@ wss.on('connection', async (ws, req) => {
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
         if (phoneActive(room)) break; // the sheet is locked while a phone game runs
+        if (room.storybook?.enabled) break;
         const nextSheet = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
         // Trace photos and Draw Phone pages can ONLY be set by their own minting
         // handlers (each binds an id to this room). Rejecting trace_/pp_ ids here
@@ -2535,6 +2655,7 @@ wss.on('connection', async (ws, req) => {
       // hostless public drawing rooms can NEVER accept one. The client also
       // runs an NSFW pre-check, but the gate is the real control.
       case 'set_trace_photo': {
+        if (room.storybook?.enabled) break;
         if (user.muted) break; // a muted member can't push a photo either
         if (room.locked && !isHost(room, user)) break; // locked room = host-only
         if (room.audience === 'kid_safe') {
@@ -2675,6 +2796,7 @@ wss.on('connection', async (ws, req) => {
         // Draw Phone: each player's page is private and independent — a shared
         // clear would wipe everyone's in-progress drawing. Only the engine blanks.
         if (phoneActive(room)) break;
+        if (room.storybook?.enabled && !isHost(room, user)) break;
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
         if (room.animationEnabled && clearFrameId && room.frames.some((f) => f.id === clearFrameId)) {
           // Animation rooms: Clear wipes ONE frame for everyone (never the whole
@@ -2800,6 +2922,85 @@ wss.on('connection', async (ws, req) => {
         break;
       }
 
+      // ---- Creative room capabilities --------------------------------------
+      case 'set_symmetry': {
+        // The featured room is deliberately predictable: every visitor sees
+        // the same four-way mandala. Private-room hosts can choose other modes.
+        if (room.audience === 'kid_safe' || !isHost(room, user)) break;
+        if (!rateOk(`symmetry:${id}`, 12, 60_000)) break;
+        room.symmetry = normalizeRoomSymmetry(data.mode);
+        broadcast(roomId, { type: 'symmetry_state', symmetry: room.symmetry });
+        persistRoom(roomId);
+        break;
+      }
+      case 'quest_nominate': {
+        if (!room.quests || user.muted) break;
+        const missionId = String(data.missionId || '').slice(0, 48);
+        if (!room.quests.missionIds.includes(missionId) || room.quests.completedIds.has(missionId)) break;
+        let voters = room.quests.nominations.get(missionId);
+        if (!voters) {
+          voters = new Set();
+          room.quests.nominations.set(missionId, voters);
+        }
+        voters.add(id);
+        const needed = Math.max(1, Math.floor(room.users.size / 2) + 1);
+        let justCompleted = false;
+        if (voters.size >= needed) {
+          room.quests.completedIds.add(missionId);
+          justCompleted = true;
+          persistRoom(roomId);
+        }
+        broadcast(roomId, { type: 'quest_state', quest: questPayload(room), justCompleted: justCompleted ? missionId : null });
+        break;
+      }
+      case 'quest_reset': {
+        if (!room.quests || !isHost(room, user)) break;
+        room.quests = normalizeQuestState(null, roomId);
+        broadcast(roomId, { type: 'quest_state', quest: questPayload(room), reset: true });
+        persistRoom(roomId);
+        break;
+      }
+      case 'storybook_caption': {
+        if (!room.storybook?.enabled || user.muted) break;
+        const sceneId = String(data.sceneId || '').slice(0, 24);
+        const page = room.storybook.pages.find((item) => item.sceneId === sceneId);
+        if (!page || (page.locked && !isHost(room, user))) break;
+        const caption = typeof data.caption === 'string' ? data.caption.trim().slice(0, 160) : '';
+        if (caption && scan(caption).hit) {
+          ws.send(JSON.stringify({ type: 'storybook_rejected', reason: 'text' }));
+          break;
+        }
+        page.caption = caption;
+        broadcast(roomId, { type: 'storybook_state', storybook: storybookPayload(room) });
+        persistRoom(roomId);
+        break;
+      }
+      case 'storybook_lock': {
+        if (!room.storybook?.enabled || !isHost(room, user)) break;
+        const sceneId = String(data.sceneId || '').slice(0, 24);
+        const page = room.storybook.pages.find((item) => item.sceneId === sceneId);
+        if (!page) break;
+        page.locked = !!data.locked;
+        broadcast(roomId, { type: 'storybook_state', storybook: storybookPayload(room) });
+        persistRoom(roomId);
+        break;
+      }
+      case 'storybook_move': {
+        if (!room.storybook?.enabled || !isHost(room, user)) break;
+        const sceneId = String(data.sceneId || '').slice(0, 24);
+        const from = room.storybook.pages.findIndex((item) => item.sceneId === sceneId);
+        const to = Math.max(0, Math.min(room.storybook.pages.length - 1, Number(data.toIndex) || 0));
+        if (from < 0 || from === to) break;
+        const [page] = room.storybook.pages.splice(from, 1);
+        room.storybook.pages.splice(to, 0, page);
+        const order = new Map(room.storybook.pages.map((item, index) => [item.sceneId, index]));
+        room.scenes.sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+        room.frames.sort((a, b) => (order.get(a.sceneId) ?? 999) - (order.get(b.sceneId) ?? 999));
+        broadcast(roomId, { type: 'storybook_state', storybook: storybookPayload(room), scenes: scenesMeta(room) });
+        persistRoom(roomId);
+        break;
+      }
+
       // ---- Shared animation frames ------------------------------------------
       // Frame structure is shared state exactly like strokes: mutations are
       // validated here, applied to the room, and broadcast to EVERYONE
@@ -2809,6 +3010,7 @@ wss.on('connection', async (ws, req) => {
         // rooms can never opt in — FLIPBOOK is the one public animation room.
         if (room.audience === 'kid_safe') break;
         if (!isHost(room, user)) break;
+        if (room.storybook?.enabled) break;
         room.animationEnabled = !!data.enabled;
         // Animation and Draw & Guess are mutually exclusive: the game blanks
         // the canvas frame-agnostically each round, which would desync a
@@ -2964,6 +3166,7 @@ wss.on('connection', async (ws, req) => {
       // public playground stays single-scene by design.
       case 'scene_add': {
         if (!room.animationEnabled) break;
+        if (room.storybook?.enabled) break;
         if (!isHost(room, user)) break;
         if (room.scenes.length >= MAX_SCENES) {
           ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_SCENES} scenes` }));
@@ -2980,6 +3183,7 @@ wss.on('connection', async (ws, req) => {
       }
       case 'scene_del': {
         if (!room.animationEnabled) break;
+        if (room.storybook?.enabled) break;
         if (!isHost(room, user)) break;
         if (room.scenes.length <= 1) break;
         const delSceneId = String(data.sceneId || '').slice(0, 24);
@@ -3019,6 +3223,7 @@ wss.on('connection', async (ws, req) => {
       }
       case 'frame_add': {
         if (!room.animationEnabled) break;
+        if (room.storybook?.enabled) break;
         if (room.locked && !isHost(room, user)) break;
         const afterId = data.afterFrameId != null ? String(data.afterFrameId).slice(0, 24) : null;
         const afterFrame = afterId ? room.frames.find((f) => f.id === afterId) : null;
@@ -3076,6 +3281,7 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'frame_del': {
+        if (room.storybook?.enabled) break;
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
         const delId = String(data.frameId || '').slice(0, 24);
@@ -3108,6 +3314,7 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'frame_move': {
+        if (room.storybook?.enabled) break;
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
         const moveId = String(data.frameId || '').slice(0, 24);
@@ -3142,6 +3349,7 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'frame_duration': {
+        if (room.storybook?.enabled) break;
         if (!room.animationEnabled) break;
         if (room.locked && !isHost(room, user)) break;
         const durId = String(data.frameId || '').slice(0, 24);
@@ -3442,8 +3650,14 @@ wss.on('connection', async (ws, req) => {
     analyticsEndSession(user);
     room.users.delete(id);
     room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
+    if (room.quests) {
+      for (const voters of room.quests.nominations.values()) voters.delete(id);
+    }
     broadcast(roomId, { type: 'cursor_leave', userId: id });
     broadcast(roomId, { type: 'userLeft', userId: id, userList: userListOf(room) });
+    if (room.quests) {
+      broadcast(roomId, { type: 'quest_state', quest: questPayload(room) });
+    }
     // Draw & Guess: if the drawer bailed mid-round, end the round now (it'll
     // rotate to the next player). If the room dropped below the minimum, park
     // the game in "waiting" so it resumes when someone rejoins.
@@ -4003,6 +4217,7 @@ function sanitizeWallTag(raw) {
 }
 
 function publicWallPost(meta, viewerHash) {
+  const parent = meta.parentPostId ? wallPosts.get(meta.parentPostId) : null;
   return {
     id: meta.id,
     title: meta.title,
@@ -4013,6 +4228,10 @@ function publicWallPost(meta, viewerHash) {
     durationMs: meta.durationMs,
     createdAt: meta.createdAt,
     liked: viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
+    allowRemix: meta.allowRemix === true,
+    parentPostId: meta.parentPostId || null,
+    rootPostId: meta.rootPostId || null,
+    parent: parent && !parent.hidden ? { id: parent.id, title: parent.title } : null,
   };
 }
 
@@ -4115,6 +4334,33 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
   res.send(decoded.buffer);
 });
 
+// Start a fresh private room from an opt-in Wall post. The server derives and
+// persists the source so a collaborator/reconnect cannot forge or lose lineage.
+app.post('/api/wall/:id/remix-room', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const source = wallPosts.get(req.params.id);
+  if (!source || source.hidden || source.allowRemix !== true) {
+    return res.status(404).json({ error: 'not_remixable' });
+  }
+  const ip = clientIp(req);
+  if (!rateOk(`remix-room:${ip}`, 8, 10 * 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  const code = genRoomCode();
+  const room = getRoom(code);
+  room.audience = 'friends';
+  room.listed = false;
+  room.title = `Remix: ${source.title}`.slice(0, 40);
+  room.remixSource = {
+    id: source.id,
+    rootPostId: source.rootPostId || source.id,
+    title: source.title,
+  };
+  room.sheetId = `remix:${source.id}`;
+  persistRoom(code);
+  res.json({ code, remixSource: room.remixSource });
+});
+
 app.post('/api/wall', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const ownerKey = await resolveArtOwner(req);
@@ -4164,6 +4410,14 @@ app.post('/api/wall', async (req, res) => {
       return res.status(400).json({ error: 'language' });
     }
   }
+  let parentPost = null;
+  const requestedParentId = safeWallId(body.parentPostId);
+  if (requestedParentId) {
+    parentPost = wallPosts.get(requestedParentId) || null;
+    if (!parentPost || parentPost.hidden || parentPost.allowRemix !== true) {
+      return res.status(400).json({ error: 'invalid_remix_source' });
+    }
+  }
 
   if (wallPosts.size >= MAX_WALL_POSTS) {
     // Prune the least-loved poster older than 48h to make room; a wall full of
@@ -4192,6 +4446,9 @@ app.post('/api/wall', async (req, res) => {
     reports: 0,
     hidden: false,
     challenge: challengeDate, // 'YYYY-MM-DD' when posted from the DAILY room
+    allowRemix: body.allowRemix === true,
+    parentPostId: parentPost?.id || null,
+    rootPostId: parentPost ? (parentPost.rootPostId || parentPost.id) : null,
   };
   mkdirSync(WALL_DIR, { recursive: true });
   writeFileAtomic(wallFramesFile(meta.id), JSON.stringify(frames));
@@ -4372,11 +4629,18 @@ app.post('/api/rooms', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const body = req.body || {};
   const audience = typeof body.audience === 'string' ? body.audience : 'kid_safe';
+  const mode = typeof body.mode === 'string' ? body.mode : null;
   if (!['kid_safe', 'friends', 'adult_18'].includes(audience)) {
     return res.status(400).json({ error: 'bad_audience' });
   }
   if (audience === 'adult_18') {
     return res.status(403).json({ error: 'adult_disabled' });
+  }
+  if (mode && mode !== 'storybook') {
+    return res.status(400).json({ error: 'bad_mode' });
+  }
+  if (mode === 'storybook' && audience !== 'friends') {
+    return res.status(400).json({ error: 'storybook_private_only' });
   }
   const token = bearerToken(req);
   const identity = token ? await verifyAccessToken(token) : null;
@@ -4394,8 +4658,12 @@ app.post('/api/rooms', async (req, res) => {
   room.listed = audience === 'kid_safe' ? body.listed !== false : false;
   room.title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 40) : null;
   if (identity) room.ownerProfileId = identity.profileId;
+  if (mode === 'storybook') {
+    room.title = room.title || 'Our Story';
+    enableStorybookRoom(room);
+  }
   persistRoom(code);
-  res.json({ code, audience: room.audience, listed: room.listed, title: room.title });
+  res.json({ code, audience: room.audience, listed: room.listed, title: room.title, mode });
 });
 
 // One segment's complete film data for the client-side production exporter:

@@ -23,6 +23,7 @@ import { createStrokeBuffer } from "./strokeBuffer";
 import { createMixMap } from "./mixMap";
 import { drawShape, drawText } from "./shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "./layers";
+import { normalizeSymmetry, transformPointsBySymmetry } from "./symmetry";
 
 // Cap on concurrently BUFFERED in-progress strokes (each buffer ≤2048x2048);
 // stroke #5 falls back to the legacy direct per-segment path.
@@ -36,6 +37,26 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
   if (op.kind === "draw") {
     let entry = strokes.get(op.strokeId);
     const settings = op.settings || entry?.settings || {};
+    const symmetry = normalizeSymmetry(settings.symmetry || "none");
+    if (!op.symmetryExpanded && symmetry.copies > 1) {
+      const paths = transformPointsBySymmetry(op.points || [], symmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+      paths.forEach((points, copyIndex) => applyOp(
+        ctx,
+        {
+          ...op,
+          strokeId: `${op.strokeId}:sym${copyIndex}`,
+          points,
+          settings: { ...settings, symmetry: normalizeSymmetry("none") },
+          symmetryExpanded: true,
+        },
+        lastMap,
+        strokes,
+        onImage,
+        mix,
+        deferred,
+      ));
+      return;
+    }
     if (!op.settings && !entry) {
       const queued = deferred.get(op.strokeId);
       if (queued) queued.ops.push(op);

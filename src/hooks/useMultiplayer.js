@@ -231,6 +231,23 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendReaction = useCallback((emoji, x, y) => send({ type: "reaction", emoji, x, y }), [send]);
   const sendVoteStart = useCallback(() => send({ type: "vote_start" }), [send]);
   const sendVote = useCallback((choice) => send({ type: "vote", choice }), [send]);
+  // Creative room capabilities. The server owns/persists canonical room state;
+  // clients send only bounded ids/values.
+  const sendSetSymmetry = useCallback((mode) => send({ type: "set_symmetry", mode }), [send]);
+  const sendQuestNominate = useCallback((missionId) => send({ type: "quest_nominate", missionId }), [send]);
+  const sendQuestReset = useCallback(() => send({ type: "quest_reset" }), [send]);
+  const sendStorybookCaption = useCallback(
+    (sceneId, caption) => send({ type: "storybook_caption", sceneId, caption }),
+    [send],
+  );
+  const sendStorybookLock = useCallback(
+    (sceneId, locked) => send({ type: "storybook_lock", sceneId, locked }),
+    [send],
+  );
+  const sendStorybookMove = useCallback(
+    (sceneId, toIndex) => send({ type: "storybook_move", sceneId, toIndex }),
+    [send],
+  );
   // Draw & Guess: guesses ride normal sendChat (server checks them). These
   // control the round: the drawer/host can skip, a private-room host toggles the
   // game on/off. Incoming game_* messages auto-forward to the App dispatcher.
@@ -256,7 +273,9 @@ export function useMultiplayer(roomId, onMessage, token) {
     connected, users, self, chat, disconnect,
     sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
-    sendSetWet, sendVoteStart, sendVote, sendReaction, sendGameSkip, sendSetGame,
+    sendSetWet, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
+    sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,
+    sendGameSkip, sendSetGame,
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
