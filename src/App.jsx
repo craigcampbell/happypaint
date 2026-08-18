@@ -112,6 +112,8 @@ import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import GameHud from "./components/GameHud";
 import DrawPhonePanel from "./components/DrawPhonePanel";
+import CanvasChat from "./components/CanvasChat";
+import { HYPES } from "./utils/hypes";
 import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
@@ -599,9 +601,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [reactions, setReactions] = useState([]); // transient floating emoji
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const reactionIdRef = useRef(0);
-  const [chatDraft, setChatDraft] = useState("");
   // Phones start with the chat closed so the canvas gets the whole screen.
-  const [showChat, setShowChat] = useState(() => !window.matchMedia("(max-width: 700px) and (pointer: coarse)").matches);
+  // Canvas Chat: closed = ambient overlay (Twitch mode); open = the panel.
+  const [showChat, setShowChat] = useState(false);
 
   // --- Content moderation (public rooms only) ---
   const nsfwWatcherRef = useRef(null); // in-browser NSFW watcher controller
@@ -647,7 +649,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [isPreparingStepBack, setIsPreparingStepBack] = useState(false);
   const stepBackUrlRef = useRef(null);
   const stepBackBusyRef = useRef(false);
-  const [chatPos, setChatPos] = useState(null); // {left, top} once the chat is dragged
+  const [hypes, setHypes] = useState([]); // live big-reaction bursts (capped, ephemeral)
+  const hypeIdRef = useRef(0);
   const [showReport, setShowReport] = useState(false);
   const [showLobby, setShowLobby] = useState(false);
   const [showWelcome, setShowWelcome] = useState(() => {
@@ -2257,6 +2260,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }, 2600);
     showToast(`Found ${pos.name || "your friend"} ✨`);
   };
+  // Stable wrapper for CanvasChat (its Bubbles are memoized; a fresh closure
+  // per render would defeat that). Reads focusUser via a ref.
+  const focusUserRef = useRef(focusUser);
+  focusUserRef.current = focusUser;
+  const focusChatUser = useCallback((userId) => {
+    if (userId && userId !== "system") focusUserRef.current(userId);
+  }, []);
 
   const loadMyDrawings = useCallback(async () => {
     const key = userKeyRef.current;
@@ -6288,6 +6298,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           window.setTimeout(() => setReactions((list) => list.filter((r) => r.id !== rid)), 1500);
           break;
         }
+        case "hype": {
+          // Big animated celebration over the canvas (curated kinds; the server
+          // rate-limits + allowlists). Hard cap of 3 on screen — extras drop so
+          // a hype pile-on can never bury the art or the frame rate.
+          const meta = HYPES.find((h) => h.kind === data.kind);
+          if (!meta) break;
+          const hid = `hy${Date.now()}_${(hypeIdRef.current += 1)}`;
+          setHypes((list) => {
+            if (list.length >= 3) return list; // dropped — no timer, no re-render later
+            window.setTimeout(() => {
+              setHypes((cur) => (cur.some((h) => h.id === hid) ? cur.filter((h) => h.id !== hid) : cur));
+            }, 2400);
+            return [...list, { id: hid, kind: data.kind, emoji: meta.emoji, name: data.name }];
+          });
+          break;
+        }
         case "wet_state":
           // The room's wet toggle flipped. Strokes already in flight keep the
           // wetness captured in their op settings (replay determinism).
@@ -6297,6 +6323,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           break;
         case "vote_open":
           setRoomVote({ options: data.options || [], endsAt: data.endsAt || 0, counts: [0, 0, 0], myChoice: null });
+          // The vote card lives in the chat panel — announce it so people with
+          // the panel closed know a 45s vote just started (a floating card also
+          // renders for them; see the cc-vote-floating block).
+          showToast("🗳️ Theme vote started — pick the next theme!");
           break;
         case "vote_tally":
           setRoomVote((vote) => (vote ? { ...vote, counts: data.counts || vote.counts } : vote));
@@ -7354,30 +7384,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   // Drag the chat window by its header (pointer-based, works with touch).
-  const startChatDrag = (event) => {
-    if (event.target.closest("button")) {
-      return; // let the hide button work
-    }
-    const chat = event.currentTarget.closest(".mp-chat");
-    if (!chat) {
-      return;
-    }
-    const rect = chat.getBoundingClientRect();
-    const offX = event.clientX - rect.left;
-    const offY = event.clientY - rect.top;
-    const onMove = (ev) => {
-      const left = Math.max(4, Math.min(window.innerWidth - 60, ev.clientX - offX));
-      const top = Math.max(4, Math.min(window.innerHeight - 44, ev.clientY - offY));
-      setChatPos({ left, top });
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
-
   const toggleOrchestra = async (enabled) => {
     const ok = await orchestraRef.current?.setEnabled(enabled);
     setOrchestraEnabled(Boolean(enabled && ok));
@@ -7766,6 +7772,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 </span>
               ))}
             </div>
+
+            {/* Big "hype" celebration bursts from the chat tray (Twitch-alert
+                energy, curated + capped). Pure transform/opacity animation. */}
+            {hypes.length > 0 ? (
+              <div className="hype-layer" aria-hidden="true">
+                {hypes.map((h, i) => (
+                  <div key={h.id} className={`hype-burst hype-${h.kind}`} style={{ "--lane": i }}>
+                    <span className="hype-emoji">{h.emoji}</span>
+                    <span className="hype-bits">
+                      <i /><i /><i /><i /><i /><i />
+                    </span>
+                    {h.name ? <span className="hype-name">{h.name}</span> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {/* "Come look at my frame!" beacon — a friendly tap-to-jump card. */}
             {beacon ? (
@@ -8223,180 +8245,144 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         ) : null}
 
-        {/* The finger-paint room has NO chat — its audience can't read yet. */}
-        {roomFingerPaint ? null : showChat ? (
-          <div
-            className="mp-chat"
-            style={chatPos ? { left: chatPos.left, top: chatPos.top, right: "auto", bottom: "auto" } : undefined}
-          >
-            <div className="mp-chat-head" onPointerDown={startChatDrag}>
-              <span>💬 {roomTitle || `Room ${roomId}`}</span>
-              {roomAudience === "kid_safe" && !isRoomHost ? null : (
-                /* Desktop home of the vote starter (the mobile chat-room row
-                   below has its own; CSS hides this one on small screens). */
-                <button
-                  type="button"
-                  className="vote-start-btn"
-                  onClick={() => mpRef.current?.sendVoteStart?.()}
-                  disabled={Boolean(roomVote)}
-                  title="Start a 45-second room vote on the next drawing theme"
-                >
-                  🗳️ Theme vote
-                </button>
-              )}
-              <button type="button" onClick={() => setShowChat(false)} aria-label="Hide chat">
-                –
-              </button>
-            </div>
-            <div className="mp-chat-room">
-              <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
-              <button type="button" className="mp-chat-room-switch" onClick={() => setShowLobby(true)} title="Switch rooms">
-                {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
-              </button>
-              <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
-              <button type="button" className="mp-chat-invite" onClick={inviteFriends}>
-                Invite friends
-              </button>
-              <button type="button" className="mp-chat-iconbtn" onClick={() => setShowLobby(true)} title="Browse & create rooms">
-                🌐
-              </button>
-              <button type="button" className="mp-chat-iconbtn" onClick={createPrivateRoom} title="Create a private room">
-                🔒
-              </button>
-              <button type="button" className="mp-chat-iconbtn" onClick={() => setShowReport(true)} title="Report something">
-                ⚠️
-              </button>
-              <button
-                type="button"
-                className={`mp-chat-iconbtn mp-wet-toggle${roomWet ? " is-on" : ""}`}
-                onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
-                disabled={roomAudience === "kid_safe" && !isRoomHost}
-                aria-pressed={roomWet}
-                title={
-                  roomAudience === "kid_safe" && !isRoomHost
-                    ? "Wet canvas — only a host can switch this in public rooms"
-                    : roomWet
-                      ? "Wet canvas is ON — paints mix and smear. Tap to dry."
-                      : "Wet canvas — make paints mix and smear into each other"
-                }
-              >
-                💧
-              </button>
-              {roomAudience === "kid_safe" && !isRoomHost ? null : (
-                <button
-                  type="button"
-                  className="mp-chat-iconbtn"
-                  onClick={() => mpRef.current?.sendVoteStart?.()}
-                  disabled={Boolean(roomVote)}
-                  title="Start a 45-second room vote on the next drawing theme"
-                >
-                  🗳️
-                </button>
-              )}
-              {isRoomHost ? (
-                <button type="button" className="mp-chat-iconbtn" onClick={() => setShowHostPanel(true)} title="Host controls">
-                  ⭐
-                </button>
-              ) : null}
-            </div>
-            {roomVote ? (
-              <div className="vote-card" role="group" aria-label="Theme vote">
-                <div className="vote-card-head">
-                  <span>🗳️ Pick the next theme!</span>
-                  <span className="vote-countdown" aria-live="polite">{voteSecondsLeft}s</span>
-                </div>
-                {roomVote.options.map((option, index) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className={`vote-option${roomVote.myChoice === index ? " is-picked" : ""}`}
-                    onClick={() => {
-                      // Optimistic highlight; counts come back via vote_tally.
-                      mpRef.current?.sendVote?.(index);
-                      setRoomVote((vote) => (vote ? { ...vote, myChoice: index } : vote));
-                    }}
-                  >
-                    <span className="vote-option-text">{option}</span>
-                    <span className="vote-option-count">{roomVote.counts?.[index] || 0}</span>
+        {/* Canvas Chat — Twitch × iMessage overlay (finger-paint room: none —
+            its audience can't read yet). Ambient bubbles float over the art;
+            the open panel carries the room row, votes, and participants. */}
+        {roomFingerPaint ? null : (
+          <CanvasChat
+            open={showChat}
+            onOpenChange={setShowChat}
+            messages={mp.chat}
+            self={mp.self}
+            disabled={mutedSelf}
+            onSend={mp.sendChat}
+            onReact={mp.sendChatReact}
+            onHype={mp.sendHype}
+            onNameTap={focusChatUser}
+            panelExtras={
+              <>
+                <div className="mp-chat-room">
+                  <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
+                  <button type="button" className="mp-chat-room-switch" onClick={() => setShowLobby(true)} title="Switch rooms">
+                    {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
                   </button>
-                ))}
-              </div>
-            ) : null}
-            {mp.users.length > 0 ? (
-              <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
-                {mp.users.map((u) => {
-                  const isSelf = u.id === mp.self?.id;
-                  return (
+                  <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
+                  <button type="button" className="mp-chat-invite" onClick={inviteFriends}>
+                    Invite friends
+                  </button>
+                  <button type="button" className="mp-chat-iconbtn" onClick={createPrivateRoom} title="Create a private room">
+                    🔒
+                  </button>
+                  <button type="button" className="mp-chat-iconbtn" onClick={() => setShowReport(true)} title="Report something">
+                    ⚠️
+                  </button>
+                  <button
+                    type="button"
+                    className={`mp-chat-iconbtn mp-wet-toggle${roomWet ? " is-on" : ""}`}
+                    onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+                    disabled={roomAudience === "kid_safe" && !isRoomHost}
+                    aria-pressed={roomWet}
+                    title={
+                      roomAudience === "kid_safe" && !isRoomHost
+                        ? "Wet canvas — only a host can switch this in public rooms"
+                        : roomWet
+                          ? "Wet canvas is ON — paints mix and smear. Tap to dry."
+                          : "Wet canvas — make paints mix and smear into each other"
+                    }
+                  >
+                    💧
+                  </button>
+                  {roomAudience === "kid_safe" && !isRoomHost ? null : (
                     <button
-                      key={u.id}
                       type="button"
-                      className={`mp-participant${isSelf ? " is-self" : ""}`}
-                      onClick={() => focusUser(u.id)}
-                      disabled={isSelf}
-                      title={isSelf ? "That's you" : `Find ${u.name} on the canvas`}
+                      className="mp-chat-iconbtn"
+                      onClick={() => mpRef.current?.sendVoteStart?.()}
+                      disabled={Boolean(roomVote)}
+                      title="Start a 45-second room vote on the next drawing theme"
                     >
-                      <span className="mp-participant-dot" style={{ background: u.color }}>
-                        {(u.name || "?").slice(0, 1).toUpperCase()}
-                      </span>
-                      <span className="mp-participant-name">{isSelf ? "You" : u.name}</span>
+                      🗳️
                     </button>
-                  );
-                })}
-              </div>
-            ) : null}
-            <div className="mp-chat-log">
-              {mp.chat.length === 0 ? (
-                <p className="mp-chat-empty">Say hi to your friends! 👋</p>
-              ) : (
-                mp.chat.map((line, index) => (
-                  <p key={index} className="mp-chat-line">
-                    {line.user?.id ? (
+                  )}
+                  {isRoomHost ? (
+                    <button type="button" className="mp-chat-iconbtn" onClick={() => setShowHostPanel(true)} title="Host controls">
+                      ⭐
+                    </button>
+                  ) : null}
+                </div>
+                {roomVote ? (
+                  <div className="vote-card" role="group" aria-label="Theme vote">
+                    <div className="vote-card-head">
+                      <span>🗳️ Pick the next theme!</span>
+                      <span className="vote-countdown" aria-live="polite">{voteSecondsLeft}s</span>
+                    </div>
+                    {roomVote.options.map((option, index) => (
                       <button
+                        key={option}
                         type="button"
-                        className="mp-chat-name"
-                        style={{ color: line.user?.color }}
-                        onClick={() => focusUser(line.user.id)}
-                        title={`Find ${line.user?.name} on the canvas`}
+                        className={`vote-option${roomVote.myChoice === index ? " is-picked" : ""}`}
+                        onClick={() => {
+                          // Optimistic highlight; counts come back via vote_tally.
+                          mpRef.current?.sendVote?.(index);
+                          setRoomVote((vote) => (vote ? { ...vote, myChoice: index } : vote));
+                        }}
                       >
-                        {line.user?.name}:
+                        <span className="vote-option-text">{option}</span>
+                        <span className="vote-option-count">{roomVote.counts?.[index] || 0}</span>
                       </button>
-                    ) : (
-                      <strong style={{ color: line.user?.color }}>{line.user?.name}:</strong>
-                    )}{" "}
-                    {line.message}
-                  </p>
-                ))
-              )}
-            </div>
-            <form
-              className="mp-chat-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const text = chatDraft.trim();
-                if (text) {
-                  // The server echoes chat back to the sender, so the message
-                  // appears once it round-trips — no local push (avoids dupes).
-                  mp.sendChat(text);
-                  setChatDraft("");
-                }
-              }}
-            >
-              <input
-                type="text"
-                value={chatDraft}
-                maxLength={300}
-                disabled={mutedSelf}
-                onChange={(event) => setChatDraft(event.target.value)}
-                placeholder={mutedSelf ? "You're muted by a host" : "Type a message…"}
-              />
-              <button type="submit" disabled={mutedSelf}>Send</button>
-            </form>
-          </div>
-        ) : (
-          <button type="button" className="mp-chat-toggle" onClick={() => setShowChat(true)}>
-            💬 Chat{mp.chat.length ? ` (${mp.chat.length})` : ""}
-          </button>
+                    ))}
+                  </div>
+                ) : null}
+                {mp.users.length > 0 ? (
+                  <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
+                    {mp.users.map((u) => {
+                      const isSelf = u.id === mp.self?.id;
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          className={`mp-participant${isSelf ? " is-self" : ""}`}
+                          onClick={() => focusUser(u.id)}
+                          disabled={isSelf}
+                          title={isSelf ? "That's you" : `Find ${u.name} on the canvas`}
+                        >
+                          <span className="mp-participant-dot" style={{ background: u.color }}>
+                            {(u.name || "?").slice(0, 1).toUpperCase()}
+                          </span>
+                          <span className="mp-participant-name">{isSelf ? "You" : u.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </>
+            }
+          />
         )}
+
+        {/* A live theme vote must be visible even with the chat panel closed —
+            the same card floats over the canvas until the vote resolves. */}
+        {roomVote && !showChat && !roomFingerPaint ? (
+          <div className="vote-card cc-vote-floating" role="group" aria-label="Theme vote">
+            <div className="vote-card-head">
+              <span>🗳️ Pick the next theme!</span>
+              <span className="vote-countdown" aria-live="polite">{voteSecondsLeft}s</span>
+            </div>
+            {roomVote.options.map((option, index) => (
+              <button
+                key={option}
+                type="button"
+                className={`vote-option${roomVote.myChoice === index ? " is-picked" : ""}`}
+                onClick={() => {
+                  mpRef.current?.sendVote?.(index);
+                  setRoomVote((vote) => (vote ? { ...vote, myChoice: index } : vote));
+                }}
+              >
+                <span className="vote-option-text">{option}</span>
+                <span className="vote-option-count">{roomVote.counts?.[index] || 0}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <aside className={toolsOpen ? "tool-rail is-open" : "tool-rail"} aria-label="Drawing tools">
@@ -8918,7 +8904,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             aria-pressed={showChat}
           >
             <span className="qb-ico" aria-hidden="true">💬</span>
-            <span className="qb-label">Chat{mp.chat.length ? ` ${mp.chat.length}` : ""}</span>
+            <span className="qb-label">Chat</span>
           </button>
         )}
       </div>

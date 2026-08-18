@@ -103,12 +103,46 @@ export function useMultiplayer(roomId, onMessage, token) {
           if (data.userList) setUsers(data.userList);
           break;
         case "chat":
-          setChat((current) => [...current.slice(-49), data]);
+          // Keep the whole line (msgId keys tapbacks/replies). Arrival time
+          // drives the ambient overlay's fade — the server ts can lag it.
+          setChat((current) => [...current.slice(-79), { ...data, arrivedAt: Date.now() }]);
           break;
         case "chat_history":
-          // Server catch-up on join: seed the log with recent messages.
+          // Server catch-up on join: seed the log with recent messages (no
+          // arrivedAt — history shouldn't flash through the ambient overlay).
           setChat(Array.isArray(data.messages) ? data.messages.slice(-50) : []);
           break;
+        case "chat_react": {
+          // A tapback count changed on one bubble. Bail with the SAME array
+          // reference when the line isn't in our window — no re-render.
+          setChat((current) => {
+            const at = current.findIndex((m) => m.msgId === data.msgId);
+            if (at < 0) return current;
+            const m = current[at];
+            const reactions = { ...(m.reactions || {}) };
+            if (data.count > 0) reactions[data.emoji] = data.count;
+            else delete reactions[data.emoji];
+            const next = current.slice();
+            next[at] = { ...m, reactions };
+            return next;
+          });
+          break;
+        }
+        case "chat_react_self": {
+          // Private ack: OUR toggle landed — highlight (or un-highlight) the chip.
+          setChat((current) => {
+            const at = current.findIndex((m) => m.msgId === data.msgId);
+            if (at < 0) return current;
+            const m = current[at];
+            const mine = { ...(m.myReacts || {}) };
+            if (data.on) mine[data.emoji] = true;
+            else delete mine[data.emoji];
+            const next = current.slice();
+            next[at] = { ...m, myReacts: mine };
+            return next;
+          });
+          break;
+        }
         default:
           break;
       }
@@ -178,7 +212,14 @@ export function useMultiplayer(roomId, onMessage, token) {
   // rides the WS once (host/private-gated + validated server-side); everyone
   // then loads it through the normal sheet path.
   const sendTracePhoto = useCallback((image) => send({ type: "set_trace_photo", image }), [send]);
-  const sendChat = useCallback((message) => send({ type: "chat", message }), [send]);
+  const sendChat = useCallback(
+    (message, replyToId) => send(replyToId != null ? { type: "chat", message, replyToId } : { type: "chat", message }),
+    [send],
+  );
+  // iMessage-style tapback toggle on one bubble (server allowlists the emoji).
+  const sendChatReact = useCallback((msgId, emoji) => send({ type: "chat_react", msgId, emoji }), [send]);
+  // Big animated hype reaction over the canvas (curated kinds, server-limited).
+  const sendHype = useCallback((kind) => send({ type: "hype", kind }), [send]);
   const sendRename = useCallback(
     (name, color) => {
       send({ type: "rename", name, color });
@@ -271,7 +312,7 @@ export function useMultiplayer(roomId, onMessage, token) {
 
   return {
     connected, users, self, chat, disconnect,
-    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat,
+    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,

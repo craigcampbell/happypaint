@@ -784,6 +784,12 @@ function roomFile(roomId) {
 // Both store the display name + message + the opaque profileId (when signed in)
 // so a future account-deletion scrub can redact by id.
 const CHAT_BUFFER_MAX = 200; // messages kept in memory + the room file
+// Tapback emoji a chat bubble can carry (iMessage-style) — server allowlist;
+// the client tray mirrors this. Keep small + universally readable.
+const CHAT_TAPBACKS = ['❤️', '😂', '🔥', '👍', '😮', '🎨'];
+// Big animated "hype" reactions — curated KINDS, rendered client-side as pure
+// CSS celebrations (never external media; this is the kid-safe Giphy stand-in).
+const HYPE_KINDS = ['confetti', 'fire', 'laugh', 'heart', 'clap', 'rainbow', 'star', 'mind', 'unicorn', 'hundred'];
 const CHAT_LOG_DIR = process.env.CHAT_LOG_DIR || join(DATA_DIR, '.chatlog');
 const CHAT_LOG_CAP_BYTES = 2 * 1024 * 1024; // ~2MB per room; trim oldest half past this
 function chatLogFile(roomId) {
@@ -826,6 +832,7 @@ function loadRoom(roomId) {
       hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
       userSeconds: Number(data.userSeconds) || 0,
       chat: Array.isArray(data.chat) ? data.chat.slice(-CHAT_BUFFER_MAX) : [],
+      chatSeq: Number(data.chatSeq) || 0,
       // Wet-canvas toggle + the last theme-vote winner both survive restarts.
       wetCanvas: !!data.wetCanvas,
       customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
@@ -879,6 +886,7 @@ async function saveRoomNow(roomId) {
       hiddenOpIds: Array.from(room.hiddenOpIds || []),
       userSeconds: room.userSeconds || 0,
       chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
+      chatSeq: room.chatSeq || 0,
       wetCanvas: !!room.wetCanvas,
       customPrompt: room.customPrompt || null,
       frames: room.frames,
@@ -1261,6 +1269,7 @@ function getRoom(roomId) {
       flags: [], // recent moderation flags (in-memory, for corroboration)
       flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
       chat: saved.chat || [], // recent chat buffer (late-joiner context, persisted)
+      chatSeq: 0, // per-room chat message id counter (backfilled below; persisted)
       watchers: new Set(), // elected client ids running the in-browser watcher
       spectators: new Set(), // read-only homepage viewers (not counted as users)
       // Ephemeral "who's on which cel" presence for animation rooms: userId ->
@@ -1319,6 +1328,14 @@ function getRoom(roomId) {
         frame.sceneId = created.scenes[0].id;
       }
     }
+    // Backfill chat ids (tapbacks/replies key on them): legacy lines predate
+    // ids. Resume the counter past the highest seen so ids never collide.
+    let chatSeq = Number(saved.chatSeq) || 0;
+    for (const line of created.chat) {
+      if (typeof line.id === 'number' && Number.isFinite(line.id)) chatSeq = Math.max(chatSeq, line.id);
+      else line.id = ++chatSeq;
+    }
+    created.chatSeq = chatSeq;
     recountFrameOps(created);
   }
   return rooms.get(roomId);
@@ -1590,11 +1607,23 @@ function userListOf(room) {
 }
 
 // The recent-chat catch-up sent to anyone joining (or spectating) a room, so
-// they see who's been talking. Capped to the last 50 (profileId stays server-side).
+// they see who's been talking. Capped to the last 50. Projection rules:
+// profileId stays server-side, and tapback membership lists (gameKeys) reduce
+// to COUNTS — who reacted is never exposed, only how many.
 function chatHistoryMsg(room) {
   return {
     type: 'chat_history',
-    messages: (room.chat || []).slice(-50).map((c) => ({ user: c.user, message: c.message, ts: c.ts })),
+    messages: (room.chat || []).slice(-50).map((c) => ({
+      msgId: c.id,
+      user: c.user,
+      message: c.message,
+      ts: c.ts,
+      ...(c.system ? { system: true } : {}),
+      ...(c.replyTo ? { replyTo: c.replyTo } : {}),
+      ...(c.reactions
+        ? { reactions: Object.fromEntries(Object.entries(c.reactions).map(([e, l]) => [e, l.length])) }
+        : {}),
+    })),
   };
 }
 
@@ -1610,7 +1639,10 @@ function broadcast(roomId, message, exceptId = null) {
   // Read-only homepage viewers see the live mural too, but never draw/count.
   // Animation rooms: spectators watch the FIRST frame only (mirrors the join
   // filter) — ops/clears for other frames would smear onto their one canvas.
+  // Social messages carrying member NAMES (hype, chat, tapbacks) never reach
+  // spectators: the spectator join path deliberately withholds the roster.
   if (room.spectators && room.spectators.size) {
+    if (message.type === 'hype' || message.type === 'chat' || message.type === 'chat_react' || message.type === 'chat_react_self') return;
     if (room.animationEnabled) {
       const firstId = room.frames[0] && room.frames[0].id;
       if (message.type === 'op' && message.op && opFrameId(room, message.op) !== firstId) return;
@@ -1680,10 +1712,10 @@ function broadcastGame(roomId) {
   if (room) broadcast(roomId, { type: 'game_state', game: publicGame(room) });
 }
 function pushGameChat(room, roomId, message, color) {
-  const line = { user: { id: 'system', name: 'Draw & Guess', color: color || '#7c3aed' }, message, ts: Date.now(), system: true };
+  const line = { id: ++room.chatSeq, user: { id: 'system', name: 'Draw & Guess', color: color || '#7c3aed' }, message, ts: Date.now(), system: true };
   room.chat.push(line);
   if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
-  broadcast(roomId, { type: 'chat', user: line.user, message, ts: line.ts, system: true });
+  broadcast(roomId, { type: 'chat', msgId: line.id, user: line.user, message, ts: line.ts, system: true });
 }
 
 function startGameRound(roomId) {
@@ -1904,10 +1936,10 @@ function broadcastPhone(roomId) {
   if (room) broadcast(roomId, { type: 'phone_state', phone: publicPhone(room) });
 }
 function pushPhoneChat(room, roomId, message) {
-  const line = { user: { id: 'system', name: 'Draw Phone', color: '#0ea5e9' }, message, ts: Date.now(), system: true };
+  const line = { id: ++room.chatSeq, user: { id: 'system', name: 'Draw Phone', color: '#0ea5e9' }, message, ts: Date.now(), system: true };
   room.chat.push(line);
   if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
-  broadcast(roomId, { type: 'chat', user: line.user, message, ts: line.ts, system: true });
+  broadcast(roomId, { type: 'chat', msgId: line.id, user: line.user, message, ts: line.ts, system: true });
 }
 // Park a "need more players" waiting HUD (mirrors Draw & Guess's waiting state).
 function phoneWaiting(room) {
@@ -2897,18 +2929,102 @@ wss.on('connection', async (ws, req) => {
             break; // drawer / already-correct typed the word — swallow it
           }
         }
+        // Flood guard — AFTER the guess intercept, so a correct guess is never
+        // throttled. Wrong guesses still echo as chat, so the cap loosens
+        // during a live round (machine-gun guessing IS the game). Feedback on drop.
+        {
+          const now = Date.now();
+          const cap = room.gameEnabled && room.game && room.game.phase === 'playing' ? 20 : 8;
+          user.chatTimes = (user.chatTimes || []).filter((t) => now - t < 10_000);
+          if (user.chatTimes.length >= cap) {
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'slow_down' }));
+            break;
+          }
+          user.chatTimes.push(now);
+        }
         const chatTs = Date.now();
-        const entry = { user: { id, name: user.name, color: user.color }, message, ts: chatTs };
+        const entry = { id: ++room.chatSeq, user: { id, name: user.name, color: user.color }, message, ts: chatTs };
+        // Reply-threading: the client names a target id; the SERVER derives the
+        // quoted context from its own buffer (never client text), so a reply
+        // can't fabricate what someone said. Unknown/expired id → plain message.
+        const replyTarget = Number.isFinite(Number(data.replyToId))
+          ? room.chat.find((c) => c.id === Number(data.replyToId))
+          : null;
+        if (replyTarget) {
+          // Draw & Guess leak guard: handleGuess only inspects data.message, so
+          // a reply QUOTING an old line that contains the live secret word would
+          // smuggle it to the room. Drop the quote (keep the message) on a hit.
+          const g = room.gameEnabled && room.game && room.game.phase === 'playing' ? room.game : null;
+          const quoteLeaks = g && g.word && squishGuess(replyTarget.message).includes(squishGuess(g.word));
+          if (!quoteLeaks) {
+            entry.replyTo = { id: replyTarget.id, name: replyTarget.user.name, snippet: String(replyTarget.message).slice(0, 70) };
+          }
+        }
         // 1) capped buffer (late-joiner context + report context), persisted with the room
         room.chat.push(entry);
         if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
         // 2) durable append-only audit log (keeps the profileId for deletion scrubs)
         appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message });
-        broadcast(roomId, { type: 'chat', user: entry.user, message, ts: chatTs });
+        broadcast(roomId, { type: 'chat', msgId: entry.id, user: entry.user, message, ts: chatTs, ...(entry.replyTo ? { replyTo: entry.replyTo } : {}) });
         analyticsRecordChat(roomId, user);
         // Ping cross-room watchers who are @mentioned here (see notifyMentions).
         notifyMentions(room, roomId, user.name, message, chatTs);
         persistRoom(roomId);
+        break;
+      }
+
+      // iMessage-style tapback on one chat bubble: toggles the sender's emoji
+      // on/off. Allowlisted emoji only; membership stored by stable gameKey
+      // (so a reconnect can still un-react) but only COUNTS ever leave the
+      // server — see the chat_history projection.
+      case 'chat_react': {
+        if (room.fingerPaint) break;
+        if (user.muted) break;
+        const emoji = String(data.emoji || '');
+        if (!CHAT_TAPBACKS.includes(emoji)) break;
+        {
+          const now = Date.now();
+          user.tapbackTimes = (user.tapbackTimes || []).filter((t) => now - t < 2000);
+          if (user.tapbackTimes.length >= 8) break;
+          user.tapbackTimes.push(now);
+        }
+        const msgId = Number(data.msgId);
+        const line = Number.isFinite(msgId) ? room.chat.find((c) => c.id === msgId) : null;
+        if (!line) break; // expired out of the buffer or never existed
+        if (!line.reactions) line.reactions = {};
+        const key = gameKey(user);
+        const list = line.reactions[emoji] || [];
+        const at = list.indexOf(key);
+        if (at >= 0) list.splice(at, 1);
+        else {
+          if (list.length >= 40) break; // a bubble can only get so loved
+          list.push(key);
+        }
+        if (list.length) line.reactions[emoji] = list;
+        else delete line.reactions[emoji];
+        // The room learns COUNTS only — never who reacted. The reactor alone
+        // gets a private ack so their own chip can highlight.
+        broadcast(roomId, { type: 'chat_react', msgId, emoji, count: list.length });
+        if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_react_self', msgId, emoji, on: at < 0 }));
+        persistRoom(roomId);
+        break;
+      }
+
+      // Big animated "hype" reaction over the canvas (the Twitch-alert moment).
+      // Curated kinds only — the client renders each as a pure-CSS celebration,
+      // so no external content ever reaches a kid-safe room. Ephemeral.
+      case 'hype': {
+        if (room.fingerPaint) break;
+        if (user.muted) break;
+        const kind = String(data.kind || '');
+        if (!HYPE_KINDS.includes(kind)) break;
+        {
+          const now = Date.now();
+          user.hypeTimes = (user.hypeTimes || []).filter((t) => now - t < 5000);
+          if (user.hypeTimes.length >= 3) break; // big effects stay special
+          user.hypeTimes.push(now);
+        }
+        broadcast(roomId, { type: 'hype', kind, userId: id, name: user.name });
         break;
       }
 
@@ -3991,13 +4107,43 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     const sessionIds = new Set(
       Array.from(room.users.values()).filter((u) => u.profileId === pid).map((u) => u.id),
     );
-    if (!sessionIds.size) continue;
+    // Tapback membership keys are pb_<profileId> — erase them in EVERY room,
+    // whether or not this profile has a live session there.
+    const reactKey = `pb_${pid}`;
+    let roomTouched = false;
     for (const c of room.chat || []) {
-      if (c.user && sessionIds.has(c.user.id)) {
-        c.user.name = '[deleted]';
-        c.message = '[deleted]';
+      if (c.reactions) {
+        for (const [emoji, list] of Object.entries(c.reactions)) {
+          const at = list.indexOf(reactKey);
+          if (at >= 0) {
+            list.splice(at, 1);
+            if (!list.length) delete c.reactions[emoji];
+            roomTouched = true;
+          }
+        }
       }
     }
+    if (sessionIds.size) {
+      const scrubbedIds = new Set();
+      for (const c of room.chat || []) {
+        if (c.user && sessionIds.has(c.user.id)) {
+          c.user.name = '[deleted]';
+          c.message = '[deleted]';
+          if (c.id != null) scrubbedIds.add(c.id);
+          roomTouched = true;
+        }
+      }
+      // Replies embed a VALUE COPY of the quoted name + snippet — redact those
+      // copies too, or the deleted child's words keep shipping to every joiner
+      // inside other kids' reply lines.
+      for (const c of room.chat || []) {
+        if (c.replyTo && scrubbedIds.has(c.replyTo.id)) {
+          c.replyTo = { id: c.replyTo.id, name: '[deleted]', snippet: '[deleted]' };
+          roomTouched = true;
+        }
+      }
+    }
+    if (roomTouched) persistRoom(room.code);
   }
   const analyticsScrubbed = analyticsScrubProfile(pid);
   // 3) the account's SAVED ARTWORK — a deleted child's drawings must not linger
