@@ -379,10 +379,13 @@ scenario('F. Watcher election + flag corroboration (Tier 2, never auto-kick)', a
   const code = made.body.code;
 
   // Host owns the room; two "capable" watcher clients join and ack capable.
+  // They sign in with DISTINCT identities: corroboration now counts distinct
+  // people (profileId, else IP), not distinct sockets, so two loopback guests
+  // would (correctly) collapse to one flagger.
   const host = new SimClient(ctx.baseWs, { room: code, token: ctx.signedInToken, name: 'host' });
   await host.connect();
-  const w1 = new SimClient(ctx.baseWs, { room: code, name: 'w1' });
-  const w2 = new SimClient(ctx.baseWs, { room: code, name: 'w2' });
+  const w1 = new SimClient(ctx.baseWs, { room: code, token: 'tok_watcher1', name: 'w1' });
+  const w2 = new SimClient(ctx.baseWs, { room: code, token: 'tok_watcher2', name: 'w2' });
   await w1.connect();
   await w2.connect();
 

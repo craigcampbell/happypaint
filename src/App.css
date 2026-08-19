@@ -8770,3 +8770,189 @@ select {
   .cc-vote-floating { right: 8px; bottom: calc(84px + env(safe-area-inset-bottom)); }
   .hype-emoji { font-size: 56px; }
 }
+
+/* ---- Weekly event nights (homepage) ------------------------------------- */
+.home-events {
+  width: min(1080px, 100%);
+  margin: 0 auto 24px;
+  padding: 0 16px;
+}
+.home-events-head h2 {
+  margin: 2px 0 12px;
+  font-size: clamp(1.5rem, 3.4vw, 2.1rem);
+}
+.home-events-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 1fr);
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+.home-event-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border: 2px solid var(--snap-black, #17212b);
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  min-height: 130px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.home-event-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 4px 4px 0 var(--snap-black, #17212b);
+}
+.home-event-card.is-tonight {
+  background: var(--brand-yellow, #f7ff54);
+  box-shadow: 5px 5px 0 var(--snap-black, #17212b);
+}
+.home-event-day {
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+.home-event-card.is-tonight .home-event-day { color: #b51d4c; }
+.home-event-emoji { font-size: 1.6rem; line-height: 1; }
+.home-event-title { font-weight: 900; font-size: 0.95rem; color: var(--snap-black, #17212b); }
+.home-event-blurb { font-size: 0.78rem; font-weight: 600; color: #4b5563; }
+.home-event-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #b51d4c;
+  margin-top: auto;
+}
+
+/* ---- Site footer ---------------------------------------------------------- */
+.site-footer {
+  border-top: 3px solid var(--snap-black, #17212b);
+  background: #fffdf3;
+  padding: 30px 20px 22px;
+}
+.site-footer-inner {
+  width: min(1080px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 22px;
+}
+.site-footer-brand strong { font-size: 1.15rem; font-weight: 900; }
+.site-footer-brand p { margin: 6px 0 0; font-size: 0.85rem; font-weight: 600; color: #4b5563; max-width: 260px; }
+.site-footer-col { display: grid; gap: 6px; align-content: start; }
+.site-footer-title { font-size: 0.72rem; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+.site-footer-col a {
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--snap-black, #17212b);
+  width: fit-content;
+}
+.site-footer-col a:hover { text-decoration: underline; }
+.site-footer-note {
+  width: min(1080px, 100%);
+  margin: 22px auto 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+}
+.site-footer-note a { color: inherit; }
+@media (max-width: 720px) {
+  .site-footer-inner { grid-template-columns: 1fr 1fr; }
+  .site-footer-brand { grid-column: 1 / -1; }
+}
+
+/* ---- Parents & teachers page ---------------------------------------------- */
+.parents-page { display: grid; gap: 26px; }
+.parents-hero h1 { margin: 4px 0 10px; font-size: clamp(1.7rem, 4vw, 2.4rem); }
+.parents-ages,
+.parents-classroom,
+.parents-contact {
+  border: 2px solid var(--snap-black, #17212b);
+  border-radius: 18px;
+  background: #fff;
+  padding: 18px 20px;
+}
+.parents-classroom { background: #f2fbff; }
+.parents-steps { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 12px; }
+.parents-steps li { display: flex; gap: 12px; align-items: flex-start; }
+.parents-steps p { margin: 2px 0 0; font-weight: 600; color: #374151; }
+.parents-step-num {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--snap-black, #17212b);
+  border-radius: 999px;
+  background: var(--brand-yellow, #f7ff54);
+  font-weight: 900;
+}
+.parents-note { margin-top: 14px; font-weight: 600; color: #374151; }
+
+/* ---- "Hide this painter" (local mute) ------------------------------------- */
+.mp-participant-row { display: inline-flex; align-items: center; gap: 2px; }
+.mp-participant.is-hidden { opacity: 0.45; }
+.mp-participant.is-hidden .mp-participant-name { text-decoration: line-through; }
+.mp-hide-toggle {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  border-radius: 8px;
+  filter: grayscale(1) opacity(0.5);
+}
+.mp-hide-toggle:hover { filter: none; background: #f1f5f9; }
+.mp-hide-toggle.is-on { filter: none; }
+
+/* ---- Draw & Guess match podium -------------------------------------------- */
+.game-podium {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 30;
+}
+.game-podium-card {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 18px 26px;
+  border: 3px solid var(--snap-black, #17212b);
+  border-radius: 20px;
+  background: #fffef2;
+  box-shadow: 8px 8px 0 rgba(23, 33, 43, 0.35);
+  animation: podium-pop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+@keyframes podium-pop {
+  from { transform: scale(0.6); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.game-podium-title { font-size: 1.25rem; font-weight: 900; }
+.game-podium-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 220px; }
+.game-podium-place {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  font-weight: 800;
+}
+.game-podium-place.is-1 { background: var(--brand-yellow, #f7ff54); border: 2px solid var(--snap-black, #17212b); font-size: 1.05rem; }
+.game-podium-medal { font-size: 1.2rem; }
+.game-podium-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.game-podium-score { font-variant-numeric: tabular-nums; color: #4b5563; }
+.game-podium-next { font-size: 0.8rem; font-weight: 700; color: #64748b; }

@@ -101,6 +101,7 @@ import PrivacyPage from "./components/PrivacyPage";
 import SignupPage from "./components/SignupPage";
 import RoomFinderPage from "./components/RoomFinderPage";
 import SafetyPage from "./components/SafetyPage";
+import ParentsPage from "./components/ParentsPage";
 import FaqPage from "./components/FaqPage";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
@@ -762,6 +763,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // 'kid_safe' = public room (brush-only tools); anything else = private.
   const [roomAudience, setRoomAudience] = useState(null);
   const [mutedSelf, setMutedSelf] = useState(false);
+  // "Hide this painter" — MY mute button, no host needed: locally hides a
+  // user's chat, cursor, reactions and hype for this session. Client-only
+  // agency (the audit's quick-win): nothing is sent to the server, their
+  // strokes still land (that's the host's mute/kick domain).
+  const [hiddenPainters, setHiddenPainters] = useState(() => new Set());
+  const hiddenPaintersRef = useRef(hiddenPainters);
+  hiddenPaintersRef.current = hiddenPainters;
+  const toggleHiddenPainter = useCallback((userId) => {
+    setHiddenPainters((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+        // Drop any cursor already on screen so they vanish immediately.
+        remoteCursorsRef.current.delete(userId);
+      }
+      return next;
+    });
+  }, []);
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
   const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
@@ -814,6 +835,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [myWord, setMyWord] = useState(null);
   const [gamePop, setGamePop] = useState(null); // { name, points } | { reveal, word }
   const gamePopTimer = useRef(null);
+  // Match-over podium: { standings: [{name, score}], rounds } — auto-dismissed.
+  const [gamePodium, setGamePodium] = useState(null);
+  const gamePodiumTimer = useRef(null);
   // Draw Phone (telephone): whether this room plays it, the public game state,
   // my PRIVATE task this round (draw a prompt / describe a drawing), whether I
   // submitted, my current guess text, and the reveal books once the game ends.
@@ -6158,6 +6182,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           showToast("Couldn't add that photo — try a different one.");
           break;
         case "cursor":
+          if (hiddenPaintersRef.current.has(data.userId)) break; // locally hidden painter
           remoteCursorsRef.current.set(data.userId, {
             x: data.x,
             y: data.y,
@@ -6208,6 +6233,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "beacon": {
           // "Come look at my frame!" — a friendly, tappable summon (never a
           // forced view-yank). Lands the tapper on the exact Part+scene+frame.
+          if (hiddenPaintersRef.current.has(data.fromUserId)) break; // locally hidden painter
           const target = { roomCode: data.roomCode, sceneId: data.sceneId, frameId: data.frameId };
           showBeacon(data.name || "A friend", data.color, target);
           break;
@@ -6254,6 +6280,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "game_spoiler":
           showToast("🤫 No spoilers — you already know the word!");
           break;
+        case "game_podium": {
+          // Match over — celebrate the top three, then get out of the way
+          // before the next match's first round begins.
+          setGamePodium({ standings: data.standings || [], rounds: data.rounds || 0 });
+          window.clearTimeout(gamePodiumTimer.current);
+          gamePodiumTimer.current = window.setTimeout(() => setGamePodium(null), 9500);
+          break;
+        }
         // ---- Draw Phone (telephone) ----------------------------------------
         case "phone_state": {
           // Public game snapshot (phase/round/roster/timer) — no page contents.
@@ -6297,6 +6331,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         case "reaction": {
           // Ephemeral floating emoji from someone (or our own echo). Placed at the
           // world point, mapped to screen once; it floats up + fades via CSS.
+          if (hiddenPaintersRef.current.has(data.userId)) break; // locally hidden painter
           const p = worldToScreen(viewRef.current, (data.x || 0) * CANVAS_WIDTH, (data.y || 0) * CANVAS_HEIGHT);
           const rid = `rx${Date.now()}_${(reactionIdRef.current += 1)}`;
           setReactions((list) => [
@@ -6310,6 +6345,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Big animated celebration over the canvas (curated kinds; the server
           // rate-limits + allowlists). Hard cap of 3 on screen — extras drop so
           // a hype pile-on can never bury the art or the frame rate.
+          if (hiddenPaintersRef.current.has(data.userId)) break; // locally hidden painter
           const meta = HYPES.find((h) => h.kind === data.kind);
           if (!meta) break;
           const hid = `hy${Date.now()}_${(hypeIdRef.current += 1)}`;
@@ -6397,6 +6433,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
+
+  // Chat with locally-hidden painters filtered out (see toggleHiddenPainter).
+  const visibleChat = useMemo(
+    () => (hiddenPainters.size ? mp.chat.filter((m) => !m.user || !hiddenPainters.has(m.user.id)) : mp.chat),
+    [mp.chat, hiddenPainters],
+  );
 
   // Watch our OTHER recent rooms for @mentions of us and collect them in the
   // profile-menu inbox (the current room's chat is already live here, so it's
@@ -7958,6 +8000,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 onSkip={() => mpRef.current?.sendGameSkip?.()}
               />
             ) : null}
+            {gamePodium ? (
+              <div className="game-podium" role="status" aria-label="Match results">
+                <div className="game-podium-card">
+                  <span className="game-podium-title">🏆 Match over!</span>
+                  <ol className="game-podium-list">
+                    {gamePodium.standings.map((s, i) => (
+                      <li key={`${s.name}-${i}`} className={`game-podium-place is-${i + 1}`}>
+                        <span className="game-podium-medal" aria-hidden="true">{["🥇", "🥈", "🥉"][i]}</span>
+                        <span className="game-podium-name">{s.name}</span>
+                        <span className="game-podium-score">{s.score}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  <span className="game-podium-next">New match starting…</span>
+                </div>
+              </div>
+            ) : null}
             {roomPhone && (phone || phoneReveal) ? (
               <DrawPhonePanel
                 phone={phone}
@@ -8274,7 +8333,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <CanvasChat
             open={showChat}
             onOpenChange={setShowChat}
-            messages={mp.chat}
+            messages={visibleChat}
             self={mp.self}
             disabled={mutedSelf}
             onSend={mp.sendChat}
@@ -8358,20 +8417,34 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
                     {mp.users.map((u) => {
                       const isSelf = u.id === mp.self?.id;
+                      const isHidden = hiddenPainters.has(u.id);
                       return (
-                        <button
-                          key={u.id}
-                          type="button"
-                          className={`mp-participant${isSelf ? " is-self" : ""}`}
-                          onClick={() => focusUser(u.id)}
-                          disabled={isSelf}
-                          title={isSelf ? "That's you" : `Find ${u.name} on the canvas`}
-                        >
-                          <span className="mp-participant-dot" style={{ background: u.color }}>
-                            {(u.name || "?").slice(0, 1).toUpperCase()}
-                          </span>
-                          <span className="mp-participant-name">{isSelf ? "You" : u.name}</span>
-                        </button>
+                        <span key={u.id} className="mp-participant-row">
+                          <button
+                            type="button"
+                            className={`mp-participant${isSelf ? " is-self" : ""}${isHidden ? " is-hidden" : ""}`}
+                            onClick={() => focusUser(u.id)}
+                            disabled={isSelf}
+                            title={isSelf ? "That's you" : `Find ${u.name} on the canvas`}
+                          >
+                            <span className="mp-participant-dot" style={{ background: u.color }}>
+                              {(u.name || "?").slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="mp-participant-name">{isSelf ? "You" : u.name}</span>
+                          </button>
+                          {!isSelf ? (
+                            <button
+                              type="button"
+                              className={`mp-hide-toggle${isHidden ? " is-on" : ""}`}
+                              onClick={() => toggleHiddenPainter(u.id)}
+                              title={isHidden ? `Show ${u.name}'s messages again` : `Hide ${u.name}'s messages + cursor (just for you)`}
+                              aria-pressed={isHidden}
+                              aria-label={isHidden ? `Show ${u.name} again` : `Hide ${u.name} for me`}
+                            >
+                              {isHidden ? "🙈" : "👁"}
+                            </button>
+                          ) : null}
+                        </span>
                       );
                     })}
                   </div>
@@ -9171,6 +9244,10 @@ export default function App() {
 
   if (path.startsWith("/safety")) {
     return <SafetyPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/parents")) {
+    return <ParentsPage onNavigate={navigate} />;
   }
 
   if (path.startsWith("/faq")) {

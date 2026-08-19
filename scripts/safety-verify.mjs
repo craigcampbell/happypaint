@@ -170,6 +170,36 @@ const run = async () => {
     await b.close();
   }
 
+  // ---- 4b. Flag self-corroboration is closed --------------------------------
+  {
+    // Two guest sockets from the SAME machine (loopback IP) must NOT be able to
+    // corroborate a Tier-2 auto-hide between them — they're one "person".
+    const host = new SimClient(BASE_WS, { room: "MAIN", name: "host" });
+    await host.connect();
+    const s1 = new SimClient(BASE_WS, { room: "MAIN", name: "s1" });
+    const s2 = new SimClient(BASE_WS, { room: "MAIN", name: "s2" });
+    await s1.connect();
+    await s2.connect();
+    s1.send({ type: "watcher_ack", capable: true });
+    s2.send({ type: "watcher_ack", capable: true });
+    host.sendOp({ kind: "image", src: "data:image/png;base64,AAAA", x: 0, y: 0 });
+    const opMsg = await s1.waitFor((m) => m.type === "op" && m.op?.kind === "image", { timeoutMs: 3000, label: "image op" });
+    const toOpId = opMsg.op.opId;
+    const sinceOpId = Math.max(0, toOpId - 1);
+    s1.send({ type: "flag", kind: "image", score: 0.95, sinceOpId, toOpId });
+    s2.send({ type: "flag", kind: "image", score: 0.95, sinceOpId, toOpId });
+    await sleep(500);
+    const j = new SimClient(BASE_WS, { room: "MAIN", name: "j" });
+    await j.connect();
+    const hist = await j.waitFor((m) => m.type === "history", { timeoutMs: 3000, label: "history after self-flags" });
+    const stillThere = (hist.ops || []).some((o) => o.opId === toOpId);
+    check("two same-IP sockets cannot self-corroborate an auto-hide", stillThere);
+    await j.close();
+    await s1.close();
+    await s2.close();
+    await host.close();
+  }
+
   // ---- 5. Report rate limit + receipt ---------------------------------------
   {
     let last = null;

@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 import LiveRoomCanvas from "./LiveRoomCanvas";
 import BrandMark from "./BrandMark";
 import { getSession, onAuthStateChange } from "../utils/auth";
@@ -63,6 +64,8 @@ export default function HomePage({ onNavigate }) {
   // The Daily Challenge: today's prompt + gallery of entries + a countdown tick.
   const [daily, setDaily] = useState(null);
   const [dailyEntries, setDailyEntries] = useState([]);
+  // Weekly event nights: tonight's beacon + the rest of the week's schedule.
+  const [events, setEvents] = useState([]);
   const [, setCountTick] = useState(0); // re-render for the countdown label
   // State (not a one-shot memo) so a tab left open across midnight can refresh
   // the chip when the challenge rolls over below.
@@ -113,6 +116,18 @@ export default function HomePage({ onNavigate }) {
     }, 15000); // keep the lobby fresh
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  // The week's event nights (deterministic server schedule — cheap, fetch once).
+  useEffect(() => {
+    let active = true;
+    fetch("/api/events", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => active && setEvents(Array.isArray(d?.events) ? d.events : []))
+      .catch(() => { /* the section just doesn't render */ });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // A peek at the community wall drives the loop: see art → make art → post it.
   // Fetched once (the wall changes slowly); wallLoaded gates the empty-state so
@@ -372,6 +387,41 @@ export default function HomePage({ onNavigate }) {
           </section>
         ) : null}
 
+        {/* Event nights — a reason to come back on a DAY, not just "sometime".
+            Tonight's beacon leads; the rest of the week teases what's ahead.
+            Rooms are always open, so this gates nothing — it coordinates. */}
+        {events.length > 0 ? (
+          <section className="home-events" aria-labelledby="home-events-title">
+            <div className="home-events-head">
+              <p className="eyebrow">✦ Event nights</p>
+              <h2 id="home-events-title">This week on Drawesome</h2>
+            </div>
+            <div className="home-events-row">
+              {events.map((ev) => (
+                <button
+                  type="button"
+                  key={ev.date}
+                  className={`home-event-card${ev.today ? " is-tonight" : ""}`}
+                  onClick={() => join(ev.room)}
+                  aria-label={`${ev.title}${ev.today ? " (tonight)" : ""}: ${ev.blurb}`}
+                >
+                  <span className="home-event-day">
+                    {ev.today ? "TONIGHT" : new Date(`${ev.date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short" })}
+                  </span>
+                  <span className="home-event-emoji" aria-hidden="true">{ev.emoji}</span>
+                  <span className="home-event-title">{ev.title}</span>
+                  <span className="home-event-blurb">{ev.blurb}</span>
+                  {ev.today && ev.live > 0 ? (
+                    <span className="home-event-live">
+                      <span className="live-dot" aria-hidden="true" /> {ev.live} there now
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {/* Fridge Wall nudge — the community loop's front door. Peeks real
             recent art (or invites the first post when the wall is bare). */}
         <section className="home-wall">
@@ -496,6 +546,8 @@ export default function HomePage({ onNavigate }) {
           </div>
         </section>
       </main>
+
+      <SiteFooter onNavigate={onNavigate} />
 
       {showJoin && joinRoom ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setShowJoin(false)}>

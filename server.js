@@ -1699,6 +1699,8 @@ function broadcast(roomId, message, exceptId = null) {
 const GAME_ROUND_MS = 75_000; // drawing time per round
 const GAME_INTERMISSION_MS = 6_000; // reveal + scoreboard pause between rounds
 const GAME_MIN_PLAYERS = 2;
+const GAME_MATCH_ROUNDS = 5; // rounds per match — then the podium + score reset
+const GAME_PODIUM_MS = 11_000; // podium celebration pause before the next match
 
 function normalizeGuess(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -1830,9 +1832,30 @@ function endGameRound(roomId, reason) {
   clearGameTimers(room);
   g.phase = 'intermission';
   broadcast(roomId, { type: 'game_end', word: g.word, reason, game: publicGame(room) });
-  pushGameChat(room, roomId, `The word was "${g.word}". Next round starting…`, '#7c3aed');
+  // Every MATCH_ROUNDS rounds the match ends on a podium: top three by
+  // cumulative score get their moment (confetti client-side), then scores
+  // reset and a fresh match begins. Turns an endless round-carousel into
+  // something you can WIN — and a reason to stay for "one more match".
+  const matchOver = g.roundNo >= GAME_MATCH_ROUNDS;
+  let pauseMs = GAME_INTERMISSION_MS;
+  if (matchOver) {
+    const standings = gamePlayers(room)
+      .map((u) => ({ name: u.name, score: (g.scores && g.scores[gameKey(u)]) || 0 }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    if (standings.length && standings[0].score > 0) {
+      broadcast(roomId, { type: 'game_podium', standings, rounds: g.roundNo });
+      pushGameChat(room, roomId, `🏆 Match over — ${standings[0].name} takes the crown with ${standings[0].score} points!`, '#b45309');
+      pauseMs = GAME_PODIUM_MS;
+    }
+    g.roundNo = 0;
+    g.scores = {};
+    pushGameChat(room, roomId, `The word was "${g.word}". New match starting…`, '#7c3aed');
+  } else {
+    pushGameChat(room, roomId, `The word was "${g.word}". Next round starting…`, '#7c3aed');
+  }
   broadcastGame(roomId);
-  room.gameTimers = { round: null, hint: null, intermission: setTimeout(() => startGameRound(roomId), GAME_INTERMISSION_MS) };
+  room.gameTimers = { round: null, hint: null, intermission: setTimeout(() => startGameRound(roomId), pauseMs) };
 }
 
 function stopGame(roomId, reason) {
@@ -2162,11 +2185,14 @@ function nameMentioned(lower, name) {
 
 // Cross-room @mention notifications are CAPABILITY-gated: joining a room hands
 // the client a per-(room,name) secret (`mentionKey` in the connected payload).
-// The notify socket must present that key to subscribe — so nobody can watch a
-// room's mentions by guessing names or codes; you can only watch rooms you have
-// genuinely been in, under the name you actually held there. Keys persist with
-// the room (server-side only, never shown to other users) so a watch survives
-// restarts; the map is bounded and oldest names age out.
+// The notify socket must present that key to subscribe — so the channel can't
+// be probed by guessing room codes, and the mention body is never sent (only
+// "you were mentioned in <room>"). The key is bound to the display NAME, not a
+// person, so it proves "was present under this name" rather than identity; the
+// rename throttle + duplicate/authority checks bound name recycling, and since
+// the payload carries no content the residual is a metadata-only signal. Keys
+// persist with the room (server-side only, never shown to other users) so a
+// watch survives restarts; the map is bounded and oldest names age out.
 function issueMentionKey(room, name) {
   const n = String(name || '').trim().toLowerCase();
   if (!n) return null;
@@ -2472,6 +2498,15 @@ wss.on('connection', async (ws, req) => {
   }
   const identity = token ? await verifyAccessToken(token) : null;
   if (ws.readyState !== 1) return; // user disconnected during validation
+
+  // Re-check capacity AFTER the first-frame auth wait: the pre-wait check can
+  // pass for many concurrent joiners who then all self-add, so the authoritative
+  // gate is here, immediately before room.users grows.
+  if (room.users.size >= MAX_ROOM_USERS) {
+    ws.send(JSON.stringify({ type: 'room_full', max: MAX_ROOM_USERS }));
+    ws.close(1008, 'room full');
+    return;
+  }
 
   // Honor a recent host kick (signed-in users only; short in-memory ban). A
   // kicked anonymous user can't be reliably blocked behind the tunnel, but the
@@ -2820,6 +2855,10 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'rename': {
+        // Throttle renames: unbounded renaming lets one socket mint/evict
+        // mention-watch keys and spam "X is now Y" system lines. 8 per minute
+        // is generous for a real person fiddling with their name.
+        if (!rateOk(`rename:${id}`, 8, 60_000)) break;
         if (typeof data.name === 'string' && data.name.trim()) {
           const proposed = data.name.trim().slice(0, 20);
           const lower = proposed.toLowerCase();
@@ -3821,8 +3860,16 @@ wss.on('connection', async (ws, req) => {
         const toOpId = Number(data.toOpId) || 0;
         if (toOpId <= sinceOpId) break;
         const now = Date.now();
+        // Per-user flag throttle so a single client can't machine-gun flags.
+        const fTimes = (user.flagTimes = (user.flagTimes || []).filter((t) => now - t < FLAG_WINDOW_MS));
+        if (fTimes.length >= 6) break;
+        fTimes.push(now);
+        // Corroboration counts DISTINCT PEOPLE, not distinct sockets: key by
+        // profileId when signed in, else by client IP. Two tabs / two sockets
+        // from one machine can no longer self-corroborate a reversible auto-hide.
+        const flaggerKey = user.profileId || `ip:${rawClientIp(req)}`;
         room.flags = room.flags.filter((f) => now - f.ts < FLAG_WINDOW_MS);
-        room.flags.push({ clientId: id, kind, sinceOpId, toOpId, ts: now });
+        room.flags.push({ clientId: id, flaggerKey, kind, sinceOpId, toOpId, ts: now });
 
         const implicated = opIdsInRange(room, sinceOpId, toOpId);
         if (!implicated.length) break;
@@ -3839,7 +3886,7 @@ wss.on('connection', async (ws, req) => {
         // Tier 2: corroborated (>=2 independent flaggers, or 1 flag + 1 human
         // report) -> reversible auto-hide of the implicated ops + mute author.
         const overlapping = room.flags.filter((f) => f.kind === kind && f.sinceOpId < toOpId && sinceOpId < f.toOpId);
-        const flaggers = new Set(overlapping.map((f) => f.clientId));
+        const flaggers = new Set(overlapping.map((f) => f.flaggerKey || `c:${f.clientId}`));
         const humanReports = reports.filter(
           (r) => r.room === roomId && r.source === 'user' && r.status === 'open' && now - r.ts < FLAG_WINDOW_MS,
         ).length;
@@ -4475,6 +4522,14 @@ function clientIp(req) {
   return req.get('cf-connecting-ip') || req.ip || 'anon';
 }
 
+// Same intent as clientIp, but for the RAW upgrade request in the WS handler
+// (an http.IncomingMessage — no Express .get()/.ip). Header-based only.
+function rawClientIp(req) {
+  return (req.headers && req.headers['cf-connecting-ip'])
+    || (req.socket && req.socket.remoteAddress)
+    || 'anon';
+}
+
 // Voter identity on a post is a salted hash — the meta file never stores raw
 // device/account keys where a leak would link art to identities.
 function wallVoterHash(key) {
@@ -4535,6 +4590,44 @@ app.get('/api/daily', (_req, res) => {
     if (!p.hidden && p.challenge === c.date) entries += 1;
   }
   res.json({ ...c, entries });
+});
+
+// ---- Weekly event nights ---------------------------------------------------
+// Derived purely from the date (like the daily challenge): no state, no cron,
+// and every client agrees on the schedule. An "event" is a coordination beacon
+// into an always-open featured room — the room doesn't gate anything, the
+// calendar just gives everyone a reason to show up at the same place on the
+// same day. UTC day-of-week keeps it deterministic worldwide.
+const WEEKLY_EVENTS = [
+  { dow: 0, room: 'VIBES', emoji: '🌈', title: 'Cozy Sunday', blurb: 'Slow doodles, soft colors, zero pressure.' },
+  { dow: 1, room: 'MEMEWALL', emoji: '🎭', title: 'Meme Monday', blurb: 'Redraw a meme from memory — chaos welcome.' },
+  { dow: 2, room: 'OCCORNER', emoji: '🐲', title: 'OC Tuesday', blurb: 'Bring your character. Draw them into each other’s scenes.' },
+  { dow: 3, room: 'FLIPBOOK', emoji: '🎬', title: 'Wiggle Wednesday', blurb: 'Group animation night — one loop, many hands.' },
+  { dow: 4, room: 'GUESS', emoji: '🎮', title: 'Guess-a-thon Thursday', blurb: 'Draw & Guess marathon. Fastest scribbles win.' },
+  { dow: 5, room: 'PHONE', emoji: '📞', title: 'Draw Phone Friday', blurb: 'Telephone with doodles. The drift is the fun.' },
+  { dow: 6, room: 'GRAFFITI', emoji: '🧱', title: 'Saturday Mural', blurb: 'One giant wall. Paint your piece of it.' },
+];
+
+app.get('/api/events', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const now = new Date();
+  const events = [];
+  for (let i = 0; i < 7; i += 1) {
+    const d = new Date(now.getTime() + i * 86_400_000);
+    const ev = WEEKLY_EVENTS[d.getUTCDay()];
+    const room = rooms.get(ev.room);
+    events.push({
+      date: d.toISOString().slice(0, 10),
+      today: i === 0,
+      room: ev.room,
+      emoji: ev.emoji,
+      title: ev.title,
+      blurb: ev.blurb,
+      roomTitle: room ? room.title : null,
+      live: room ? room.users.size : 0,
+    });
+  }
+  res.json({ events });
 });
 
 // `q` searches title+tags+artist; `tag` filters exactly. Hidden posts (report
@@ -5443,6 +5536,10 @@ const PAGE_META = {
     description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',
   },
   '/safety': { title: 'Safety — Drawesome', description: 'How Drawesome keeps shared drawing spaces safe: auto-moderation in public rooms, reporting, host tools, and data care.' },
+  '/parents': {
+    title: 'Parents & teachers — Drawesome',
+    description: 'The honest tour for grown-ups: how moderation works, what data we keep (and delete), age guidance, and how to host a classroom drawing session in two minutes.',
+  },
   '/privacy': { title: 'Privacy — Drawesome', description: 'What Drawesome stores, what it never does with your data, and the choices you have — including full account erasure.' },
   '/signup': { title: 'Save your art — Drawesome', description: 'Make a free account to keep your gallery, wall posts, and streak across devices. Or keep drawing as a guest.' },
 };
