@@ -9,12 +9,14 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <title>Drawesome 🎨 — paint together</title>
-    <meta
-      name="description"
-      content="Drawesome is a fast, fun, kid-safe drawing and coloring studio where you paint together with friends in real time. No account needed to start."
-    />
+    <!-- SEO tags below carry data-seo markers so server.js can rewrite them
+         per-route (per-room invites, per-post wall cards, page titles) without
+         an SSR framework. Keep each marked tag on ONE line — the server does a
+         whole-tag regex replace on the marker. -->
+    <title data-seo="title">Drawesome 🎨 — draw with your friends, live</title>
+    <meta name="description" content="Drawesome is a live drawing hangout: paint with friends in real time, play drawing games, post to the Fridge Wall, and keep your daily streak. Free, no account needed, auto-moderated public rooms." data-seo="desc" />
     <meta name="theme-color" content="#f7ff54" />
+    <link rel="canonical" href="https://drawesome.art/" data-seo="canonical" />
 
     <!-- Icons + installable web app -->
     <link rel="icon" type="image/svg+xml" href="/brand-mark.svg" />
@@ -27,24 +29,51 @@
     <meta name="mobile-web-app-capable" content="yes" />
 
     <!-- Social share previews -->
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content="website" data-seo="og:type" />
     <meta property="og:site_name" content="Drawesome" />
-    <meta property="og:title" content="Drawesome 🎨 — paint together" />
-    <meta
-      property="og:description"
-      content="A fast, fun, kid-safe drawing studio where you paint together with friends in real time. No account needed to start."
-    />
-    <meta property="og:url" content="https://drawesome.art/" />
-    <meta property="og:image" content="https://drawesome.art/og-image.png" />
+    <meta property="og:title" content="Drawesome 🎨 — draw with your friends, live" data-seo="og:title" />
+    <meta property="og:description" content="A live drawing hangout: paint with friends in real time, play drawing games, and post to the Fridge Wall. Free, no account needed." data-seo="og:desc" />
+    <meta property="og:url" content="https://drawesome.art/" data-seo="og:url" />
+    <meta property="og:image" content="https://drawesome.art/og-image.png" data-seo="og:image" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Drawesome 🎨 — paint together" />
-    <meta
-      name="twitter:description"
-      content="A fast, fun, kid-safe drawing studio where you paint together with friends in real time."
-    />
-    <meta name="twitter:image" content="https://drawesome.art/og-image.png" />
+    <meta name="twitter:title" content="Drawesome 🎨 — draw with your friends, live" data-seo="tw:title" />
+    <meta name="twitter:description" content="A live drawing hangout: paint with friends in real time, play drawing games, and post to the Fridge Wall." data-seo="tw:desc" />
+    <meta name="twitter:image" content="https://drawesome.art/og-image.png" data-seo="tw:image" />
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://drawesome.art/#website",
+          "url": "https://drawesome.art/",
+          "name": "Drawesome",
+          "description": "A live drawing hangout: paint with friends in real time, play drawing games, and post to the Fridge Wall.",
+          "publisher": { "@id": "https://drawesome.art/#org" }
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://drawesome.art/#org",
+          "name": "Drawesome",
+          "url": "https://drawesome.art/",
+          "logo": "https://drawesome.art/icon-512.png"
+        },
+        {
+          "@type": "WebApplication",
+          "name": "Drawesome",
+          "url": "https://drawesome.art/",
+          "applicationCategory": "DesignApplication",
+          "operatingSystem": "Any",
+          "browserRequirements": "Requires JavaScript",
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "audience": { "@type": "PeopleAudience", "suggestedMinAge": 13 }
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>

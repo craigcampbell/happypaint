@@ -28,7 +28,8 @@ export class SimClient {
   connect({ timeoutMs = 4000 } = {}) {
     const params = new URLSearchParams();
     params.set('room', this.room);
-    if (this.token) params.set('token', this.token);
+    // Like the real client, identity goes in the FIRST frame ({type:'auth'}),
+    // never the URL — see the 'open' handler below.
     const url = `${this.baseUrl}/ws?${params.toString()}`;
     this.ws = new WebSocket(url);
 
@@ -59,6 +60,8 @@ export class SimClient {
         reject(new Error(`${this.label}: connect timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.ws.once('open', () => {
+        // First frame is always auth (token or null) — mirrors the web client.
+        try { this.ws.send(JSON.stringify({ type: 'auth', token: this.token || null })); } catch { /* close handler reports */ }
         // Resolve on the 'connected' frame, or immediately if it already landed.
         if (this.connected) {
           clearTimeout(timer);

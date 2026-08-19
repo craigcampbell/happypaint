@@ -9,14 +9,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // the Cloudflare tunnel (wss://drawesome.art/ws) and in local dev. A dev page
 // served by Vite on :5173 is redirected to the server on :8787.
 
-function resolveSocketUrl(roomId, token) {
-  // A signed-in user's Supabase access token rides along as a query param; the
-  // server validates it (anon key only) to learn who owns/hosts the room. Empty
-  // for anonymous users — sign-in is optional.
-  const tokenQs = token ? `&token=${encodeURIComponent(token)}` : "";
+function resolveSocketUrl(roomId) {
+  // NOTE: the auth token deliberately does NOT ride the URL — query strings
+  // land in proxy/CDN access logs and browser history. Identity is sent as the
+  // socket's first frame ({type:'auth', token}) instead; see onopen below.
   const override = import.meta.env.VITE_WS_URL;
   if (override) {
-    return `${override}?room=${encodeURIComponent(roomId)}${tokenQs}`;
+    return `${override}?room=${encodeURIComponent(roomId)}`;
   }
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   let host = window.location.host;
@@ -28,7 +27,7 @@ function resolveSocketUrl(roomId, token) {
       host = `${pageUrl.hostname}:8787`;
     }
   }
-  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${tokenQs}`;
+  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}`;
 }
 
 function clientInfoPayload() {
@@ -75,7 +74,7 @@ export function useMultiplayer(roomId, onMessage, token) {
 
     let ws;
     try {
-      ws = new WebSocket(resolveSocketUrl(roomId, token));
+      ws = new WebSocket(resolveSocketUrl(roomId));
     } catch {
       // Malformed URL or blocked — retry shortly.
       reconnectTimerRef.current = window.setTimeout(connect, 2000);
@@ -152,6 +151,9 @@ export function useMultiplayer(roomId, onMessage, token) {
     ws.onopen = () => {
       setConnected(true);
       retryRef.current = 0;
+      // FIRST frame is always auth (token or null) — the server holds the join
+      // until it arrives, so identity lands without ever touching the URL.
+      ws.send(JSON.stringify({ type: "auth", token: token || null }));
       ws.send(JSON.stringify(clientInfoPayload()));
       pingTimerRef.current = window.setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));

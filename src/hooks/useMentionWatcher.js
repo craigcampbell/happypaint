@@ -1,9 +1,14 @@
 import { useEffect, useRef } from "react";
 
 // Opens ONE lightweight "notify" WebSocket that watches other rooms' chat for
-// @mentions of the given display name and calls onMention({room,roomTitle,from,
-// text,ts}) for each. It carries no canvas traffic, so watching several rooms is
-// cheap. The socket is separate from the studio's room socket.
+// @mentions of you and calls onMention({room,roomTitle,from,ts}) for each. It
+// carries no canvas traffic, so watching several rooms is cheap. The socket is
+// separate from the studio's room socket.
+//
+// `watchList` entries are { code, name, key }: the room, the display name we
+// held there, and the mentionKey capability its join handshake issued. The
+// server refuses watches without a valid key, so this channel can't be used to
+// probe rooms or impersonate names.
 //
 // It re-asserts its watch periodically so a watched room that (re)opens on the
 // server gets picked up, and pings to stay alive through the tunnel.
@@ -17,18 +22,22 @@ function notifySocketUrl() {
   return `${proto}://${host}/ws?notify=1`;
 }
 
-export function useMentionWatcher(rooms, name, onMention) {
+export function useMentionWatcher(watchList, onMention) {
   const onMentionRef = useRef(onMention);
   onMentionRef.current = onMention;
-  const nameRef = useRef(name);
-  nameRef.current = name;
+  const watchRef = useRef(watchList);
+  watchRef.current = watchList;
 
-  // Stable primitive dep so we only reconnect when the actual set/name changes.
-  const roomsKey = Array.isArray(rooms) ? rooms.filter(Boolean).join(",") : "";
+  // Stable primitive dep so we only reconnect when the actual set changes.
+  const watchKey = Array.isArray(watchList)
+    ? watchList
+        .filter((w) => w && w.code && w.name && w.key)
+        .map((w) => `${w.code}:${w.key}`)
+        .join(",")
+    : "";
 
   useEffect(() => {
-    if (!name || !roomsKey) return undefined; // nothing to watch yet
-    const roomList = roomsKey.split(",").filter(Boolean);
+    if (!watchKey) return undefined; // nothing watchable yet
     let closed = false;
     let ws = null;
     let reconnectTimer = null;
@@ -37,7 +46,10 @@ export function useMentionWatcher(rooms, name, onMention) {
 
     const sendWatch = () => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "watch", rooms: roomList, name: nameRef.current }));
+        const rooms = (watchRef.current || [])
+          .filter((w) => w && w.code && w.name && w.key)
+          .map((w) => ({ code: w.code, name: w.name, key: w.key }));
+        ws.send(JSON.stringify({ type: "watch", rooms }));
       }
     };
 
@@ -93,5 +105,5 @@ export function useMentionWatcher(rooms, name, onMention) {
         // ignore
       }
     };
-  }, [roomsKey, name]);
+  }, [watchKey]);
 }

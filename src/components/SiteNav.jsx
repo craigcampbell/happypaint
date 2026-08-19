@@ -1,4 +1,8 @@
 // Top navigation shared by the homepage and the supporting site pages.
+//
+// Links are real <a href> anchors so crawlers can walk the site graph and
+// users can middle-click/ctrl-click into new tabs; a plain left-click is
+// intercepted and routed through the SPA's pushState navigation instead.
 
 import { useEffect, useState } from "react";
 import BrandMark from "./BrandMark";
@@ -26,49 +30,53 @@ export default function SiteNav({ onNavigate, current }) {
     { href: "/privacy", label: "Privacy" },
   ];
 
-  const navigate = (href) => {
+  const follow = (event, href) => {
+    // Let the browser handle new-tab/download clicks; SPA-route the rest.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
     setMenuOpen(false);
     onNavigate(href);
   };
 
   return (
     <header className="site-nav">
-      <button type="button" className="site-brand" onClick={() => navigate("/")} aria-label="Drawesome home">
+      <a href="/" className="site-brand" onClick={(e) => follow(e, "/")} aria-label="Drawesome home">
         <BrandMark />
-      </button>
+      </a>
 
       <nav className={`site-nav-links${menuOpen ? " is-open" : ""}`} aria-label="Site navigation">
         {links.map((link) => (
-          <button
+          <a
             key={link.href}
-            type="button"
+            href={link.href}
             className={current === link.href ? "is-current" : ""}
-            onClick={() => navigate(link.href)}
+            aria-current={current === link.href ? "page" : undefined}
+            onClick={(e) => follow(e, link.href)}
           >
             {link.label}
-          </button>
+          </a>
         ))}
         {session ? (
-          <button
-            type="button"
+          <a
+            href="/signup"
             className={`site-nav-account${current === "/signup" ? " is-current" : ""}`}
-            onClick={() => navigate("/signup")}
+            onClick={(e) => follow(e, "/signup")}
             title="Your account"
           >
             {sessionLabel(session)}
-          </button>
+          </a>
         ) : (
-          <button type="button" className="site-nav-signup" onClick={() => navigate("/signup")}>
+          <a href="/signup" className="site-nav-signup" onClick={(e) => follow(e, "/signup")}>
             Save my art
-          </button>
+          </a>
         )}
       </nav>
 
       <div className="site-nav-actions">
-        <button type="button" className="site-nav-paint primary-action" onClick={() => navigate("/studio")}>
+        <a href="/studio" className="site-nav-paint primary-action" onClick={(e) => follow(e, "/studio")}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
           Create
-        </button>
+        </a>
         <button
           type="button"
           className="site-nav-toggle"

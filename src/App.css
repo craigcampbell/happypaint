@@ -5362,6 +5362,21 @@ textarea:focus-visible,
   z-index: 20;
   flex-wrap: wrap;
 }
+/* SiteNav links are real <a href> elements (crawlable + middle-clickable) that
+   the SPA intercepts on plain left-click. Neutralize anchor UA styles so they
+   render exactly like the buttons they replaced. */
+/* No `color` here on purpose: every nav anchor gets its ink from its own class
+   rules (.site-nav-links > :is(button,a), .site-brand, .site-nav-paint, …) —
+   a blanket inherit/override would clobber the themed CTA pill. */
+.site-nav a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
 .site-brand {
   min-height: 0;
   border: none;
@@ -5379,15 +5394,15 @@ textarea:focus-visible,
   gap: 6px;
   flex-wrap: wrap;
 }
-.site-nav-links > button {
+.site-nav-links > :is(button, a) {
   min-height: 40px;
   border: none;
   background: none;
   color: #44535e;
   font-weight: 800;
 }
-.site-nav-links > button:hover { box-shadow: none; color: #174c4d; }
-.site-nav-links > button.is-current { color: #2d6cdf; }
+.site-nav-links > :is(button, a):hover { box-shadow: none; color: #174c4d; }
+.site-nav-links > :is(button, a).is-current { color: #2d6cdf; }
 .site-nav-signup { border: 1px solid #cdd7e0 !important; border-radius: 999px !important; padding: 0 14px !important; }
 .site-nav-account {
   border: 1px solid #b7e0c7 !important;
@@ -5643,6 +5658,27 @@ textarea:focus-visible,
 .signup-guest { min-height: 44px; border: none; background: none; color: #2d6cdf; font-weight: 800; }
 .signup-guest:hover { box-shadow: none; text-decoration: underline; }
 .signup-form { display: grid; gap: 10px; }
+.signup-age {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dde6ee;
+  border-radius: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  margin: 0;
+}
+.signup-age legend { font-weight: 900; font-size: 0.85rem; color: #17212b; padding: 0 4px; }
+.signup-age label { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.86rem; color: #44535e; cursor: pointer; }
+.signup-age input { accent-color: #2d6cdf; width: 16px; height: 16px; }
+.signup-age-note {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #146c43;
+  background: #eafaf1;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
 .signup-field { display: grid; gap: 4px; text-align: left; font-weight: 800; font-size: 0.82rem; color: #44535e; }
 .signup-field input { min-height: 46px; width: 100%; }
 .signup-submit { min-height: 48px; font-size: 1rem; }
@@ -6600,6 +6636,48 @@ textarea:focus-visible,
 .wall-report:hover {
   color: #ef4444;
 }
+.wall-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.wall-share {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 4px 6px;
+  filter: grayscale(1) opacity(0.55);
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.wall-share:hover {
+  filter: none;
+  transform: scale(1.15);
+}
+.wall-spotlight {
+  max-width: 420px;
+  margin: 0 auto 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wall-spotlight .wall-card {
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+  border: 3px solid #f7ff54;
+}
+.wall-spotlight-close {
+  align-self: center;
+  border: 0;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.wall-spotlight-close:hover {
+  background: #e2e8f0;
+}
 .wall-tags {
   display: flex;
   flex-wrap: wrap;
@@ -6873,7 +6951,7 @@ select {
   gap: 2px;
 }
 
-.site-nav-links > button {
+.site-nav-links > :is(button, a) {
   min-height: 36px;
   padding: 0 10px;
   border: 0;
@@ -6883,14 +6961,14 @@ select {
   font-size: 0.86rem;
 }
 
-.site-nav-links > button:hover:not(:disabled) {
+.site-nav-links > :is(button, a):hover:not(:disabled) {
   color: var(--ink);
   background: #eef1f2;
   box-shadow: none;
   transform: none;
 }
 
-.site-nav-links > button.is-current {
+.site-nav-links > :is(button, a).is-current {
   color: var(--ink);
   background: var(--sun);
   box-shadow: inset 0 -3px 0 var(--ink);
@@ -7455,7 +7533,7 @@ select {
     display: grid;
   }
 
-  .site-nav-links > button {
+  .site-nav-links > :is(button, a) {
     width: 100%;
     justify-content: flex-start;
   }
@@ -7476,7 +7554,7 @@ select {
 }
 
 @media (max-width: 1024px), (pointer: coarse) {
-  .site-nav-links > button {
+  .site-nav-links > :is(button, a) {
     min-height: 44px;
   }
 

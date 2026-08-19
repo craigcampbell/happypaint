@@ -154,7 +154,7 @@ select:focus {
   gap: 2px;
 }
 
-.site-nav-links > button {
+.site-nav-links > :is(button, a) {
   min-height: 40px;
   padding: 0 12px;
   border: 0;
@@ -164,14 +164,14 @@ select:focus {
   font-size: 0.88rem;
 }
 
-.site-nav-links > button:hover:not(:disabled) {
+.site-nav-links > :is(button, a):hover:not(:disabled) {
   background: var(--brand-blue-soft);
   color: var(--brand-blue-ink);
   box-shadow: none;
   transform: none;
 }
 
-.site-nav-links > button.is-current {
+.site-nav-links > :is(button, a).is-current {
   background: var(--brand-blue-soft);
   color: var(--brand-blue-ink);
   box-shadow: none;
@@ -1133,7 +1133,7 @@ select:focus {
     display: grid;
   }
 
-  .site-nav-links > button {
+  .site-nav-links > :is(button, a) {
     width: 100%;
     justify-content: flex-start;
   }
@@ -1149,7 +1149,7 @@ select:focus {
 }
 
 @media (max-width: 1024px), (pointer: coarse) {
-  .site-nav-links > button {
+  .site-nav-links > :is(button, a) {
     min-height: 44px;
   }
 
@@ -1934,15 +1934,15 @@ button,
   height: 48px;
 }
 
-.site-nav-links > button {
+.site-nav-links > :is(button, a) {
   min-height: 42px;
   padding-inline: 13px;
   border-radius: 14px;
   font-weight: 800;
 }
 
-.site-nav-links > button:hover:not(:disabled),
-.site-nav-links > button.is-current {
+.site-nav-links > :is(button, a):hover:not(:disabled),
+.site-nav-links > :is(button, a).is-current {
   background: var(--brand-blue-soft);
   color: var(--brand-blue-ink);
 }

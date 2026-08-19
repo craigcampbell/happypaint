@@ -132,14 +132,16 @@ scenario('A. Audience gating: kid_safe listed, friends not', async (ctx) => {
     const codes = list.map((r) => r.code);
     assert.ok(codes.includes(kidCode), `kid_safe room ${kidCode} should appear in public list (got ${JSON.stringify(codes)})`);
     assert.ok(!codes.includes(friendsCode), `friends room ${friendsCode} must NOT appear in public list`);
-    // Sanitized shape: never leak owner ids / names / raw strokes.
+    // Sanitized shape: never leak owner ids / names / raw strokes. Allowlist of
+    // safe metadata (counts, emoji, prompt strings) — anything new must be
+    // reviewed here before it ships in discovery.
+    const allowed = new Set(['code', 'emoji', 'featured', 'hasHost', 'lastActivity', 'ops', 'prompt', 'sheetId', 'title', 'users']);
     for (const r of list) {
-      const keys = Object.keys(r).sort();
-      assert.deepStrictEqual(
-        keys,
-        ['code', 'hasHost', 'lastActivity', 'sheetId', 'title', 'users'],
-        `public room entry must be sanitized, got keys ${JSON.stringify(keys)}`,
-      );
+      for (const key of Object.keys(r)) {
+        assert.ok(allowed.has(key), `public room entry leaked an unreviewed key "${key}" (${JSON.stringify(Object.keys(r).sort())})`);
+      }
+      assert.ok(typeof r.users === 'number', 'users must be a headcount, not a roster');
+      assert.ok(r.ops === undefined || typeof r.ops === 'number', 'ops must be a count, not stroke data');
     }
   } finally {
     await kidPainter.close();
@@ -260,22 +262,31 @@ scenario('D. Text moderation: kid_safe blocks+reports+alerts, friends does not',
     await painter.close();
   }
 
-  // Same content in a friends room must NOT be moderated (friends is not auto-moderated).
+  // Friends rooms run the SEVERE tier too (slurs are blocked in EVERY room);
+  // only the softer MILD masking stays kid_safe-only, so ordinary salty talk
+  // between friends still flows verbatim.
   const friendsCode = 'FRNDMOD';
   const fa = new SimClient(ctx.baseWs, { room: friendsCode, name: 'fa' });
   const fb = new SimClient(ctx.baseWs, { room: friendsCode, name: 'fb' });
   await fa.connect();
   await fb.connect();
   try {
+    // SEVERE: dropped — the sender gets chat_blocked, the peer never sees it.
     fa.sendChat('you are a fucking idiot retard');
-    // fb (another participant) SHOULD receive it verbatim — no moderation here.
-    await fb.waitFor(
-      (m) => m.type === 'chat' && typeof m.message === 'string' && m.message.includes('retard'),
-      { timeoutMs: 2500, label: 'unmoderated chat delivered in friends room' },
+    await fa.waitFor(
+      (m) => m.type === 'chat_blocked',
+      { timeoutMs: 2500, label: 'chat_blocked receipt for severe chat in friends room' },
     );
-    // And no mod_alert should have fired.
-    const alerts = fa.all('mod_alert').concat(fb.all('mod_alert'));
-    assert.strictEqual(alerts.length, 0, 'friends rooms must not emit mod_alert');
+    await sleep(200);
+    const leakedToPeer = fb.all('chat').some((m) => m.message && m.message.includes('retard'));
+    assert.ok(!leakedToPeer, 'severe chat must be dropped in friends rooms too');
+
+    // MILD: delivered VERBATIM (no masking outside kid_safe).
+    fa.sendChat('well damn that drawing is good');
+    await fb.waitFor(
+      (m) => m.type === 'chat' && typeof m.message === 'string' && m.message.includes('damn'),
+      { timeoutMs: 2500, label: 'mild chat delivered unmasked in friends room' },
+    );
   } finally {
     await fa.close();
     await fb.close();

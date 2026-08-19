@@ -16,7 +16,7 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { scan } from './server/moderation/textFilter.js';
@@ -52,6 +52,7 @@ const __dirname = dirname(__filename);
 const PORT = Number(process.env.PORT || 8787);
 const MAX_HISTORY = Number(process.env.MAX_HISTORY || 20000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
+const MAX_SPECTATORS = Number(process.env.MAX_SPECTATORS || 40); // read-only homepage viewers per public room
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
 const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
 const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min ms between watcher samples
@@ -811,6 +812,29 @@ function appendChatAudit(roomId, entry) {
     // Best-effort — never let audit logging break a chat message.
   }
 }
+
+// Retention sweep: chat audit logs exist for moderation context and deletion
+// scrubs, not forever. Guests can't be scrubbed by profileId (they have none),
+// so time is the only eraser — drop any room log untouched for 90 days.
+// Defense-in-depth on top of the per-account scrub endpoint.
+const CHAT_LOG_TTL_MS = Number(process.env.CHAT_LOG_TTL_DAYS || 90) * 86_400_000;
+async function sweepChatLogs() {
+  let files = [];
+  try { files = (await fsp.readdir(CHAT_LOG_DIR)).filter((f) => f.endsWith('.jsonl')); } catch { return; }
+  const cutoff = Date.now() - CHAT_LOG_TTL_MS;
+  for (const f of files) {
+    const p = join(CHAT_LOG_DIR, f);
+    try {
+      const st = await fsp.stat(p);
+      if (st.mtimeMs < cutoff) await fsp.unlink(p);
+    } catch {
+      // Best-effort — a locked/vanished file just waits for the next sweep.
+    }
+  }
+}
+setInterval(() => { sweepChatLogs(); }, 6 * 3_600_000).unref();
+sweepChatLogs();
+
 function loadRoom(roomId) {
   try {
     const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
@@ -849,9 +873,11 @@ function loadRoom(roomId) {
       quests: data.quests && typeof data.quests === 'object' ? data.quests : null,
       storybook: data.storybook && typeof data.storybook === 'object' ? data.storybook : null,
       remixSource: data.remixSource && typeof data.remixSource === 'object' ? data.remixSource : null,
+      // Server-side capability secrets for cross-room @mention watching.
+      mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -904,6 +930,9 @@ async function saveRoomNow(roomId) {
       } : null,
       storybook: room.storybook || null,
       remixSource: room.remixSource || null,
+      // Mention-watch capability keys (see issueMentionKey). Server-side only:
+      // this file never leaves the host, and keys never appear in any API.
+      mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
       savedAt: Date.now(),
     });
     // Temp-file + rename so a crash mid-write never leaves a truncated room file.
@@ -1277,6 +1306,8 @@ function getRoom(roomId) {
       // bounded by MAX_ROOM_USERS, cleared on disconnect + overwritten on hop.
       presence: new Map(),
       modLog: [], // recent moderation actions (in-memory, capped)
+      // name(lower) -> capability key for cross-room mention watching (persisted).
+      mentionKeys: new Map(Array.isArray(saved.mentionKeys) ? saved.mentionKeys : []),
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
       customPrompt: saved.customPrompt, // theme-vote winner; beats the daily prompt
@@ -1637,16 +1668,22 @@ function broadcast(roomId, message, exceptId = null) {
     }
   });
   // Read-only homepage viewers see the live mural too, but never draw/count.
+  // ALLOWLIST, not blocklist: spectators get the mural (ops, clears, sheet
+  // swaps) and moderation history rebuilds — nothing else. Rosters, cursors,
+  // chat, hype, renames and every future message type stay inside the room by
+  // default, so a new social feature can never leak names to spectators.
   // Animation rooms: spectators watch the FIRST frame only (mirrors the join
   // filter) — ops/clears for other frames would smear onto their one canvas.
-  // Social messages carrying member NAMES (hype, chat, tapbacks) never reach
-  // spectators: the spectator join path deliberately withholds the roster.
   if (room.spectators && room.spectators.size) {
-    if (message.type === 'hype' || message.type === 'chat' || message.type === 'chat_react' || message.type === 'chat_react_self') return;
+    const t = message.type;
+    if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history') return;
     if (room.animationEnabled) {
+      // A history rebuild carries every frame's ops — a spectator's single
+      // canvas would smear them together. Skip it; the tile catches up on hop.
+      if (t === 'history') return;
       const firstId = room.frames[0] && room.frames[0].id;
-      if (message.type === 'op' && message.op && opFrameId(room, message.op) !== firstId) return;
-      if (message.type === 'clear' && message.frameId && message.frameId !== firstId) return;
+      if (t === 'op' && message.op && opFrameId(room, message.op) !== firstId) return;
+      if (t === 'clear' && message.frameId && message.frameId !== firstId) return;
     }
     room.spectators.forEach((sws) => {
       if (sws.readyState === 1) sws.send(data);
@@ -2123,20 +2160,33 @@ function nameMentioned(lower, name) {
   }
 }
 
-// True if a user with `name` is actually present in this room right now, or has
-// spoken recently — so a notifier can only be pinged about rooms its name really
-// appears in, not any room it subscribes to by code (blocks eavesdrop-by-guess).
-function nameIsInRoom(room, name) {
-  const n = (name || '').trim().toLowerCase();
-  if (!n) return false;
-  for (const u of room.users.values()) {
-    if ((u.name || '').trim().toLowerCase() === n) return true;
+// Cross-room @mention notifications are CAPABILITY-gated: joining a room hands
+// the client a per-(room,name) secret (`mentionKey` in the connected payload).
+// The notify socket must present that key to subscribe — so nobody can watch a
+// room's mentions by guessing names or codes; you can only watch rooms you have
+// genuinely been in, under the name you actually held there. Keys persist with
+// the room (server-side only, never shown to other users) so a watch survives
+// restarts; the map is bounded and oldest names age out.
+function issueMentionKey(room, name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return null;
+  if (!(room.mentionKeys instanceof Map)) room.mentionKeys = new Map();
+  let key = room.mentionKeys.get(n);
+  if (!key) {
+    key = randomBytes(9).toString('base64url');
+    room.mentionKeys.set(n, key);
+    while (room.mentionKeys.size > 300) {
+      room.mentionKeys.delete(room.mentionKeys.keys().next().value);
+    }
+    persistRoom(room.code);
   }
-  const chat = room.chat || [];
-  for (let i = chat.length - 1; i >= 0 && i >= chat.length - 60; i -= 1) {
-    if ((chat[i]?.user?.name || '').trim().toLowerCase() === n) return true;
-  }
-  return false;
+  return key;
+}
+
+function mentionKeyValid(room, name, key) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n || !key || !(room.mentionKeys instanceof Map)) return false;
+  return room.mentionKeys.get(n) === key;
 }
 
 function notifyMentions(room, roomId, senderName, message, ts) {
@@ -2145,12 +2195,12 @@ function notifyMentions(room, roomId, senderName, message, ts) {
   const sender = (senderName || '').toLowerCase();
   const now = Date.now();
   for (const ws of room.notifiers) {
-    const name = (ws.watchName || '').trim().toLowerCase();
+    const entry = ws.watch instanceof Map ? ws.watch.get(roomId) : null;
+    const name = (entry?.name || '').trim().toLowerCase();
     if (!name || name === sender) continue; // no self-pings
+    // Re-verify the capability at delivery time (keys can rotate/expire).
+    if (!mentionKeyValid(room, name, entry.key)) continue;
     if (!nameMentioned(lower, name)) continue;
-    // Only notify if this name actually appears in this room (not an arbitrary
-    // room subscribed to just to harvest activity).
-    if (!nameIsInRoom(room, ws.watchName)) continue;
     // Per-watcher rate limit: at most 6 mention deliveries per rolling 60s.
     const bucket = ws.mentionTimes || (ws.mentionTimes = []);
     while (bucket.length && now - bucket[0] > 60000) bucket.shift();
@@ -2158,9 +2208,9 @@ function notifyMentions(room, roomId, senderName, message, ts) {
     bucket.push(now);
     if (ws.readyState === 1) {
       // NOTE: message text is deliberately NOT included — the notify channel is
-      // cross-room and only loosely authenticated, so leaking chat content (esp.
-      // from private rooms) would be a privacy hole. Recipients get "you were
-      // mentioned in <room>", never the message body.
+      // cross-room, so leaking chat content (esp. from private rooms) would be
+      // a privacy hole. Recipients get "you were mentioned in <room>", never
+      // the message body.
       ws.send(JSON.stringify({
         type: 'mention',
         room: roomId,
@@ -2244,17 +2294,19 @@ wss.on('connection', async (ws, req) => {
   // Notify mode: a lightweight cross-room mention watcher. It joins NO room for
   // drawing/presence — it just subscribes to a set of rooms' chat and receives
   // 'mention' events when the given name is @mentioned there. The client sends
-  // {type:'watch', rooms:[...], name} to (re)subscribe.
+  // {type:'watch', rooms:[{code, name, key}]} to (re)subscribe, where `key` is
+  // the mentionKey the room's join handshake issued for that name — a watch
+  // subscription without a valid capability key is silently dropped, so this
+  // channel cannot be used to probe rooms or impersonate names.
   if (url.searchParams.get('notify') === '1') {
     ws.isNotifier = true;
-    ws.watchName = '';
-    ws.watchRooms = [];
+    ws.watch = new Map(); // code -> { name, key }
     const unwatchAll = () => {
-      for (const code of ws.watchRooms) {
+      for (const code of ws.watch.keys()) {
         const r = rooms.get(code);
         if (r && r.notifiers) r.notifiers.delete(ws);
       }
-      ws.watchRooms = [];
+      ws.watch.clear();
     };
     ws.on('message', (raw) => {
       let data;
@@ -2265,23 +2317,82 @@ wss.on('connection', async (ws, req) => {
       }
       if (!data || data.type !== 'watch') return; // 'ping' etc. just keep it alive
       unwatchAll();
-      ws.watchName = String(data.name || '').trim().slice(0, 40);
       const list = Array.isArray(data.rooms) ? data.rooms.slice(0, 12) : [];
-      for (const rawCode of list) {
-        const code = String(rawCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
+      for (const entry of list) {
+        if (!entry || typeof entry !== 'object') continue; // legacy bare-code watches are gone
+        const code = String(entry.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
+        const name = String(entry.name || '').trim().slice(0, 40);
+        const key = String(entry.key || '').slice(0, 32);
         // Attach only to rooms that actually exist (don't resurrect idle-closed
         // rooms just to watch them); the client re-asserts the watch periodically
         // so a room that (re)opens later still gets picked up.
         const r = code ? rooms.get(code) : null;
-        if (!r) continue;
+        if (!r || !name || !key) continue;
+        if (!mentionKeyValid(r, name, key)) continue; // no capability, no watch
         if (!r.notifiers) r.notifiers = new Set();
         r.notifiers.add(ws);
-        ws.watchRooms.push(code);
+        ws.watch.set(code, { name, key });
       }
     });
     ws.on('close', unwatchAll);
     ws.on('error', unwatchAll);
     ws.send(JSON.stringify({ type: 'notify_ready' }));
+    return;
+  }
+
+  // Spectator mode: a homepage viewer watches the live mural read-only. It is a
+  // PUBLIC-room privilege: private rooms are never watchable (a friends-room
+  // code is an invite to draw, not a window for silent strangers), a spectate
+  // probe never lazily creates a room, and viewers are capped per room.
+  if (url.searchParams.get('spectate') === '1') {
+    const live = rooms.get(roomId);
+    if (!live || live.audience !== 'kid_safe' || !live.listed) {
+      ws.send(JSON.stringify({ type: 'room_blocked', reason: 'not_watchable' }));
+      ws.close(1008, 'not watchable');
+      return;
+    }
+    if (live.spectators.size >= MAX_SPECTATORS) {
+      ws.send(JSON.stringify({ type: 'room_full', max: MAX_SPECTATORS }));
+      ws.close(1008, 'spectators full');
+      return;
+    }
+    if (roomId === 'DAILY') ensureDailyFresh();
+    const specFeatured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
+    const specPrompt = live.customPrompt || (specFeatured ? dailyPromptFor(specFeatured) : null);
+    live.spectators.add(ws);
+    ws.isSpectator = true;
+    ws.roomId = roomId;
+    ws.send(JSON.stringify({
+      type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
+      roomId, spectator: true, locked: !!live.locked, roomTitle: live.title || null, audience: live.audience,
+      prompt: specPrompt,
+      wetCanvas: !!live.wetCanvas,
+      moderated: live.audience === 'kid_safe',
+      watched: live.watchers.size > 0,
+    }));
+    // Spectators (homepage viewers) get a headcount only — never painter names,
+    // so a leaked/guessed room code can't be used to harvest who's in a room.
+    // (broadcast() enforces the same rule afterwards with an allowlist.)
+    ws.send(JSON.stringify({ type: 'userList', count: live.users.size }));
+    // Always send history (even empty) so the spectator view resets cleanly when
+    // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
+    // ops — plenty for a homepage preview, a fraction of a big room's payload.
+    // Animation rooms: spectators watch the FIRST frame only (their single
+    // canvas would otherwise overdraw the whole flipbook into one smear).
+    // (No chat catch-up either: the read-only viewer ignores chat.)
+    const spectatorOps = live.animationEnabled
+      ? visibleHistory(live).filter((op) => opFrameId(live, op) === live.frames[0].id)
+      : visibleHistory(live);
+    ws.send(JSON.stringify({ type: 'history', ops: spectatorOps.slice(-1500) }));
+    // Don't point a spectator at a trace-photo id whose in-memory image is gone
+    // (e.g. after a restart) — same guard as the member join path.
+    if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
+      ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
+    }
+    ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
+    const dropSpectator = () => live.spectators.delete(ws);
+    ws.on('close', dropSpectator);
+    ws.on('error', dropSpectator);
     return;
   }
 
@@ -2315,57 +2426,50 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
-  // Spectator mode: a homepage viewer watches the live mural read-only. They are
-  // NOT added to room.users (no presence, no count, no draw rights, no room-full
-  // limit), just subscribed to broadcasts via room.spectators. Unlimited viewers.
-  if (url.searchParams.get('spectate') === '1') {
-    room.spectators.add(ws);
-    ws.isSpectator = true;
-    ws.roomId = roomId;
-    ws.send(JSON.stringify({
-      type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
-      roomId, spectator: true, locked: !!room.locked, roomTitle: room.title || null, audience: room.audience,
-      prompt: roomPrompt,
-      wetCanvas: !!room.wetCanvas,
-      moderated: room.audience === 'kid_safe',
-      watched: room.watchers.size > 0,
-    }));
-    // Spectators (homepage viewers) get a headcount only — never painter names,
-    // so a leaked/guessed room code can't be used to harvest who's in a room.
-    ws.send(JSON.stringify({ type: 'userList', count: room.users.size }));
-    // Always send history (even empty) so the spectator view resets cleanly when
-    // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
-    // ops — plenty for a homepage preview, a fraction of a big room's payload.
-    // Animation rooms: spectators watch the FIRST frame only (their single
-    // canvas would otherwise overdraw the whole flipbook into one smear).
-    // (No chat catch-up either: the read-only viewer ignores chat.)
-    const spectatorOps = room.animationEnabled
-      ? visibleHistory(room).filter((op) => opFrameId(room, op) === room.frames[0].id)
-      : visibleHistory(room);
-    ws.send(JSON.stringify({ type: 'history', ops: spectatorOps.slice(-1500) }));
-    // Don't point a spectator at a trace-photo id whose in-memory image is gone
-    // (e.g. after a restart) — same guard as the member join path.
-    if (room.sheetId && (!room.sheetId.startsWith('trace_') || tracePhotos.has(room.sheetId))) {
-      ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
-    }
-    ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
-    const dropSpectator = () => room.spectators.delete(ws);
-    ws.on('close', dropSpectator);
-    ws.on('error', dropSpectator);
-    return;
-  }
-
   if (room.users.size >= MAX_ROOM_USERS) {
     ws.send(JSON.stringify({ type: 'room_full', max: MAX_ROOM_USERS }));
     ws.close(1008, 'room full');
     return;
   }
 
-  // Optional identity. A signed-in user passes their Supabase access token; we
-  // validate it with the public anon key (no secrets) and learn their profile.
-  // Anonymous users pass nothing and stay anonymous — sign-in only unlocks
-  // ownership/host powers, never the ability to draw.
-  const token = url.searchParams.get('token');
+  // Optional identity. A signed-in user proves who they are with their access
+  // token; we validate it with the public anon key (no secrets) and learn their
+  // profile. Anonymous users stay anonymous — sign-in only unlocks ownership/
+  // host powers, never the ability to draw.
+  //
+  // Transport (task #40): the web client's FIRST frame is {type:'auth', token}
+  // (token:null for guests) so the JWT never rides the URL query string, where
+  // proxy/CDN access logs and browser history would capture it. The query param
+  // stays as a fallback for the mobile app and stale cached bundles. A non-auth
+  // first frame (legacy client) is replayed into the normal handler after join.
+  let token = url.searchParams.get('token');
+  let replayFirstFrame = null;
+  if (!token) {
+    const first = await new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer);
+        ws.off('message', onFrame);
+        ws.off('close', onGone);
+        ws.off('error', onGone);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), 1500);
+      const onFrame = (raw) => finish(raw);
+      const onGone = () => finish(null);
+      ws.on('message', onFrame);
+      ws.on('close', onGone);
+      ws.on('error', onGone);
+    });
+    if (first != null) {
+      let hello = null;
+      try { hello = JSON.parse(first); } catch { hello = null; }
+      if (hello && hello.type === 'auth') {
+        token = typeof hello.token === 'string' && hello.token ? hello.token : null;
+      } else {
+        replayFirstFrame = first; // legacy client_info etc. — process after join
+      }
+    }
+  }
   const identity = token ? await verifyAccessToken(token) : null;
   if (ws.readyState !== 1) return; // user disconnected during validation
 
@@ -2444,6 +2548,10 @@ wss.on('connection', async (ws, req) => {
     wetCanvas: !!room.wetCanvas,
     moderated: room.audience === 'kid_safe',
     watched: room.watchers.size > 0,
+    // Capability key for cross-room @mention notifications: proves to the
+    // notify channel that this client really held this name in this room, so
+    // nobody can subscribe to a room's mentions by guessing names/codes.
+    mentionKey: issueMentionKey(room, name),
     // Shared animation: whether this room has the film strip, and its frames.
     animation: !!room.animationEnabled,
     // Finger-paint room: smudge-friendly, always wet, chat-free (pre-readers).
@@ -2571,10 +2679,11 @@ wss.on('connection', async (ws, req) => {
         // pages can't collide or leak before their guess round. This is the
         // authoritative boundary; the client also suppresses sending.
         if (room.phone && (room.phone.phase === 'starting' || room.phone.phase === 'drawing' || room.phone.phase === 'guessing')) break;
-        // Public-room text moderation: block severe drawn text before it lands on
-        // the shared mural. Imagery is handled by the watcher/flag path. O(small),
+        // Drawn-text moderation: SEVERE text is blocked in EVERY room — same
+        // contract as chat (a private room is no reason to relay slurs painted
+        // as text ops). Imagery is handled by the watcher/flag path. O(small),
         // synchronous — adds no latency to the normal draw-op relay below.
-        if (room.audience === 'kid_safe' && data.op.kind === 'text' && typeof data.op.text === 'string') {
+        if (data.op.kind === 'text' && typeof data.op.text === 'string') {
           const verdict = scan(data.op.text);
           if (verdict.severity === 'severe') {
             autoModerate(room, user, `drawn text: ${verdict.terms.join(', ')}`);
@@ -2735,6 +2844,10 @@ wss.on('connection', async (ws, req) => {
             user.name = proposed;
             if (old && old !== proposed) {
               broadcast(roomId, { type: 'system', text: `${old} is now ${proposed}` });
+            }
+            // A new name needs its own mention-watch capability for this room.
+            if (user.ws.readyState === 1) {
+              user.ws.send(JSON.stringify({ type: 'mention_key', room: roomId, name: proposed, key: issueMentionKey(room, proposed) }));
             }
           }
         }
@@ -3697,11 +3810,11 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'flag': {
-        // A watcher (or any client) flags a region as possibly lewd. Acted on
-        // only in public rooms. Conservative ladder: a lone flag is Tier-1 (alert
-        // the hosts, destroy nothing); corroboration is required before the
-        // reversible auto-hide; a kick is NEVER automatic.
-        if (room.audience !== 'kid_safe') break;
+        // A watcher (or any client) flags a region as possibly lewd. Acted on in
+        // every room — private rooms elect watchers too, and a flag there alerts
+        // the room's host instead of vanishing. Conservative ladder: a lone flag
+        // is Tier-1 (alert the hosts, destroy nothing); corroboration is required
+        // before the reversible auto-hide; a kick is NEVER automatic.
         const kind = data.kind === 'text' ? 'text' : 'image';
         const score = Number(data.score) || 0;
         const sinceOpId = Math.max(0, Number(data.sinceOpId) || 0);
@@ -3759,6 +3872,10 @@ wss.on('connection', async (ws, req) => {
         break;
     }
   });
+
+  // A legacy client's first frame (consumed by the auth wait above) wasn't an
+  // auth message — replay it through the real handler now that it's attached.
+  if (replayFirstFrame != null) ws.emit('message', replayFirstFrame);
 
   ws.on('close', () => {
     // Accrue this user's time in the room — engagement extends the auto-close TTL.
@@ -4043,8 +4160,13 @@ function maskMessage(message) {
 }
 
 function isAdmin(req) {
-  const key = req.get('x-admin-key') || req.query.key;
-  return Boolean(key) && key === ADMIN_KEY;
+  // Header only — never a query param, which would land the key in proxy/CDN
+  // access logs and browser history (same leak class as tokens in WS URLs).
+  const key = req.get('x-admin-key');
+  if (!key || typeof ADMIN_KEY !== 'string' || !ADMIN_KEY) return false;
+  const a = Buffer.from(String(key));
+  const b = Buffer.from(ADMIN_KEY);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 function adminGuard(req, res) {
   res.set('Cache-Control', 'no-store');
@@ -4055,11 +4177,17 @@ function adminGuard(req, res) {
   return true;
 }
 
-// Anyone can file a report (no auth) — that's the point.
+// Anyone can file a report (no auth) — that's the point. But the queue is a
+// bounded store, so rate-limit per IP so a flooder can't push real reports out
+// the end of it. The cap is loose enough for a kid legitimately reporting a
+// pile-on (12 per 10 minutes).
 app.post('/api/report', (req, res) => {
   const { room, reason, reporterName } = req.body || {};
   if (!room) {
     return res.status(400).json({ error: 'room required' });
+  }
+  if (!rateOk(`report:${clientIp(req)}`, 12, 10 * 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
   }
   const report = fileReport({ room, reason, reporterName, source: 'user' });
   // Give the reporter a real receipt so a kid knows it went through.
@@ -4478,6 +4606,16 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
   res.set('Content-Security-Policy', "default-src 'none'; sandbox");
   res.set('Cache-Control', 'public, max-age=86400, immutable');
   res.send(decoded.buffer);
+});
+
+// One post, by id — powers the /wall/:id deep link (share a drawing with a
+// friend and it opens on exactly that card, with its own OG preview).
+app.get('/api/wall/:id', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const meta = wallPosts.get(req.params.id);
+  if (!meta || meta.hidden) return res.status(404).json({ error: 'not found' });
+  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${req.ip || 'anon'}`));
+  res.json({ post: publicWallPost(meta, viewerHash) });
 });
 
 // Start a fresh private room from an opt-in Wall post. The server derives and
@@ -5228,8 +5366,198 @@ app.post('/api/admin/sheet-theme', (req, res) => {
 // ---- Static host ----------------------------------------------------------
 app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
+// ---- Route-aware <head> (the SPA's "linker pass") -------------------------
+// The built shell is one HTML file, but the tags that matter to crawlers and
+// chat-app preview bots are marked with data-seo attributes (see index.html).
+// Instead of SSR, we treat the shell as an object file and relink its head per
+// route at serve time: per-room invite cards, per-post wall art cards, real
+// titles on every page. Costs a few string replaces per HTML request — zero
+// impact on the drawing hot path.
+const SITE_ORIGIN = process.env.PUBLIC_ORIGIN || 'https://drawesome.art';
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderShell(shell, over = {}) {
+  let html = shell;
+  // Every replacement below uses a FUNCTION replacement, never a string one:
+  // string replacements interpret `$&`/`$'` sequences, so a kid-entered title
+  // containing `$` would splice shell fragments into the head.
+  const setTag = (marker, attr, value) => {
+    if (value == null) return;
+    const re = new RegExp(`<([a-z]+)([^>]*data-seo="${marker}"[^>]*)>`, 'i');
+    html = html.replace(re, (tag) =>
+      tag.replace(new RegExp(`${attr}="[^"]*"`), () => `${attr}="${escapeHtml(value)}"`));
+  };
+  if (over.title != null) {
+    html = html.replace(/<title[^>]*>[\s\S]*?<\/title>/, () => `<title data-seo="title">${escapeHtml(over.title)}</title>`);
+    setTag('og:title', 'content', over.title);
+    setTag('tw:title', 'content', over.title);
+  }
+  if (over.description != null) {
+    setTag('desc', 'content', over.description);
+    setTag('og:desc', 'content', over.description);
+    setTag('tw:desc', 'content', over.description);
+  }
+  if (over.url != null) {
+    setTag('og:url', 'content', over.url);
+    setTag('canonical', 'href', over.url);
+  }
+  if (over.image != null) {
+    setTag('og:image', 'content', over.image);
+    setTag('tw:image', 'content', over.image);
+  }
+  if (over.type != null) setTag('og:type', 'content', over.type);
+  if (over.jsonLd) {
+    // Static, server-authored JSON-LD only. If user content ever flows in here,
+    // it must be sanitized against `</script>` breakout first.
+    html = html.replace('</head>', () => `<script type="application/ld+json">${JSON.stringify(over.jsonLd)}</script>\n</head>`);
+  }
+  return html;
+}
+
+// Static page titles/descriptions. Every entry becomes a distinct SERP result
+// instead of eight copies of the homepage.
+const PAGE_META = {
+  '/studio': {
+    title: 'Open studio — Drawesome',
+    description: 'Jump straight into the studio and start drawing — brushes, layers, coloring sheets, and live rooms. Free, no account needed.',
+  },
+  '/rooms': {
+    title: 'Live drawing rooms — Drawesome',
+    description: "See what everyone is drawing right now and join a live room: open studio, Draw Phone, animation, daily challenge, and more.",
+  },
+  '/wall': {
+    title: 'The Fridge Wall — Drawesome gallery',
+    description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
+  },
+  '/about': { title: 'About Drawesome', description: 'What Drawesome is, how rooms work, and why there are no ads and no real-money purchases.' },
+  '/faq': {
+    title: 'Safety & FAQ — Drawesome',
+    description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',
+  },
+  '/safety': { title: 'Safety — Drawesome', description: 'How Drawesome keeps shared drawing spaces safe: auto-moderation in public rooms, reporting, host tools, and data care.' },
+  '/privacy': { title: 'Privacy — Drawesome', description: 'What Drawesome stores, what it never does with your data, and the choices you have — including full account erasure.' },
+  '/signup': { title: 'Save your art — Drawesome', description: 'Make a free account to keep your gallery, wall posts, and streak across devices. Or keep drawing as a guest.' },
+};
+
+const FAQ_JSON_LD = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'Is Drawesome safe for kids and teens?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Public rooms are auto-moderated: chat is filtered, drawings are scanned, and every room has reporting plus host mute/kick tools. Private invite rooms are lighter-touch, and we say so up front.' },
+    },
+    {
+      '@type': 'Question',
+      name: 'Do I need an account?',
+      acceptedAnswer: { '@type': 'Answer', text: 'No. You can draw, join rooms, and play games as a guest. An account only adds cross-device saving of your art and streak.' },
+    },
+    {
+      '@type': 'Question',
+      name: 'Does Drawesome have ads or in-app purchases?',
+      acceptedAnswer: { '@type': 'Answer', text: 'No ads and no real-money purchases. The in-app currency is play money earned by drawing.' },
+    },
+    {
+      '@type': 'Question',
+      name: 'How do I report something?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Every room and every wall post has a report button. Reports go straight to the moderators, and urgent ones are triaged first. You can also email safety@drawesome.art.' },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can I delete my data?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Yes — deleting your account wipes your saved art, wall posts, and chat history from our servers.' },
+    },
+  ],
+};
+
+// Head overrides for one request path, or null for the untouched default shell.
+function seoOverridesFor(reqPath) {
+  const path = reqPath.replace(/\/+$/, '') || '/';
+  if (PAGE_META[path]) {
+    const over = { ...PAGE_META[path], url: `${SITE_ORIGIN}${path}` };
+    if (path === '/faq') over.jsonLd = FAQ_JSON_LD;
+    return over;
+  }
+  const wallMatch = /^\/wall\/([A-Za-z0-9_-]{1,64})$/.exec(path);
+  if (wallMatch) {
+    const post = wallPosts.get(wallMatch[1]);
+    if (post && !post.hidden) {
+      const hearts = Object.keys(post.votedBy || {}).length;
+      return {
+        title: `“${post.title}” by ${post.artist} — the Fridge Wall`,
+        description: `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ' — it moves!' : ''}. See it, heart it, or remix it live.`,
+        url: `${SITE_ORIGIN}/wall/${post.id}`,
+        image: `${SITE_ORIGIN}/api/wall/${post.id}/frame/0`,
+        type: 'article',
+      };
+    }
+    return { ...PAGE_META['/wall'], url: `${SITE_ORIGIN}/wall` };
+  }
+  const joinMatch = /^\/join\/([A-Za-z0-9-]{1,16})$/.exec(path);
+  if (joinMatch) {
+    const code = joinMatch[1].toUpperCase();
+    const room = rooms.get(code);
+    // Public rooms get a real invite card. Private rooms stay opaque: the link
+    // itself is the capability, so preview bots (and code guessers) never see a
+    // kid-entered title or a headcount.
+    if (room && room.audience === 'kid_safe' && room.listed) {
+      const painting = room.users ? room.users.size : 0;
+      return {
+        title: `Join “${room.title || code}” on Drawesome 🎨`,
+        description: `${painting > 0 ? `${painting} drawing right now — ` : ''}jump into this live drawing room. Free, no account needed.`,
+        url: `${SITE_ORIGIN}/join/${code}`,
+      };
+    }
+    return {
+      title: "You're invited to draw on Drawesome 🎨",
+      description: 'A friend wants to draw with you, live. Tap to join their room — free, no account needed.',
+      url: `${SITE_ORIGIN}/join/${code}`,
+    };
+  }
+  return null;
+}
+
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send(
+    `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /join/\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,
+  );
+});
+
+// Sitemap: the static pages plus the wall's newest posts (each has its own OG
+// card, so they're real landing pages). /join/ links are deliberately absent —
+// robots.txt disallows them so a leaked private invite never gets indexed.
+app.get('/sitemap.xml', (_req, res) => {
+  const urls = [];
+  const add = (loc, changefreq, priority) => urls.push({ loc, changefreq, priority });
+  add(`${SITE_ORIGIN}/`, 'daily', '1.0');
+  for (const p of Object.keys(PAGE_META)) add(`${SITE_ORIGIN}${p}`, p === '/wall' || p === '/rooms' ? 'hourly' : 'weekly', '0.8');
+  const posts = [...wallPosts.values()].filter((p) => !p.hidden).sort((a, b) => b.createdAt - a.createdAt).slice(0, 500);
+  for (const p of posts) add(`${SITE_ORIGIN}/wall/${p.id}`, 'weekly', '0.5');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
+    .map((u) => `  <url><loc>${escapeHtml(u.loc)}</loc><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`)
+    .join('\n')}\n</urlset>\n`;
+  res.type('application/xml').setHeader('Cache-Control', 'public, max-age=3600').send(xml);
+});
+
 const distPath = join(__dirname, 'dist');
 if (existsSync(distPath)) {
+  // The shell is read once; deploys replace the container (or restart the
+  // process), so an in-memory copy is always current.
+  let shellHtml = '';
+  try {
+    shellHtml = readFileSync(join(distPath, 'index.html'), 'utf8');
+  } catch {
+    shellHtml = '';
+  }
   // Vite emits content-hashed asset names, so a year of immutable edge/browser
   // caching is safe; only index.html (the pointer to the hashes) must revalidate.
   app.use(express.static(distPath, {
@@ -5241,8 +5569,9 @@ if (existsSync(distPath)) {
     },
   }));
   // SPA fallback (Express 5: use middleware, not an app.get('*') route). Every
-  // unmatched GET returns index.html so /studio, /join/CODE and /admin work on
-  // direct load / refresh.
+  // unmatched GET returns the shell — with its head relinked for the route —
+  // so /studio, /join/CODE and /wall/POST work on direct load AND unfurl as
+  // themselves in iMessage/Discord/WhatsApp.
   app.use((req, res) => {
     if (req.method !== 'GET') {
       res.status(404).end();
@@ -5255,7 +5584,12 @@ if (existsSync(distPath)) {
       return;
     }
     res.setHeader('Cache-Control', 'no-cache'); // shell must revalidate so new deploys land
-    res.sendFile(join(distPath, 'index.html'));
+    if (!shellHtml) {
+      res.sendFile(join(distPath, 'index.html'));
+      return;
+    }
+    const over = seoOverridesFor(req.path);
+    res.type('html').send(over ? renderShell(shellHtml, over) : shellHtml);
   });
 } else {
   app.use((_req, res) => res.status(503).send('Build missing. Run `npm run build` first.'));

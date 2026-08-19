@@ -5699,13 +5699,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setRemixSource(data.remixSource || null);
           setRoomVote(data.vote ? { options: data.vote.options || [], endsAt: data.vote.endsAt || 0, counts: data.vote.counts || [0, 0, 0], myChoice: null } : null);
           // Remember this room (with its friendly title) so it shows up under
-          // "Your rooms" in the switcher for quick hopping back.
-          recordRecentRoom(roomId, data.roomTitle || null, Date.now());
+          // "Your rooms" in the switcher for quick hopping back — plus the
+          // mention-watch capability (our name here + the server-issued key)
+          // so the notify socket can subscribe to @mentions later.
+          recordRecentRoom(
+            roomId,
+            data.roomTitle || null,
+            Date.now(),
+            data.mentionKey ? { name: data.userName, key: data.mentionKey } : undefined,
+          );
           // Mute is re-applied by the server on (re)connect for signed-in users,
           // so trust the handshake rather than optimistically clearing it.
           setMutedSelf(!!data.muted);
-          // Moderation runs only in public (kid_safe) rooms. Offer to be a watcher
-          // if this device is capable; the server decides who actually scans.
           roomAudienceRef.current = data.audience || null;
           setRoomAudience(data.audience || null);
           roomFingerPaintRef.current = !!data.fingerPaint;
@@ -5741,7 +5746,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             // could carry one into a public room before the audience arrived).
             setSelectedBrush((prev) => (brushCatalog.find((b) => b.id === prev)?.privateOnly ? "marker" : prev));
           }
-          if (data.audience === "kid_safe" && isWatcherCapable()) {
+          // Offer to be a watcher in EVERY room (the server elects who scans).
+          // Private rooms elect watchers too now — a flag there goes to the
+          // room's host instead of nobody (the audit's biggest gap).
+          if (isWatcherCapable()) {
             mpRef.current?.sendWatcherAck?.(true);
           }
           break;
@@ -6346,6 +6354,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // The server elected (or stood down) this client as an NSFW watcher.
           nsfwWatcherRef.current?.setActive(!!data.active);
           break;
+        case "mention_key":
+          // A rename minted a fresh mention-watch capability for our new name —
+          // store it so cross-room @mention pings keep following us.
+          if (data.room && data.name && data.key) {
+            recordRecentRoom(data.room, null, Date.now(), { name: data.name, key: data.key });
+          }
+          break;
         case "mod_alert":
           // Host-only — the server only sends these to a room's hosts.
           setModAlerts((list) => [{ ...data, id: `ma_${Date.now()}_${list.length}`, ts: Date.now() }, ...list].slice(0, 50));
@@ -6385,12 +6400,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   // Watch our OTHER recent rooms for @mentions of us and collect them in the
   // profile-menu inbox (the current room's chat is already live here, so it's
-  // excluded). Mentions match the display name, case-insensitive.
-  const watchRoomCodes = useMemo(
-    () => getRecentRooms().map((r) => r.code).filter((code) => code && code !== roomId),
-    [roomId],
+  // excluded). Each watch presents the room's stored mention-key capability —
+  // rooms visited before keys existed (or where the handshake didn't issue one)
+  // simply aren't watchable until the next visit.
+  const selfName = mp.self?.name || null;
+  const watchList = useMemo(
+    () =>
+      getRecentRooms()
+        .filter((r) => r.code && r.code !== roomId && r.watchName && r.mentionKey)
+        .map((r) => ({ code: r.code, name: r.watchName, key: r.mentionKey })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selfName re-reads storage after joins/renames land new keys
+    [roomId, selfName],
   );
-  useMentionWatcher(watchRoomCodes, mp.self?.name || null, (mention) => {
+  useMentionWatcher(watchList, (mention) => {
     setNotifications(addNotification(mention));
   });
   const unreadNotifs = notifications.filter((n) => !n.read).length;
@@ -9172,7 +9194,10 @@ export default function App() {
   }
 
   if (path.startsWith("/wall")) {
-    return <WallPage onNavigate={navigate} />;
+    // /wall/:id deep-links open the wall with that post spotlighted — the URL
+    // every wall share button hands out.
+    const [, , postId = ""] = path.split("/");
+    return <WallPage onNavigate={navigate} initialPostId={postId.slice(0, 64)} />;
   }
 
   return <HomePage onNavigate={navigate} />;

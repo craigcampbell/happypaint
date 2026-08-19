@@ -1,8 +1,8 @@
 {
-  "name": "Drawesome — paint together",
+  "name": "Drawesome — draw with your friends, live",
   "short_name": "Drawesome",
-  "description": "A fast, fun, kid-safe drawing and coloring studio where you paint together with friends in real time. No account needed to start.",
-  "start_url": "/studio",
+  "description": "A live drawing hangout: paint with friends in real time, play drawing games, and post to the Fridge Wall. Free, no account needed.",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
@@ -13,5 +13,25 @@
     { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
     { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
     { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open the studio",
+      "short_name": "Draw",
+      "url": "/studio",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Today's challenge",
+      "short_name": "Challenge",
+      "url": "/join/DAILY",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "The Fridge Wall",
+      "short_name": "Wall",
+      "url": "/wall",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

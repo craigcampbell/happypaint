@@ -1,4 +1,4 @@
-const CACHE_NAME = "happypaint-static-v7";
+const CACHE_NAME = "happypaint-static-v8";
 const STATIC_ASSETS = [
   "/linen.png",
   "/canvas.png",
@@ -37,7 +37,14 @@ self.addEventListener("fetch", (event) => {
 
   // NEVER cache or intercept live endpoints — the API and websocket must always
   // hit the network (caching the API was returning stale/empty saved-art lists).
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws")) {
+  // robots/sitemap are server-generated with their own HTTP caching; the SW's
+  // forever-cache would pin them stale across deploys.
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/ws") ||
+    url.pathname === "/robots.txt" ||
+    url.pathname === "/sitemap.xml"
+  ) {
     return;
   }
 

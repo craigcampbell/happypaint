@@ -33,7 +33,7 @@ const CTA_MESSAGES = [
 // One animated card. Frames are served as immutable URLs; we preload them all
 // once, then cycle with an interval only while the card is on screen (the
 // IntersectionObserver keeps a wall of GIF-like posts from burning battery).
-function WallCard({ post, onVote, onReport, onRemix }) {
+function WallCard({ post, onVote, onReport, onRemix, onShare }) {
   const [frame, setFrame] = useState(0);
   const [visible, setVisible] = useState(false);
   const rootRef = useRef(null);
@@ -89,9 +89,14 @@ function WallCard({ post, onVote, onReport, onRemix }) {
         </div>
         <div className="wall-meta">
           <span className="wall-artist">by {post.artist}</span>
-          <button type="button" className="wall-report" onClick={() => onReport(post)} title="Report this post" aria-label="Report this post">
-            ⚑
-          </button>
+          <span className="wall-meta-actions">
+            <button type="button" className="wall-share" onClick={() => onShare(post)} title="Share this drawing" aria-label="Share this drawing">
+              📤
+            </button>
+            <button type="button" className="wall-report" onClick={() => onReport(post)} title="Report this post" aria-label="Report this post">
+              ⚑
+            </button>
+          </span>
         </div>
         {post.parentPostId ? (
           <p className="wall-remix-line">
@@ -128,8 +133,11 @@ function CtaCard({ index, onNavigate }) {
   );
 }
 
-export default function WallPage({ onNavigate }) {
+export default function WallPage({ onNavigate, initialPostId = "" }) {
   const [posts, setPosts] = useState([]);
+  // /wall/:id deep link: the shared post is spotlighted above the feed.
+  const [spotlight, setSpotlight] = useState(null);
+  const [spotlightMissing, setSpotlightMissing] = useState(false);
   const [topTags, setTopTags] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -182,6 +190,51 @@ export default function WallPage({ onNavigate }) {
     };
   }, [load]);
 
+  useEffect(() => {
+    if (!initialPostId) return;
+    let active = true;
+    (async () => {
+      try {
+        const key = deviceKey();
+        const session = await getSession().catch(() => null);
+        const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+        const res = await fetch(`/api/wall/${encodeURIComponent(initialPostId)}${key ? `?userKey=${encodeURIComponent(key)}` : ""}`, { headers, cache: "no-store" });
+        if (!res.ok) throw new Error("missing");
+        const data = await res.json();
+        if (active && data.post) setSpotlight(data.post);
+      } catch {
+        if (active) setSpotlightMissing(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [initialPostId]);
+
+  const share = useCallback(async (post) => {
+    const url = `${window.location.origin}/wall/${encodeURIComponent(post.id)}`;
+    const payload = {
+      title: `“${post.title}” on Drawesome`,
+      text: `Look what ${post.artist} drew on Drawesome! 🎨 ${url}`,
+      url,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(payload);
+        return;
+      }
+      throw new Error("no share sheet");
+    } catch (err) {
+      if (err?.name === "AbortError") return; // user closed the sheet — not an error
+      try {
+        await navigator.clipboard.writeText(url);
+        say("Link copied — send it to a friend! 🔗");
+      } catch {
+        window.prompt("Copy this link:", url);
+      }
+    }
+  }, [say]);
+
   // Debounced search; tag + sort reload immediately. All three cancel any
   // pending debounced search first so a stale keystroke can't clobber them.
   const onSearch = (value) => {
@@ -203,8 +256,13 @@ export default function WallPage({ onNavigate }) {
 
   const vote = useCallback(async (post) => {
     const on = !post.liked;
-    // Optimistic heart — snap back if the server disagrees.
-    setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, liked: on, votes: Math.max(0, p.votes + (on ? 1 : -1)) } : p)));
+    // Optimistic heart — snap back if the server disagrees. The spotlight card
+    // (deep-link view) holds its own copy of the post, so patch it in step.
+    const patch = (updater) => {
+      setPosts((prev) => prev.map((p) => (p.id === post.id ? updater(p) : p)));
+      setSpotlight((s) => (s && s.id === post.id ? updater(s) : s));
+    };
+    patch((p) => ({ ...p, liked: on, votes: Math.max(0, p.votes + (on ? 1 : -1)) }));
     try {
       const session = await getSession().catch(() => null);
       const headers = { "Content-Type": "application/json" };
@@ -216,11 +274,11 @@ export default function WallPage({ onNavigate }) {
       });
       if (!res.ok) throw new Error("vote failed");
       const data = await res.json();
-      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, votes: data.votes, liked: data.liked } : p)));
+      patch((p) => ({ ...p, votes: data.votes, liked: data.liked }));
     } catch {
       // Reverse the optimistic delta against CURRENT state (a reload may have
       // replaced the list meanwhile) rather than restoring a click-time snapshot.
-      setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, liked: !on, votes: Math.max(0, p.votes + (on ? -1 : 1)) } : p)));
+      patch((p) => ({ ...p, liked: !on, votes: Math.max(0, p.votes + (on ? -1 : 1)) }));
       say("Couldn't save that heart — try again!");
     }
   }, [say]);
@@ -274,6 +332,25 @@ export default function WallPage({ onNavigate }) {
           <p>Art by kids like you — pin yours from the studio with the 🧲 Wall button!</p>
         </header>
 
+        {spotlight ? (
+          <section className="wall-spotlight" aria-label="Shared drawing">
+            <WallCard post={spotlight} onVote={vote} onReport={report} onRemix={remix} onShare={share} />
+            <button
+              type="button"
+              className="wall-spotlight-close"
+              onClick={() => {
+                setSpotlight(null);
+                onNavigate("/wall");
+              }}
+            >
+              See the whole wall ↓
+            </button>
+          </section>
+        ) : null}
+        {spotlightMissing ? (
+          <p className="wall-status">That drawing isn&rsquo;t on the wall anymore — but look at everything else! 👇</p>
+        ) : null}
+
         <div className="wall-controls">
           <input
             className="wall-search"
@@ -324,7 +401,7 @@ export default function WallPage({ onNavigate }) {
           <div className="wall-masonry">
             {cells.map((cell, i) =>
               cell.post ? (
-                <WallCard key={cell.post.id} post={cell.post} onVote={vote} onReport={report} onRemix={remix} />
+                <WallCard key={cell.post.id} post={cell.post} onVote={vote} onReport={report} onRemix={remix} onShare={share} />
               ) : (
                 <CtaCard key={`cta-${i}`} index={cell.cta} onNavigate={onNavigate} />
               ),

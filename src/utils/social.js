@@ -139,9 +139,9 @@ export function writeSocialSessions(sessions) {
   }
 }
 
-export async function shareInvite({ code, title = "Happy Paint session" }) {
+export async function shareInvite({ code, title = "Drawesome room" }) {
   const url = createInviteLink(code);
-  const text = `Join my Happy Paint room with code ${code}`;
+  const text = `Come draw with me on Drawesome! 🎨 Room code ${code}`;
 
   if (navigator.share) {
     await navigator.share({ title, text, url });

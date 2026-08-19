@@ -26,6 +26,9 @@ export default function SignupPage({ onNavigate }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
+  // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
+  // "" until answered; signup stays disabled until one option is picked.
+  const [ageBand, setAgeBand] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -40,15 +43,31 @@ export default function SignupPage({ onNavigate }) {
 
   const submitEmail = async (event) => {
     event.preventDefault();
+    if (mode === "signup" && ageBand !== "13plus" && ageBand !== "parent") return;
     setBusy(true);
     setMessage("");
     const result = await (mode === "signup" ? signUpWithEmail : signInWithEmail)(email, password);
     setMessage(result.message);
     setBusy(false);
-    if (result.ok) onNavigate("/studio");
+    if (result.ok) {
+      // Keep the attestation on-device (what was answered + when) — the only
+      // record we need, and nothing personal beyond a yes/no leaves the browser.
+      try {
+        window.localStorage.setItem(
+          "drawesome:age-attestation:v1",
+          JSON.stringify({ band: ageBand || "login", ts: Date.now() }),
+        );
+      } catch { /* best-effort */ }
+      onNavigate("/studio");
+    }
   };
 
   const handleProvider = async (provider) => {
+    // OAuth can CREATE an account too, so the age screen gates it in signup mode.
+    if (mode === "signup" && ageBand !== "13plus" && ageBand !== "parent") {
+      setMessage("Pick who this account is for first (13+ or parent-made).");
+      return;
+    }
     const popup = window.open("", "_blank", "width=520,height=680");
     setBusy(true);
     const result = await signInWithProvider(provider, popup);
@@ -80,6 +99,47 @@ export default function SignupPage({ onNavigate }) {
           ) : (
             <>
               <form className="signup-form" onSubmit={submitEmail}>
+                {mode === "signup" ? (
+                  <fieldset className="signup-age" disabled={busy}>
+                    <legend>Who is this account for?</legend>
+                    <label>
+                      <input
+                        type="radio"
+                        name="ageBand"
+                        value="13plus"
+                        checked={ageBand === "13plus"}
+                        onChange={() => setAgeBand("13plus")}
+                      />
+                      <span>I&rsquo;m 13 or older</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="ageBand"
+                        value="parent"
+                        checked={ageBand === "parent"}
+                        onChange={() => setAgeBand("parent")}
+                      />
+                      <span>I&rsquo;m a parent/guardian making this for my kid</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="ageBand"
+                        value="under13"
+                        checked={ageBand === "under13"}
+                        onChange={() => setAgeBand("under13")}
+                      />
+                      <span>I&rsquo;m under 13</span>
+                    </label>
+                    {ageBand === "under13" ? (
+                      <p className="signup-age-note">
+                        No account needed — you can draw everything as a guest! If you want art saved across
+                        devices, ask a parent or guardian to make the account with you. 💛
+                      </p>
+                    ) : null}
+                  </fieldset>
+                ) : null}
                 <label className="signup-field">
                   <span>Email</span>
                   <input
@@ -102,7 +162,11 @@ export default function SignupPage({ onNavigate }) {
                     required
                   />
                 </label>
-                <button type="submit" className="primary-action signup-submit" disabled={busy || !isCloudConfigured}>
+                <button
+                  type="submit"
+                  className="primary-action signup-submit"
+                  disabled={busy || !isCloudConfigured || (mode === "signup" && ageBand !== "13plus" && ageBand !== "parent")}
+                >
                   {mode === "signup" ? "Create account" : "Log in"}
                 </button>
               </form>

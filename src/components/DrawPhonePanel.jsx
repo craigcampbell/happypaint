@@ -52,9 +52,13 @@ async function shareBook(book) {
   const last = drawings[drawings.length - 1];
   const seed = book.pages[0]?.content || "";
   const finalGuess = [...book.pages].reverse().find((p) => p.type === "guess")?.content;
+  // The join link rides inside the text (not only the `url` field) because
+  // several share targets drop `url` when a file is attached — the image must
+  // still carry a way back to the site.
+  const joinUrl = `${window.location.origin}/join/PHONE`;
   const text = finalGuess
-    ? `Draw Phone: "${seed}" became "${finalGuess}"! 📞🎨`
-    : `Draw Phone on Drawesome! 📞🎨`;
+    ? `Draw Phone: "${seed}" became "${finalGuess}"! 📞🎨 Play at ${joinUrl}`
+    : `Draw Phone on Drawesome! 📞🎨 Play at ${joinUrl}`;
   try {
     if (last) {
       const res = await fetch(`/api/sheets/${last.content}`);
@@ -62,7 +66,7 @@ async function shareBook(book) {
       const blob = await (await fetch(data.image)).blob();
       const file = new File([blob], "drawphone.jpg", { type: blob.type || "image/jpeg" });
       if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], text, title: "Draw Phone" });
+        await navigator.share({ files: [file], text, title: "Draw Phone", url: joinUrl });
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -71,7 +75,7 @@ async function shareBook(book) {
       URL.revokeObjectURL(url);
       return;
     }
-    if (navigator.share) await navigator.share({ text, title: "Draw Phone" });
+    if (navigator.share) await navigator.share({ text, title: "Draw Phone", url: joinUrl });
   } catch { /* user dismissed or share unsupported — no-op */ }
 }
 
