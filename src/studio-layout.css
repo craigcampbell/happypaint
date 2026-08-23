@@ -1,0 +1,219 @@
+/* ==========================================================================
+   Studio layout tiers — the canvas is the page.
+
+   The tier is resolved in JS (src/hooks/useLayoutTier.js) and stamped on the
+   shell as data-layout="desktop|tablet|phone"; the shell also carries
+   .rail-open / .rail-collapsed for the tool rail. The media queries that make
+   a tier "compact" live in that hook — keep them in sync.
+
+     desktop  docked 328px rail that COLLAPSES (remembered), floating studio
+              menu, slim in-flow room bar, zero padding: the canvas fills the
+              rest of the window.
+     tablet   (iPad landscape, ≥900px) compact chrome, but the tool rail is a
+              RIGHT-HAND SIDE SHEET so the canvas stays visible and live while
+              you pick brushes / colours. No dimming backdrop.
+     phone    compact chrome + the bottom-sheet tool drawer.
+
+   Loaded after App.css and drawesome-theme.css, so plain rules here win ties.
+   ========================================================================== */
+
+/* ---- Every tier --------------------------------------------------------- */
+.studio-workspace {
+  padding: 0;
+  gap: 0;
+}
+
+.canvas-stage {
+  gap: 6px;
+}
+
+.canvas-paper {
+  border-radius: 0;
+}
+
+/* The rail scrolls vertically under a finger; nothing else (no page zoom /
+   horizontal drift on iPad). */
+.tool-rail {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+.rail-head,
+.rail-reopen {
+  display: none;
+}
+
+.rail-head {
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  order: -11; /* ahead of .drawer-handle (-10) and .status-line (-9) */
+}
+
+.rail-head-title {
+  font-family: var(--display-font);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.rail-collapse {
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.rail-collapse span {
+  margin-left: 4px;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* ---- Desktop: docked, collapsible rail ----------------------------------- */
+.studio-shell[data-layout="desktop"] {
+  grid-template-columns: minmax(0, 1fr) 328px;
+  transition: grid-template-columns 180ms ease;
+}
+
+.studio-shell[data-layout="desktop"].rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.studio-shell[data-layout="desktop"].rail-collapsed .tool-rail {
+  display: none;
+}
+
+.studio-shell[data-layout="desktop"] .rail-head {
+  display: flex;
+}
+
+/* Slim, in-flow room bar (not floated over the art — you don't want to draw
+   under it). The floating "Studio" menu button sits in its left gutter. */
+.studio-shell[data-layout="desktop"] .mp-bar {
+  min-height: 52px;
+  margin: 0;
+  padding: 5px 8px 5px 142px;
+  border: 0;
+  border-bottom: 1px solid var(--snap-gray-200, #e3e6ea);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.studio-shell[data-layout="desktop"] .desktop-studio-toggle {
+  top: 5px;
+  left: 8px;
+}
+
+.studio-shell[data-layout="desktop"] .topbar {
+  top: 58px;
+  right: 8px;
+  left: 8px;
+}
+
+.studio-shell[data-layout="desktop"] .canvas-paper {
+  border: 0;
+  box-shadow: none;
+}
+
+/* Edge tab that brings the rail back when it's collapsed. */
+.studio-shell[data-layout="desktop"] .rail-reopen {
+  position: absolute;
+  z-index: 46;
+  top: 50%;
+  right: 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-height: 0;
+  padding: 10px 9px 10px 11px;
+  border: 1px solid var(--snap-gray-200, #dfe2e5);
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+  background: rgba(250, 251, 252, 0.98);
+  box-shadow: var(--snap-shadow-soft, -6px 6px 22px rgba(16, 16, 16, 0.14));
+  font-size: 1.25rem;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.studio-shell[data-layout="desktop"] .rail-reopen:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: var(--snap-shadow-soft, -6px 6px 22px rgba(16, 16, 16, 0.14));
+  transform: translateY(-50%);
+}
+
+.rail-reopen-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* ---- Tablet: right-hand side sheet --------------------------------------- */
+.studio-shell[data-layout="tablet"] {
+  --rail-w: min(380px, 42vw);
+}
+
+.studio-shell[data-layout="tablet"] .tool-rail {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  width: var(--rail-w);
+  height: 100dvh;
+  max-height: none;
+  padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+  border-radius: 0;
+  border-left: 1px solid var(--snap-gray-200, #e3e6ea);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.16);
+  transform: translateX(104%);
+  transition: transform 0.22s ease;
+}
+
+.studio-shell[data-layout="tablet"] .tool-rail.is-open {
+  transform: translateX(0);
+}
+
+.studio-shell[data-layout="tablet"] .rail-head {
+  display: flex;
+}
+
+.studio-shell[data-layout="tablet"] .drawer-handle {
+  display: none;
+}
+
+/* No dimming backdrop: the canvas beside the sheet stays live, so you can keep
+   painting with the palette open (close it with Hide, 🎨, or the T key). */
+.studio-shell[data-layout="tablet"] .tools-backdrop {
+  display: none;
+}
+
+/* Floating chrome moves out from under the open sheet. */
+.studio-shell[data-layout="tablet"].rail-open .mobile-quickbar {
+  display: flex;
+  left: calc((100vw - var(--rail-w)) / 2);
+}
+
+.studio-shell[data-layout="tablet"].rail-open .zoom-controls {
+  right: calc(var(--rail-w) + 10px);
+}
+
+.studio-shell[data-layout="tablet"].rail-open .mp-chat,
+.studio-shell[data-layout="tablet"].rail-open .reaction-picker {
+  right: calc(var(--rail-w) + 12px);
+}
+
+/* ---- Phone: bottom sheet (unchanged), capped on big portrait tablets ------ */
+@media (min-width: 700px) {
+  .studio-shell[data-layout="phone"] .tool-rail {
+    max-height: min(82vh, 640px);
+  }
+}
+
+/* Hide the desktop rail header on phones (the grip + Done row is the handle). */
+.studio-shell[data-layout="phone"] .rail-head {
+  display: none;
+}

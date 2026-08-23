@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   brushCatalog,
-  clamp,
   drawBrushSegment,
   getAuthoringDab,
   getStrokeDab,
@@ -119,6 +118,14 @@ import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
 import { useMultiplayer } from "./hooks/useMultiplayer";
+import { useLayoutTier, resolveLayoutTier } from "./hooks/useLayoutTier";
+import {
+  isEraserPointer,
+  isSecondaryButtonPointer,
+  loadPenCalibration,
+  mapPenPressure,
+  savePenCalibration,
+} from "./utils/penInput";
 import { extractCanvasPalette, resolvePreviewTheme } from "./utils/artPreview";
 import {
   normalizeSymmetry,
@@ -131,6 +138,7 @@ import StorybookPanel from "./components/StorybookPanel";
 import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
 import "./App.css";
 import "./drawesome-theme.css";
+import "./studio-layout.css";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
 // 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
@@ -229,6 +237,29 @@ const scheduleIdle = (callback) =>
     ? window.requestIdleCallback(callback, { timeout: 200 })
     : window.setTimeout(callback, 32);
 const MAX_PALETTE_COLORS = 10;
+// Touch contacts are ignored for this long after any pen activity (contact OR
+// hover), so a hand resting on a Cintiq / iPad can't paint or pinch while the
+// pen is in use, yet fingers work again a moment after the pen is put down.
+const PEN_PRIORITY_MS = 1500;
+// A touch contact wider/taller than this is a palm or forearm, never a fingertip.
+const PALM_CONTACT_PX = 45;
+// Desktop tool-rail open/closed preference (desktop tier only; the compact
+// tiers always start with the rail closed so the canvas gets the screen).
+const RAIL_OPEN_STORAGE_KEY = "happypaint:studio-rail:v1";
+const readRailPreference = () => {
+  try {
+    return window.localStorage.getItem(RAIL_OPEN_STORAGE_KEY) !== "closed";
+  } catch {
+    return true;
+  }
+};
+const writeRailPreference = (open) => {
+  try {
+    window.localStorage.setItem(RAIL_OPEN_STORAGE_KEY, open ? "open" : "closed");
+  } catch {
+    /* private mode / quota — the rail just won't remember */
+  }
+};
 
 // --- View transform math (pure, so it's testable + closure-safe) -----------
 // The view maps WORLD coords (the CANVAS_WIDTH x CANVAS_HEIGHT document) to CSS
@@ -536,10 +567,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const shapePreviewRectRef = useRef(null);
   const activePointerRef = useRef(null);
   const activeCanvasRectRef = useRef(null);
-  // Pen prioritization / palm rejection (W14). Once a pen contact is seen we
-  // prefer it: touch contacts (especially large-contact palm rests) are ignored
-  // while a pen is the active input. Mouse and lone-finger touch keep working.
-  const penSeenRef = useRef(false);
+  // Pen prioritization / palm rejection (W14). While a pen is active — or was
+  // seen (incl. hovering: Cintiq / M2 Pencil proximity) within the last
+  // PEN_PRIORITY_MS — touch contacts are ignored, so a resting hand can't paint
+  // or hijack the stroke into a pinch. It's TIME-based, not sticky: a shared
+  // iPad can go Pencil → finger and back without a reload. Mouse and a normal
+  // lone finger are never rejected; big contact patches are always palms.
+  const lastPenAtRef = useRef(0);
+  const activePointerTypeRef = useRef(null); // pointerType of the pointer drawing right now
+  // Adaptive pen pressure band (see utils/penInput). Loaded once per session,
+  // persisted (debounced) whenever the ceiling learns a heavier pen.
+  const penCalRef = useRef(null);
+  const penCalSaveRef = useRef(0);
+  // Stylus eraser-end override: the tool the UI had before the eraser end of
+  // the pen touched down, restored at pen-up. Null while no override is live.
+  const penEraserOverrideRef = useRef(null);
   const dirtyRef = useRef(false);
   const autosaveTimerRef = useRef(null);
   const saveInFlightRef = useRef(false);
@@ -644,8 +686,32 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false); // mobile tools drawer
+  // Which studio layout we're in (desktop / tablet / phone) — see useLayoutTier.
+  // Stamped on the shell as data-layout so the CSS tiers and this state agree.
+  const layoutTier = useLayoutTier();
+  const layoutTierRef = useRef(layoutTier);
+  layoutTierRef.current = layoutTier;
+  // The tool rail: desktop = docked column (open by default, remembered);
+  // tablet = side sheet; phone = bottom sheet. Compact tiers start closed so
+  // the canvas gets the whole screen.
+  const [toolsOpen, setToolsOpen] = useState(() => (resolveLayoutTier() === "desktop" ? readRailPreference() : false));
   const [desktopHeaderOpen, setDesktopHeaderOpen] = useState(false);
+  // Crossing a tier (window resize, iPad rotation, plugging a Cintiq in):
+  // re-apply that tier's default — desktop remembers the rail, the compact
+  // tiers drop the sheet so the canvas isn't suddenly half-covered.
+  // Desktop-only: remember whether the docked rail is open. (Sheet tiers are
+  // transient — opening the phone drawer shouldn't pin the desktop rail.)
+  const prevTierRef = useRef(layoutTier);
+  useEffect(() => {
+    if (prevTierRef.current !== layoutTier) {
+      prevTierRef.current = layoutTier;
+      setToolsOpen(layoutTier === "desktop" ? readRailPreference() : false);
+      return; // the value in hand is the OLD tier's — don't persist it
+    }
+    if (layoutTier === "desktop") {
+      writeRailPreference(toolsOpen);
+    }
+  }, [layoutTier, toolsOpen]);
   const [stepBackPreview, setStepBackPreview] = useState(null);
   const [isPreparingStepBack, setIsPreparingStepBack] = useState(false);
   const stepBackUrlRef = useRef(null);
@@ -2627,11 +2693,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
     let rawPressure;
     if (event.pointerType === "pen" && event.pressure > 0) {
-      // Real pen pressure, stretched to the band styluses actually report:
-      // Apple Pencil rarely exceeds ~0.75 in normal drawing and floors near
-      // ~0.03, so map 0.03..0.75 → 0.02..1. Without this, a hard press only
-      // reached ~3/4 of the brush's size range and strokes felt dead.
-      rawPressure = clamp((event.pressure - 0.03) / 0.72, 0.02, 1);
+      // Real pen pressure, stretched to the band THIS stylus actually reports
+      // (utils/penInput): Apple Pencil floors near ~0.03 and rarely passes
+      // ~0.75 in normal drawing; a Wacom Cintiq fills the band to 1.0. The
+      // ceiling starts on the Pencil band and learns upward from sustained
+      // heavier pressure, then sticks per device. Without the stretch a hard
+      // press only reached ~3/4 of the brush's size range and felt dead; with
+      // a fixed Pencil band a Wacom would max out at three-quarter pressure.
+      if (!penCalRef.current) {
+        penCalRef.current = loadPenCalibration();
+      }
+      const cal = penCalRef.current;
+      rawPressure = mapPenPressure(cal, event.pressure);
+      if (cal.dirty && !penCalSaveRef.current) {
+        penCalSaveRef.current = window.setTimeout(() => {
+          penCalSaveRef.current = 0;
+          savePenCalibration(penCalRef.current);
+        }, 1200);
+      }
     } else {
       // No real pressure (mouse reports a UA-constant 0.5/0, fingers a
       // constant too — the old hardcoded 0.62/0.72 fallbacks): synthesize it
@@ -2913,7 +2992,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const beginInteraction = useCallback(
     (event) => {
-      if (event.button !== undefined && event.button !== 0) {
+      // Pen tip (0) or the stylus eraser end (5) may stroke; barrel / mouse
+      // secondary buttons were already routed to a pan drag upstream.
+      if (event.button !== undefined && event.button !== 0 && !isEraserPointer(event)) {
         return false;
       }
 
@@ -2952,31 +3033,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         /* capture is best-effort (synthetic / already-released pointer) */
       }
       activePointerRef.current = event.pointerId;
+      activePointerTypeRef.current = event.pointerType || null;
       activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
       return true;
     },
     [getActiveLayer, roomLocked, isRoomHost, storybook],
   );
 
-  // Decide whether to ignore a pointerdown for palm rejection / pen priority
-  // (W14). Conservative: pen always wins and is remembered; once a pen has been
-  // used, touch contacts are ignored (the user is drawing with the pen and
-  // resting their hand); and any touch with a large contact patch is treated as
-  // a palm. Mouse and a normal lone finger are never rejected.
+  // Decide whether to ignore a touch contact for palm rejection / pen priority
+  // (W14). The pen always wins: while a pen stroke is live, or for
+  // PEN_PRIORITY_MS after any pen activity (contact or hover — a Cintiq and an
+  // M2 iPad report the pen in proximity before it lands), touch contacts are
+  // ignored, so the resting hand can't paint or pinch. Any touch with a large
+  // contact patch is a palm regardless. Mouse and a lone fingertip are never
+  // rejected, and fingers come back a moment after the pen is put down.
   const shouldRejectPointer = useCallback((event) => {
     const type = event.pointerType;
     if (type === "pen") {
-      penSeenRef.current = true;
+      lastPenAtRef.current = event.timeStamp || performance.now();
       return false;
     }
     if (type === "touch") {
-      if (penSeenRef.current) {
-        return true; // Prefer the pen; ignore resting-hand / second-finger touches.
+      if (activePointerRef.current != null && activePointerTypeRef.current === "pen") {
+        return true; // a pen stroke is in progress — this is the hand
+      }
+      const now = event.timeStamp || performance.now();
+      if (now - lastPenAtRef.current < PEN_PRIORITY_MS) {
+        return true; // pen was just here; ignore resting-hand / second-finger touches
       }
       // Palm heuristic: real fingertips report a small contact patch. A large
       // width/height is almost certainly a palm or forearm resting on a tablet.
-      const PALM_CONTACT = 45; // CSS px
-      if ((event.width || 0) > PALM_CONTACT || (event.height || 0) > PALM_CONTACT) {
+      if ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX) {
         return true;
       }
     }
@@ -2988,7 +3075,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       if (shouldRejectPointer(event)) {
         return;
       }
-      const settings = settingsRef.current;
+      let settings = settingsRef.current;
+      // Stylus eraser end (Wacom / Surface / any pen reporting button 5): erase
+      // with whatever is in hand, whatever tool the rail shows. The rail flips
+      // to the eraser for the stroke so the UI agrees with the pen, and
+      // finishStroke / abortActiveStroke put the previous tool back at pen-up.
+      if (
+        settings &&
+        isEraserPointer(event) &&
+        !roomFingerPaintRef.current &&
+        !(settings.tool === "brush" && settings.brush === "eraser")
+      ) {
+        penEraserOverrideRef.current = { tool: settings.tool, brush: settings.brush };
+        settings = { ...settings, tool: "brush", brush: "eraser" };
+        settingsRef.current = settings;
+        handToolRef.current = false;
+        setHandTool(false);
+        setSelectedTool("brush");
+        setSelectedBrush("eraser");
+      }
       const tool = settings?.tool || "brush";
 
       // Fill is a single click: commit immediately, no drag.
@@ -3264,6 +3369,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [drawBrushFromEvent, getPoint, sendCursorThrottled],
   );
 
+  // Pen-up after an eraser-end stroke: hand the rail back the tool it showed
+  // before the stylus was flipped (see startStroke).
+  const restorePenEraserOverride = useCallback(() => {
+    const prev = penEraserOverrideRef.current;
+    if (!prev) {
+      return;
+    }
+    penEraserOverrideRef.current = null;
+    setSelectedTool(prev.tool);
+    setSelectedBrush(prev.brush);
+  }, []);
+
   const finishStroke = useCallback(
     (event) => {
       if (activePointerRef.current !== event.pointerId) {
@@ -3271,7 +3388,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       event.preventDefault();
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      try {
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+      } catch {
+        /* pointer already inactive (interrupted pen sequence) — never strand the stroke */
+      }
 
       const tool = settingsRef.current?.tool || "brush";
 
@@ -3327,12 +3448,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
 
       activePointerRef.current = null;
+      activePointerTypeRef.current = null;
       activeCanvasRectRef.current = null;
       lastPointRef.current = null;
       activeStrokeLayerIdRef.current = null;
       invalidateCompositeCache();
       updateHistoryCounts();
       refreshActiveThumbnail();
+      restorePenEraserOverride();
       // Stroke-batch end: mark the recorder dirty so a timed keyframe is taken.
       recordReplay(false);
       // Play-money reward: a finished stroke earns a Drop (throttled internally).
@@ -3340,7 +3463,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Drawing streak: the first real stroke of the day ticks it (day-guarded).
       bumpStreakRef.current?.();
     },
-    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, updateHistoryCounts],
+    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, restorePenEraserOverride, updateHistoryCounts],
   );
 
   // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
@@ -3366,12 +3489,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       commitLocalStroke();
       localSmudgeRef.current = null;
       activePointerRef.current = null;
+      activePointerTypeRef.current = null;
       lastPointRef.current = null;
       activeStrokeLayerIdRef.current = null;
       invalidateCompositeCache();
       renderDisplay();
+      restorePenEraserOverride();
     }
-  }, [commitLocalStroke, flushStrokeFrame, flushStrokeNet, invalidateCompositeCache, renderDisplay]);
+  }, [commitLocalStroke, flushStrokeFrame, flushStrokeNet, invalidateCompositeCache, renderDisplay, restorePenEraserOverride]);
 
   // ---- Brush-size preview ring --------------------------------------------
   // A hollow circle sized to the brush (brushSize x current zoom) + tinted with
@@ -3454,6 +3579,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     } catch {
       /* capture unavailable — pointer tracking + the safety nets still apply */
     }
+    // Palm / pen-priority rejection happens HERE, before the contact is
+    // registered as a pointer: a palm resting beside a pen used to land in
+    // pointersRef, read as a 2nd "finger", and abort the pen stroke into a
+    // pinch. Rejected touches are captured (so their up/cancel still returns)
+    // but otherwise ignored. Pens always pass and refresh the priority window.
+    if (event.pointerType === "touch" && shouldRejectPointer(event)) {
+      return;
+    }
+    if (event.pointerType === "pen") {
+      lastPenAtRef.current = event.timeStamp || performance.now();
+    }
     // Defensive prune: a fresh first contact with no live stroke/gesture/pan means
     // any lingering pointersRef entries are stale (a prior touch's up/cancel was
     // dropped by iOS). Clear them so this touch isn't misread as a 2nd pinch finger.
@@ -3479,7 +3615,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
-    if (handToolRef.current) {
+    // Hand tool, OR a secondary button held — pen barrel button, mouse right /
+    // middle — pans for the length of the drag without changing the tool (the
+    // Wacom / Krita / Photoshop habit). Never starts a stroke mid-stroke.
+    const buttonPan = !handToolRef.current && activePointerRef.current == null && isSecondaryButtonPointer(event);
+    if (handToolRef.current || buttonPan) {
+      event.preventDefault();
       hideBrushCursor();
       panPointerRef.current = event.pointerId;
       panLastRef.current = { x: event.clientX, y: event.clientY };
@@ -3496,6 +3637,12 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   const handleCanvasPointerMove = (event) => {
+    if (event.pointerType === "pen") {
+      // Hover counts: a Cintiq / M2 Pencil in proximity keeps palm touches out.
+      lastPenAtRef.current = event.timeStamp || performance.now();
+    } else if (event.pointerType === "touch" && !pointersRef.current.has(event.pointerId)) {
+      return; // a rejected palm (or a contact that began off-canvas): no ring, no cursor relay
+    }
     if (pointersRef.current.has(event.pointerId)) {
       pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     }
@@ -3570,6 +3717,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       hideBrushCursor();
     }
     finishStroke(event);
+  };
+
+  // A pen barrel button / mouse right-click must never pop the browser context
+  // menu over the canvas (Windows fires it on pen long-press and barrel press;
+  // the secondary button is a pan drag here instead).
+  const handleCanvasContextMenu = (event) => {
+    event.preventDefault();
   };
 
   // Final safety net: when capture is released (after up/cancel, or force-released
@@ -6899,6 +7053,19 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Leaving the studio: flush a learned pen-pressure band that's still waiting
+  // on its debounce so the next session starts calibrated.
+  useEffect(
+    () => () => {
+      if (penCalSaveRef.current) {
+        window.clearTimeout(penCalSaveRef.current);
+        penCalSaveRef.current = 0;
+      }
+      savePenCalibration(penCalRef.current);
+    },
+    [],
+  );
+
   // Spacebar toggles the pan/hand tool — unless you're typing (e.g. chat).
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -6972,6 +7139,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               80,
             );
           }
+          break;
+        case "t":
+        case "T":
+          // Toggle the tool rail / sheet — the "give me the whole canvas" key
+          // (Cintiq ExpressKeys map nicely to it).
+          event.preventDefault();
+          setToolsOpen((open) => !open);
           break;
         default:
           break;
@@ -7465,7 +7639,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   return (
-    <main className="studio-shell" translate="no">
+    <main
+      className={`studio-shell${toolsOpen ? " rail-open" : ""}${layoutTier === "desktop" && !toolsOpen ? " rail-collapsed" : ""}`}
+      data-layout={layoutTier}
+      translate="no"
+    >
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
         <button
           type="button"
@@ -7596,6 +7774,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             ) : null}
           </button>
         </div>
+
+        {/* Desktop, rail collapsed: an edge tab brings the tools back. */}
+        {layoutTier === "desktop" && !toolsOpen ? (
+          <button
+            type="button"
+            className="rail-reopen"
+            onClick={() => setToolsOpen(true)}
+            title="Show the tools (T)"
+            aria-label="Show tools"
+          >
+            <span aria-hidden="true">🎨</span>
+            <span className="rail-reopen-label">Tools</span>
+          </button>
+        ) : null}
 
         <div className="mp-bar">
           <button
@@ -7805,6 +7997,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               onPointerCancel={handleCanvasPointerUp}
               onPointerLeave={handleCanvasPointerLeave}
               onLostPointerCapture={handleCanvasLostPointerCapture}
+              onContextMenu={handleCanvasContextMenu}
             />
             {/* Brush-size preview ring — sized to brushSize x zoom, tinted with the
                 colour, following the pointer (and flashed when size/brush changes). */}
@@ -8480,7 +8673,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         ) : null}
       </section>
 
-      <aside className={toolsOpen ? "tool-rail is-open" : "tool-rail"} aria-label="Drawing tools">
+      <aside
+        className={toolsOpen ? "tool-rail is-open" : "tool-rail"}
+        aria-label="Drawing tools"
+        aria-hidden={layoutTier === "desktop" && !toolsOpen ? true : undefined}
+      >
+        {/* Desktop: the docked rail's own header with the collapse control.
+            (The compact tiers show .drawer-handle instead — CSS swaps them.) */}
+        <div className="rail-head">
+          <span className="rail-head-title">Tools</span>
+          <button
+            type="button"
+            className="rail-collapse"
+            onClick={() => setToolsOpen(false)}
+            title="Hide the tools for more canvas (T)"
+            aria-label="Hide tools"
+          >
+            Hide <span aria-hidden="true">›</span>
+          </button>
+        </div>
         <div className="drawer-handle">
           <span className="drawer-grip" aria-hidden="true" />
           <button type="button" className="drawer-done" onClick={() => setToolsOpen(false)}>

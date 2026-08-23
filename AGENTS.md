@@ -41,6 +41,13 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
   imperative canvas/multiplayer logic uses refs (`mpRef`, `layersRef`, etc.).
 - **Single shared canvas**: all draw ops land on `layersRef.current[0]`. The
   server is an op-relay; don't add per-user canvases.
+- **Studio layout tiers** (`desktop` docked/collapsible rail · `tablet` right
+  side sheet · `phone` bottom sheet) are resolved in `src/hooks/useLayoutTier.js`
+  and styled in `src/studio-layout.css` (loaded last; keyed on
+  `.studio-shell[data-layout]`). Change the breakpoints in the hook AND the CSS
+  together. Stylus handling (adaptive pressure band, eraser end, barrel-button
+  pan, time-based palm rejection) lives in `src/utils/penInput.js` + the
+  `handleCanvasPointer*` handlers in `App.jsx`.
 - **WS protocol**: to add a realtime action, add a `send*` in
   `useMultiplayer.js`, a `case` in the `server.js` message switch (guard
   host-only actions with `isHost`), and handle the server→client message in
