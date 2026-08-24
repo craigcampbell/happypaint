@@ -152,6 +152,36 @@
   text-transform: uppercase;
 }
 
+/* Quick paint / eraser in the zoom cluster (desktop): active tool is filled
+   like the hand button; a hairline separates zoom from tools. */
+.zoom-controls .zoom-sep {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--snap-gray-200, #dfe3e8);
+}
+
+.zoom-controls .zoom-tool {
+  font-size: 19px;
+}
+
+.zoom-controls .zoom-tool.is-active {
+  background: var(--brand-blue, #2d6cdf);
+  color: #fff;
+}
+
+.zoom-controls .zoom-tool.is-active:hover:not(:disabled) {
+  background: var(--brand-blue, #2d6cdf);
+}
+
+/* Compact tiers: the quick bar already carries Paint / Eraser / Pan. */
+.studio-shell[data-layout="tablet"] .zoom-controls .zoom-tool,
+.studio-shell[data-layout="tablet"] .zoom-controls .zoom-sep,
+.studio-shell[data-layout="phone"] .zoom-controls .zoom-tool,
+.studio-shell[data-layout="phone"] .zoom-controls .zoom-sep {
+  display: none;
+}
+
 /* ---- Tablet: right-hand side sheet --------------------------------------- */
 .studio-shell[data-layout="tablet"] {
   --rail-w: min(380px, 42vw);

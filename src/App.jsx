@@ -3579,13 +3579,20 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     } catch {
       /* capture unavailable — pointer tracking + the safety nets still apply */
     }
-    // Palm / pen-priority rejection happens HERE, before the contact is
-    // registered as a pointer: a palm resting beside a pen used to land in
-    // pointersRef, read as a 2nd "finger", and abort the pen stroke into a
-    // pinch. Rejected touches are captured (so their up/cancel still returns)
-    // but otherwise ignored. Pens always pass and refresh the priority window.
-    if (event.pointerType === "touch" && shouldRejectPointer(event)) {
-      return;
+    // Palm / pen-priority filtering happens HERE, before the contact is
+    // registered as a pointer. Two hard rejections: a big contact patch is a
+    // palm, and while a pen stroke is actually IN PROGRESS nothing touch may
+    // interfere (a palm used to land in pointersRef, read as a 2nd "finger",
+    // and abort the pen stroke into a pinch). But fingers while the pen is
+    // merely NEAR (hovering / just lifted) DO register — as gesture-only
+    // contacts: two of them pinch/pan/twist like Procreate, they just can't
+    // paint (the pen-priority window in startStroke keeps single touches
+    // inert). Rejected touches are still captured so their up/cancel returns.
+    if (event.pointerType === "touch") {
+      const palm = (event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX;
+      if (palm || (activePointerRef.current != null && activePointerTypeRef.current === "pen")) {
+        return;
+      }
     }
     if (event.pointerType === "pen") {
       lastPenAtRef.current = event.timeStamp || performance.now();
@@ -3593,11 +3600,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // Defensive prune: a fresh first contact with no live stroke/gesture/pan means
     // any lingering pointersRef entries are stale (a prior touch's up/cancel was
     // dropped by iOS). Clear them so this touch isn't misread as a 2nd pinch finger.
+    // EXCEPT inside the pen-priority window: there, a tracked finger with no
+    // stroke is a live GESTURE CANDIDATE (it deliberately doesn't paint) — the
+    // second finger landing next to it is exactly how a pinch starts.
     if (
       activePointerRef.current == null &&
       gestureRef.current == null &&
       panPointerRef.current == null &&
-      pointersRef.current.size > 0
+      pointersRef.current.size > 0 &&
+      (event.timeStamp || performance.now()) - lastPenAtRef.current >= PEN_PRIORITY_MS
     ) {
       pointersRef.current.clear();
     }
@@ -3629,6 +3640,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       } catch {
         /* capture is best-effort */
       }
+      return;
+    }
+
+    // A lone finger inside the pen-priority window stays a silent gesture
+    // candidate — no ring, no stroke (startStroke would reject it anyway, but
+    // the ring hopping to a resting finger looks broken).
+    if (
+      event.pointerType === "touch" &&
+      (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS
+    ) {
       return;
     }
 
@@ -3691,6 +3712,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       hideBrushCursor();
       panBy(event.clientX - panLastRef.current.x, event.clientY - panLastRef.current.y);
       panLastRef.current = { x: event.clientX, y: event.clientY };
+      return;
+    }
+
+    // A lone gesture-candidate finger inside the pen-priority window: tracked
+    // above (it may become a pinch), but it owns neither the ring nor the
+    // cursor relay — those follow the pen.
+    if (
+      event.pointerType === "touch" &&
+      (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS
+    ) {
       return;
     }
 
@@ -7036,7 +7067,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     window.clearTimeout(beaconTimerRef.current);
   }, []);
 
-  // Non-passive wheel listener so zoom can preventDefault page scroll.
+  // Non-passive wheel listener (so it can preventDefault page scroll/zoom).
+  // "Hands on the trackpad" navigation: two-finger scroll PANS, a trackpad
+  // pinch (which browsers deliver as ctrlKey+wheel) or ⌘/Ctrl+scroll ZOOMS
+  // smoothly at the cursor, and a classic mouse-wheel notch keeps the familiar
+  // 12% zoom step. On a Mac, Wacom Cintiq touch is translated by the driver
+  // into these same trackpad gestures — the browser never sees real touches —
+  // so this is exactly what makes pan/zoom-by-hand work on a Cintiq + Mac.
   useEffect(() => {
     const el = overlayCanvasRef.current;
     if (!el) {
@@ -7045,8 +7082,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const onWheel = (event) => {
       event.preventDefault();
       const rect = el.getBoundingClientRect();
-      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-      zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1;
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+      if (event.ctrlKey || event.metaKey) {
+        // Pinch / modifier zoom: exponential so the zoom tracks finger travel
+        // (many tiny deltas), capped per event so a modifier+mouse-notch (one
+        // big delta) steps instead of leaping.
+        const factor = Math.min(1.3, Math.max(1 / 1.3, Math.exp(-dy * 0.01)));
+        zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
+        return;
+      }
+      // A classic mouse notch is a big, whole-number, vertical-only delta —
+      // keep its zoom-per-click. Everything else (trackpad two-finger scroll,
+      // Cintiq touch ring: small and/or two-axis deltas) pans the view, the
+      // pro-drawing-app convention.
+      if (dx === 0 && Math.abs(dy) >= 100 && Number.isInteger(event.deltaY)) {
+        zoomAt(dy < 0 ? 1.12 : 1 / 1.12, event.clientX - rect.left, event.clientY - rect.top);
+        return;
+      }
+      panBy(-dx, -dy);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -8088,7 +8143,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               ) : null}
             </div>
 
-            <div className="zoom-controls" role="group" aria-label="Zoom and pan">
+            <div className="zoom-controls" role="group" aria-label="Zoom, pan and quick tools">
               <button type="button" onClick={() => zoomByButton(1 / 1.25)} aria-label="Zoom out">
                 −
               </button>
@@ -8098,12 +8153,38 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               <button type="button" onClick={() => zoomByButton(1.25)} aria-label="Zoom in">
                 +
               </button>
+              {/* Quick paint / eraser beside the hand, so hopping out of a pan
+                  never means a trip to the tool rail. (Desktop only — the
+                  compact tiers already have these on the quick bar.) */}
+              <span className="zoom-sep" aria-hidden="true" />
+              <button
+                type="button"
+                className={isPaintActive ? "zoom-tool is-active" : "zoom-tool"}
+                onClick={activatePaint}
+                aria-pressed={isPaintActive}
+                title="Paint (B)"
+                aria-label="Paint"
+              >
+                ✏️
+              </button>
+              {roomFingerPaint ? null : (
+                <button
+                  type="button"
+                  className={isEraserActive ? "zoom-tool is-active" : "zoom-tool"}
+                  onClick={activateEraser}
+                  aria-pressed={isEraserActive}
+                  title="Eraser (Backspace, or the pen's eraser end)"
+                  aria-label="Eraser"
+                >
+                  🧽
+                </button>
+              )}
               <button
                 type="button"
                 className={handTool ? "zoom-hand is-active" : "zoom-hand"}
                 onClick={toggleHandTool}
                 aria-pressed={handTool}
-                title="Pan tool (or use two fingers)"
+                title="Pan (Space, hold the pen's barrel button, or scroll — pinch zooms)"
               >
                 ✋
               </button>
