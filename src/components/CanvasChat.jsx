@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import PageImage from "./PageImage";
+import DoodlePad from "./DoodlePad";
 
 // Canvas Chat — Twitch × iMessage, ON the canvas.
 //
@@ -69,7 +71,8 @@ const Bubble = memo(function Bubble({ m, mine, cluster, onReact, onNameTap, onRe
               <span className="cc-quote-text">{m.replyTo.snippet}</span>
             </span>
           ) : null}
-          <span className="cc-text">{m.message}</span>
+          {m.doodle ? <PageImage id={m.doodle} alt="a doodle" className="cc-doodle" placeholder="🎨 doodle faded" /> : null}
+          {m.message ? <span className="cc-text">{m.message}</span> : null}
         </button>
         {m.reactions && Object.keys(m.reactions).length ? (
           <span className="cc-tapbacks">
@@ -121,6 +124,7 @@ export default function CanvasChat({
   const [replyTo, setReplyTo] = useState(null); // { msgId, name, message }
   const [pickerFor, setPickerFor] = useState(null); // msgId with the tapback bar open
   const [hypeOpen, setHypeOpen] = useState(false);
+  const [padOpen, setPadOpen] = useState(false); // the doodle-reply pad
   const [fadeTick, setFadeTick] = useState(0); // drives ambient expiry recompute
   const [unread, setUnread] = useState(0);
   const logRef = useRef(null);
@@ -200,6 +204,15 @@ export default function CanvasChat({
     setReplyTo(null);
   };
 
+  // A doodle sends with whatever text is drafted (caption-style), consuming
+  // any pending reply context the same way a plain message does.
+  const sendDoodle = useCallback((dataUrl) => {
+    onSend?.(draft.trim(), replyTo ? replyTo.msgId : null, dataUrl);
+    setDraft("");
+    setReplyTo(null);
+    setPadOpen(false);
+  }, [draft, onSend, replyTo]);
+
   const beginReply = useCallback((m) => {
     setReplyTo({ msgId: m.msgId, name: m.user?.name || "?", message: m.message });
     inputRef.current?.focus();
@@ -233,6 +246,7 @@ export default function CanvasChat({
               ) : null}
               <span className="cc-ambient-text">
                 {m.replyTo ? <span className="cc-ambient-reply">↩ {m.replyTo.name}</span> : null}
+                {m.doodle ? <PageImage id={m.doodle} alt="a doodle" className="cc-doodle cc-doodle-sm" placeholder="🎨" /> : null}
                 {m.message}
               </span>
             </div>
@@ -249,7 +263,7 @@ export default function CanvasChat({
 
       {/* Open panel: iMessage over the canvas. */}
       {open ? (
-        <section className="cc-panel" aria-label="Room chat">
+        <section className={`cc-panel${padOpen ? " has-pad" : ""}`} aria-label="Room chat">
           <header className="cc-head">
             <span className="cc-head-title">💬 Chat</span>
             <button type="button" className="cc-close" onClick={() => { onOpenChange?.(false); setPickerFor(null); setHypeOpen(false); }} aria-label="Close chat">
@@ -291,6 +305,8 @@ export default function CanvasChat({
             </div>
           ) : null}
 
+          {padOpen ? <DoodlePad onSend={sendDoodle} onClose={() => setPadOpen(false)} /> : null}
+
           {replyTo ? (
             <div className="cc-replying">
               <span>↩ Replying to <strong>{replyTo.name}</strong> — “{String(replyTo.message).slice(0, 44)}{String(replyTo.message).length > 44 ? "…" : ""}”</span>
@@ -302,11 +318,21 @@ export default function CanvasChat({
             <button
               type="button"
               className={`cc-hype-btn ${hypeOpen ? "is-open" : ""}`}
-              onClick={() => setHypeOpen((v) => !v)}
+              onClick={() => { setHypeOpen((v) => !v); setPadOpen(false); }}
               title="Send a big reaction"
               aria-label="Big reactions"
             >
               🎉
+            </button>
+            <button
+              type="button"
+              className={`cc-hype-btn ${padOpen ? "is-open" : ""}`}
+              onClick={() => { setPadOpen((v) => !v); setHypeOpen(false); }}
+              disabled={disabled}
+              title="Draw a doodle reply"
+              aria-label="Doodle reply"
+            >
+              ✏️
             </button>
             <input
               ref={inputRef}

@@ -8956,3 +8956,176 @@ select {
 .game-podium-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 .game-podium-score { font-variant-numeric: tabular-nums; color: #4b5563; }
 .game-podium-next { font-size: 0.8rem; font-weight: 700; color: #64748b; }
+
+/* ==== Talk-first additions: doodle replies + homepage banter ============== */
+
+/* Doodle bubbles in chat (open panel + ambient). White ground baked in. */
+.cc-doodle {
+  display: block;
+  width: 170px;
+  max-width: 100%;
+  border-radius: 10px;
+  margin: 2px 0 4px;
+  background: #fff;
+}
+.cc-doodle-sm { width: 110px; margin: 4px 0 2px; }
+.cc-doodle.phone-page-empty {
+  width: auto;
+  min-height: 0;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* The doodle pad — a tiny meme easel above the composer. */
+.doodle-pad {
+  margin: 6px 10px 0;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  flex: none;
+  animation: cc-pop-in 160ms ease-out;
+}
+.doodle-pad-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.doodle-pad-head button { border: none; background: none; color: #cbd5e1; cursor: pointer; }
+.doodle-pad canvas {
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  cursor: crosshair;
+  background: #fff;
+}
+.doodle-pad-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.doodle-pen {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  flex: none;
+}
+.doodle-pen.is-active { border-color: #fff; transform: scale(1.15); }
+.doodle-tool {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 3px 7px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  flex: none;
+}
+.doodle-tool.is-active { background: #7c3aed; }
+.doodle-send {
+  margin-left: auto;
+  border: none;
+  background: #7c3aed;
+  color: #fff;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* Homepage banter overlay — the room's conversation over the live viewport. */
+.home-banter {
+  position: absolute;
+  left: 10px;
+  bottom: 44px;
+  right: 30%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  pointer-events: none;
+  text-align: left;
+}
+.home-banter-line {
+  display: inline-block;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: 12px 12px 12px 4px;
+  background: rgba(10, 16, 28, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f5f8fc;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: cc-pop-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.home-banter-line.is-system { font-style: italic; opacity: 0.85; }
+.home-banter-name { font-weight: 800; margin-right: 5px; font-size: 0.72rem; }
+.home-banter-hypes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.home-banter-hypes .hype-emoji { font-size: 44px; }
+
+/* "Join the chat" — one tap from reading the banter to being in it. */
+.home-join-chat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  background: rgba(124, 58, 237, 0.08);
+  cursor: text;
+  text-align: left;
+}
+.home-join-chat:hover { background: rgba(124, 58, 237, 0.14); }
+.home-join-chat-hint { color: #6d5a8f; font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-join-chat-go {
+  flex: none;
+  background: #7c3aed;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.82rem;
+  padding: 5px 14px;
+  border-radius: 999px;
+}
+
+/* ==== Talk-first review fixes ============================================= */
+
+/* With the doodle pad open the panel enters FOCUS MODE: the log collapses and
+   the room/participant rows hide, so the pad + composer always fit inside the
+   clipped panel instead of pushing Send past its edge. */
+.cc-panel.has-pad .cc-log { min-height: 0; flex: 0 1 auto; }
+.cc-panel.has-pad .mp-chat-room,
+.cc-panel.has-pad .mp-participants,
+.cc-panel.has-pad .vote-card { display: none !important; }
+
+/* The pad canvas scales with the panel (backing store stays 520x360; the
+   pointer math normalizes by the rendered rect). */
+.doodle-pad canvas { width: 100%; height: auto; aspect-ratio: 13 / 9; }
+
+/* Reserve the bubble's box BEFORE the image loads — an async pop-in would
+   unpin the chat scroll and shift the ambient overlay mid-stroke. */
+.cc-doodle { aspect-ratio: 13 / 9; object-fit: cover; }
+img.cc-doodle { background: #fff; }
+
+/* Mobile: the sheet grows while the pad is open so everything fits. */
+@media (max-width: 1024px), (pointer: coarse) {
+  .cc-panel.has-pad { max-height: calc(100vh - 96px); }
+}
+
+/* Homepage hype bursts stay INSIDE the clipped viewer: lanes spread bursts
+   apart, and the unicorn's screen-crossing gallop is swapped for the rise
+   (a 30vw exit would escape the tile). */
+.home-banter-hypes .hype-burst { left: calc(30% + var(--lane, 0) * 34%); }
+.home-banter-hypes .hype-unicorn { animation-name: hype-rise; }

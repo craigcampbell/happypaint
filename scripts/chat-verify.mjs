@@ -34,7 +34,13 @@ function connect(room) {
     const ws = new WebSocket(`ws://localhost:${PORT}/ws?room=${room}`);
     const msgs = [];
     ws.on("message", (raw) => { try { msgs.push(JSON.parse(raw.toString())); } catch { /* ignore */ } });
-    ws.on("open", () => setTimeout(() => resolve({ ws, msgs, send: (o) => ws.send(JSON.stringify(o)) }), 300));
+    ws.on("open", () => {
+      // Task #40 handshake: the server holds the join for up to 1.5s waiting
+      // for the client's first frame ({type:'auth'}). Send it like the real
+      // web client does, or every raw-WS test races that window.
+      ws.send(JSON.stringify({ type: "auth", token: null }));
+      setTimeout(() => resolve({ ws, msgs, send: (o) => ws.send(JSON.stringify(o)) }), 300);
+    });
   });
 }
 async function waitFor(c, pred, timeout = 5000) {
@@ -63,10 +69,10 @@ const run = async () => {
   check("chat lines carry a server-minted msgId", !!m1 && Number.isFinite(m1.msgId), `msgId=${m1 && m1.msgId}`);
 
   // 2) Reply-threading: server derives the quote from its own buffer.
-  b.send({ type: "chat", message: "nice drawing!", replyToId: m1.msgId });
+  b.send({ type: "chat", message: "nice drawing!", replyToId: m1 ? m1.msgId : 1 });
   const m2 = await waitFor(a, (m) => m.type === "chat" && m.message === "nice drawing!");
   check("a reply carries server-derived quoted context",
-    !!m2 && m2.replyTo && m2.replyTo.id === m1.msgId && m2.replyTo.snippet === "hello world");
+    !!m2 && !!m1 && m2.replyTo && m2.replyTo.id === m1.msgId && m2.replyTo.snippet === "hello world");
 
   // 3) A bogus replyToId yields a plain message (no fabricated quotes).
   b.send({ type: "chat", message: "orphan reply", replyToId: 999999 });
@@ -143,12 +149,26 @@ const run = async () => {
     const drawer = g1.msgs.some((m) => m.type === "game_role" && m.role === "drawer") ? g1 : g2;
     const guesser = drawer === g1 ? g2 : g1;
     guesser.msgs.length = 0;
+    // REGRESSION (review): the DRAWER can't smuggle the word as a DRAWING —
+    // doodles from word-knowers are spoiler-blocked while the round is LIVE
+    // (so this runs before the correct guess ends the round).
+    const PNGSPOIL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    drawer.msgs.length = 0;
+    guesser.msgs.length = 0;
+    drawer.send({ type: "chat", message: "", doodle: PNGSPOIL });
+    const spoilBlock = await waitFor(drawer, (m) => m.type === "game_spoiler", 3000);
+    const spoilLeak = guesser.msgs.some((m) => m.type === "chat" && m.doodle);
+    check("the drawer can't doodle the secret word into chat", !!spoilBlock && !spoilLeak);
+
     // 25 rapid wrong guesses first — way past any flood cap.
+    guesser.msgs.length = 0;
     for (let i = 0; i < 25; i += 1) guesser.send({ type: "chat", message: `zzguess${i}` });
     guesser.send({ type: "chat", message: role.word });
     const correct = await waitFor(guesser, (m) => m.type === "game_correct", 4000);
     const echoed = guesser.msgs.some((m) => m.type === "chat" && m.message === role.word);
     guessOk = !!correct && !echoed;
+  } else {
+    check("the drawer can't doodle the secret word into chat", false, "no game role");
   }
   check("a correct guess scores even after machine-gun guessing (flood-proof)", guessOk);
   g1.ws.close(); g2.ws.close();
@@ -162,6 +182,108 @@ const run = async () => {
   check("the finger-paint room refuses chat and hype",
     !fp2.msgs.some((m) => m.type === "chat" || m.type === "hype"));
   fp.ws.close(); fp2.ws.close();
+
+  // 12) Doodle replies: a valid raster doodle relays as a cd_ id + serves;
+  //     junk is rejected with feedback; doodles rate-limit separately.
+  //     Fresh client — `a` deliberately burned its chat budget in check 8.
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const d = await connect("ZZCHAT");
+  b.msgs.length = 0;
+  d.send({ type: "chat", message: "look at this", doodle: PNG });
+  const dmsg = await waitFor(b, (m) => m.type === "chat" && m.message === "look at this");
+  check("a doodle reply relays with an unguessable cd_ id",
+    !!dmsg && typeof dmsg.doodle === "string" && dmsg.doodle.startsWith("cd_"));
+  const dserved = dmsg && await fetch(`${BASE}/api/sheets/${dmsg.doodle}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  check("the doodle serves via /api/sheets/cd_…", !!dserved && String(dserved.image).startsWith("data:image"));
+  d.msgs.length = 0;
+  d.send({ type: "chat", message: "", doodle: "data:image/svg+xml;base64," + Buffer.from("<svg/>").toString("base64") });
+  const drej = await waitFor(d, (m) => m.type === "chat_blocked" && m.reason === "doodle", 3000);
+  check("a non-raster doodle is rejected with feedback", !!drej);
+  d.send({ type: "chat", message: "", doodle: PNG }); // 2nd ok
+  d.send({ type: "chat", message: "", doodle: PNG }); // 3rd ok
+  d.send({ type: "chat", message: "", doodle: PNG }); // 4th ok
+  d.msgs.length = 0;
+  d.send({ type: "chat", message: "", doodle: PNG }); // 5th within a minute → blocked
+  const dlimit = await waitFor(d, (m) => m.type === "chat_blocked" && m.reason === "slow_down", 3000);
+  check("doodles have their own tighter rate limit", !!dlimit);
+
+  // REGRESSION (review): a decompression bomb — tiny bytes claiming enormous
+  // pixel dimensions — must be rejected by the server's header parse.
+  const bomb = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), // PNG magic
+    Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"),
+    Buffer.from([0, 0, 0x23, 0x28, 0, 0, 0x23, 0x28, 8, 6, 0, 0, 0]), // 9000x9000
+  ]);
+  const d2 = await connect("ZZCHAT");
+  d2.msgs.length = 0;
+  d2.send({ type: "chat", message: "", doodle: "data:image/png;base64," + bomb.toString("base64") });
+  const bombRej = await waitFor(d2, (m) => m.type === "chat_blocked" && m.reason === "doodle", 3000);
+  check("a dimension-bomb doodle is rejected (header parse)", !!bombRej);
+
+  // REGRESSION (review): GIF/WEBP are no longer doodle formats (animation vector).
+  const GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+  d2.msgs.length = 0;
+  d2.send({ type: "chat", message: "", doodle: GIF });
+  const gifRej = await waitFor(d2, (m) => m.type === "chat_blocked" && m.reason === "doodle", 3000);
+  check("GIF doodles are rejected (PNG/JPEG only)", !!gifRej);
+
+  // REGRESSION (review): rejects must NOT burn the doodle quota — after the
+  // two rejects above, a fresh client still sends a valid doodle first try.
+  d2.msgs.length = 0;
+  d2.send({ type: "chat", message: "quota check", doodle: PNG });
+  const afterRejects = await waitFor(d2, (m) => m.type === "chat" && m.message === "quota check", 3000);
+  check("rejected doodles don't burn the quota", !!afterRejects && !!afterRejects.doodle);
+
+  // REGRESSION (review): admin takedown pushes a removal to live clients.
+  const { readFileSync } = await import("fs");
+  const adminKey = readFileSync(path.join(SCRATCH, ".admin-key"), "utf8").trim();
+  const rmres = await fetch(`${BASE}/api/admin/doodle/${afterRejects.doodle}/remove`, { method: "POST", headers: { "x-admin-key": adminKey } });
+  const removedPush = await waitFor(d2, (m) => m.type === "chat_doodle_removed" && m.doodle === afterRejects.doodle, 3000);
+  const removedGone = await fetch(`${BASE}/api/sheets/${afterRejects.doodle}`).then((r) => r.status);
+  check("admin takedown deletes the image AND pushes removal to live screens",
+    rmres.ok && !!removedPush && removedGone === 404);
+  d2.ws.close();
+  d.ws.close();
+
+  // 13) Spectators now get the conversation (Craig-approved stance change) —
+  //     in PUBLIC listed rooms only (private rooms stay unwatchable): history
+  //     on join + live chat + hype, a count-only roster, still read-only.
+  const mtalk = await connect("MAIN");
+  mtalk.send({ type: "chat", message: "main room banter" });
+  await sleep(400);
+  const spec = await new Promise((resolve) => {
+    const ws = new WebSocket(`ws://localhost:${PORT}/ws?room=MAIN&spectate=1`);
+    const msgs = [];
+    ws.on("message", (raw) => { try { msgs.push(JSON.parse(raw.toString())); } catch { /* ignore */ } });
+    ws.on("open", () => setTimeout(() => resolve({ ws, msgs, send: (o) => ws.send(JSON.stringify(o)) }), 400));
+  });
+  const specHist = spec.msgs.find((m) => m.type === "chat_history");
+  check("a spectator gets the room's recent banter on join",
+    !!specHist && specHist.messages.some((m) => m.message === "main room banter"));
+  const specRoster = spec.msgs.find((m) => m.type === "userList");
+  check("the spectator roster stays count-only (no names)",
+    !!specRoster && typeof specRoster.count === "number" && !specRoster.users);
+  spec.msgs.length = 0;
+  mtalk.send({ type: "chat", message: "live banter for the lurkers" });
+  mtalk.send({ type: "hype", kind: "star" });
+  const specLive = await waitFor(spec, (m) => m.type === "chat" && m.message === "live banter for the lurkers");
+  const specHype = await waitFor(spec, (m) => m.type === "hype", 3000);
+  check("live chat + hype reach the spectator", !!specLive && !!specHype);
+  mtalk.msgs.length = 0;
+  spec.send({ type: "chat", message: "spectators cannot talk" });
+  await sleep(500);
+  check("spectators remain read-only",
+    !mtalk.msgs.some((m) => m.type === "chat" && /spectators cannot talk/.test(m.message || "")));
+  const privSpec = await new Promise((resolve) => {
+    const ws = new WebSocket(`ws://localhost:${PORT}/ws?room=ZZCHAT&spectate=1`);
+    const msgs = [];
+    ws.on("message", (raw) => { try { msgs.push(JSON.parse(raw.toString())); } catch { /* ignore */ } });
+    ws.on("open", () => setTimeout(() => resolve({ ws, msgs }), 400));
+  });
+  check("private rooms stay unwatchable (spectate refused)",
+    privSpec.msgs.some((m) => m.type === "room_blocked"));
+  try { privSpec.ws.close(); } catch { /* already closed by server */ }
+  spec.ws.close(); mtalk.ws.close();
 
   a.ws.close(); b.ws.close();
 
@@ -212,13 +334,63 @@ const run = async () => {
   }
 
   // Hype: fire one from the tray → the burst layer mounts.
-  await page.locator(".cc-hype-btn").click();
+  await page.locator('[aria-label="Big reactions"]').click();
   await sleep(250);
   await page.locator(".cc-hype-tray button").first().click();
   const burst = await page.waitForSelector(".hype-burst", { timeout: 4000 }).then(() => true).catch(() => false);
   check("a hype reaction bursts over the canvas", burst);
 
+  // Doodle reply: open the pad, scribble with the mouse, send → a doodle
+  // bubble (real <img>) lands in the log.
+  await page.locator('[aria-label="Doodle reply"]').click();
+  await sleep(300);
+  const pad = page.locator(".doodle-pad canvas");
+  const pbox = await pad.boundingBox();
+  check("the doodle pad opens from the composer", !!pbox);
+  if (pbox) {
+    await page.mouse.move(pbox.x + 30, pbox.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(pbox.x + 120, pbox.y + 90, { steps: 6 });
+    await page.mouse.up();
+    await page.locator(".doodle-send").click();
+    const doodleBubble = await page.waitForSelector(".cc-log img.cc-doodle", { timeout: 6000 }).then(() => true).catch(() => false);
+    check("a drawn doodle sends and renders as a bubble", doodleBubble);
+  }
+
   peer.ws.close();
+
+  // Homepage: the viewed room's banter floats over the live viewport, with a
+  // "Join the chat" bar one tap from the conversation.
+  const mainTalker = await connect("MAIN");
+  await page.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+  await sleep(2500);
+  mainTalker.send({ type: "chat", message: "homepage banter test" });
+  const banter = await page.waitForFunction(
+    () => [...document.querySelectorAll(".home-banter-line")].some((el) => el.textContent.includes("homepage banter test")),
+    { timeout: 6000 },
+  ).then(() => true).catch(() => false);
+  check("room banter floats over the homepage viewport", banter);
+  check("the homepage shows a Join-the-chat bar", await page.locator(".home-join-chat").isVisible().catch(() => false));
+  mainTalker.ws.close();
+
+  // REGRESSION (review, was CRITICAL): on a phone the doodle pad + composer
+  // must FIT the bottom sheet — the Send button was clipped off-screen.
+  const mctx = await browser.newContext({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
+  const mpage = await mctx.newPage();
+  await mpage.goto(`${BASE}/join/ZZMOBILE`, { waitUntil: "domcontentloaded" });
+  await sleep(2500);
+  await mpage.locator(".mobile-quickbar .qb-btn", { hasText: "Chat" }).click();
+  await sleep(600);
+  await mpage.locator('[aria-label="Doodle reply"]').click();
+  await sleep(500);
+  const sendBox = await mpage.locator(".doodle-send").boundingBox();
+  const composerBox = await mpage.locator(".cc-form").boundingBox();
+  const fits = !!sendBox && sendBox.y + sendBox.height <= 667 && sendBox.y >= 0
+    && !!composerBox && composerBox.y + composerBox.height <= 667;
+  check("iPhone-SE: doodle pad Send + composer fit the mobile sheet",
+    fits, `send=${sendBox && Math.round(sendBox.y + sendBox.height)} composer=${composerBox && Math.round(composerBox.y + composerBox.height)} (viewport 667)`);
+  await mctx.close();
+
   const fatal = errors.filter((e) => !/favicon|manifest/i.test(e));
   check("zero page errors", fatal.length === 0, fatal.slice(0, 2).join(" | "));
 

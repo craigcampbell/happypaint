@@ -1,25 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
-// /api/sheets/:id returns JSON { image: <dataURL> }, NOT raw image bytes — so a
-// page id can't go straight into an <img src>. Fetch (once, cached) and render
-// the data URL. Handles trace_/pp_/sheet ids uniformly.
-const pageImageCache = new Map();
-function PageImage({ id, alt, className }) {
-  const [src, setSrc] = useState(() => (id && pageImageCache.get(id)) || null);
-  useEffect(() => {
-    if (!id) { setSrc(null); return undefined; }
-    const cached = pageImageCache.get(id);
-    if (cached) { setSrc(cached); return undefined; }
-    let alive = true;
-    fetch(`/api/sheets/${id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d && d.image) { pageImageCache.set(id, d.image); setSrc(d.image); } })
-      .catch(() => { /* broken page — leave placeholder */ });
-    return () => { alive = false; };
-  }, [id]);
-  if (!src) return <div className={`phone-page-empty ${className || ""}`}>🎨</div>;
-  return <img src={src} alt={alt} className={className} loading="lazy" />;
-}
+import PageImage from "./PageImage";
 
 // Draw Phone (telephone / Gartic) HUD. Pure presentation over the game state:
 //  - waiting: need more players (with a host Start button in private rooms)

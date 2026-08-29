@@ -1,7 +1,6 @@
-// The new homepage: a live, read-only window into an active public room so every
-// visitor immediately sees art being made. A top nav links to the other pages;
-// the in-flow room directory shows every public room; a room-code box jumps
-// straight in; clicking the canvas or a room thumbnail opens a Join modal.
+// The homepage has one job: make it obvious that you can start drawing now.
+// Community, rooms, and the daily prompt still have a home here, but they sit
+// below the primary invitation instead of competing with it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
@@ -9,22 +8,9 @@ import SiteFooter from "./SiteFooter";
 import LiveRoomCanvas from "./LiveRoomCanvas";
 import BrandMark from "./BrandMark";
 import { getSession, onAuthStateChange } from "../utils/auth";
-import { resolvePreviewTheme } from "../utils/artPreview";
+import { HYPES } from "../utils/hypes";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-const ROOM_TONES = ["coral", "blue", "mint", "lilac", "yellow", "pink"];
-const compactNumber = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-
-function roomTone(code) {
-  const score = [...String(code || "")].reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  return ROOM_TONES[score % ROOM_TONES.length];
-}
-
-function roomActivity(room) {
-  if (room.users === 1) return "1 painting";
-  if (room.users > 1) return `${room.users} painting`;
-  return "Open";
-}
 
 // The device-local drawing streak (written by the studio on the first stroke of
 // each day). Shown only while it's alive: last drew today, or yesterday (still
@@ -52,28 +38,84 @@ function untilLabel(endsAt) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// The room's live conversation floating over the homepage viewport — the talk
+// IS the show. Owns its own state fed via listenerRef, so a chatty room only
+// re-renders these few spans, never the page. Mounted keyed by room code.
+// Inert spans only (it renders inside the viewer <button>).
+function HomeBanter({ listenerRef }) {
+  const [lines, setLines] = useState([]);
+  const [hypes, setHypes] = useState([]);
+  const idRef = useRef(0);
+  useEffect(() => {
+    listenerRef.current = (data) => {
+      if (data.type === "chat") {
+        setLines((cur) => [...cur.slice(-3), data]);
+      } else if (data.type === "chat_history") {
+        setLines(Array.isArray(data.messages) ? data.messages.slice(-3) : []);
+      } else if (data.type === "hype") {
+        const meta = HYPES.find((h) => h.kind === data.kind);
+        if (!meta) return;
+        const hid = `hh${(idRef.current += 1)}`;
+        setHypes((cur) => (cur.length >= 2 ? cur : [...cur, { id: hid, kind: data.kind, emoji: meta.emoji }]));
+        window.setTimeout(() => setHypes((cur) => (cur.some((h) => h.id === hid) ? cur.filter((h) => h.id !== hid) : cur)), 2400);
+      }
+    };
+    return () => {
+      if (listenerRef.current) listenerRef.current = null;
+    };
+  }, [listenerRef]);
+
+  return (
+    <>
+      {lines.length > 0 ? (
+        <span className="home-banter" aria-hidden="true">
+          {lines.map((m, i) => (
+            <span key={m.msgId || i} className={`home-banter-line${m.system ? " is-system" : ""}`}>
+              {!m.system ? (
+                <span className="home-banter-name" style={{ color: m.user?.color || "#cbd5e1" }}>{m.user?.name}</span>
+              ) : null}
+              <span className="home-banter-text">{m.doodle ? "🎨 sent a doodle " : ""}{m.message}</span>
+            </span>
+          ))}
+        </span>
+      ) : null}
+      {hypes.length > 0 ? (
+        <span className="home-banter-hypes" aria-hidden="true">
+          {hypes.map((h, i) => (
+            <span key={h.id} className={`hype-burst hype-${h.kind}`} style={{ "--lane": i }}>
+              <span className="hype-emoji">{h.emoji}</span>
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 export default function HomePage({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [activeCode, setActiveCode] = useState(null);
-  const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
-  const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art for the nudge
+  const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art
   const [wallLoaded, setWallLoaded] = useState(false);
-  // The Daily Challenge: today's prompt + gallery of entries + a countdown tick.
+  // The Daily Challenge: today's prompt + a countdown tick.
   const [daily, setDaily] = useState(null);
-  const [dailyEntries, setDailyEntries] = useState([]);
-  // Weekly event nights: tonight's beacon + the rest of the week's schedule.
-  const [events, setEvents] = useState([]);
   const [, setCountTick] = useState(0); // re-render for the countdown label
   // State (not a one-shot memo) so a tab left open across midnight can refresh
   // the chip when the challenge rolls over below.
   const [streak, setStreak] = useState(readStreak);
-  const liveOpsRef = useRef(0);
-  // Mirrored into refs so timers/callbacks read the latest without being deps.
-  const roomsRef = useRef([]);
-  roomsRef.current = rooms;
+  // The viewed room's live banter rides through a ref-listener into the
+  // <HomeBanter> child, so a busy room's chat re-renders THAT tiny overlay —
+  // never this whole page. onSocial itself stays referentially stable so
+  // LiveRoomCanvas's socket effect (keyed on it) never reconnects.
+  const socialListenerRef = useRef(null);
+  const onSocial = useCallback((data) => {
+    socialListenerRef.current?.(data);
+  }, []);
+  // Mirrored into a ref so refresh() can leave the selected room alone while
+  // its join dialog is open.
   const showJoinRef = useRef(false);
   showJoinRef.current = showJoin;
   // Signed-in visitors get one "jump in" button in the join modal instead of
@@ -117,18 +159,6 @@ export default function HomePage({ onNavigate }) {
     return () => window.clearInterval(t);
   }, [refresh]);
 
-  // The week's event nights (deterministic server schedule — cheap, fetch once).
-  useEffect(() => {
-    let active = true;
-    fetch("/api/events", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => active && setEvents(Array.isArray(d?.events) ? d.events : []))
-      .catch(() => { /* the section just doesn't render */ });
-    return () => {
-      active = false;
-    };
-  }, []);
-
   // A peek at the community wall drives the loop: see art → make art → post it.
   // Fetched once (the wall changes slowly); wallLoaded gates the empty-state so
   // it doesn't flash before the request lands.
@@ -147,8 +177,8 @@ export default function HomePage({ onNavigate }) {
     };
   }, []);
 
-  // Today's challenge + its gallery. Refetched when the countdown crosses
-  // midnight (the tick effect below re-runs this when daily.endsAt passes).
+  // Today's challenge. Refetched when the countdown crosses midnight (the tick
+  // effect below re-runs this when daily.endsAt passes).
   useEffect(() => {
     let active = true;
     fetch("/api/daily", { cache: "no-store" })
@@ -156,9 +186,6 @@ export default function HomePage({ onNavigate }) {
       .then((d) => {
         if (!active || !d || !d.prompt) return;
         setDaily(d);
-        return fetch(`/api/wall?challenge=${d.date}&sort=new&limit=10`, { cache: "no-store" })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((g) => active && setDailyEntries(Array.isArray(g?.posts) ? g.posts : []));
       })
       .catch(() => { /* offline — the card just doesn't render */ });
     return () => {
@@ -182,9 +209,6 @@ export default function HomePage({ onNavigate }) {
             if (!d || !d.prompt || d.date === daily.date) return; // not actually a new day yet
             setDaily(d);
             setStreak(readStreak()); // the chip's "alive" window shifted too
-            return fetch(`/api/wall?challenge=${d.date}&sort=new&limit=10`, { cache: "no-store" })
-              .then((r) => (r.ok ? r.json() : null))
-              .then((g) => setDailyEntries(Array.isArray(g?.posts) ? g.posts : []));
           })
           .catch(() => { /* retry next tick */ });
       } else {
@@ -194,44 +218,7 @@ export default function HomePage({ onNavigate }) {
     return () => window.clearInterval(t);
   }, [daily]);
 
-  // Stable so LiveRoomCanvas (which keys its socket effect on onActivity) doesn't
-  // tear down + reopen the spectator WS on every parent re-render.
-  const onLiveActivity = useCallback((n) => {
-    liveOpsRef.current = n;
-  }, []);
-
-  // Auto-tour open rooms: every 30s hop the live viewport to another public room
-  // so the homepage always feels active. Pauses while the join modal is open.
-  // Reads rooms via a ref so the 15s refresh() (which
-  // replaces the rooms array every poll) can't restart/starve this 30s timer.
-  useEffect(() => {
-    if (showJoin) return undefined;
-    const t = window.setInterval(() => {
-      if (document.hidden) return; // no point touring a hidden tab
-      const list = roomsRef.current;
-      if (list.length < 2) return;
-      setActiveCode((cur) => {
-        const others = list.filter((r) => r.code !== cur);
-        if (others.length === 0) return cur;
-        // Prefer rooms with painters; fall back to any other room. Pseudo-random
-        // pick so the tour doesn't feel like a fixed loop.
-        const lively = others.filter((r) => r.users > 0);
-        const pool = lively.length ? lively : others;
-        return pool[Math.floor(Math.random() * pool.length)].code;
-      });
-    }, 30000);
-    return () => window.clearInterval(t);
-  }, [showJoin]);
-
-  const touring = rooms.length >= 2 && !showJoin;
-
   const active = useMemo(() => rooms.find((r) => r.code === activeCode) || null, [rooms, activeCode]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rooms;
-    return rooms.filter((r) => `${r.title || ""} ${r.code} ${r.prompt || ""}`.toLowerCase().includes(q));
-  }, [rooms, query]);
 
   const join = (c) => onNavigate(`/join/${c}`);
 
@@ -242,23 +229,6 @@ export default function HomePage({ onNavigate }) {
     let c = "";
     for (let i = 0; i < 6; i += 1) c += alphabet[Math.floor(Math.random() * alphabet.length)];
     join(c);
-  };
-
-  const startStorybook = async () => {
-    try {
-      const res = await fetch("/api/rooms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audience: "friends", mode: "storybook", title: "Our Story" }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.code) throw new Error("create failed");
-      join(data.code);
-    } catch {
-      // A normal private room is still a useful anonymous fallback if the
-      // mode endpoint is unavailable during a rolling deploy.
-      startRoom();
-    }
   };
 
   const goByCode = (event) => {
@@ -272,278 +242,180 @@ export default function HomePage({ onNavigate }) {
       <SiteNav onNavigate={onNavigate} current="/" />
 
       <main className="home-main">
-        <div className="home-headline">
-          <BrandMark className="home-brand-art" showName={false} />
-          <div className="home-headline-copy">
-            <p className="eyebrow"><span aria-hidden="true">●</span> Live creative rooms</p>
-            <h1>Draw it. Remix it. <span>Make it yours.</span></h1>
-            <p className="home-kicker">A live canvas for your people.</p>
+        <section className="home-hero" aria-labelledby="home-title">
+          <div className="home-hero-copy">
+            <p className="home-eyebrow">Free online drawing studio</p>
+            <h1 id="home-title">Draw something.</h1>
+            <p className="home-hero-line">Right here, right now.</p>
             <p className="home-sub">
-              Made for your pencil, your group chat, and ideas that refuse to sit still. Jump in—no account needed.
+              Open a blank canvas and start painting. No account, no setup—just draw.
             </p>
-            <div className="home-proof-row" aria-label="Drawesome highlights">
-              <span>✦ Pen-ready</span>
-              <span>↗ Draw live</span>
-              <span>⚡ Start in seconds</span>
+            <div className="home-hero-actions">
+              <button type="button" className="primary-action home-draw-now" onClick={() => onNavigate("/studio")}>
+                Start drawing <span aria-hidden="true">→</span>
+              </button>
+              <button type="button" className="home-together-link" onClick={startRoom}>
+                Draw with friends
+              </button>
             </div>
-          </div>
-        </div>
-
-        <div className="home-stage">
-          <div className="home-viewer-head">
-            <span className="home-viewing">
-              <span className="live-dot" aria-hidden="true" />{" "}
-              {touring ? "Room tour" : "Live now"}
-            </span>
-            <strong className="home-room-name">
-              {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Finding an open room…"}
-            </strong>
-            {active?.prompt ? <span className="home-room-prompt">“{active.prompt}”</span> : null}
-            <span className="home-room-meta">
-              {active ? `${active.users} painting · ${active.ops} strokes` : ""}
-            </span>
+            <p className="home-reassurance">
+              <span>Free</span><i aria-hidden="true" />
+              <span>No account needed</span><i aria-hidden="true" />
+              <span>Touch, mouse &amp; pen</span>
+            </p>
           </div>
 
           <button
             type="button"
-            className="home-viewer"
-            onClick={() => { if (active) { setJoinRoom(active); setShowJoin(true); } }}
-            aria-label={active ? `Join ${active.title || active.code}` : "Loading room"}
+            className="home-paper"
+            onClick={() => onNavigate("/studio")}
+            aria-label="Open a blank canvas and start drawing"
           >
-            {activeCode ? (
-              <LiveRoomCanvas roomCode={activeCode} onActivity={onLiveActivity} />
-            ) : (
-              <div className="home-viewer-empty">Loading live artwork…</div>
-            )}
-            <span className="home-viewer-cta">Jump into this canvas →</span>
+            <span className="home-paper-sun" aria-hidden="true" />
+            <span className="home-paper-stroke home-paper-stroke-one" aria-hidden="true" />
+            <span className="home-paper-stroke home-paper-stroke-two" aria-hidden="true" />
+            <BrandMark className="home-paper-mark" showName={false} />
+            <span className="home-paper-note">Your canvas is waiting.</span>
+            <span className="home-paper-pencil" aria-hidden="true">✎</span>
           </button>
+        </section>
 
-          <div className="home-controls">
-            <button type="button" className="primary-action home-open-studio" onClick={() => onNavigate("/studio")}>
-              Start drawing
-            </button>
-            <button type="button" className="home-start-room" onClick={startRoom}>
-              Create a room
-            </button>
-            <button type="button" className="home-start-room" onClick={startStorybook}>
-              📖 Start a storybook
+        <p className="home-feature-line" aria-label="Things you can do in Drawesome">
+          Blank canvas <span aria-hidden="true">·</span> Coloring pages <span aria-hidden="true">·</span> Shared rooms <span aria-hidden="true">·</span> Drawing games
+        </p>
+
+        <section className="home-next" aria-labelledby="home-next-title">
+          <div className="home-section-heading">
+            <p className="home-eyebrow">Pick a way to begin</p>
+            <h2 id="home-next-title">What do you want to draw?</h2>
+          </div>
+
+          <div className="home-choice-grid">
+            <button type="button" className="home-choice home-choice-blank" onClick={() => onNavigate("/studio")}>
+              <span className="home-choice-icon" aria-hidden="true">✎</span>
+              <span><strong>Anything you want</strong><small>Start with a fresh canvas</small></span>
+              <b aria-hidden="true">→</b>
             </button>
 
-            <form className="home-code" onSubmit={goByCode}>
+            {daily ? (
+              <button type="button" className="home-choice home-choice-daily" onClick={() => join("DAILY")}>
+                <span className="home-choice-icon" aria-hidden="true">{daily.emoji}</span>
+                <span>
+                  <strong>{daily.prompt}</strong>
+                  <small>
+                    Today&rsquo;s prompt · {untilLabel(daily.endsAt)} left
+                    {streak >= 2 ? ` · 🔥 ${streak} days` : ""}
+                  </small>
+                </span>
+                <b aria-hidden="true">→</b>
+              </button>
+            ) : (
+              <button type="button" className="home-choice home-choice-daily" onClick={() => join("DAILY")}>
+                <span className="home-choice-icon" aria-hidden="true">✨</span>
+                <span><strong>Today&rsquo;s prompt</strong><small>Try a quick drawing challenge</small></span>
+                <b aria-hidden="true">→</b>
+              </button>
+            )}
+
+            <button type="button" className="home-choice home-choice-friends" onClick={startRoom}>
+              <span className="home-choice-icon" aria-hidden="true">☺</span>
+              <span><strong>Something together</strong><small>Make a room and invite friends</small></span>
+              <b aria-hidden="true">→</b>
+            </button>
+          </div>
+
+          <form className="home-code" onSubmit={goByCode}>
+            <label htmlFor="home-room-code">Already have a room code?</label>
+            <span>
               <input
+                id="home-room-code"
                 type="text"
                 value={code}
-                placeholder="Have a room code?"
+                placeholder="Enter code"
                 maxLength={8}
+                autoCapitalize="characters"
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
               />
-              <button type="submit" className="primary-action">Go →</button>
-            </form>
-          </div>
-        </div>
+              <button type="submit">Join room →</button>
+            </span>
+          </form>
+        </section>
 
-        {/* Today's Challenge — the reason to come back tomorrow. One fresh
-            prompt a day; entries hang in today's gallery right here. */}
-        {daily ? (
-          <section className="home-daily" aria-labelledby="home-daily-title">
-            <div className="home-daily-head">
-              <div className="home-daily-copy">
-                <p className="eyebrow">
-                  ✦ Daily drop
-                  {streak >= 2 ? <span className="home-streak" title="Days in a row you've drawn">🔥 {streak}-day streak</span> : null}
-                </p>
-                <h2 id="home-daily-title">
-                  <span className="home-daily-emoji" aria-hidden="true">{daily.emoji}</span> {daily.prompt}
-                </h2>
-                <p className="home-daily-sub">
-                  {daily.entries > 0
-                    ? `${compactNumber.format(daily.entries)} ${daily.entries === 1 ? "drawing hangs" : "drawings hang"} in today's gallery.`
-                    : "Nobody has drawn it yet — be the first!"}{" "}
-                  New challenge in <strong>{untilLabel(daily.endsAt)}</strong>.
-                </p>
-              </div>
-              <div className="home-daily-actions">
-                <button type="button" className="primary-action home-daily-go" onClick={() => join("DAILY")}>
-                  Draw today&rsquo;s prompt →
-                </button>
-              </div>
+        <section className="home-live" aria-labelledby="home-live-title">
+          <div className="home-live-copy">
+            <p className="home-eyebrow"><span className="live-dot" aria-hidden="true" /> Draw together</p>
+            <h2 id="home-live-title">A canvas is better with company.</h2>
+            <p>
+              Paint on the same canvas in real time, or play a drawing game. Send a room code and everyone can jump in.
+            </p>
+            <div className="home-live-actions">
+              <button type="button" className="primary-action" onClick={startRoom}>Create a room</button>
+              <button type="button" onClick={() => onNavigate("/rooms")}>See live rooms</button>
             </div>
-            {dailyEntries.length > 0 ? (
-              <button
-                type="button"
-                className="home-wall-strip home-daily-strip"
-                onClick={() => onNavigate("/wall")}
-                aria-label="See today's challenge gallery on the Wall"
-              >
-                {dailyEntries.map((p) => (
-                  <span className="home-wall-tile" key={p.id}>
-                    {/* Below the fold — lazy keeps them off the first paint. */}
-                    <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" />
-                  </span>
-                ))}
-                <span className="home-wall-more">Today&rsquo;s<br />gallery →</span>
+          </div>
+
+          <div className="home-live-preview">
+            <div className="home-viewer-head">
+              <span className="home-viewing"><span className="live-dot" aria-hidden="true" /> Live canvas</span>
+              <strong className="home-room-name">
+                {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Open drawing room"}
+              </strong>
+              <span className="home-room-meta">{active ? `${active.users} drawing now` : "Ready for you"}</span>
+            </div>
+            <button
+              type="button"
+              className="home-viewer"
+              onClick={() => {
+                if (active) {
+                  setJoinRoom(active);
+                  setShowJoin(true);
+                } else {
+                  startRoom();
+                }
+              }}
+              aria-label={active ? `Join ${active.title || active.code}` : "Create a drawing room"}
+            >
+              {activeCode ? <LiveRoomCanvas roomCode={activeCode} onSocial={onSocial} /> : <span className="home-viewer-empty">Start the first drawing</span>}
+              {/* keyed by room: a carousel hop remounts the overlay clean, so a
+                  late chat_history from the OLD room can never bleed across. */}
+              {activeCode ? <HomeBanter key={activeCode} listenerRef={socialListenerRef} /> : null}
+              <span className="home-viewer-cta">{active ? "Join this canvas →" : "Create a room →"}</span>
+            </button>
+            {/* One tap from reading the banter to being IN it. */}
+            {active ? (
+              <button type="button" className="home-join-chat" onClick={() => join(active.code)}>
+                <span className="home-join-chat-hint">💬 Join the chat — say hi, drop a doodle…</span>
+                <span className="home-join-chat-go">Chat →</span>
               </button>
             ) : null}
-          </section>
-        ) : null}
+          </div>
+        </section>
 
-        {/* Event nights — a reason to come back on a DAY, not just "sometime".
-            Tonight's beacon leads; the rest of the week teases what's ahead.
-            Rooms are always open, so this gates nothing — it coordinates. */}
-        {events.length > 0 ? (
-          <section className="home-events" aria-labelledby="home-events-title">
-            <div className="home-events-head">
-              <p className="eyebrow">✦ Event nights</p>
-              <h2 id="home-events-title">This week on Drawesome</h2>
-            </div>
-            <div className="home-events-row">
-              {events.map((ev) => (
-                <button
-                  type="button"
-                  key={ev.date}
-                  className={`home-event-card${ev.today ? " is-tonight" : ""}`}
-                  onClick={() => join(ev.room)}
-                  aria-label={`${ev.title}${ev.today ? " (tonight)" : ""}: ${ev.blurb}`}
-                >
-                  <span className="home-event-day">
-                    {ev.today ? "TONIGHT" : new Date(`${ev.date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "short" })}
-                  </span>
-                  <span className="home-event-emoji" aria-hidden="true">{ev.emoji}</span>
-                  <span className="home-event-title">{ev.title}</span>
-                  <span className="home-event-blurb">{ev.blurb}</span>
-                  {ev.today && ev.live > 0 ? (
-                    <span className="home-event-live">
-                      <span className="live-dot" aria-hidden="true" /> {ev.live} there now
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {/* Fridge Wall nudge — the community loop's front door. Peeks real
-            recent art (or invites the first post when the wall is bare). */}
-        <section className="home-wall">
+        <section className="home-wall" aria-labelledby="home-wall-title">
           <div className="home-wall-head">
             <div className="home-wall-copy">
-              <p className="eyebrow">✦ Fresh from the community</p>
-              <h2>Your art deserves the spotlight.</h2>
-              <p className="home-wall-sub">
-                Post a drawing or animation for everyone to see. No follower counts, no popularity contest—just art.
-              </p>
+              <p className="home-eyebrow">Made on Drawesome</p>
+              <h2 id="home-wall-title">See what people are making.</h2>
             </div>
-            <div className="home-wall-actions">
-              <button type="button" className="primary-action" onClick={() => onNavigate("/wall")}>
-                Explore the Wall →
-              </button>
-              <button type="button" className="home-wall-make" onClick={() => onNavigate("/studio")}>
-                Make something
-              </button>
-            </div>
+            <button type="button" className="home-wall-link" onClick={() => onNavigate("/wall")}>Visit the Wall →</button>
           </div>
 
           {wallPosts.length > 0 ? (
-            <button
-              type="button"
-              className="home-wall-strip"
-              onClick={() => onNavigate("/wall")}
-              aria-label="Open the Fridge Wall"
-            >
-              {wallPosts.map((p) => (
+            <button type="button" className="home-wall-strip" onClick={() => onNavigate("/wall")} aria-label="Open the Fridge Wall">
+              {wallPosts.slice(0, 6).map((p) => (
                 <span className="home-wall-tile" key={p.id}>
-                  {/* Eager: only a handful of small thumbs, and the whole point
-                      of the strip is to be seen the moment you scroll to it. */}
-                  <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} />
+                  <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" />
                   {p.frames > 1 ? <span className="home-wall-anim" aria-hidden="true">🎬</span> : null}
                 </span>
               ))}
-              <span className="home-wall-more">
-                See more<br />on the Wall →
-              </span>
             </button>
           ) : wallLoaded ? (
             <div className="home-wall-empty">
               <span className="home-wall-empty-emoji" aria-hidden="true">🖼️</span>
-              <p>The wall is empty — be the first to pin your artwork!</p>
-              <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>
-                Start drawing 🖌️
-              </button>
+              <p>The wall is waiting for its first drawing.</p>
+              <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>Make one</button>
             </div>
           ) : null}
-        </section>
-
-        <section className="home-room-directory" aria-labelledby="home-room-directory-title">
-          <div className="home-room-directory-inner">
-            <div className="home-room-directory-head">
-              <div>
-                <p className="eyebrow">Find your next canvas</p>
-                <h2 id="home-room-directory-title">
-                  Live rooms <span>{rooms.length}</span>
-                </h2>
-              </div>
-              <input
-                className="home-room-search"
-                type="search"
-                value={query}
-                placeholder="Search rooms or prompts…"
-                aria-label="Search open rooms"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-
-            {rooms.length === 0 ? <p className="home-room-directory-empty">Finding open rooms…</p> : null}
-            {rooms.length > 0 && filtered.length === 0 ? (
-              <p className="home-room-directory-empty">No rooms match that search.</p>
-            ) : null}
-
-            <div className="home-room-grid">
-              {filtered.map((room) => {
-                const theme = resolvePreviewTheme({
-                  roomId: room.code,
-                  roomTitle: room.title,
-                  roomPrompt: room.prompt,
-                });
-                const activity = roomActivity(room);
-                const watching = room.code === activeCode;
-                return (
-                  <button
-                    type="button"
-                    key={room.code}
-                    className={`home-room-card${watching ? " is-active" : ""}`}
-                    aria-label={`${room.title || room.code}: ${activity}, ${room.ops || 0} marks`}
-                    onClick={() => {
-                      setActiveCode(room.code);
-                      setJoinRoom(room);
-                      setShowJoin(true);
-                    }}
-                  >
-                    <span className={`home-room-thumb room-tone-${roomTone(room.code)}${theme ? " has-image" : ""}`}>
-                      {theme ? <img src={theme.asset} alt="" loading="lazy" /> : null}
-                      <span className="home-room-thumb-squiggle is-one" aria-hidden="true">~~~~</span>
-                      <span className="home-room-thumb-squiggle is-two" aria-hidden="true">~~~</span>
-                      <span className="home-room-card-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
-                      <span className={`home-room-card-status${room.users > 0 ? " is-live" : ""}`}>
-                        <i aria-hidden="true" />
-                        {watching ? "On screen" : room.users > 0 ? "Live" : "Open"}
-                      </span>
-                    </span>
-                    <span className="home-room-card-body">
-                      <span className="home-room-card-title">
-                        <strong>{room.title || room.code}</strong>
-                        <small>{room.code}</small>
-                      </span>
-                      <span className="home-room-card-prompt">{room.prompt || "Free draw"}</span>
-                      <span className="home-room-card-meta">
-                        <span>{activity}</span>
-                        <span>{compactNumber.format(room.ops || 0)} marks</span>
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         </section>
       </main>
 

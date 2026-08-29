@@ -56,7 +56,7 @@ function boundsOf(ops) {
   };
 }
 
-export default function LiveRoomCanvas({ roomCode, onActivity }) {
+export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
   const visRef = useRef(null);
   const offRef = useRef(null);
   const boundsRef = useRef(null);
@@ -263,6 +263,10 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
           dropStrokes(); // in-progress strokes are wiped with the mural
           boundsRef.current = null;
           blit();
+        } else if (data.type === "chat" || data.type === "chat_history" || data.type === "hype") {
+          // The room's live banter — the parent renders it over the viewport
+          // (the conversation is the show; this canvas only paints ops).
+          onSocial?.(data);
         }
       };
       ws.onclose = () => {
@@ -322,7 +326,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity }) {
       }
       window.removeEventListener("resize", onResize);
     };
-  }, [roomCode, onActivity]);
+  }, [roomCode, onActivity, onSocial]);
 
   return <canvas ref={visRef} className="live-room-canvas" aria-label="Live public room artwork" />;
 }

@@ -127,6 +127,14 @@ export function useMultiplayer(roomId, onMessage, token) {
           });
           break;
         }
+        case "chat_doodle_removed": {
+          // Admin takedown: strip the image from any line referencing it.
+          setChat((current) => {
+            if (!current.some((m) => m.doodle === data.doodle)) return current;
+            return current.map((m) => (m.doodle === data.doodle ? { ...m, doodle: undefined, message: m.message || "[removed]" } : m));
+          });
+          break;
+        }
         case "chat_react_self": {
           // Private ack: OUR toggle landed — highlight (or un-highlight) the chip.
           setChat((current) => {
@@ -215,7 +223,12 @@ export function useMultiplayer(roomId, onMessage, token) {
   // then loads it through the normal sheet path.
   const sendTracePhoto = useCallback((image) => send({ type: "set_trace_photo", image }), [send]);
   const sendChat = useCallback(
-    (message, replyToId) => send(replyToId != null ? { type: "chat", message, replyToId } : { type: "chat", message }),
+    (message, replyToId, doodle) => send({
+      type: "chat",
+      message,
+      ...(replyToId != null ? { replyToId } : {}),
+      ...(doodle ? { doodle } : {}), // a "doodle reply" dataURL (validated server-side)
+    }),
     [send],
   );
   // iMessage-style tapback toggle on one bubble (server allowlists the emoji).

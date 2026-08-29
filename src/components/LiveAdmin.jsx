@@ -212,6 +212,13 @@ export default function LiveAdmin({ onNavigate }) {
     refresh();
   };
 
+  // Take down a reported chat doodle: deletes the image server-side and pushes
+  // a removal to every screen currently showing it.
+  const removeDoodle = async (id) => {
+    await fetch(`/api/admin/doodle/${id}/remove`, { method: "POST", headers: { "x-admin-key": adminKey } });
+    refresh();
+  };
+
   const openRoom = (id) => window.open(`/join/${id}`, "_blank", "noopener");
 
   if (!authed) {
@@ -370,7 +377,23 @@ export default function LiveAdmin({ onNavigate }) {
                   {r.chatContext?.length ? (
                     <div className="admin-report-chat" aria-label="Recent chat around this report">
                       {r.chatContext.slice(-8).map((c, i) => (
-                        <p key={i}><strong>{c.name}:</strong> {c.message}</p>
+                        <p key={i}>
+                          <strong>{c.name}:</strong> {c.message}
+                          {c.doodle ? (
+                            <span className="admin-doodle">
+                              {/* Snapshot rides IN the report so it's reviewable even
+                                  after the live store evicts. */}
+                              {c.doodleImage ? (
+                                <img src={c.doodleImage} alt="reported doodle" style={{ display: "block", maxWidth: 170, borderRadius: 8, margin: "4px 0" }} />
+                              ) : (
+                                <em> (doodle {c.doodle} — image expired)</em>
+                              )}
+                              <button type="button" className="admin-danger" onClick={() => removeDoodle(c.doodle)}>
+                                Remove doodle
+                              </button>
+                            </span>
+                          ) : null}
+                        </p>
                       ))}
                     </div>
                   ) : null}

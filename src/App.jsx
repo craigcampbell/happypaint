@@ -114,6 +114,7 @@ import GameHud from "./components/GameHud";
 import DrawPhonePanel from "./components/DrawPhonePanel";
 import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
+import { evictPageImage } from "./utils/pageImageCache";
 import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
@@ -138,6 +139,7 @@ import StorybookPanel from "./components/StorybookPanel";
 import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
 import "./App.css";
 import "./drawesome-theme.css";
+import "./homepage-redesign.css";
 import "./studio-layout.css";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
@@ -6588,7 +6590,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           showToast(data.hidden ? "🛡️ Auto-hid a flagged drawing — see Host controls" : "🛡️ A drawing was flagged — see Host controls");
           break;
         case "chat_blocked":
-          showToast("That message was blocked by the room's safety filter.");
+          // Honest feedback per cause — a rate-limited kid shouldn't be told
+          // the safety filter caught them.
+          if (data.reason === "slow_down") showToast("Whoa, slow down a little — try again in a moment! 🐢");
+          else if (data.reason === "doodle") showToast("That doodle couldn't be sent — try drawing it again!");
+          else showToast("That message was blocked by the room's safety filter.");
+          break;
+        case "chat_doodle_removed":
+          // Admin takedown: the hook already stripped chat state; drop the
+          // cached image too so nothing can re-render it.
+          evictPageImage(data.doodle);
           break;
         case "room_full":
           // The server closes the socket right after this — stop the auto-

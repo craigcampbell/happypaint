@@ -1448,6 +1448,7 @@ function closeRoom(roomId, reason) {
     clearGameTimers(room); // never leave a Draw & Guess round timer firing on a closed room
     clearPhoneTimers(room); // same for a Draw Phone round/intermission timer
     dropRoomPhonePages(room); // free any Draw Phone page images
+    dropRoomChatDoodles(room); // free the room's chat-doodle images
     dropRoomTracePhoto(room); // free any uploaded trace photo when the room dies
     rooms.delete(roomId);
   }
@@ -1651,6 +1652,7 @@ function chatHistoryMsg(room) {
       ts: c.ts,
       ...(c.system ? { system: true } : {}),
       ...(c.replyTo ? { replyTo: c.replyTo } : {}),
+      ...(c.doodle ? { doodle: c.doodle } : {}),
       ...(c.reactions
         ? { reactions: Object.fromEntries(Object.entries(c.reactions).map(([e, l]) => [e, l.length])) }
         : {}),
@@ -1669,14 +1671,19 @@ function broadcast(roomId, message, exceptId = null) {
   });
   // Read-only homepage viewers see the live mural too, but never draw/count.
   // ALLOWLIST, not blocklist: spectators get the mural (ops, clears, sheet
-  // swaps) and moderation history rebuilds — nothing else. Rosters, cursors,
-  // chat, hype, renames and every future message type stay inside the room by
-  // default, so a new social feature can never leak names to spectators.
+  // swaps), moderation history rebuilds, AND the room's live conversation —
+  // chat, tapback counts, hype. The talk IS the show (Twitch model): a visitor
+  // watching the homepage viewport reads the banter and taps in to join it.
+  // Display names in chat are pseudonymous and moderated; the ROSTER stays
+  // count-only (userList never reaches spectators), and every other message
+  // type stays inside the room by default. [Owner-approved stance change from
+  // the earlier no-social-to-spectators rule.]
   // Animation rooms: spectators watch the FIRST frame only (mirrors the join
   // filter) — ops/clears for other frames would smear onto their one canvas.
   if (room.spectators && room.spectators.size) {
     const t = message.type;
-    if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history') return;
+    if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history'
+      && t !== 'chat' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
     if (room.animationEnabled) {
       // A history rebuild carries every frame's ops — a spectator's single
       // canvas would smear them together. Skip it; the tile catches up on hop.
@@ -2405,7 +2412,7 @@ wss.on('connection', async (ws, req) => {
     // ops — plenty for a homepage preview, a fraction of a big room's payload.
     // Animation rooms: spectators watch the FIRST frame only (their single
     // canvas would otherwise overdraw the whole flipbook into one smear).
-    // (No chat catch-up either: the read-only viewer ignores chat.)
+    // (Chat catch-up rides along below — the banter is part of the show.)
     const spectatorOps = live.animationEnabled
       ? visibleHistory(live).filter((op) => opFrameId(live, op) === live.frames[0].id)
       : visibleHistory(live);
@@ -2414,6 +2421,11 @@ wss.on('connection', async (ws, req) => {
     // (e.g. after a restart) — same guard as the member join path.
     if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
+    }
+    // The room's recent banter — the conversation is the draw (Twitch model).
+    // Same projection members get: counts, never reaction membership.
+    if (live.chat.length && !live.fingerPaint) {
+      ws.send(JSON.stringify(chatHistoryMsg(live)));
     }
     ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
     const dropSpectator = () => live.spectators.delete(ws);
@@ -3055,8 +3067,30 @@ wss.on('connection', async (ws, req) => {
       case 'chat': {
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
         if (user.muted) break; // a host muted this user
-        if (typeof data.message !== 'string' || !data.message.trim()) break;
-        let message = String(data.message).slice(0, 300);
+        // A message is text, a doodle reply, or both — never neither.
+        const rawText = typeof data.message === 'string' ? data.message : '';
+        const wantsDoodle = typeof data.doodle === 'string' && data.doodle.length > 0;
+        if (!rawText.trim() && !wantsDoodle) break;
+        // Doodles are heavier than text: validate strictly (raster-only, tiny)
+        // and rate-limit separately. A bad doodle rejects the whole message
+        // with feedback rather than silently sending half of it.
+        let cleanDoodle = null;
+        if (wantsDoodle) {
+          const now = Date.now();
+          user.doodleTimes = (user.doodleTimes || []).filter((t) => now - t < 60_000);
+          if (user.doodleTimes.length >= 4) {
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'slow_down' }));
+            break;
+          }
+          cleanDoodle = validateChatDoodle(data.doodle);
+          if (!cleanDoodle) {
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'doodle' }));
+            break;
+          }
+          // Quota is consumed at STORE time (below) — a message the moderation
+          // or guess gates reject shouldn't burn a kid's doodle allowance.
+        }
+        let message = String(rawText).slice(0, 300);
         // Chat moderation. SEVERE content is blocked in EVERY room (public AND
         // private) — a private room being "for friends" is no reason to relay
         // slurs/explicit terms. The softer MILD masking stays public-only so
@@ -3080,6 +3114,12 @@ wss.on('connection', async (ws, req) => {
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'game_spoiler' }));
             break; // drawer / already-correct typed the word — swallow it
           }
+          // A doodle can DRAW the secret word where typing it is swallowed —
+          // block doodles from anyone who knows it (the drawer + solved guessers).
+          if (cleanDoodle && (id === room.game.drawerId || room.game.guessed.has(gameKey(user)))) {
+            if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'game_spoiler' }));
+            break;
+          }
         }
         // Flood guard — AFTER the guess intercept, so a correct guess is never
         // throttled. Wrong guesses still echo as chat, so the cap loosens
@@ -3096,6 +3136,10 @@ wss.on('connection', async (ws, req) => {
         }
         const chatTs = Date.now();
         const entry = { id: ++room.chatSeq, user: { id, name: user.name, color: user.color }, message, ts: chatTs };
+        if (cleanDoodle) {
+          user.doodleTimes.push(chatTs); // quota spent only on an accepted doodle
+          entry.doodle = storeChatDoodle(roomId, cleanDoodle, user.profileId || null);
+        }
         // Reply-threading: the client names a target id; the SERVER derives the
         // quoted context from its own buffer (never client text), so a reply
         // can't fabricate what someone said. Unknown/expired id → plain message.
@@ -3116,8 +3160,8 @@ wss.on('connection', async (ws, req) => {
         room.chat.push(entry);
         if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
         // 2) durable append-only audit log (keeps the profileId for deletion scrubs)
-        appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message });
-        broadcast(roomId, { type: 'chat', msgId: entry.id, user: entry.user, message, ts: chatTs, ...(entry.replyTo ? { replyTo: entry.replyTo } : {}) });
+        appendChatAudit(roomId, { ts: chatTs, room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message, ...(entry.doodle ? { doodle: entry.doodle } : {}) });
+        broadcast(roomId, { type: 'chat', msgId: entry.id, user: entry.user, message, ts: chatTs, ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.doodle ? { doodle: entry.doodle } : {}) });
         analyticsRecordChat(roomId, user);
         // Ping cross-room watchers who are @mentioned here (see notifyMentions).
         notifyMentions(room, roomId, user.name, message, chatTs);
@@ -4149,8 +4193,16 @@ function fileReport({ room, reason, reporterName, source }) {
   // Snapshot the room's recent chat so a moderator sees the conversation around
   // the report (last 20 lines; names + text, no profile ids on the wire).
   const liveRoom = rooms.get(roomCode);
+  // Doodle-bearing lines carry BOTH the id (admin takedown handle) and an
+  // image snapshot — the report must stay reviewable even after the in-memory
+  // doodle store evicts or the server restarts.
   const chatContext = liveRoom
-    ? (liveRoom.chat || []).slice(-20).map((c) => ({ name: c.user.name, message: c.message, ts: c.ts }))
+    ? (liveRoom.chat || []).slice(-20).map((c) => ({
+      name: c.user.name,
+      message: c.message,
+      ts: c.ts,
+      ...(c.doodle ? { doodle: c.doodle, doodleImage: (chatDoodles.get(c.doodle) || {}).image || null } : {}),
+    }))
     : [];
   const report = {
     id: 'rep_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -4165,7 +4217,10 @@ function fileReport({ room, reason, reporterName, source }) {
   // Urgency triage: keywords that suggest grooming/CSAM/self-harm/contact-sharing
   // float the report to the very front of the admin queue and get flagged.
   const haystack = `${report.reason} ${chatContext.map((c) => c.message).join(' ')}`.toLowerCase();
-  report.urgent = /\b(sexual|nude|naked|nsfw|porn|meet\s?up|meet me|address|phone|snap(chat)?|kik|discord|instagram|insta|tiktok|kill|suicide|self.?harm|groom)\b/.test(haystack);
+  report.urgent = /\b(sexual|nude|naked|nsfw|porn|meet\s?up|meet me|address|phone|snap(chat)?|kik|discord|instagram|insta|tiktok|kill|suicide|self.?harm|groom)\b/.test(haystack)
+    // A report whose context contains image content (doodles) is triaged as
+    // urgent — text keywords can't see inside a picture.
+    || chatContext.some((c) => c.doodle);
   if (report.urgent) {
     reports.unshift(report); // already newest-first; keep it at the top explicitly
   } else {
@@ -4304,6 +4359,12 @@ app.post('/api/account/scrub-chat', async (req, res) => {
         if (c.user && sessionIds.has(c.user.id)) {
           c.user.name = '[deleted]';
           c.message = '[deleted]';
+          // Their doodle images are content too — delete the stored image and
+          // the bubble's reference, not just the text.
+          if (c.doodle) {
+            chatDoodles.delete(c.doodle);
+            delete c.doodle;
+          }
           if (c.id != null) scrubbedIds.add(c.id);
           roomTouched = true;
         }
@@ -4319,6 +4380,12 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       }
     }
     if (roomTouched) persistRoom(room.code);
+  }
+  // Doodle images are stamped with their sender's profileId at store time —
+  // sweep the whole store so a child's drawings vanish even when their chat
+  // line already rolled out of every buffer or they're long disconnected.
+  for (const [did, dd] of [...chatDoodles]) {
+    if (dd.profileId === pid) chatDoodles.delete(did);
   }
   const analyticsScrubbed = analyticsScrubProfile(pid);
   // 3) the account's SAVED ARTWORK — a deleted child's drawings must not linger
@@ -5139,6 +5206,12 @@ app.get('/api/sheets/:id', (req, res) => {
     if (!page) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Draw Phone page', image: page.image });
   }
+  // Chat doodles too (id "cd_…") — handed out only inside the room's chat.
+  if (req.params.id.startsWith('cd_')) {
+    const doodle = chatDoodles.get(req.params.id);
+    if (!doodle) return res.status(404).json({ error: 'not found' });
+    return res.json({ id: req.params.id, name: 'Chat doodle', image: doodle.image });
+  }
   const sheet = sheets.find((s) => s.id === req.params.id);
   if (!sheet) {
     return res.status(404).json({ error: 'not found' });
@@ -5169,6 +5242,32 @@ app.delete('/api/admin/sheets/:id', (req, res) => {
   if (!adminGuard(req, res)) return;
   sheets = sheets.filter((s) => s.id !== req.params.id);
   persistSheets();
+  res.json({ ok: true });
+});
+
+// Takedown for a reported chat doodle: delete the image and blank the bubble
+// in whichever room's chat buffer references it.
+app.post('/api/admin/doodle/:id/remove', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = req.params.id;
+  chatDoodles.delete(id);
+  for (const [code, room] of rooms) {
+    let touched = false;
+    for (const c of room.chat || []) {
+      if (c.doodle === id) {
+        delete c.doodle;
+        c.message = c.message || '[removed]';
+        touched = true;
+      }
+    }
+    if (touched) {
+      // Everyone with the image on screen (members AND homepage spectators)
+      // drops it immediately — a takedown that only affects future joins isn't
+      // a takedown.
+      broadcast(code, { type: 'chat_doodle_removed', doodle: id });
+      persistRoom(code);
+    }
+  }
   res.json({ ok: true });
 });
 
@@ -5288,6 +5387,97 @@ function dropRoomPhonePages(room) {
   if (!room || !room.phone || !Array.isArray(room.phone.books)) return;
   for (const b of room.phone.books) for (const pg of b.pages) {
     if (pg.type === 'draw' && typeof pg.content === 'string' && pg.content.startsWith('pp_')) phonePages.delete(pg.content);
+  }
+}
+
+// ---- Chat doodles ----------------------------------------------------------
+// A "doodle reply": a tiny drawing sent as a chat bubble — memes in the app's
+// native medium instead of external GIFs. Same posture as Draw Phone pages:
+// raster-only (magic-byte sniffed, never SVG), tightly size-capped, held in
+// memory under unguessable ids, served via the /api/sheets fallback. In-memory
+// on purpose — embedding dataURLs in room.chat would balloon every room file
+// (200 lines × ~80KB); after a restart an old doodle bubble just shows a
+// gentle "doodle faded" placeholder client-side.
+const chatDoodles = new Map(); // id -> { image, roomId, ts }
+const CHAT_DOODLE_MAX = 400; // FIFO cap across all rooms
+const CHAT_DOODLE_MAX_CHARS = 160_000; // ~120KB decoded — a small sketch, not a photo
+
+// Read pixel dimensions from a PNG IHDR or JPEG SOF header. A ~120KB payload
+// can legally encode a 5500x5500 PNG (deflate) that costs hundreds of MB of
+// RGBA to decode — and doodles auto-render in EVERY member's browser, so the
+// server must bound dimensions, not just bytes.
+function rasterDimensions(buf) {
+  // PNG: IHDR width/height at fixed offsets 16..23.
+  if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) {
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+  // JPEG: scan segments for a SOFn marker (C0-CF minus C4/C8/CC).
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let off = 2;
+    while (off + 9 < buf.length) {
+      if (buf[off] !== 0xff) { off += 1; continue; }
+      const marker = buf[off + 1];
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { h: buf.readUInt16BE(off + 5), w: buf.readUInt16BE(off + 7) };
+      }
+      const len = buf.readUInt16BE(off + 2);
+      if (len < 2) return null;
+      off += 2 + len;
+    }
+  }
+  return null;
+}
+
+const CHAT_DOODLE_MAX_DIM = 1200; // the pad emits 520x360 — anything huge is an attack
+
+function validateChatDoodle(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > CHAT_DOODLE_MAX_CHARS) return null;
+  const m = /^data:image\/([a-z+]+);base64,([a-z0-9+/=]+)$/i.exec(dataUrl);
+  // PNG/JPEG ONLY — tighter than the wall list on purpose: no animated
+  // GIF/WEBP smuggling, and the pad itself emits JPEG.
+  const mime = m && m[1].toLowerCase();
+  if (!m || (mime !== 'png' && mime !== 'jpeg' && mime !== 'jpg')) return null;
+  let buf;
+  try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+  if (!sniffWallImage(buf)) return null;
+  const dims = rasterDimensions(buf);
+  if (!dims || !dims.w || !dims.h || dims.w > CHAT_DOODLE_MAX_DIM || dims.h > CHAT_DOODLE_MAX_DIM) return null;
+  return dataUrl;
+}
+
+const CHAT_DOODLE_HARD_MAX = 600; // absolute memory ceiling — referenced or not
+
+function storeChatDoodle(roomId, dataUrl, profileId) {
+  const id = 'cd_' + randomBytes(12).toString('hex');
+  // profileId rides along so a COPPA erasure can delete a child's doodles even
+  // after they disconnect or their chat line rolls out of the buffer.
+  chatDoodles.set(id, { image: dataUrl, roomId, ts: Date.now(), profileId: profileId || null });
+  if (chatDoodles.size > CHAT_DOODLE_MAX) {
+    // Soft pass: prefer evicting doodles no live room still references.
+    const active = new Set();
+    for (const r of rooms.values()) {
+      for (const c of r.chat || []) if (typeof c.doodle === 'string') active.add(c.doodle);
+    }
+    for (const key of chatDoodles.keys()) {
+      if (chatDoodles.size <= CHAT_DOODLE_MAX) break;
+      if (key !== id && !active.has(key)) chatDoodles.delete(key);
+    }
+    // Hard ceiling: if everything is "referenced" (an attacker can mint
+    // references), evict oldest anyway — bubbles degrade to the same
+    // "doodle faded" placeholder a restart produces. Memory stays bounded.
+    for (const key of chatDoodles.keys()) {
+      if (chatDoodles.size <= CHAT_DOODLE_HARD_MAX) break;
+      if (key !== id) chatDoodles.delete(key);
+    }
+  }
+  return id;
+}
+
+// Free a closing room's doodles (mirrors dropRoomPhonePages/dropRoomTracePhoto).
+function dropRoomChatDoodles(room) {
+  if (!room) return;
+  for (const c of room.chat || []) {
+    if (typeof c.doodle === 'string') chatDoodles.delete(c.doodle);
   }
 }
 

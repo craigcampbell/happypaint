@@ -75,7 +75,7 @@ export default function SiteNav({ onNavigate, current }) {
       <div className="site-nav-actions">
         <a href="/studio" className="site-nav-paint primary-action" onClick={(e) => follow(e, "/studio")}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
-          Create
+          Draw now
         </a>
         <button
           type="button"
