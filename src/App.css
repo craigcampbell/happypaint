@@ -544,6 +544,19 @@ button:disabled {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 24px 70px rgba(16, 24, 32, 0.28);
+  /* The modal is its OWN scroll container. Its backdrop is position:fixed and
+     centers with place-items, so a modal taller than the screen used to spill
+     off both ends with nothing scrollable — on a phone the rooms dialog
+     rendered 2174px tall on a 667px screen and most of the list was simply
+     unreachable. Capping the height here (rather than scrolling the backdrop)
+     also avoids the classic centered-overflow bug where the TOP gets clipped
+     out of reach. overscroll-behavior stops the scroll chaining into the
+     canvas behind it. */
+  max-height: calc(100vh - 36px); /* 18px backdrop padding top + bottom */
+  max-height: calc(100dvh - 36px); /* honours mobile browser chrome */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .pack-grid {
