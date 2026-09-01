@@ -8833,6 +8833,29 @@ select {
   .hype-emoji { font-size: 56px; }
 }
 
+/* ---- Small phones: rescue the zoom cluster from under the rooms FAB ------- */
+/* The rooms FAB row (🏠 · Rooms · step-back · 🔔, z-index 45) is ~253px wide and
+   the zoom cluster ~164px, so on any phone-width screen they fight for the same
+   line — and the FAB wins, burying the "−" button and the % readout under it
+   (z-index 45 over 20). A kid on an iPhone SE cannot zoom out at all. Neither
+   row can shrink enough to share the line, so zoom moves to the bottom-RIGHT:
+   it mirrors the reaction picker on the bottom-left and reuses the same
+   quick-bar clearance. The breakpoint covers every phone (Pixel 7 = 412px,
+   iPhone Pro Max = 430px) and no tablet (iPad portrait = 834px). The
+   prompt-chip (top: 56px) and wipe-chip (top: 100px) rows do not move. */
+@media (max-width: 430px) {
+  .zoom-controls {
+    top: auto;
+    right: 8px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+  /* A live vote card lives in that same corner — lift it clear of the cluster:
+     84px quick-bar clearance + the 54px-tall cluster + a 12px gap. */
+  .cc-vote-floating {
+    bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+}
+
 /* ---- Weekly event nights (homepage) ------------------------------------- */
 .home-events {
   width: min(1080px, 100%);

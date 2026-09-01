@@ -204,6 +204,23 @@ const STORAGE_KEYS = {
 // existing localStorage draft (W3).
 const DRAFT_IDB_KEY = "draft:v4";
 
+// Some engines (WebKit most reliably) refuse to serialise a Blob into an object
+// store — "Error preparing Blob/File data to be stored in object store". The
+// autosave retries the same draft as base64 dataURLs, which always store, so the
+// artwork is safe and the user sees nothing. Warn ONCE per session: the autosave
+// timer fires every few seconds and would otherwise bury the console.
+let draftBlobFallbackWarned = false;
+function warnDraftBlobFallback(error) {
+  if (draftBlobFallbackWarned) {
+    return;
+  }
+  draftBlobFallbackWarned = true;
+  console.warn(
+    "Draft autosave: this browser wouldn't store PNG Blobs — falling back to dataURLs.",
+    error,
+  );
+}
+
 // The gallery and Paint Space lockers now persist their full arrays in
 // IndexedDB (much larger quota than the ~5MB localStorage budget, and a quota
 // overflow rejects instead of silently dropping the save). STORAGE_KEYS.gallery
@@ -1986,13 +2003,39 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           });
         }
 
-        await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
-          version: 4,
-          layers: layerData,
-          activeLayerId,
-          settings,
-          savedAt,
-        });
+        try {
+          await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
+            version: 4,
+            layers: layerData,
+            activeLayerId,
+            settings,
+            savedAt,
+          });
+        } catch (error) {
+          // The Blobs wouldn't serialise (see warnDraftBlobFallback). That's a
+          // storage-SHAPE problem, not "out of room", so re-encode the same
+          // layers as base64 dataURLs and try once more — restoreLayersFromDraft
+          // reads either form. If this throws too, the outer catch reports it.
+          warnDraftBlobFallback(error);
+          const fallbackLayers = [];
+          for (const layer of layersRef.current) {
+            fallbackLayers.push({
+              id: layer.id,
+              name: layer.name,
+              visible: layer.visible,
+              opacity: layer.opacity,
+              locked: layer.locked,
+              image: await canvasToDataUrl(layer.canvas),
+            });
+          }
+          await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
+            version: 4,
+            layers: fallbackLayers,
+            activeLayerId,
+            settings,
+            savedAt,
+          });
+        }
         // The IndexedDB write is now the source of truth. Drop this room's
         // localStorage fallback (it would only shadow the IDB copy), and for MAIN
         // also drop the pre-per-room global draft that was migrated forward into

@@ -10,6 +10,7 @@
 // Every finding prints as `PASS/WARN/FAIL  name — detail` and is backed by a
 // screenshot in the ux/ scratch dir.
 import { chromium, devices } from "playwright";
+import { WebSocket } from "ws";
 import { spawn } from "child_process";
 import { mkdirSync, rmSync, readFileSync } from "fs";
 import path from "path";
@@ -494,6 +495,198 @@ const run = async () => {
         `scrollbar-width=${polish.scrollbarWidth}; text-size-adjust=${polish.textSizeAdjust}; ` +
         `:focus-visible styling=${polish.hasFocusVisibleRule}; inputs=` +
         polish.inputs.map((i) => `r${i.radius}/${i.fs}`).join(",") + ` [${roomsShot}]`);
+    }
+
+    await ctx.close();
+  }
+
+  // ------------------------------------------------ U10: small-phone corners ---
+  // The rooms FAB row (.studio-rooms-fab, z-index 45) spans the whole width of a
+  // small phone and used to paint straight over .zoom-controls (z-index 20) at
+  // top-right: the "-" button and the % readout were unreachable, so a kid on an
+  // iPhone SE could not zoom out at all. Zoom now lives bottom-right on narrow
+  // phones. These checks keep it there and keep that corner uncontested:
+  //   a) the cluster is inside the viewport and each control is the topmost
+  //      element at its own centre (nothing painted over it),
+  //   b) a LIVE vote card (.cc-vote-floating, same corner) clears it,
+  //   c) the bottom-left .reaction-picker clears it,
+  //   d) the top chrome rows (.studio-rooms-fab, .room-prompt-chip, .wipe-chip)
+  //      are exactly where they were — the fix moved zoom, not them.
+  //
+  // Each profile gets its OWN room: the server enforces a 120s vote cooldown per
+  // room, so a second vote_start in the same room would be denied.
+  const rectLabel = (a) => `${Math.round(a.x)},${Math.round(a.y)} ${Math.round(a.width)}x${Math.round(a.height)}`;
+  const intersects = (a, b) =>
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 1 &&
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 1;
+
+  // Drive a REAL vote through a second raw-WS member of the room, exactly as a
+  // friend tapping the vote button would. ZZB9* rooms are private ("friends"),
+  // where vote_start is open to any member — no host and no fixtures needed.
+  const startVote = (roomCode) =>
+    new Promise((resolve) => {
+      let done = false;
+      const finish = (ok, why) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { sock.close(); } catch { /* already gone */ }
+        resolve({ ok, why });
+      };
+      const sock = new WebSocket(`ws://localhost:${PORT}/ws?room=${roomCode}`);
+      const timer = setTimeout(() => finish(false, "timed out waiting for vote_open"), 12000);
+      sock.on("open", () => {
+        sock.send(JSON.stringify({ type: "auth", token: null })); // guest handshake
+        sock.send(JSON.stringify({ type: "client_info", ua: "mobile-ux-audit" }));
+        setTimeout(() => sock.send(JSON.stringify({ type: "vote_start" })), 400);
+      });
+      sock.on("message", (buf) => {
+        let msg = null;
+        try { msg = JSON.parse(String(buf)); } catch { return; }
+        if (msg.type === "vote_open") finish(true, "vote_open broadcast");
+        if (msg.type === "vote_denied") finish(false, "vote_denied: " + msg.reason);
+      });
+      sock.on("error", (e) => finish(false, String(e.message || e).slice(0, 80)));
+    });
+
+  const CORNER_PROFILES = [
+    { key: "pixel7", label: "Pixel 7", room: "ZZB9", opts: { ...devices["Pixel 7"] } },
+    {
+      key: "iphonese375", label: "iPhone SE 375x667", room: "ZZB9SE",
+      opts: { ...iphoneSE, viewport: { width: 375, height: 667 } },
+    },
+  ];
+
+  for (const prof of CORNER_PROFILES) {
+    const ctx = await browser.newContext({ ...prof.opts, ignoreHTTPSErrors: true });
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/join/${prof.room}`, { waitUntil: "domcontentloaded" });
+    // The studio mounts asynchronously, so a fixed sleep races it — that is how
+    // the 375x667 run once screenshotted a blank page and measured nothing. Wait
+    // for the canvas itself, THEN let the floating chrome settle before probing.
+    await page.waitForSelector(".overlay-canvas", { timeout: 15000 });
+    await sleep(1500);
+    const zoomShot = await shot(page, prof.key, "b9-zoom-corner");
+
+    // (d) The top-chrome rows. .wipe-chip only renders during a public room's
+    // 3-day refresh cycle, so its row is measured from the shipped stylesheet
+    // with a probe element rather than skipped — that is the position a real
+    // wipe chip would land on.
+    const top = await page.evaluate(() => {
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      };
+      const stage = document.querySelector(".canvas-stage") || document.body;
+      const probe = document.createElement("div");
+      probe.className = "wipe-chip";
+      probe.style.visibility = "hidden";
+      stage.appendChild(probe);
+      const wipeTop = getComputedStyle(probe).top;
+      probe.remove();
+      return { fab: box(".studio-rooms-fab"), chip: box(".room-prompt-chip"), wipeTop };
+    });
+
+    const zoom = await page.evaluate(() => {
+      const el = document.querySelector(".zoom-controls");
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const parts = {};
+      const wanted = [
+        ["minus", "[aria-label='Zoom out']"],
+        ["pct", ".zoom-pct"],
+        ["plus", "[aria-label='Zoom in']"],
+      ];
+      for (const [name, sel] of wanted) {
+        const b = el.querySelector(sel);
+        if (!b) continue;
+        const br = b.getBoundingClientRect();
+        const hit = document.elementFromPoint(br.x + br.width / 2, br.y + br.height / 2);
+        parts[name] = {
+          rect: { x: br.x, y: br.y, width: br.width, height: br.height },
+          inside: br.x >= 0 && br.y >= 0 && br.right <= innerWidth + 1 && br.bottom <= innerHeight + 1,
+          // The button itself (or a child of it) must be what a finger lands on.
+          ownsHit: !!hit && (hit === b || b.contains(hit)),
+          hit: hit ? String(hit.className || hit.tagName).slice(0, 40) : "none",
+        };
+      }
+      const pickerEl = document.querySelector(".reaction-picker");
+      let picker = null;
+      if (pickerEl) {
+        const p = pickerEl.getBoundingClientRect();
+        picker = { x: p.x, y: p.y, width: p.width, height: p.height };
+      }
+      return { rect: { x: r.x, y: r.y, width: r.width, height: r.height }, parts, picker, vw: innerWidth, vh: innerHeight };
+    });
+
+    if (!zoom) {
+      log("FAIL", `U10 zoom cluster is rendered (${prof.label})`, `no .zoom-controls in ${prof.room} [${zoomShot}]`);
+      await ctx.close();
+      continue;
+    }
+
+    // (a) reachable: every control on screen AND nothing painted over it.
+    const missing = ["minus", "pct", "plus"].filter((k) => !zoom.parts[k]);
+    const offscreen = Object.entries(zoom.parts).filter(([, p]) => !p.inside).map(([k]) => k);
+    log(!missing.length && !offscreen.length ? "PASS" : "FAIL",
+      `U10 zoom −/%/+ are inside the viewport (${prof.label})`,
+      `cluster ${rectLabel(zoom.rect)} in ${zoom.vw}x${zoom.vh}; ` +
+      `missing=${missing.join(",") || "none"} offscreen=${offscreen.join(",") || "none"} [${zoomShot}]`);
+    const covered = Object.entries(zoom.parts).filter(([, p]) => !p.ownsHit);
+    log(covered.length ? "FAIL" : "PASS",
+      `U10 nothing is painted over the zoom buttons (${prof.label})`,
+      "elementFromPoint at each centre: " +
+      Object.entries(zoom.parts).map(([k, p]) => `${k}->${p.ownsHit ? "itself" : p.hit}`).join(", ") +
+      ` [${zoomShot}]`);
+
+    // (c) the bottom-left reaction picker must not reach into that corner.
+    if (zoom.picker) {
+      log(!intersects(zoom.rect, zoom.picker) ? "PASS" : "FAIL",
+        `U10 reaction picker clears the zoom cluster (${prof.label})`,
+        `picker ${rectLabel(zoom.picker)} vs zoom ${rectLabel(zoom.rect)} [${zoomShot}]`);
+    } else {
+      log("WARN", `U10 reaction picker not rendered (${prof.label})`, `no .reaction-picker [${zoomShot}]`);
+    }
+
+    // (d) the top rows sit exactly where the mobile chrome puts them.
+    const rowsOk = !!top.fab && Math.round(top.fab.y) === 8
+      && !!top.chip && Math.round(top.chip.y) === 56
+      && top.wipeTop === "100px"
+      && !intersects(zoom.rect, top.fab) && !intersects(zoom.rect, top.chip);
+    log(rowsOk ? "PASS" : "FAIL", `U10 top chrome rows are untouched (${prof.label})`,
+      `rooms FAB ${top.fab ? rectLabel(top.fab) : "absent"} (want y=8); ` +
+      `prompt chip ${top.chip ? rectLabel(top.chip) : "absent"} (want y=56); ` +
+      `wipe-chip top=${top.wipeTop} (want 100px); ` +
+      `zoom overlaps them: ${[top.fab, top.chip].filter((r) => r && intersects(zoom.rect, r)).length} [${zoomShot}]`);
+
+    // (b) a REAL live vote card in the same corner.
+    const vote = await startVote(prof.room);
+    await sleep(1200);
+    const voteShot = await shot(page, prof.key, "b9-zoom-vote");
+    const voteBox = await page.evaluate(() => {
+      const el = document.querySelector(".cc-vote-floating");
+      const z = document.querySelector(".zoom-controls");
+      if (!el || !z) return null;
+      const r = el.getBoundingClientRect();
+      const zr = z.getBoundingClientRect();
+      return {
+        card: { x: r.x, y: r.y, width: r.width, height: r.height },
+        zoom: { x: zr.x, y: zr.y, width: zr.width, height: zr.height },
+        inside: r.x >= 0 && r.y >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
+        zoomInside: zr.x >= 0 && zr.y >= 0 && zr.right <= innerWidth + 1 && zr.bottom <= innerHeight + 1,
+        vw: innerWidth, vh: innerHeight,
+      };
+    });
+    if (!voteBox) {
+      log("FAIL", `U10 live vote card renders (${prof.label})`,
+        `vote_start ${vote.ok ? "succeeded" : "FAILED"} (${vote.why}) but no .cc-vote-floating [${voteShot}]`);
+    } else {
+      log(!intersects(voteBox.card, voteBox.zoom) && voteBox.inside && voteBox.zoomInside ? "PASS" : "FAIL",
+        `U10 live vote card clears the zoom cluster (${prof.label})`,
+        `card ${rectLabel(voteBox.card)} (inside=${voteBox.inside}) vs zoom ${rectLabel(voteBox.zoom)} ` +
+        `(inside=${voteBox.zoomInside}) in ${voteBox.vw}x${voteBox.vh} [${voteShot}]`);
     }
 
     await ctx.close();

@@ -3,6 +3,13 @@
 // stable key, in a much larger quota than localStorage. All ops reject on
 // open/upgrade/transaction errors so callers can keep `dirtyRef` true and
 // surface an honest "couldn't save" status instead of silently losing artwork.
+//
+// Request errors REJECT (via the `fail` callback runTransaction hands to the
+// work function) — they must never `throw`. A request's onerror fires long
+// after runTransaction's try/catch has returned, so a throw there escapes as an
+// uncaught page error even though the promise itself is handled. WebKit hits
+// this on every draft autosave it can't serialise ("Error preparing Blob/File
+// data to be stored in object store").
 
 const DB_NAME = "happypaint";
 // v2 adds the generic "kv" store used by the gallery and Paint Space locker so
@@ -89,9 +96,13 @@ function runTransaction(mode, work, storeName = STORE_NAME) {
         tx.onerror = () => fail(tx.error);
         tx.onabort = () => fail(tx.error);
         try {
-          work(store, (value) => {
-            result = value;
-          });
+          work(
+            store,
+            (value) => {
+              result = value;
+            },
+            fail,
+          );
         } catch (error) {
           // Surface synchronous errors (e.g. structured-clone failures) and abort.
           try {
@@ -106,30 +117,24 @@ function runTransaction(mode, work, storeName = STORE_NAME) {
 }
 
 export function idbGet(key) {
-  return runTransaction("readonly", (store, setResult) => {
+  return runTransaction("readonly", (store, setResult, fail) => {
     const request = store.get(key);
     request.onsuccess = () => setResult(request.result ?? null);
-    request.onerror = () => {
-      throw request.error || new Error("IndexedDB get failed");
-    };
+    request.onerror = () => fail(request.error || new Error("IndexedDB get failed"));
   });
 }
 
 export function idbSet(key, value) {
-  return runTransaction("readwrite", (store) => {
+  return runTransaction("readwrite", (store, setResult, fail) => {
     const request = store.put(value, key);
-    request.onerror = () => {
-      throw request.error || new Error("IndexedDB put failed");
-    };
+    request.onerror = () => fail(request.error || new Error("IndexedDB put failed"));
   });
 }
 
 export function idbDelete(key) {
-  return runTransaction("readwrite", (store) => {
+  return runTransaction("readwrite", (store, setResult, fail) => {
     const request = store.delete(key);
-    request.onerror = () => {
-      throw request.error || new Error("IndexedDB delete failed");
-    };
+    request.onerror = () => fail(request.error || new Error("IndexedDB delete failed"));
   });
 }
 
@@ -137,11 +142,9 @@ export function idbDelete(key) {
 // so account deletion clears the whole store rather than a single key — otherwise
 // per-room autosaves would survive a "delete my data" request.
 export function idbClearDrafts() {
-  return runTransaction("readwrite", (store) => {
+  return runTransaction("readwrite", (store, setResult, fail) => {
     const request = store.clear();
-    request.onerror = () => {
-      throw request.error || new Error("IndexedDB clear failed");
-    };
+    request.onerror = () => fail(request.error || new Error("IndexedDB clear failed"));
   });
 }
 
@@ -152,12 +155,10 @@ export function idbClearDrafts() {
 export function idbGetKV(key) {
   return runTransaction(
     "readonly",
-    (store, setResult) => {
+    (store, setResult, fail) => {
       const request = store.get(key);
       request.onsuccess = () => setResult(request.result ?? null);
-      request.onerror = () => {
-        throw request.error || new Error("IndexedDB get failed");
-      };
+      request.onerror = () => fail(request.error || new Error("IndexedDB get failed"));
     },
     KV_STORE_NAME,
   );
@@ -166,11 +167,9 @@ export function idbGetKV(key) {
 export function idbSetKV(key, value) {
   return runTransaction(
     "readwrite",
-    (store) => {
+    (store, setResult, fail) => {
       const request = store.put(value, key);
-      request.onerror = () => {
-        throw request.error || new Error("IndexedDB put failed");
-      };
+      request.onerror = () => fail(request.error || new Error("IndexedDB put failed"));
     },
     KV_STORE_NAME,
   );
@@ -179,11 +178,9 @@ export function idbSetKV(key, value) {
 export function idbDeleteKV(key) {
   return runTransaction(
     "readwrite",
-    (store) => {
+    (store, setResult, fail) => {
       const request = store.delete(key);
-      request.onerror = () => {
-        throw request.error || new Error("IndexedDB delete failed");
-      };
+      request.onerror = () => fail(request.error || new Error("IndexedDB delete failed"));
     },
     KV_STORE_NAME,
   );
