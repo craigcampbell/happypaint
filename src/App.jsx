@@ -718,6 +718,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [isPreparingStepBack, setIsPreparingStepBack] = useState(false);
   const stepBackUrlRef = useRef(null);
   const stepBackBusyRef = useRef(false);
+  // Public canvas refresh: { wipeAt, keepVotes, keepNeeded } or null off-cycle.
+  const [roomWipe, setRoomWipe] = useState(null);
+  const [wipePanelOpen, setWipePanelOpen] = useState(false);
+  const [, setWipeTick] = useState(0); // ticks the countdown label
   const [hypes, setHypes] = useState([]); // live big-reaction bursts (capped, ephemeral)
   const hypeIdRef = useRef(0);
   const [showReport, setShowReport] = useState(false);
@@ -5933,6 +5937,8 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           gameRef.current = null;
           setGame(null);
           setMyWord(null);
+          setRoomWipe(data.wipe || null);
+          setWipePanelOpen(false);
           // Draw Phone room? Reset any stale telephone state from a prior room;
           // the live phone_state / phone_task (if any) arrive right after.
           roomPhoneRef.current = !!data.phone;
@@ -6206,7 +6212,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           // A Draw & Guess round clears the canvas every turn — that's expected,
           // so skip the "Someone cleared" banner (the HUD already narrates it).
-          if (!data.gameRound) showClearBanner(data.name || "Someone");
+          if (data.wipeRefresh) {
+            // Not blame-worthy and not a surprise — say what happened, which
+            // also covers FINGERS, where there's no chat to read it in.
+            showToast("🧽 Fresh canvas! This room starts over every 3 days.");
+          } else if (!data.gameRound) {
+            showClearBanner(data.name || "Someone");
+          }
           break;
         }
         // Private-room host toggled Draw & Guess on/off.
@@ -6596,6 +6608,34 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           else if (data.reason === "doodle") showToast("That doodle couldn't be sent — try drawing it again!");
           else showToast("That message was blocked by the room's safety filter.");
           break;
+        case "wipe_state":
+          setRoomWipe(data.wipe || null);
+          break;
+        case "wipe_denied":
+          showToast(
+            data.reason === "already_voted" ? "You already voted to keep this one! 🗳️"
+              : data.reason === "already_extended" ? "This canvas is already booked for a while — enjoy it! 🎉"
+                : data.reason === "muted" ? "You're muted by a host right now."
+                  : "Give it a moment and try again.",
+          );
+          break;
+        case "fork_denied":
+          showToast(
+            data.reason === "empty" ? "Draw something first, then you can take it private! ✏️"
+              : data.reason === "too_big" ? "This canvas is too big to copy — pin it to the Wall instead. 🧲"
+                : data.reason === "locked" ? "A host locked this room."
+                  : data.reason === "muted" ? "You're muted by a host right now."
+                    : data.reason === "not_forkable" ? "This room doesn't refresh, so there's nothing to rescue."
+                      : "Couldn't make your copy — try again in a bit.",
+          );
+          break;
+        case "fork_ready":
+          // Our private copy is ready — hand over the room, don't teleport the
+          // user mid-stroke.
+          setWipePanelOpen(false);
+          showToast(`Your private copy is ready — room ${data.code} 🔒`);
+          window.setTimeout(() => { window.location.href = `/join/${data.code}`; }, 900);
+          break;
         case "chat_doodle_removed":
           // Admin takedown: the hook already stripped chat state; drop the
           // cached image too so nothing can re-render it.
@@ -6768,12 +6808,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       sendCheer: mp.sendCheer,
       sendGameSkip: mp.sendGameSkip,
       sendSetGame: mp.sendSetGame,
+      sendWipeKeep: mp.sendWipeKeep,
+      sendForkPrivate: mp.sendForkPrivate,
       sendSetPhone: mp.sendSetPhone,
       sendPhoneStart: mp.sendPhoneStart,
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip]);
+  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -6800,6 +6842,27 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     setPhoneSubmitted(true);
     mpRef.current?.sendPhoneSubmit?.({ round: task.round, text: phoneGuess.trim() || "(no guess)" });
   }, [phoneGuess, phoneSubmitted]);
+
+  // Countdown label for the public canvas refresh. Ticks once a minute (only
+  // while a room is actually on the cycle) — this is a "2d 4h" label, not a
+  // stopwatch, so per-second work would be pure waste on the drawing path.
+  useEffect(() => {
+    if (!roomWipe || !roomWipe.wipeAt) return undefined;
+    const t = window.setInterval(() => setWipeTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(t);
+  }, [roomWipe]);
+  const wipeMsLeft = roomWipe && roomWipe.wipeAt ? Math.max(0, roomWipe.wipeAt - Date.now()) : 0;
+  const wipeUrgent = Boolean(roomWipe && roomWipe.wipeAt) && wipeMsLeft < 6 * 3600_000;
+  const wipeCountdown = (() => {
+    if (!roomWipe || !roomWipe.wipeAt) return "";
+    const mins = Math.floor(wipeMsLeft / 60_000);
+    const d = Math.floor(mins / 1440);
+    const h = Math.floor((mins % 1440) / 60);
+    const m = mins % 60;
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  })();
 
   // Drop an ephemeral emoji reaction at the center of the current view. The
   // server echoes it to everyone (including us) so it renders exactly once.
@@ -8208,6 +8271,53 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                   ✕
                 </button>
               </div>
+            ) : null}
+
+            {/* Public canvas refresh: a live countdown so the reset is never a
+                surprise, and two ways out — vote to keep it, or fork it into
+                your own private room. */}
+            {roomWipe && roomWipe.wipeAt ? (
+              <>
+                <button
+                  type="button"
+                  className={`wipe-chip${wipeUrgent ? " is-urgent" : ""}`}
+                  onClick={() => setWipePanelOpen((v) => !v)}
+                  aria-expanded={wipePanelOpen}
+                  title="This public canvas refreshes on a 3-day cycle"
+                >
+                  🧽 Fresh canvas in <strong>{wipeCountdown}</strong>
+                </button>
+                {wipePanelOpen ? (
+                  <div className="wipe-panel" role="dialog" aria-label="Canvas refresh">
+                    <div className="wipe-panel-head">
+                      <strong>🧽 Fresh canvas in {wipeCountdown}</strong>
+                      <button type="button" onClick={() => setWipePanelOpen(false)} aria-label="Close">✕</button>
+                    </div>
+                    <p className="wipe-panel-why">
+                      Public rooms start over every 3 days so there&rsquo;s always space to draw.
+                      Pin anything you love to the <strong>Fridge Wall</strong> to keep it forever.
+                    </p>
+                    <button
+                      type="button"
+                      className="wipe-keep-btn"
+                      onClick={() => mpRef.current?.sendWipeKeep?.()}
+                    >
+                      🗳️ Keep this canvas
+                      <span className="wipe-keep-count">
+                        {roomWipe.keepVotes}/{roomWipe.keepNeeded} votes
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="wipe-fork-btn"
+                      onClick={() => mpRef.current?.sendForkPrivate?.()}
+                    >
+                      🔒 Continue in a private room
+                      <span className="wipe-fork-sub">Copies this art to a room that&rsquo;s just yours</span>
+                    </button>
+                  </div>
+                ) : null}
+              </>
             ) : null}
 
             {(roomId === "KALEIDO" || (roomAudience && roomAudience !== "kid_safe" && isRoomHost)) ? (

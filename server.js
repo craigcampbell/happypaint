@@ -857,6 +857,7 @@ function loadRoom(roomId) {
       userSeconds: Number(data.userSeconds) || 0,
       chat: Array.isArray(data.chat) ? data.chat.slice(-CHAT_BUFFER_MAX) : [],
       chatSeq: Number(data.chatSeq) || 0,
+      wipeAt: Number(data.wipeAt) || 0,
       // Wet-canvas toggle + the last theme-vote winner both survive restarts.
       wetCanvas: !!data.wetCanvas,
       customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
@@ -913,6 +914,7 @@ async function saveRoomNow(roomId) {
       userSeconds: room.userSeconds || 0,
       chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
       chatSeq: room.chatSeq || 0,
+      wipeAt: room.wipeAt || 0,
       wetCanvas: !!room.wetCanvas,
       customPrompt: room.customPrompt || null,
       frames: room.frames,
@@ -1299,6 +1301,10 @@ function getRoom(roomId) {
       flaggedOps: new Set(), // op ids already alerted on (avoids duplicate Tier-1 alerts)
       chat: saved.chat || [], // recent chat buffer (late-joiner context, persisted)
       chatSeq: 0, // per-room chat message id counter (backfilled below; persisted)
+      // Public canvas refresh: when this room's mural next resets (persisted,
+      // so the deadline survives restarts) + who has voted to keep it going.
+      wipeAt: Number(saved.wipeAt) || 0,
+      keepVotes: new Set(), // ephemeral: gameKeys voting to extend this cycle
       watchers: new Set(), // elected client ids running the in-browser watcher
       spectators: new Set(), // read-only homepage viewers (not counted as users)
       // Ephemeral "who's on which cel" presence for animation rooms: userId ->
@@ -1525,6 +1531,128 @@ function ensureDailyFresh() {
 ensureDailyFresh(); // boot: wipe a stale canvas loaded from disk (restart spanning midnight)
 const dailyRolloverTimer = setInterval(ensureDailyFresh, 60_000);
 if (dailyRolloverTimer.unref) dailyRolloverTimer.unref();
+
+// ---- Public canvas refresh (3-day cycle) -----------------------------------
+// A public room's mural is a commons: left alone it silts up until there's no
+// blank space for the next kid, and the oldest art is also the least
+// moderated. So every public room gets a rolling 3-day refresh, shown as a
+// live countdown so nobody is surprised. Two escape hatches before it fires:
+// the room can VOTE to keep the canvas (adds another 3 days), or anyone can
+// fork the art into their own private room and keep going there.
+//
+// Like the daily wipe, the deadline is DERIVED from a persisted timestamp
+// (room.wipeAt) rather than an in-memory timer — a deploy or crash must not
+// silently skip or double-fire a wipe.
+const ROOM_WIPE_MS = 3 * 24 * 3600_000;
+const KEEP_VOTES_NEEDED = 2; // one person alone can't hold the commons open
+// However many times a room votes to keep, the canvas can never be held more
+// than this far ahead — otherwise repeat votes push the refresh out by months
+// and the commons silts up exactly as before.
+const MAX_WIPE_HORIZON_MS = 2 * ROOM_WIPE_MS;
+// Forking copies the whole history into a new room + writes a room file, so
+// cap it far below MAX_HISTORY (20k) — this is a rescue, not a bulk export.
+const FORK_MAX_OPS = 6000;
+
+// Both wipe-panel buttons used to fail SILENTLY on every guard — the kid just
+// saw nothing happen. Reply with a reason so the client can say why.
+function denyWipe(user, reason) {
+  if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'wipe_denied', reason }));
+}
+function denyFork(user, reason) {
+  if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'fork_denied', reason }));
+}
+
+// The 3-day cycle covers listed public rooms EXCEPT those that already blank
+// themselves faster: DAILY (midnight) and the game rooms (per round/game).
+function wipesOnCycle(room, roomId) {
+  if (!room || room.audience !== 'kid_safe' || !room.listed) return false;
+  if (roomId === 'DAILY') return false;
+  if (GAME_ROOM_CODES.has(roomId) || PHONE_ROOM_CODES.has(roomId)) return false;
+  return true;
+}
+
+function wipeState(room, roomId) {
+  if (!wipesOnCycle(room, roomId)) return null;
+  return {
+    wipeAt: room.wipeAt || 0,
+    keepVotes: room.keepVotes ? room.keepVotes.size : 0,
+    keepNeeded: KEEP_VOTES_NEEDED,
+  };
+}
+
+function broadcastWipeState(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  const state = wipeState(room, roomId);
+  if (state) broadcast(roomId, { type: 'wipe_state', wipe: state });
+}
+
+function pushSystemChat(room, roomId, message, name, color) {
+  const line = {
+    id: ++room.chatSeq,
+    user: { id: 'system', name: name || 'Drawesome', color: color || '#0ea5e9' },
+    message,
+    ts: Date.now(),
+    system: true,
+  };
+  room.chat.push(line);
+  if (room.chat.length > CHAT_BUFFER_MAX) room.chat.splice(0, room.chat.length - CHAT_BUFFER_MAX);
+  broadcast(roomId, { type: 'chat', msgId: line.id, user: line.user, message, ts: line.ts, system: true });
+}
+
+// Idempotent + cheap: safe to call on every join and on the sweep tick.
+function ensureRoomFresh(roomId) {
+  const room = rooms.get(roomId);
+  if (!wipesOnCycle(room, roomId)) return;
+  if (!room.wipeAt) {
+    // First sight of an eligible room — start its clock.
+    room.wipeAt = Date.now() + ROOM_WIPE_MS;
+    persistRoom(roomId);
+    return;
+  }
+  if (Date.now() < room.wipeAt) return;
+
+  room.history = [];
+  // An uploaded trace photo belongs to the mural being retired — free the image
+  // instead of orphaning it in memory (same contract as clear/replace/close).
+  dropRoomTracePhoto(room);
+  // A flipbook's frames/scenes are part of the artwork: leaving 8 empty frames
+  // pinned at the cap would hand the next kids a blank film strip they can't
+  // grow. Reset the structure the way a fresh room starts.
+  if (room.animationEnabled) {
+    room.frames = [{ id: 'f0', durationMs: 120, sceneId: 's0' }];
+    room.scenes = [{ id: 's0', name: 'Scene 1' }];
+  }
+  recountFrameOps(room);
+  room.sheetId = null;
+  room.lastCleared = null; // the refresh is not undoable — it IS the reset
+  room.lastClearedFrameId = null;
+  room.lastClearedSheet = null;
+  // The old ops are gone; stale moderation state on recycled opIds would
+  // silently hide innocent new strokes (same reasoning as the daily wipe).
+  room.hiddenOpIds.clear();
+  room.flaggedOps.clear();
+  if (room.keepVotes) room.keepVotes.clear();
+  room.wipeAt = Date.now() + ROOM_WIPE_MS;
+
+  // gameRound:true suppresses the "someone cleared it" blame banner (nobody
+  // did this), and wipeRefresh lets the client explain what actually happened
+  // — including in FINGERS, which has no chat to read.
+  broadcast(roomId, { type: 'clear', userId: 'system', name: 'Fresh canvas', gameRound: true, wipeRefresh: true });
+  broadcast(roomId, { type: 'sheet', sheetId: null });
+  if (!room.fingerPaint) {
+    pushSystemChat(room, roomId, 'Fresh canvas! This room refreshes every 3 days — pin art to the Fridge Wall to keep it forever. 🧽');
+  }
+  broadcastWipeState(roomId);
+  persistRoom(roomId);
+}
+
+function sweepRoomWipes() {
+  for (const code of [...rooms.keys()]) ensureRoomFresh(code);
+}
+sweepRoomWipes(); // boot: a deadline that passed while we were down fires now
+const roomWipeTimer = setInterval(sweepRoomWipes, 60_000);
+if (roomWipeTimer.unref) roomWipeTimer.unref();
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
 // lewd" that an image flag implicates.
@@ -2440,6 +2568,9 @@ wss.on('connection', async (ws, req) => {
   // just-past-midnight joiner would see yesterday's mural under today's prompt
   // and then lose their first strokes to the delayed wipe.
   if (roomId === 'DAILY') ensureDailyFresh();
+  // Public rooms refresh on a 3-day cycle — settle it on contact, not on the
+  // next sweep tick, so a joiner never lands on a canvas that is already due.
+  ensureRoomFresh(roomId);
   if (roomId === 'QUEST') {
     const fresh = questSetFor(roomId);
     if (room.quests?.setId !== fresh.setId) {
@@ -2547,6 +2678,9 @@ wss.on('connection', async (ws, req) => {
     muted: identity ? room.mutedProfileIds.has(identity.profileId) : false,
     connectedAt: Date.now(),
     lastActivity: Date.now(),
+    // Survives reload/extra tabs, unlike the per-socket id — used where a
+    // limit or a vote must not be resettable by reconnecting.
+    ip: rawClientIp(req),
   };
   room.users.set(id, user);
   room.lastActivity = Date.now();
@@ -2613,6 +2747,8 @@ wss.on('connection', async (ws, req) => {
     game: !!room.gameEnabled,
     // Draw Phone: whether this room plays the telephone game.
     phone: !!room.phoneEnabled,
+    // Public canvas refresh countdown (null in rooms not on the cycle).
+    wipe: wipeState(room, roomId),
     symmetry: room.symmetry,
     orchestra: !!room.orchestraEnabled,
     quests: questPayload(room),
@@ -2714,6 +2850,12 @@ wss.on('connection', async (ws, req) => {
 
     switch (data.type) {
       case 'client_info':
+        // Browser-local id (localStorage): survives reload, differs between two
+        // kids on one school network. Spoofable, so it only ever gates
+        // low-stakes per-person actions like the keep-vote — never moderation.
+        if (typeof data.deviceKey === 'string' && /^[a-z0-9_]{6,48}$/i.test(data.deviceKey)) {
+          user.deviceKey = data.deviceKey;
+        }
         analyticsUpdateClientInfo(user, data);
         break;
       case 'op': {
@@ -3375,6 +3517,106 @@ wss.on('connection', async (ws, req) => {
         if (!room.gameEnabled || !room.game || room.game.phase !== 'playing') break;
         if (user.id !== room.game.drawerId && !isHost(room, user)) break;
         endGameRound(roomId, 'skipped');
+        break;
+      }
+      // ---- Public canvas refresh: keep it going ------------------------------
+      // Any member can vote to keep the current canvas. Reaching the threshold
+      // buys another full cycle. Votes are per-person (stable gameKey) so one
+      // kid reconnecting can't extend the commons alone.
+      case 'wipe_keep': {
+        if (!wipesOnCycle(room, roomId)) break;
+        if (user.muted) { denyWipe(user, 'muted'); break; }
+        if (!rateOk(`keep:${user.ip}`, 10, 60_000)) { denyWipe(user, 'slow_down'); break; }
+        if (!room.keepVotes) room.keepVotes = new Set();
+        // Identity must survive a reload and two tabs, or one kid alone clears
+        // the "2 distinct people" bar — but it must NOT merge a whole classroom
+        // behind one NAT, or a school could never reach two votes at all.
+        // Account > device key (localStorage, shared by a browser's tabs) > IP.
+        // The device key is spoofable; the horizon cap above is what actually
+        // bounds the damage, so this only needs to stop casual double-voting.
+        const voteKey = user.profileId
+          ? `pb_${user.profileId}`
+          : (user.deviceKey ? `dk:${user.deviceKey}` : `ip:${user.ip}`);
+        if (room.keepVotes.has(voteKey)) { denyWipe(user, 'already_voted'); break; }
+        // A room can only be held open so far ahead: without a ceiling two
+        // devices could push the refresh out by months, one vote at a time.
+        // Tolerance, not an exact compare: a successful extension lands the
+        // deadline a hair UNDER the horizon (the clock moves between the two
+        // calculations), so an exact >= would let one more vote sneak in.
+        if ((room.wipeAt || 0) - Date.now() >= MAX_WIPE_HORIZON_MS - 60_000) {
+          denyWipe(user, 'already_extended');
+          break;
+        }
+        room.keepVotes.add(voteKey);
+        if (room.keepVotes.size >= KEEP_VOTES_NEEDED) {
+          // Extend from NOW (not from a deadline that may already be in the
+          // past), so a late rescue still buys a full cycle — but never past
+          // the horizon.
+          room.wipeAt = Math.min(
+            Date.now() + MAX_WIPE_HORIZON_MS,
+            Math.max(room.wipeAt || 0, Date.now()) + ROOM_WIPE_MS,
+          );
+          room.keepVotes.clear();
+          pushSystemChat(room, roomId, 'The room voted to keep this canvas — 3 more days! 🎉');
+          persistRoom(roomId);
+        }
+        broadcastWipeState(roomId);
+        break;
+      }
+      // "Continue in a private room": copy this canvas into a fresh private
+      // room the asker owns, so a refresh never destroys work someone still
+      // wants. The public room is left exactly as it was.
+      case 'fork_private': {
+        // This is the escape hatch for the PUBLIC refresh — not a universal
+        // "copy any room I can see" button. Without this gate it would let a
+        // member duplicate a locked private room's canvas into a room they own.
+        if (!wipesOnCycle(room, roomId)) { denyFork(user, 'not_forkable'); break; }
+        if (user.muted) { denyFork(user, 'muted'); break; }
+        if (room.locked && !isHost(room, user)) { denyFork(user, 'locked'); break; }
+        // Keyed on IP, not the per-socket user.id: reconnecting must not mint a
+        // fresh budget. Each fork copies a full history and writes a room file
+        // (a synchronous stringify), so this is a real amplifier.
+        if (!rateOk(`fork:${user.ip}`, 3, 10 * 60_000)) { denyFork(user, 'slow_down'); break; }
+        const source = visibleHistory(room);
+        if (!source.length) { denyFork(user, 'empty'); break; }
+        if (source.length > FORK_MAX_OPS) { denyFork(user, 'too_big'); break; }
+        const forkCode = genRoomCode();
+        const fork = getRoom(forkCode);
+        fork.audience = 'friends';
+        fork.listed = false;
+        // Clamp like every other title, and don't stack "(copy) (copy)".
+        const baseTitle = String(room.title || roomId).replace(/\s*\(copy\)\s*$/i, '');
+        fork.title = `${baseTitle} (copy)`.slice(0, 40);
+        fork.frames = room.frames.map((f) => ({ ...f }));
+        fork.scenes = room.scenes.map((sc) => ({ ...sc }));
+        fork.history = source.map((op) => ({ ...op }));
+        // Carry the room's CAPABILITIES, not just its pixels: without this a
+        // forked FLIPBOOK keeps all 8 frames but renders no film strip, so the
+        // rescue silently strands every frame after the first.
+        fork.animationEnabled = !!room.animationEnabled;
+        // Continue the sequence past every copied id — opIds AND the numeric
+        // suffixes of copied f<n>/s<n> ids, which share the same counter
+        // (mirrors the same recovery getRoom does on load).
+        let seq = 0;
+        for (const op of fork.history) if (typeof op.opId === 'number' && op.opId > seq) seq = op.opId;
+        for (const f of fork.frames) {
+          const m = /^f(\d+)$/.exec(f.id || '');
+          if (m) seq = Math.max(seq, Number(m[1]));
+        }
+        for (const sc of fork.scenes) {
+          const m = /^s(\d+)$/.exec(sc.id || '');
+          if (m) seq = Math.max(seq, Number(m[1]));
+        }
+        fork.opSeq = seq;
+        fork.sheetId = room.sheetId && !room.sheetId.startsWith('trace_') && !room.sheetId.startsWith('pp_')
+          ? room.sheetId
+          : null;
+        recountFrameOps(fork);
+        if (user.profileId) fork.ownerProfileId = user.profileId;
+        persistRoom(forkCode);
+        if (user.ws.readyState === 1) {
+          user.ws.send(JSON.stringify({ type: 'fork_ready', code: forkCode, title: fork.title }));
+        }
         break;
       }
       // ---- Draw Phone -------------------------------------------------------
@@ -5158,6 +5400,7 @@ app.get('/api/rooms/public', (_req, res) => {
       featured,
       emoji: f ? f.emoji : null,
       prompt: f ? dailyPromptFor(f) : null,
+      wipeAt: wipesOnCycle(room, code) ? (room.wipeAt || 0) : 0,
     });
   });
   // Featured prompt rooms first (in their defined order), then live ad-hoc rooms

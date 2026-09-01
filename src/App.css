@@ -8184,9 +8184,12 @@ select {
   opacity: 1;
   cursor: default;
 }
-.room-prompt-chip + .symmetry-panel,
-.room-prompt-chip + .quest-panel,
-.room-prompt-chip + .paint-orchestra-panel {
+/* General sibling (~), not adjacent (+): these panels must drop below the
+   prompt chip whenever it exists, regardless of what else renders between
+   them (the canvas-refresh chip now does). */
+.room-prompt-chip ~ .symmetry-panel,
+.room-prompt-chip ~ .quest-panel,
+.room-prompt-chip ~ .paint-orchestra-panel {
   top: 112px;
 }
 
@@ -9142,3 +9145,88 @@ img.cc-doodle { background: #fff; }
    (a 30vw exit would escape the tile). */
 .home-banter-hypes .hype-burst { left: calc(30% + var(--lane, 0) * 34%); }
 .home-banter-hypes .hype-unicorn { animation-name: hype-rise; }
+
+/* ==== Public canvas refresh (3-day cycle) ================================= */
+/* The countdown chip sits with the other canvas overlays; it must never be so
+   loud that it competes with the art, until the reset is actually close. */
+.wipe-chip {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(10, 16, 28, 0.62);
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.wipe-chip strong { color: #fff; }
+.wipe-chip.is-urgent {
+  background: rgba(180, 45, 30, 0.82);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+.wipe-panel {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  z-index: 33;
+  width: min(300px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #0b1524;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  color: #f5f8fc;
+}
+.wipe-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wipe-panel-head button { border: none; background: none; color: #cbd5e1; cursor: pointer; font-size: 1rem; }
+.wipe-panel-why { margin: 0; font-size: 0.82rem; line-height: 1.45; color: #b6c2d1; }
+.wipe-panel-why strong { color: #f5f8fc; }
+.wipe-keep-btn,
+.wipe-fork-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f8fc;
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: left;
+}
+.wipe-keep-btn { background: #16a34a; border-color: #22c55e; }
+.wipe-keep-count,
+.wipe-fork-sub { font-weight: 600; font-size: 0.74rem; opacity: 0.85; }
+
+/* The prompt chip shares this top strip — keep it clear of the countdown so
+   long prompts never slide underneath it. */
+.room-prompt-chip:has(~ .wipe-chip) { max-width: calc(100% - 210px); }
+
+@media (max-width: 1024px), (pointer: coarse) {
+  /* On phones the prompt chip spans the width, so the countdown gets its OWN
+     row underneath it rather than sitting on top of it. */
+  .wipe-chip {
+    top: 100px;
+    right: 8px;
+    font-size: 0.72rem;
+    padding: 4px 9px;
+  }
+  .room-prompt-chip:has(~ .wipe-chip) { max-width: none; }
+  .wipe-panel { top: 136px; right: 8px; }
+}

@@ -30,6 +30,22 @@ function resolveSocketUrl(roomId) {
   return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}`;
 }
 
+// The browser-local device key the wall already uses. Sent with client_info so
+// per-person actions (e.g. the keep-vote) can tell two kids on one school
+// network apart, while two tabs of the SAME browser still count once.
+function localDeviceKey() {
+  try {
+    let key = window.localStorage.getItem("drawesome:userkey:v1");
+    if (!key) {
+      key = `dk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+      window.localStorage.setItem("drawesome:userkey:v1", key);
+    }
+    return key;
+  } catch {
+    return "";
+  }
+}
+
 function clientInfoPayload() {
   try {
     const resolved = Intl.DateTimeFormat().resolvedOptions();
@@ -44,6 +60,7 @@ function clientInfoPayload() {
       viewportW: window.innerWidth || null,
       viewportH: window.innerHeight || null,
       pointer,
+      deviceKey: localDeviceKey(),
     };
   } catch {
     return { type: "client_info" };
@@ -309,6 +326,10 @@ export function useMultiplayer(roomId, onMessage, token) {
   // game on/off. Incoming game_* messages auto-forward to the App dispatcher.
   const sendGameSkip = useCallback(() => send({ type: "game_skip" }), [send]);
   const sendSetGame = useCallback((enabled) => send({ type: "set_game", enabled }), [send]);
+  // Public canvas refresh: vote to keep this canvas for another cycle, or fork
+  // it into your own private room before it resets.
+  const sendWipeKeep = useCallback(() => send({ type: "wipe_keep" }), [send]);
+  const sendForkPrivate = useCallback(() => send({ type: "fork_private" }), [send]);
   // Draw Phone (telephone): a private-room host toggles it / starts a game; each
   // player submits their page (a drawn PNG or a text guess) per round; the host
   // can force-advance. Incoming phone_* messages auto-forward to the dispatcher.
@@ -333,6 +354,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,
     sendGameSkip, sendSetGame,
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
+    sendWipeKeep, sendForkPrivate,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendSceneFetch, sendSceneAdd, sendSceneDel,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,
