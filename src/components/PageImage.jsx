@@ -21,5 +21,5 @@ export default function PageImage({ id, alt, className, placeholder = "🎨" }) 
     return () => { alive = false; };
   }, [id]);
   if (!src) return <span className={`phone-page-empty ${className || ""}`}>{placeholder}</span>;
-  return <img src={src} alt={alt} className={className} loading="lazy" />;
+  return <img src={src} alt={alt} className={className} loading="lazy" draggable={false} />;
 }

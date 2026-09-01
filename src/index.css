@@ -28,6 +28,7 @@ body,
 #root {
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   /* iOS Safari: stop the pencil/finger from selecting the whole page and popping
      the Copy / Look Up / Translate callout. Text fields opt back in below. */

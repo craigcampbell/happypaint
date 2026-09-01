@@ -404,7 +404,7 @@ export default function HomePage({ onNavigate }) {
             <button type="button" className="home-wall-strip" onClick={() => onNavigate("/wall")} aria-label="Open the Fridge Wall">
               {wallPosts.slice(0, 6).map((p) => (
                 <span className="home-wall-tile" key={p.id}>
-                  <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" />
+                  <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" draggable={false} />
                   {p.frames > 1 ? <span className="home-wall-anim" aria-hidden="true">🎬</span> : null}
                 </span>
               ))}

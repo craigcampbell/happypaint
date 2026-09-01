@@ -2044,8 +2044,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (!draftSettings) {
       return;
     }
-    // Public (kid_safe) rooms are brush-only — never restore a hidden tool there.
-    setSelectedTool(roomAudienceRef.current === "kid_safe" ? "brush" : draftSettings.tool || "brush");
+    // The studio ALWAYS opens on the brush. Restoring a saved fill/text/shape
+    // tool means a kid's first touch does something other than draw — and on a
+    // phone there is no hover to tell them why. Brush, colour, size and the rest
+    // below still persist; only the tool resets. (handTool is never persisted.)
+    setSelectedTool("brush");
     setSelectedBrush(draftSettings.brush || "marker");
     setSelectedColor(draftSettings.color || "#111827");
     setSelectedTexture(draftSettings.texture || "linen");

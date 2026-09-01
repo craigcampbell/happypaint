@@ -14,6 +14,27 @@ for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
   document.addEventListener(type, (event) => event.preventDefault(), { passive: false })
 }
 
+// Long-press while drawing: Android Chrome's "Save image / Copy image" sheet and
+// iOS's Copy · Look Up callout are both driven by the `contextmenu` event, which
+// CSS cannot reach — user-select/-webkit-touch-callout stop the SELECTION, but
+// the event still fires, so a finger landing on a chip, the quick bar, the tool
+// rail or any <img> pops the platform menu over the canvas mid-stroke. The
+// overlay canvas prevents it on itself (App.jsx); every other surface a finger
+// can hit needs the same. Cancel it document-wide in the CAPTURE phase, except
+// where kids genuinely need the menu: text fields (paste) and links.
+const CONTEXT_MENU_ALLOWED = 'input, textarea, [contenteditable="true"], a[href]'
+document.addEventListener("contextmenu", (event) => {
+  if (event.target?.closest?.(CONTEXT_MENU_ALLOWED)) return
+  event.preventDefault()
+}, { capture: true })
+
+// The same long press turning into a drag lifts a ghost copy of an image off the
+// page (every <img> is draggable by default). Text drag inside a field is fine.
+document.addEventListener("dragstart", (event) => {
+  const tag = event.target?.tagName
+  if (tag === "IMG" || tag === "CANVAS") event.preventDefault()
+}, { capture: true })
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />

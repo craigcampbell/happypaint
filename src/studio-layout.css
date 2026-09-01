@@ -232,7 +232,9 @@
 }
 
 .studio-shell[data-layout="tablet"].rail-open .mp-chat,
-.studio-shell[data-layout="tablet"].rail-open .reaction-picker {
+.studio-shell[data-layout="tablet"].rail-open .reaction-picker,
+.studio-shell[data-layout="tablet"].rail-open .cc-pill,
+.studio-shell[data-layout="tablet"].rail-open .cc-panel {
   right: calc(var(--rail-w) + 12px);
 }
 
@@ -240,10 +242,21 @@
 @media (min-width: 700px) {
   .studio-shell[data-layout="phone"] .tool-rail {
     max-height: min(82vh, 640px);
+    max-height: min(82dvh, 640px);
   }
 }
 
 /* Hide the desktop rail header on phones (the grip + Done row is the handle). */
 .studio-shell[data-layout="phone"] .rail-head {
   display: none;
+}
+
+/* The open bottom sheet stops ABOVE the always-on quick bar (84px, the same
+   clearance .reaction-picker.qb-clear uses) instead of covering it, so Chat /
+   Pan / Eraser stay one tap away while brushes are open. The sheet keeps its
+   own scroll; the 78px of quick-bar clearance inside it is no longer needed. */
+.studio-shell[data-layout="phone"] .tool-rail.is-open {
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  max-height: 70dvh;
+  padding-bottom: 14px;
 }

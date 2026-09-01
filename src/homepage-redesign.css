@@ -743,7 +743,7 @@
 
   .home-eyebrow {
     margin-bottom: 8px;
-    font-size: 0.66rem;
+    font-size: 12px; /* 0.66rem read at 10.6px on a phone — under the legibility floor */
   }
 
   .home-hero h1 {
@@ -822,7 +822,7 @@
     left: 13px;
     bottom: 12px;
     padding: 6px 9px;
-    font-size: 0.68rem;
+    font-size: 12px; /* was 0.68rem = 10.9px */
   }
 
   .home-paper-pencil {

@@ -1,5 +1,10 @@
+/* Full-height boxes are declared twice throughout this sheet: a `vh` line for
+   engines that don't know `dvh`, then the `dvh` line that wins where they do.
+   `vh` is the TALLEST viewport, so on a phone a 100vh shell hides its bottom
+   strip (the quick bar) behind the browser's URL bar until you scroll. */
 .studio-shell {
   height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   background:
@@ -309,6 +314,7 @@ button:disabled {
 
 .tool-rail {
   max-height: 100vh;
+  max-height: 100dvh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -729,6 +735,7 @@ button:disabled {
 .paint-space-modal {
   width: min(720px, 100%);
   max-height: 84vh;
+  max-height: 84dvh;
   overflow-y: auto;
 }
 
@@ -794,6 +801,7 @@ button:disabled {
 .creator-modal {
   width: min(720px, 100%);
   max-height: 86vh;
+  max-height: 86dvh;
   overflow-y: auto;
 }
 
@@ -959,12 +967,14 @@ button:disabled {
 
 .marketing-site {
   min-height: 100vh;
+  min-height: 100dvh;
   background: #f5f8f7;
   color: #17212b;
 }
 
 .marketing-hero {
   min-height: 92vh;
+  min-height: 92dvh;
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1790,6 +1800,7 @@ button:disabled {
 
 .admin-console {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   align-content: start;
   gap: 18px;
@@ -2160,6 +2171,7 @@ button:disabled {
 
   .studio-workspace {
     height: 78vh;
+    height: 78dvh;
     padding: 10px;
   }
 
@@ -2338,6 +2350,7 @@ button:disabled {
 .brush-studio-modal {
   width: min(640px, 100%);
   max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
   overflow-y: auto;
 }
 
@@ -2511,7 +2524,8 @@ button:disabled {
 
 .brush-tip-import input {
   min-width: 0;
-  font-size: 0.78rem;
+  /* 16px or iOS Safari zooms the whole page when the field takes focus. */
+  font-size: 16px;
 }
 
 .brush-tip-preview {
@@ -3357,10 +3371,11 @@ button:disabled {
 .mp-chat-form input {
   flex: 1;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: 1px solid #cdd7e0;
   border-radius: 8px;
-  font-size: 13px;
+  /* 16px or iOS Safari zooms the whole page when the field takes focus. */
+  font-size: 16px;
 }
 .mp-chat-form button {
   padding: 6px 12px;
@@ -3767,6 +3782,7 @@ button:disabled {
 .myart-card {
   width: min(680px, 100%);
   max-height: 86vh;
+  max-height: 86dvh;
   overflow: auto;
   background: #fff;
   border-radius: 18px;
@@ -3979,6 +3995,7 @@ button:disabled {
   min-height: 190px;
   max-width: 96vw;
   max-height: 90vh;
+  max-height: 90dvh;
   resize: both;
   overflow: hidden;
 }
@@ -4036,10 +4053,12 @@ button:disabled {
   .studio-shell {
     grid-template-columns: 1fr;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
   }
   .studio-workspace {
     height: 100vh;
+    height: 100dvh;
     padding: 8px;
     gap: 8px;
   }
@@ -4082,6 +4101,7 @@ button:disabled {
     top: auto;
     width: auto;
     max-height: 82vh;
+    max-height: 82dvh;
     border-radius: 18px 18px 0 0;
     border-left: none;
     border-top: 1px solid #cdd7e0;
@@ -4227,7 +4247,7 @@ button:disabled {
   }
   .qb-btn:hover:not(:disabled) { box-shadow: none; }
   .qb-ico { font-size: 23px; line-height: 1; }
-  .qb-label { font-size: 10px; font-weight: 800; }
+  .qb-label { font-size: 11px; font-weight: 800; }
   .qb-btn.is-active {
     background: linear-gradient(180deg, #4f86ff, #2d6cdf);
     color: #fff;
@@ -4246,7 +4266,7 @@ button:disabled {
   .zoom-controls .zoom-hand { display: none; }
 
   /* Drawer should clear the floating quick bar */
-  .tool-rail { max-height: 80vh; padding-bottom: 78px; }
+  .tool-rail { max-height: 80vh; max-height: 80dvh; padding-bottom: 78px; }
 }
 
 @media (max-width: 1024px), (pointer: coarse) {
@@ -4487,6 +4507,7 @@ button:disabled {
 /* ---- Admin portal ------------------------------------------------------- */
 .admin-login {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -4515,6 +4536,7 @@ button:disabled {
 
 .admin-portal {
   min-height: 100vh;
+  min-height: 100dvh;
   max-width: 920px;
   margin: 0 auto;
   padding: 18px;
@@ -5209,8 +5231,10 @@ button:disabled {
   .texture-chip { min-height: 66px; }
   .chip-ico { font-size: 1.55rem; }
 
-  /* Don't float the always-on quick bar over the open drawer; respect the safe area. */
-  .tool-rail.is-open ~ .mobile-quickbar { display: none; }
+  /* The quick bar STAYS while the drawer is open — hiding it left kids with no
+     way to reach Chat / Pan / Eraser without closing the sheet first. Its z-index
+     (70) already clears the rail (60) and the backdrop (55); the phone sheet is
+     capped and lifted in studio-layout.css so it slides in underneath the bar. */
   .mobile-quickbar { bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
 
@@ -5433,7 +5457,7 @@ textarea:focus-visible,
 .site-nav-paint { border-radius: 999px !important; }
 
 /* ---- Homepage ---- */
-.home-page { min-height: 100vh; display: flex; flex-direction: column; background: linear-gradient(180deg, #f7faff, #eef3f9); }
+.home-page { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; background: linear-gradient(180deg, #f7faff, #eef3f9); }
 .home-main { width: min(1040px, 100%); margin: 0 auto; padding: clamp(18px, 4vw, 40px) clamp(14px, 4vw, 24px) 48px; }
 .home-headline { text-align: center; margin-bottom: 18px; }
 .home-headline h1 { font-size: clamp(1.9rem, 4.5vw, 3.2rem); line-height: 1.04; margin: 4px 0 8px; }
@@ -5645,7 +5669,7 @@ textarea:focus-visible,
 .home-join-note { margin: 12px 0 0; font-size: 0.78rem; color: #8a98a6; }
 
 /* ---- Content pages (About / Privacy / Sign up / Room finder) ---- */
-.site-page { min-height: 100vh; background: #f7faff; }
+.site-page { min-height: 100vh; min-height: 100dvh; background: #f7faff; }
 .site-page-body { width: min(880px, 100%); margin: 0 auto; padding: clamp(20px, 4vw, 44px) clamp(16px, 4vw, 24px) 56px; }
 .site-page-narrow { max-width: 560px; }
 .faq-item { border: 1px solid #dbe6f5; border-radius: 12px; margin: 10px 0; background: #fff; overflow: hidden; }
@@ -6017,6 +6041,7 @@ textarea:focus-visible,
 .storyboard-card {
   width: min(880px, calc(100vw - 24px));
   max-height: 88vh;
+  max-height: 88dvh;
   overflow-y: auto;
   border-radius: 18px;
   background: linear-gradient(180deg, #c9a06b, #b9915d); /* corkboard */
@@ -6468,6 +6493,7 @@ textarea:focus-visible,
    look without a JS layout engine; cards must avoid column breaks. */
 .wall-page {
   min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(180deg, #fdf6e3 0%, #f2f6fa 240px);
 }
 .wall-main {
@@ -6816,9 +6842,15 @@ textarea:focus-visible,
     margin-bottom: 10px;
     padding: 8px;
   }
+  /* On a 320px phone the three nowrap sort chips are wider than the screen and
+     used to push the whole page sideways — scroll them inside their own pill
+     instead of overflowing the document. */
   .wall-sorts {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -7031,6 +7063,7 @@ select {
 .home-page {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: hidden;
   background: var(--paper-cool);
 }
@@ -7571,9 +7604,17 @@ select {
     min-height: 44px;
   }
 
-  .room-prompt-chip button {
-    min-width: 40px;
-    min-height: 40px;
+  /* Touch minimum. These are all icon-only controls a finger has to hit while
+     the other hand holds the tablet — the glyphs keep their size, the BOX grows
+     to 44px so the tap lands. (Each already centres its glyph, so they stay
+     aligned in their rows.) */
+  .room-prompt-chip button,
+  .mp-wet-toggle,
+  .cc-close,
+  .cc-hype-btn,
+  .cc-send {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .mp-chat-name {
@@ -8071,6 +8112,7 @@ select {
 .phone-reveal {
   width: min(96vw, 860px);
   max-height: 90vh;
+  max-height: 90dvh;
   overflow-y: auto;
   background: #f8fafc;
   border-radius: 20px;
@@ -8431,6 +8473,7 @@ select {
   z-index: 40;
   width: min(340px, calc(100vw - 24px));
   max-height: min(560px, calc(100vh - 96px));
+  max-height: min(560px, calc(100dvh - 96px));
   display: flex;
   flex-direction: column;
   border-radius: 18px;
@@ -8675,8 +8718,10 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.08);
   color: #f5f8fc;
-  padding: 9px 14px;
-  font-size: 0.92rem;
+  /* 16px or iOS Safari zooms the whole page when the field takes focus; the
+     padding carries the field the rest of the way to the 44px touch minimum. */
+  padding: 11px 14px;
+  font-size: 16px;
 }
 .cc-form input::placeholder { color: #8fa0b5; }
 .cc-form input:focus { outline: none; border-color: #a78bfa; }
@@ -8778,6 +8823,7 @@ select {
     bottom: calc(84px + env(safe-area-inset-bottom));
     width: auto;
     max-height: 52vh;
+    max-height: 52dvh;
   }
   /* The quickbar's 💬 button is the mobile entry — the pill would sit in the
      same bottom band as the reaction picker's emoji row and cover its tail. */
@@ -9137,7 +9183,7 @@ img.cc-doodle { background: #fff; }
 
 /* Mobile: the sheet grows while the pad is open so everything fits. */
 @media (max-width: 1024px), (pointer: coarse) {
-  .cc-panel.has-pad { max-height: calc(100vh - 96px); }
+  .cc-panel.has-pad { max-height: calc(100vh - 96px); max-height: calc(100dvh - 96px); }
 }
 
 /* Homepage hype bursts stay INSIDE the clipped viewer: lanes spread bursts
@@ -9160,8 +9206,10 @@ img.cc-doodle { background: #fff; }
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(10, 16, 28, 0.62);
-  color: #e2e8f0;
+  /* Opaque enough to read as white-on-dark over the white canvas — at 0.62 the
+     label composited to grey-on-grey and fell under WCAG AA. */
+  background: rgba(10, 16, 28, 0.78);
+  color: #fff;
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;

@@ -1176,8 +1176,8 @@ select:focus {
   }
 
   .room-prompt-chip button {
-    min-width: 40px;
-    min-height: 40px;
+    min-width: 44px; /* touch minimum — App.css sets the same for the other icon chrome */
+    min-height: 44px;
   }
 
   .mp-chat-name {
@@ -1217,6 +1217,7 @@ select:focus {
 
   .tool-rail {
     max-height: 82vh;
+    max-height: 82dvh;
     padding-bottom: 78px;
     border: 0;
     border-radius: 20px 20px 0 0;

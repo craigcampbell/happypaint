@@ -71,6 +71,7 @@ function WallCard({ post, onVote, onReport, onRemix, onShare }) {
           src={`/api/wall/${post.id}/frame/${frame}`}
           alt={post.title}
           loading="lazy"
+          draggable={false}
         />
         {post.frames > 1 ? <span className="wall-anim-badge" title="Animated!">🎬</span> : null}
       </div>
