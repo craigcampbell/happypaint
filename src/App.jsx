@@ -210,7 +210,13 @@ const DRAFT_IDB_KEY = "draft:v4";
 // artwork is safe and the user sees nothing. Warn ONCE per session: the autosave
 // timer fires every few seconds and would otherwise bury the console.
 let draftBlobFallbackWarned = false;
+// Once an engine has refused to store PNG Blobs it will refuse every tick, so
+// remember the verdict for the session: otherwise WebKit pays TWO full PNG
+// encodes per autosave (the doomed Blob pass, then the dataURL pass).
+let draftBlobStoreUnsupported = false;
+
 function warnDraftBlobFallback(error) {
+  draftBlobStoreUnsupported = true;
   if (draftBlobFallbackWarned) {
     return;
   }
@@ -375,17 +381,66 @@ function canvasToBlob(canvas, type = "image/png", quality = 0.95) {
   });
 }
 
+// The FileReader read is the one step here that can fail to settle: WebKit
+// denies a pending blob read on a document that is navigating away ("Cannot
+// load blob: … due to access control checks") and fires NEITHER load nor
+// error nor abort — so without a guard the promise hangs forever and any
+// in-flight flag the caller holds (saveInFlightRef) stays stuck. A base64 read
+// of an in-memory Blob takes milliseconds; anything past the deadline is a
+// dead document, and "" is the same answer onerror gives.
+const DATA_URL_READ_DEADLINE_MS = 15_000;
+
+// WebKit cancels the old document's loaders the moment a navigation is
+// committed — right after `beforeunload`, long before `pagehide` — and a blob
+// read caught in flight is what it reports as "access control checks". So on
+// `beforeunload` every in-flight reader is aborted (settling "") and the page
+// is flagged as leaving, which makes any later read return "" without touching
+// the Blob at all. (A beforeunload listener no longer blocks Safari's
+// back-forward cache; an `unload` one would.)
+const pendingDataUrlReaders = new Set();
+let pageIsLeaving = false;
+if (typeof window !== "undefined") {
+  const leave = () => {
+    pageIsLeaving = true;
+    for (const reader of pendingDataUrlReaders) {
+      try { reader.abort(); } catch { /* already settled */ }
+    }
+    pendingDataUrlReaders.clear();
+  };
+  window.addEventListener("beforeunload", leave, { capture: true });
+  window.addEventListener("pagehide", leave, { capture: true });
+  // A bfcache restore brings the document back alive.
+  window.addEventListener("pageshow", () => { pageIsLeaving = false; });
+}
+
 async function canvasToDataUrl(canvas) {
+  if (pageIsLeaving) {
+    return "";
+  }
   const blob = await canvasToBlob(canvas);
 
-  if (!blob) {
+  if (!blob || pageIsLeaving) {
     return "";
   }
 
   return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      pendingDataUrlReaders.delete(reader);
+      resolve(value);
+    };
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => resolve("");
+    pendingDataUrlReaders.add(reader);
+    const deadline = setTimeout(() => {
+      try { reader.abort(); } catch { /* already done */ }
+      settle("");
+    }, DATA_URL_READ_DEADLINE_MS);
+    reader.onload = () => settle(String(reader.result || ""));
+    reader.onerror = () => settle("");
+    reader.onabort = () => settle("");
     reader.readAsDataURL(blob);
   });
 }
@@ -1989,34 +2044,40 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const settings = settingsRef.current;
 
       if (isIdbAvailable()) {
-        // Encode each layer to a PNG Blob; store Blobs directly (no base64).
-        const layerData = [];
-        for (const layer of layersRef.current) {
-          const blob = await canvasToBlob(layer.canvas);
-          layerData.push({
-            id: layer.id,
-            name: layer.name,
-            visible: layer.visible,
-            opacity: layer.opacity,
-            locked: layer.locked,
-            blob,
-          });
-        }
+        let blobPutFailed = draftBlobStoreUnsupported;
+        if (!blobPutFailed) {
+          // Encode each layer to a PNG Blob; store Blobs directly (no base64).
+          const layerData = [];
+          for (const layer of layersRef.current) {
+            const blob = await canvasToBlob(layer.canvas);
+            layerData.push({
+              id: layer.id,
+              name: layer.name,
+              visible: layer.visible,
+              opacity: layer.opacity,
+              locked: layer.locked,
+              blob,
+            });
+          }
 
-        try {
-          await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
-            version: 4,
-            layers: layerData,
-            activeLayerId,
-            settings,
-            savedAt,
-          });
-        } catch (error) {
-          // The Blobs wouldn't serialise (see warnDraftBlobFallback). That's a
-          // storage-SHAPE problem, not "out of room", so re-encode the same
-          // layers as base64 dataURLs and try once more — restoreLayersFromDraft
-          // reads either form. If this throws too, the outer catch reports it.
-          warnDraftBlobFallback(error);
+          try {
+            await idbSet(`${DRAFT_IDB_KEY}:${roomId}`, {
+              version: 4,
+              layers: layerData,
+              activeLayerId,
+              settings,
+              savedAt,
+            });
+          } catch (error) {
+            // The Blobs wouldn't serialise (see warnDraftBlobFallback). That's a
+            // storage-SHAPE problem, not "out of room", so re-encode the same
+            // layers as base64 dataURLs and try once more — restoreLayersFromDraft
+            // reads either form. If this throws too, the outer catch reports it.
+            warnDraftBlobFallback(error);
+            blobPutFailed = true;
+          }
+        }
+        if (blobPutFailed) {
           const fallbackLayers = [];
           for (const layer of layersRef.current) {
             fallbackLayers.push({
