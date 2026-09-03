@@ -6117,7 +6117,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             }
             last = point;
           }
-        } else {
+        } else if (!entry.skip) {
           for (const point of op.points || []) {
             drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
             last = point;

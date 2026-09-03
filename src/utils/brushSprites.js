@@ -968,6 +968,11 @@ export function getTintedSprite(family, variant, r, g, b, exact = false) {
 const IDLE_STEP_MS = 16;
 const IDLE_TIMEOUT_MS = 2000;
 let idleHandle = 0; // a self-rescheduled prebuild in flight (cancelled by release)
+let timerHandle = 0; // the no-requestIdleCallback (Safari) timer continuation, cleared by release
+// The timer path's synthetic deadline: "out of time, but you may build ONE piece".
+const TIMER_DEADLINE = { didTimeout: true, timeRemaining: () => 0 };
+const TIMER_STEP_MS = 16; // one piece per tick on the timer path
+const TIMER_BUSY_MS = 250; // re-check after a pen-down on the timer path
 // Bumped by release: a continuation scheduled before a release must not run
 // after it (it would rebuild what was just freed from piece 0), even when
 // its handle was overwritten by a second scheduler — App re-scheduling
@@ -1045,32 +1050,53 @@ export function prebuildBrushSprites(deadline, isBusy) {
     cancelIdleCallback(idleHandle);
   }
   idleHandle = 0;
+  if (timerHandle) {
+    clearTimeout(timerHandle);
+    timerHandle = 0;
+  }
   const pieces = pieceList();
   if (pieceCursor >= pieces.length) {
     return; // complete (a later call is a no-op until release resets the cursor)
   }
-  const incremental = deadline && typeof deadline.timeRemaining === "function" && typeof requestIdleCallback === "function";
+  const hasIdle = typeof requestIdleCallback === "function";
+  // No requestIdleCallback (Safari / iPad): self-pace with a timer instead —
+  // ONE piece per tick, ~16 ms apart — never the whole build in one go.
+  // (With requestIdleCallback present, a call without a deadline is an
+  // explicit synchronous build, e.g. the sprite-lab's reference build.)
+  const slice = hasIdle ? deadline : TIMER_DEADLINE;
+  const incremental = !!slice && typeof slice.timeRemaining === "function";
   const busy = typeof isBusy === "function" ? isBusy : null;
   const generation = buildGeneration;
-  const reschedule = () => {
-    idleHandle = requestIdleCallback((next) => {
-      if (generation === buildGeneration) {
-        prebuildBrushSprites(next, busy);
-      }
-    }, { timeout: IDLE_TIMEOUT_MS });
+  const reschedule = (delay) => {
+    if (hasIdle) {
+      idleHandle = requestIdleCallback((next) => {
+        if (generation === buildGeneration) {
+          prebuildBrushSprites(next, busy);
+        }
+      }, { timeout: IDLE_TIMEOUT_MS });
+    } else {
+      timerHandle = setTimeout(() => {
+        timerHandle = 0;
+        if (generation === buildGeneration) {
+          prebuildBrushSprites(undefined, busy);
+        }
+      }, delay);
+    }
   };
   if (busy && busy()) {
-    // A stroke is in progress: never build under it. Come back later; if the
-    // page can't schedule us, the pieces stay lazy.
+    // A stroke is in progress: never build under it. Come back later (with
+    // requestIdleCallback via its own timeout; on the timer path after a
+    // longer pause), so a pen-down at the wrong moment can't leave every
+    // family to build synchronously on its first dab for the whole session.
     if (incremental) {
-      reschedule();
+      reschedule(TIMER_BUSY_MS);
     }
     return;
   }
   let built = 0;
   while (pieceCursor < pieces.length) {
-    if (incremental && (deadline.didTimeout ? built >= 1 : deadline.timeRemaining() < IDLE_STEP_MS)) {
-      reschedule();
+    if (incremental && (slice.didTimeout ? built >= 1 : slice.timeRemaining() < IDLE_STEP_MS)) {
+      reschedule(TIMER_STEP_MS);
       return;
     }
     buildPiece(pieces[pieceCursor]);
@@ -1090,6 +1116,10 @@ export function releaseBrushSprites() {
     cancelIdleCallback(idleHandle);
   }
   idleHandle = 0;
+  if (timerHandle) {
+    clearTimeout(timerHandle);
+    timerHandle = 0;
+  }
   buildGeneration += 1;
   pieceCursor = 0;
   dropPartial();

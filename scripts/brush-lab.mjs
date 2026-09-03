@@ -387,7 +387,7 @@ function verifyGolden(result, { record, failures }) {
     fail("golden-record needs the software renderer (drop --gpu): golden.json is the software renderer's bytes");
   }
   const fixtureSha = sha1Text(FIXTURE_FILE);
-  const engine = Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))]));
+  const engine = Object.fromEntries(engineFiles.map((f) => [f, sha1Text(path.join(ROOT, f))]));
   const golden = record ? null : readGolden();
   const rows = [];
   if (!record && !golden) {
@@ -494,7 +494,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   mode,
   renderer: useGpu ? "gpu" : "software",
-  engine: Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))])),
+  engine: Object.fromEntries(engineFiles.map((f) => [f, sha1Text(path.join(ROOT, f))])),
   brushFilter,
   guard: { ok: guard.ok, regions: guard.regions, hits: guard.hits, warnings: guard.warnings },
   scenarios: {},

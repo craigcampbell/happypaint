@@ -1537,8 +1537,10 @@ export function makeStrokeRenderer(settings, getMix) {
       }
     }
     const b = strokeBase;
-    const slot = tintedSlot(variant);
-    if (radius < SPRITE_ARC_RADIUS || !slot) {
+    // Sub-pixel dabs fall back to an analytic arc: don't touch (re-tint) a
+    // ring slot for a sprite that is never drawn.
+    const slot = radius < SPRITE_ARC_RADIUS ? null : tintedSlot(variant);
+    if (!slot) {
       ctx.setTransform(b.s, 0, 0, b.s, b.tx, b.ty);
       ctx.fillStyle = fallback;
       ctx.globalAlpha = alpha;
@@ -1610,6 +1612,10 @@ export function makeStrokeRenderer(settings, getMix) {
           ctx.moveTo(bx - c * length * 0.5, by - s * length * 0.5);
         } else {
           ctx.moveTo(bristle.lastX, bristle.lastY);
+          // The ribbon starts at the bristle's remembered position (an EMA
+          // that survives an overflow restart), so the ink bbox must cover
+          // it too — pixel-neutral, it only ever grows the pass rect.
+          inkAdd(bristle.lastX, bristle.lastY, width);
         }
         ctx.lineTo(bx + c * length * 0.5, by + s * length * 0.5);
         ctx.stroke();
@@ -1787,6 +1793,7 @@ export function makeStrokeRenderer(settings, getMix) {
             ctx.moveTo(bx - tx * length * 0.5, by - ty * length * 0.5);
           } else {
             ctx.moveTo(bristle.lastX, bristle.lastY);
+            inkAdd(bristle.lastX, bristle.lastY, width); // ink bbox covers the remembered start (pixel-neutral)
           }
           ctx.lineTo(bx + tx * length * 0.5, by + ty * length * 0.5);
           ctx.stroke();
@@ -2069,11 +2076,27 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
     // and the op's opacity is ignored, as the legacy renderer ignored it).
     // Legacy smudge ops (no `v`) never reach here — every consumer routes
     // them to the direct legacy renderer first. Past a consumer's buffer
-    // cap (buffered: false) there is no direct fallback for v3: null, and
-    // the op is skipped the same way live and in history replay.
+    // cap (buffered: false) there is no direct fallback for v3: the stroke
+    // gets a SKIP entry (no buffer, no renderer) that stays in the consumer's
+    // stroke map until its end-op, so every later op of the stroke is
+    // dropped too — a consistently missing stroke, never a partial one that
+    // resumes mid-way once a buffer frees. (Local always buffers, so this is
+    // the documented over-cap local-vs-remote divergence class.)
     const smudge = normalizeSmudgeSettings(settings);
-    if (!smudge.v3 || !buffered || !smudgeSource) {
+    if (!smudge.v3) {
       return null;
+    }
+    if (!buffered || !smudgeSource) {
+      return {
+        buf: null,
+        renderer: null,
+        fx: null,
+        composite: "source-over",
+        opacity: 1,
+        drawSettings: { ...settings, opacity: 1 },
+        pad: strokeBufferPad(settings, null),
+        skip: true, // consumers: no direct fallback either
+      };
     }
     return {
       buf: createStrokeBuffer(),
@@ -2170,7 +2193,7 @@ const BLEND_FINAL_X = 200;
 // The soft-mask sprite's unit radius is SPRITE_UNIT px of its SPRITE_PX cell.
 // Drawn at cell = dab size x this, centred on the dab, its feather (alpha 1
 // inside 0.55 radii, 0 at the rim) reaches exactly the dab's edge.
-const SMUDGE_MASK_CELL = SPRITE_PX / (2 * SPRITE_UNIT);
+export const SMUDGE_MASK_CELL = SPRITE_PX / (2 * SPRITE_UNIT); // shared with the cursor tip
 
 // The one reading of a smudge op's settings — every consumer's renderer is
 // built from this. `v3` picks the generation (an op without v >= 3 is the
@@ -2509,6 +2532,10 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
     }
     sampleFootprint(ux, uy, sizePx);
     scratchCtx.globalCompositeOperation = "source-over";
+    // The carry pad is a shared singleton: a concurrent drag stroke in the
+    // same consumer leaves it in destination-out, so reset before the pyramid
+    // writes level 1 there.
+    carryCtx.globalCompositeOperation = "source-over";
     // Box pyramid: halve down to a ~4-px image (a comparison ladder, no
     // log per dab), ping-ponging scratch -> carry -> scratch -> carry so no
     // draw ever reads the canvas it writes. Integer level sizes so every

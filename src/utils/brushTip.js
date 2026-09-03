@@ -10,8 +10,8 @@
 //
 // Only re-drawn when brush / colour / size / zoom change — never per pointer
 // move — so it stays off the draw hot path (see updateBrushCursor in App.jsx).
-import { dabExtent, drawSingleDab, mulberry32, previewDabFor } from "./brushes";
-import { SPRITE_PX, SPRITE_UNIT, getSoftMask } from "./brushSprites";
+import { dabExtent, drawSingleDab, mulberry32, previewDabFor, SMUDGE_MASK_CELL } from "./brushes";
+import { getSoftMask } from "./brushSprites";
 
 const TWO_PI = Math.PI * 2;
 // Translucent tip so the paint underneath stays readable. Applied by App.jsx
@@ -21,7 +21,6 @@ export const BRUSH_TIP_ALPHA = 0.62;
 // The smudge engine's soft pad: the softMask sprite drawn at cell = dab size
 // x this puts its unit radius (SPRITE_UNIT px of the SPRITE_PX cell) on the
 // dab's rim — the same number makeSmudgeV3Renderer stamps with.
-const SMUDGE_PAD_CELL = SPRITE_PX / (2 * SPRITE_UNIT);
 const SMUDGE_TIP_GREY = "rgba(122,135,148,0.9)";
 
 // Widest extent of one dab as a multiple of `size` — the cursor canvas box has
@@ -57,7 +56,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
       // Blend softens in place, so the tip is the pad itself: the engine's
       // soft-mask disc (white + alpha) tinted the neutral grey with one
       // source-in fill — the canvas holds nothing but this tip.
-      const cell = size * SMUDGE_PAD_CELL;
+      const cell = size * SMUDGE_MASK_CELL;
       ctx.drawImage(mask, cx - cell / 2, cy - cell / 2, cell, cell);
       ctx.globalCompositeOperation = "source-in";
       ctx.fillStyle = SMUDGE_TIP_GREY;

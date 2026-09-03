@@ -151,7 +151,8 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
         }
         last = point;
       }
-    } else {
+    } else if (!entry.skip) {
+      // (entry.skip = an over-cap v3 smudge: consistently dropped, no direct fallback)
       for (const point of op.points || []) {
         drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
         last = point;

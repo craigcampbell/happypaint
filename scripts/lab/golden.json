@@ -1,14 +1,14 @@
 {
-  "recordedAt": "2026-09-03T10:40:09.270Z",
+  "recordedAt": "2026-09-03T11:13:28.809Z",
   "engine": {
-    "src/utils/brushes.js": "c1e8bad20d96",
-    "src/utils/brushSprites.js": "60f145325b5c",
+    "src/utils/brushes.js": "7546f74bce81",
+    "src/utils/brushSprites.js": "68eddb5f6d26",
     "src/utils/strokeBuffer.js": "b3e8a858e965",
     "src/utils/mixMap.js": "cdd825f94bfa",
-    "src/utils/layers.js": "6fd71a09d9ce",
-    "src/utils/opReplay.js": "2e21bd18ddae",
+    "src/utils/layers.js": "a421b122f17c",
+    "src/utils/opReplay.js": "5b29a891edeb",
     "src/utils/symmetry.js": "880d686d96e0",
-    "src/utils/shapes.js": "2e35d02580f1"
+    "src/utils/shapes.js": "4d2839771715"
   },
   "fixture": "751163d1afeb",
   "fixtureSeed": "0x5eed0001",
@@ -18,10 +18,10 @@
   },
   "groups": {
     "legacy-unseeded": {
-      "hash": "d4e4a457e1a4a9501b262ff35af47470b08af9b2d560c4ced3217faa8a5e226e",
+      "hash": "c0f5a29227693e566e78500c68c57b281b75a79ef0037775d4ed889740611d18",
       "deterministic": false,
       "machineBound": false,
-      "painted": 3316740,
+      "painted": 3285543,
       "ops": 720
     },
     "legacy-seeded": {
