@@ -113,6 +113,17 @@ repaints every mural on the server. The rules that follow from that:
   opacity-stamped commit, on the renderer's **ink bbox** (a tracked superset of
   the stroke's pixels) rather than the whole allocated buffer — pixel-identical
   and several times cheaper on CPU-raster canvases (iPad Safari).
+- **Smudge / Blend** (brush id `smudge`, private rooms; `settings.v >= 3` +
+  `settings.smudgeMode` "drag" | "blend", one `normalizeSmudgeSettings` for every
+  consumer; ops without `v` keep the legacy square sample-and-drag verbatim).
+  Both modes copy the dab rect layer 0 → 256² scratch → layer (never a
+  self-referential `drawImage` of the 4000×2500 layer, ~8 ms per dab), feather
+  it with the soft mask, and land in a stroke buffer sampled from the
+  PRE-stroke paper (a live re-sample on a transparent layer recycles its own
+  deposits and saturates). Drag carries a fading load of what the finger
+  touched on a shared 128² pad; Blend redeposits a box-pyramid blur in place.
+  A v3 smudge past a remote consumer's 4-buffer cap is skipped (documented
+  with the symmetry-copies divergence below).
 
 **Lab + golden workflow** (`scripts/brush-lab.mjs`): headless Chromium runs
 strokes / mixing / determinism / timing / pen-up-pop scenarios and a static
