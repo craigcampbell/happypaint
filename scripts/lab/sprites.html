@@ -1,0 +1,520 @@
+<!doctype html>
+<!--
+  Sprite lab — a headless harness page for src/utils/brushSprites.js.
+
+  Served by the vite DEV server only (vite serves any .html under the project
+  root in dev; nothing here is imported by src/). Driven by
+  scripts/sprite-lab.mjs through Playwright via `window.lab.run(kind)`; also
+  works by hand at http://127.0.0.1:5175/scripts/lab/sprites.html with the
+  normal `npm run dev` server (console: lab.run("sheet")).
+
+  It drives ONLY the module's public exports and stamps dabs exactly the way
+  Stage 2 will (setTransform composing base x rotation x aspect, globalAlpha =
+  flow, one drawImage of the tinted slot — no save/restore), so the strokes
+  row is an honest preview of what the engine will produce.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sprite lab</title>
+  <style>
+    body { margin: 0; padding: 12px; font: 13px/1.4 system-ui, sans-serif; background: #e9e6df; color: #222; }
+    #status { white-space: pre-wrap; margin-bottom: 8px; }
+    #out canvas { display: block; margin: 8px 0; box-shadow: 0 1px 4px rgba(0,0,0,.25); max-width: 100%; }
+    #out h3 { margin: 12px 0 2px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="status">loading sprites module…</div>
+  <div id="out"></div>
+  <script type="module">
+    const status = document.getElementById("status");
+    const out = document.getElementById("out");
+
+    // Count canvas allocations from BEFORE the module loads, so the module's
+    // own lazy allocations are visible and the dab-path check can't be fooled
+    // by an allocation that happened during import.
+    const alloc = { canvas: 0 };
+    const nativeCreateElement = document.createElement.bind(document);
+    document.createElement = function countingCreateElement(tag, ...rest) {
+      if (String(tag).toLowerCase() === "canvas") {
+        alloc.canvas += 1;
+      }
+      return nativeCreateElement(tag, ...rest);
+    };
+
+    let sprites;
+    try {
+      sprites = await import("/src/utils/brushSprites.js");
+    } catch (error) {
+      status.textContent = `module import failed: ${error?.message || error}`;
+      window.lab = { ready: false, error: String(error?.stack || error) };
+      throw error;
+    }
+
+    const {
+      SPRITE_PX,
+      SPRITE_UNIT,
+      FAMILIES,
+      getAtlas,
+      getTintedSprite,
+      getPaperTile,
+      getSoftMask,
+      getSmudgeScratch,
+      getCarryScratch,
+      prebuildBrushSprites,
+      releaseBrushSprites,
+      spriteFamilyIndex,
+      packRgb5,
+    } = sprites;
+
+    const TINTS = [
+      { name: "blue", hex: "#1e88e5", rgb: [0x1e, 0x88, 0xe5] },
+      { name: "red", hex: "#e53935", rgb: [0xe5, 0x39, 0x35] },
+      { name: "yellow", hex: "#f9d423", rgb: [0xf9, 0xd4, 0x23] },
+    ];
+    const HALF = SPRITE_PX / 2;
+
+    // Mirrors brushes.js mulberry32 for the harness's own dice (variant /
+    // jitter rolls in the strokes preview) — fixed seed, so every run rolls
+    // the same dice and two runs differ only by the sprites.
+    const mulberry32 = (seed) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) | 0;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+
+    const makeCanvas = (w, h) => {
+      const canvas = nativeCreateElement("canvas"); // harness canvases don't count
+      canvas.width = w;
+      canvas.height = h;
+      return canvas;
+    };
+
+    const label = (ctx, text, x, y, size = 14, color = "#222") => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.font = `600 ${size}px system-ui, sans-serif`;
+      ctx.fillStyle = color;
+      ctx.textBaseline = "top";
+      ctx.fillText(text, x, y);
+    };
+
+    const show = (title, canvas) => {
+      const h3 = document.createElement("h3");
+      h3.textContent = title;
+      out.appendChild(h3);
+      out.appendChild(canvas);
+    };
+
+    const emit = (images, name, canvas) => {
+      images.push({ name, dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height });
+      show(name, canvas);
+    };
+
+    const hex = (buffer) => [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    // The GPU fence from the brush lab: a 1x1 readback forces everything
+    // recorded on that canvas to land before the clock stops.
+    const flushGpu = (canvas) => {
+      canvas.getContext("2d").getImageData(0, 0, 1, 1);
+    };
+
+    // ---- Scenarios ----------------------------------------------------------
+
+    // (a) BUILD: cold prebuild time in a fresh page (what the app pays once
+    // from requestIdleCallback), plus how many canvases it allocated.
+    const runBuild = () => {
+      const before = alloc.canvas;
+      const t0 = performance.now();
+      prebuildBrushSprites();
+      const ms = performance.now() - t0; // the module's own cost (CPU build + putImageData)
+      for (const family of FAMILIES) {
+        flushGpu(getAtlas(family.id));
+      }
+      flushGpu(getPaperTile());
+      const fencedMs = performance.now() - t0; // + the GPU upload the first drawImage would pay
+      // Second prebuild must be a no-op (everything cached).
+      const t1 = performance.now();
+      prebuildBrushSprites();
+      const cachedMs = performance.now() - t1;
+      const sizes = Object.fromEntries(FAMILIES.map((f) => [f.id, `${getAtlas(f.id).width}x${getAtlas(f.id).height}`]));
+      return { ms: +ms.toFixed(2), fencedMs: +fencedMs.toFixed(2), cachedMs: +cachedMs.toFixed(3), canvasesAllocated: alloc.canvas - before, atlasSizes: sizes };
+    };
+
+    // (b) HASH: SHA-256 over every atlas's pixel bytes + the paper tile, in
+    // family order. Compared across two fresh page loads by the runner.
+    const runHash = async () => {
+      const chunks = [];
+      const perFamily = {};
+      for (const family of FAMILIES) {
+        const atlas = getAtlas(family.id);
+        const data = atlas.getContext("2d").getImageData(0, 0, atlas.width, atlas.height).data;
+        chunks.push(data);
+        perFamily[family.id] = hex(await crypto.subtle.digest("SHA-256", data)).slice(0, 16);
+      }
+      const paper = getPaperTile();
+      const paperData = paper.getContext("2d").getImageData(0, 0, paper.width, paper.height).data;
+      chunks.push(paperData);
+      perFamily.paper = hex(await crypto.subtle.digest("SHA-256", paperData)).slice(0, 16);
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      const all = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        all.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return { hash: hex(await crypto.subtle.digest("SHA-256", all)), bytes: total, perFamily };
+    };
+
+    // (c) ALLOC: the tint ring's hit AND miss paths must allocate no canvas.
+    // 5000 lookups over rotating families / variants / colours — far more
+    // than 32 distinct keys, so most lookups are misses (re-tint in place).
+    const runAlloc = () => {
+      const stampable = FAMILIES.filter((f) => f.id !== "softMask");
+      // Warm-up: first use allocates the ring (if prebuild didn't) — that is
+      // the one allowed allocation, outside the dab path.
+      getTintedSprite("wash", 0, 30, 136, 229);
+      const before = alloc.canvas;
+      let distinctKeys = new Set();
+      const t0 = performance.now();
+      let last = null;
+      for (let i = 0; i < 5000; i += 1) {
+        const family = stampable[i % stampable.length];
+        const variant = (i * 7) % family.variants;
+        const r = (i * 37) & 255;
+        const g = (i * 91) & 255;
+        const b = (i * 53) & 255;
+        distinctKeys.add(`${family.id}/${variant}/${packRgb5(r, g, b)}`);
+        last = getTintedSprite(family.id, variant, r, g, b);
+      }
+      const rotatingMs = performance.now() - t0;
+      // Hit path: the same key 5000 times must return the same canvas object.
+      const first = getTintedSprite("matte", 2, 229, 57, 53);
+      const t1 = performance.now();
+      let sameObject = true;
+      for (let i = 0; i < 5000; i += 1) {
+        if (getTintedSprite("matte", 2, 229, 57, 53) !== first) {
+          sameObject = false;
+        }
+      }
+      const hitMs = performance.now() - t1;
+      // Correctness: a tinted slot's centre pixel carries the canonical
+      // (5-bit) colour and the sprite's alpha, i.e. copy + source-in worked.
+      const probe = getTintedSprite("matte", 0, 30, 136, 229);
+      const px = probe.getContext("2d").getImageData(HALF, HALF, 1, 1).data;
+      return {
+        canvasesAllocated: alloc.canvas - before,
+        lookups: 5000,
+        distinctKeys: distinctKeys.size,
+        rotatingMs: +rotatingMs.toFixed(2),
+        usPerRotatingLookup: +((rotatingMs * 1000) / 5000).toFixed(2),
+        hitMs: +hitMs.toFixed(2),
+        usPerHit: +((hitMs * 1000) / 5000).toFixed(3),
+        hitReturnsSameCanvas: sameObject,
+        probeCentreRgba: [...px],
+        slotIsLive: last != null && last.width === SPRITE_PX,
+      };
+    };
+
+    // (d) RIM: per wash variant, mean alpha in the rim band (0.75-0.92 rho)
+    // over the core (0-0.5 rho). rho in SPRITE_UNIT radii, like the module.
+    const runRim = () => {
+      const atlas = getAtlas("wash");
+      const data = atlas.getContext("2d").getImageData(0, 0, atlas.width, atlas.height).data;
+      const centre = (SPRITE_PX - 1) / 2;
+      const variants = FAMILIES[spriteFamilyIndex("wash")].variants;
+      const report = {};
+      for (let v = 0; v < variants; v += 1) {
+        let core = 0;
+        let coreN = 0;
+        let rim = 0;
+        let rimN = 0;
+        for (let y = 0; y < SPRITE_PX; y += 1) {
+          for (let x = 0; x < SPRITE_PX; x += 1) {
+            const rho = Math.hypot(x - centre, y - centre) / SPRITE_UNIT;
+            const a = data[(y * atlas.width + v * SPRITE_PX + x) * 4 + 3] / 255;
+            if (rho <= 0.5) {
+              core += a;
+              coreN += 1;
+            } else if (rho >= 0.75 && rho <= 0.92) {
+              rim += a;
+              rimN += 1;
+            }
+          }
+        }
+        const coreMean = core / coreN;
+        const rimMean = rim / rimN;
+        report[`v${v}`] = { core: +coreMean.toFixed(3), rim: +rimMean.toFixed(3), ratio: +(rimMean / coreMean).toFixed(2) };
+      }
+      return { report };
+    };
+
+    // (e) SHEET: every family's variants white-on-dark (alpha visible) and
+    // tinted; sprites.png is the overview (tint cycles blue/red/yellow by
+    // variant), sprite-<family>.png the close-up with all three tints.
+    const runSheet = () => {
+      const images = [];
+      const labelW = 110;
+      const maxVariants = Math.max(...FAMILIES.map((f) => f.variants));
+      const sheetW = labelW + maxVariants * SPRITE_PX;
+      const rowsPerFamily = 2;
+      const paperH = 256 + 24;
+      const sheet = makeCanvas(sheetW, FAMILIES.length * rowsPerFamily * SPRITE_PX + paperH);
+      const sctx = sheet.getContext("2d");
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      FAMILIES.forEach((family, index) => {
+        const y0 = index * rowsPerFamily * SPRITE_PX;
+        const atlas = getAtlas(family.id);
+        // Row 1: white variants on a dark card.
+        sctx.fillStyle = "#3d3d42";
+        sctx.fillRect(labelW, y0, family.variants * SPRITE_PX, SPRITE_PX);
+        sctx.globalAlpha = 1;
+        sctx.drawImage(atlas, labelW, y0);
+        // Row 2: tinted, colour cycling by variant, on white.
+        for (let v = 0; v < family.variants; v += 1) {
+          const tint = TINTS[v % TINTS.length];
+          const slot = getTintedSprite(family.id, v, tint.rgb[0], tint.rgb[1], tint.rgb[2]);
+          sctx.drawImage(slot, labelW + v * SPRITE_PX, y0 + SPRITE_PX);
+        }
+        label(sctx, family.id, 8, y0 + 8, 15);
+        label(sctx, `${family.variants} var  seed ${family.seed.toString(16)}`, 8, y0 + 30, 11, "#666");
+        label(sctx, `aspect ${family.aspect}:1`, 8, y0 + 46, 11, "#666");
+        sctx.fillStyle = "#d8d4ca";
+        sctx.fillRect(0, y0 + rowsPerFamily * SPRITE_PX - 1, sheet.width, 1);
+      });
+      // Paper tile (black alpha noise on white) + a 2x2 tiling check.
+      const py = FAMILIES.length * rowsPerFamily * SPRITE_PX + 12;
+      const paper = getPaperTile();
+      label(sctx, "paperTile 256^2 (2x2 tiled -> seamless?)", 8, py - 4, 12);
+      sctx.globalAlpha = 1;
+      for (let ty = 0; ty < 2; ty += 1) {
+        for (let tx = 0; tx < 2; tx += 1) {
+          sctx.drawImage(paper, labelW + tx * 128, py + ty * 128, 128, 128);
+        }
+      }
+      // softMask + scratch sanity: draw the mask over a colour block.
+      const mask = getSoftMask();
+      sctx.fillStyle = "#1e88e5";
+      sctx.fillRect(labelW + 300, py, 128, 128);
+      sctx.globalCompositeOperation = "destination-in";
+      // (only within that block: use a temp canvas so the rest of the sheet survives)
+      sctx.globalCompositeOperation = "source-over";
+      const maskDemo = makeCanvas(128, 128);
+      const mctx = maskDemo.getContext("2d");
+      mctx.fillStyle = "#1e88e5";
+      mctx.fillRect(0, 0, 128, 128);
+      mctx.globalCompositeOperation = "destination-in";
+      mctx.drawImage(mask, 0, 0);
+      sctx.clearRect(labelW + 300, py, 128, 128);
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(labelW + 300, py, 128, 128);
+      sctx.drawImage(maskDemo, labelW + 300, py);
+      label(sctx, "softMask over a square", labelW + 300, py + 132, 11, "#666");
+      const scratchOk = getSmudgeScratch().width === 256 && getCarryScratch().width === 256 && getSmudgeScratch() !== getCarryScratch();
+      emit(images, "sprites.png", sheet);
+
+      // Close-ups: one PNG per family — white row + the three tints.
+      for (const family of FAMILIES) {
+        const atlas = getAtlas(family.id);
+        const closeup = makeCanvas(family.variants * SPRITE_PX, SPRITE_PX * 4);
+        const cctx = closeup.getContext("2d");
+        cctx.fillStyle = "#3d3d42";
+        cctx.fillRect(0, 0, closeup.width, SPRITE_PX);
+        cctx.fillStyle = "#ffffff";
+        cctx.fillRect(0, SPRITE_PX, closeup.width, SPRITE_PX * 3);
+        cctx.drawImage(atlas, 0, 0);
+        TINTS.forEach((tint, row) => {
+          for (let v = 0; v < family.variants; v += 1) {
+            const slot = getTintedSprite(family.id, v, tint.rgb[0], tint.rgb[1], tint.rgb[2]);
+            cctx.drawImage(slot, v * SPRITE_PX, (row + 1) * SPRITE_PX);
+          }
+        });
+        emit(images, `sprite-${family.id}.png`, closeup);
+      }
+      return { images, report: { scratchOk } };
+    };
+
+    // (f) STROKES: the real test. 40 dabs along a sine path per family, at
+    // size 40, stamped with the Stage-2 primitive; a red mirrored stroke
+    // crosses each blue one so overlap / glazing shows. wash commits with
+    // 'multiply' (its Stage-2 composite); the rest source-over.
+    const STROKE_PARAMS = {
+      wash: { flow: 0.12, spacing: 0.14, aspect: 1, rotJitter: Math.PI * 2, scatter: 0.04, composite: "multiply" },
+      "wash+bloom": { family: "wash", flow: 0.12, spacing: 0.14, aspect: 1, rotJitter: Math.PI * 2, scatter: 0.04, composite: "multiply", bloom: 0.33 },
+      graphite: { flow: 0.72, spacing: 0.14, aspect: 1.15, rotJitter: 0, scatter: 0.05, composite: "multiply" },
+      wax: { flow: 0.85, spacing: 0.14, aspect: [1.05, 1.3], rotJitter: 0.25, scatter: 0.08, composite: "source-over" },
+      softOval: { flow: 0.9, spacing: 0.14, aspect: 1.6, rotJitter: 0.3, scatter: 0, composite: "source-over" },
+      matte: { flow: 0.92, spacing: 0.14, aspect: 1.3, rotJitter: 0, scatter: 0, composite: "source-over" },
+      loaded: { flow: 0.8, spacing: 0.14, aspect: 2.4, rotJitter: 0, scatter: 0, composite: "source-over" },
+      halo: { flow: 0.85, spacing: 0.14, aspect: 1, rotJitter: 0, scatter: 0, composite: "source-over" },
+    };
+
+    // One dab, exactly the Stage-2 primitive: compose base x [rotation x
+    // aspect] into ONE setTransform, set globalAlpha, ONE drawImage of the
+    // tinted slot centred on the origin. No save/restore.
+    const stampDab = (ctx, base, slot, x, y, angle, radius, aspect, bakedAspect, alpha) => {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const sx = (radius * aspect) / SPRITE_UNIT;
+      const sy = radius / (SPRITE_UNIT / bakedAspect);
+      ctx.setTransform(base.s * c * sx, base.s * s * sx, base.s * -s * sy, base.s * c * sy, base.s * x + base.tx, base.s * y + base.ty);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(slot, -HALF, -HALF, SPRITE_PX, SPRITE_PX);
+    };
+
+    // Walk `dabs` dabs along a sine path by arc length (spacing x size apart)
+    // into a transparent buffer, then commit the buffer once onto `target`
+    // with the family's composite — the engine's flow-then-commit model.
+    const paintStroke = (target, name, { x0, y0, w, h, flip, size, dabs, color, seed, pressure }) => {
+      const params = STROKE_PARAMS[name];
+      const familyId = params.family || name;
+      const family = FAMILIES[spriteFamilyIndex(familyId)];
+      const rand = mulberry32(seed);
+      // loaded: the lanes are per variant, so a coherent streak along the
+      // stroke needs ONE variant per stroke (rolled from the seed) — the
+      // recommendation to Stage 2; every other family rolls per dab.
+      const strokeVariant = familyId === "loaded" ? Math.floor(rand() * family.variants) : -1;
+      const buffer = makeCanvas(w, h);
+      const ctx = buffer.getContext("2d");
+      const base = { s: 1, tx: -x0, ty: -y0 }; // the stroke buffer's origin transform
+      const amp = h * 0.28;
+      const midY = y0 + h * 0.5;
+      const left = x0 + 24;
+      const span = w - 48;
+      const spacing = params.spacing * size;
+      let emitted = 0;
+      let walked = 0;
+      let px = left;
+      let py = midY;
+      let t = 0;
+      const step = 1 / 4000;
+      while (emitted < dabs && t <= 1) {
+        t += step;
+        const x = left + span * t;
+        const y = midY + (flip ? -1 : 1) * amp * Math.sin(t * Math.PI * 2);
+        const d = Math.hypot(x - px, y - py);
+        walked += d;
+        if (walked >= spacing || emitted === 0) {
+          walked = 0;
+          const angle = Math.atan2(y - py, x - px);
+          const p = pressure ? pressure(emitted / (dabs - 1)) : 1;
+          const flowAlpha = params.flow * (0.5 + 0.5 * p);
+          const radius = size / 2;
+          // rand order: variant -> scatter -> rot -> aspectJitter (frozen in Stage 2)
+          const variant = strokeVariant >= 0 ? strokeVariant : Math.floor(rand() * family.variants);
+          let dx = x;
+          let dy = y;
+          if (params.scatter > 0) {
+            const off = (rand() * 2 - 1) * params.scatter * size;
+            dx += -Math.sin(angle) * off;
+            dy += Math.cos(angle) * off;
+          }
+          const rot = params.rotJitter > 0 ? angle + (rand() - 0.5) * params.rotJitter : angle;
+          const aspect = Array.isArray(params.aspect) ? params.aspect[0] + rand() * (params.aspect[1] - params.aspect[0]) : params.aspect;
+          if (familyId === "halo") {
+            // halo at 2.4x radius with 'lighter' INSIDE the buffer, then the core.
+            ctx.globalCompositeOperation = "lighter";
+            stampDab(ctx, base, getTintedSprite("halo", 0, ...color), dx, dy, rot, radius * 2.4, 1, 1, flowAlpha * 0.5);
+            ctx.globalCompositeOperation = "source-over";
+            stampDab(ctx, base, getTintedSprite("halo", 1, ...color), dx, dy, rot, radius, 1, 1, flowAlpha);
+          } else {
+            stampDab(ctx, base, getTintedSprite(familyId, variant, ...color), dx, dy, rot, radius, aspect, family.aspect, flowAlpha);
+            if (params.bloom && rand() < params.bloom) {
+              const bloomVariant = (variant + 1 + Math.floor(rand() * (family.variants - 1))) % family.variants;
+              stampDab(ctx, base, getTintedSprite(familyId, bloomVariant, ...color), dx, dy, rot, radius * 1.3, aspect, family.aspect, flowAlpha * 0.35);
+            }
+          }
+          emitted += 1;
+        }
+        px = x;
+        py = y;
+      }
+      ctx.setTransform(base.s, 0, 0, base.s, base.tx, base.ty); // once per addPoints, like Stage 2
+      ctx.globalAlpha = 1;
+      const tctx = target.getContext("2d");
+      tctx.setTransform(1, 0, 0, 1, 0, 0);
+      tctx.globalAlpha = 1;
+      tctx.globalCompositeOperation = params.composite;
+      tctx.drawImage(buffer, x0, y0);
+      tctx.globalCompositeOperation = "source-over";
+      buffer.width = 0;
+      return emitted;
+    };
+
+    const runStrokes = () => {
+      const names = Object.keys(STROKE_PARAMS);
+      const cellW = 460;
+      const cellH = 150;
+      const labelW = 120;
+      const configs = [
+        { title: "size 40, 40 dabs, p=1", size: 40, dabs: 40, pressure: null },
+        { title: "size 40, 40 dabs, taper", size: 40, dabs: 40, pressure: (t) => 0.35 + 0.65 * Math.sin(t * Math.PI) },
+        { title: "size 18, 60 dabs, taper", size: 18, dabs: 60, pressure: (t) => 0.35 + 0.65 * Math.sin(t * Math.PI) },
+      ];
+      const sheet = makeCanvas(labelW + cellW * configs.length, cellH * names.length + 24);
+      const sctx = sheet.getContext("2d");
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      const report = {};
+      configs.forEach((config, col) => {
+        label(sctx, config.title, labelW + col * cellW + 8, 4, 12, "#666");
+      });
+      names.forEach((name, row) => {
+        const y0 = 24 + row * cellH;
+        report[name] = {};
+        configs.forEach((config, col) => {
+          const x0 = labelW + col * cellW;
+          const box = { x0, y0, w: cellW, h: cellH };
+          const t0 = performance.now();
+          const blue = paintStroke(sheet, name, { ...box, flip: false, size: config.size, dabs: config.dabs, color: TINTS[0].rgb, seed: 0x1234abcd + row, pressure: config.pressure });
+          const red = paintStroke(sheet, name, { ...box, flip: true, size: config.size, dabs: config.dabs, color: TINTS[1].rgb, seed: 0x0badf00d + row, pressure: config.pressure });
+          report[name][config.title] = { dabs: blue + red, ms: +(performance.now() - t0).toFixed(2) };
+        });
+        label(sctx, name, 8, y0 + 8, 15);
+        label(sctx, `flow ${STROKE_PARAMS[name].flow}  ${STROKE_PARAMS[name].composite}`, 8, y0 + 30, 10, "#666");
+        sctx.fillStyle = "#d8d4ca";
+        sctx.fillRect(0, y0 + cellH - 1, sheet.width, 1);
+      });
+      const images = [];
+      emit(images, "strokes-preview.png", sheet);
+      return { images, report };
+    };
+
+    // (g) RELEASE: releaseBrushSprites frees + everything rebuilds lazily.
+    const runRelease = () => {
+      const atlasBefore = getAtlas("wash");
+      releaseBrushSprites();
+      const freed = atlasBefore.width === 0;
+      const rebuilt = getAtlas("wash");
+      const slot = getTintedSprite("wash", 1, 10, 20, 30);
+      return { freedOldAtlas: freed, rebuiltIsNew: rebuilt !== atlasBefore && rebuilt.width === SPRITE_PX * 8, slotOk: slot != null && slot.width === SPRITE_PX, paperOk: getPaperTile().width === 256 };
+    };
+
+    const SCENARIOS = { build: runBuild, hash: runHash, alloc: runAlloc, rim: runRim, sheet: runSheet, strokes: runStrokes, release: runRelease };
+
+    const run = async (kind) => {
+      const fn = SCENARIOS[kind];
+      if (!fn) {
+        throw new Error(`unknown scenario "${kind}" (have: ${Object.keys(SCENARIOS).join(", ")})`);
+      }
+      status.textContent = `running ${kind}…`;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const t0 = performance.now();
+      const result = await fn();
+      const ms = performance.now() - t0;
+      status.textContent = `${kind} done in ${ms.toFixed(0)} ms`;
+      return { kind, ms: +ms.toFixed(1), ...result };
+    };
+
+    window.lab = { ...sprites, ready: true, error: null, alloc, scenarios: Object.keys(SCENARIOS), run };
+    status.textContent = `sprites module loaded — families: ${FAMILIES.map((f) => `${f.id}(${f.variants})`).join(", ")}. Call lab.run(kind) — kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
+  </script>
+</body>
+</html>
