@@ -257,10 +257,15 @@ const NATURAL_DABS = {
     dry: 0.6,
     startFlow: 1.3,
     // The commit passes are what the live preview can't show (pen-up pop):
-    // these strengths sit just under the lab's 0.024 stroke-mean cap.
+    // these strengths sit just under the lab's 0.024 stroke-mean cap. No
+    // wetEdge: the wash sprite's own lateral rim pools 1.14-1.89x its core
+    // (sprite-lab, 7 of 8 variants >= 1.15 — the spec's condition for
+    // dropping the filter pass), and that pass was the one commit-time
+    // ctx.filter blit left on a v3 watercolor, ~half its pen-up cost on a
+    // CPU-raster canvas (iPad Safari).
     bleed: 0.2,
     granulation: 0.27,
-    wetEdge: 0.08,
+    wetEdge: 0,
     blend: "multiply",
     mixModel: "km",
     mix: 0,
@@ -381,9 +386,13 @@ export function normalizeInlineDab(dab) {
     laneWobble: clampNumber(dab.laneWobble, 0, 0, 0.5),
     // Sprite-shape / composite fields (Stage 2). Worst hostile case: halo = 2
     // drawImages per dab, wash with bloom = 2, loaded = 1 + <= 24 ribbons.
+    // aspect / aspectJitter are tighter than the spec's 3 / 1: no shipped dab
+    // stretches past 1.6 (+ 0.25 jitter), and a 3 + 1 stretch at size 160 is
+    // a 4 x 160 px cell per dab — the wide, slow rasterisation a hostile op
+    // would pick, and most of what pushed the pad past MAX_PAD.
     blend: dab.blend === "multiply" ? "multiply" : "source-over",
-    aspect: clampNumber(dab.aspect, 1, 0.3, 3),
-    aspectJitter: clampNumber(dab.aspectJitter, 0, 0, 1),
+    aspect: clampNumber(dab.aspect, 1, 0.3, 2),
+    aspectJitter: clampNumber(dab.aspectJitter, 0, 0, 0.5),
     sizeJitter: clampNumber(dab.sizeJitter, 0, 0, 0.5),
     flowJitter: clampNumber(dab.flowJitter, 0, 0, 0.6),
     spacingJitter: clampNumber(dab.spacingJitter, 0, 0, 0.5),
@@ -465,6 +474,25 @@ const SPRITE_HALF = SPRITE_PX / 2;
 const HALO_RADIUS = 2.4; // the glow halo stamp, in dab radii
 const BLOOM_RADIUS = 1.3; // the wash bloom stamp, in dab radii
 
+// Ink-bbox bookkeeping (see makeStrokeRenderer's inkBounds): how far one
+// dab's pixels can reach from its centre, in dab RADII, per shape branch —
+// the sprite cell (transparent past its circular guard, so a rotated cell's
+// ink stays inside the circle of its larger half-extent) and, for the
+// legacy branches, the widest fleck / ellipse / ribbon / shadow the branch
+// draws. INK_MARGIN (world px) is added on top for edge anti-aliasing and
+// the bilinear footprint of a scaled or fractionally-offset drawImage.
+const INK_MARGIN = 2;
+const HALO_REACH = HALO_RADIUS * SPRITE_EXTENT;
+// Legacy branch reaches (emitDab): pencil = core + flecks thrown 0.8 x size
+// out with radius up to 0.14 x size; crayon = flecks 0.55 x size out with
+// radius up to 0.75 r; glow = the disc + the 0.85 x size shadowBlur (Skia's
+// kernel support is 3 sigma = 1.5 x blur = 2.55 r); a ribbon (bristle /
+// loaded) = the lane throw (0.85 r + wobble) + a full-load ribbon's length
+// along the tangent (stretch x 1.175 r, half of it past the lane, but the
+// legacy branch's ellipse blob spans the whole of stretch r) + the ribbon's
+// half-width (1.7 r / bristles x 1.2 wide), see ribbonReach.
+const LEGACY_REACH = { round: 1, water: 1, ellipse: 1.6, gouache: 1.3, pencil: 1.9, crayon: 1.9, glow: 4 };
+
 // Widest reach of ONE dab as a multiple of `size` (dab diameter = 1): what a
 // box has to be to hold the whole stamp — stretched ellipses, fanned bristle
 // ribbons, pencil/crayon flecks, the glow halo. Shared by the cursor tip and
@@ -525,10 +553,20 @@ export function dabExtent(dab) {
 // (size x 3 + 40) is the floor: every shape shipped so far reaches less than
 // 3 x size, and shrinking the pad would move buffer allocations / overflow
 // points and so repaint persisted strokes. A wider dab (a hostile inline
-// stretch/scatter) grows it instead of clipping.
+// stretch/scatter) grows it instead of clipping — up to MAX_PAD. The cap is
+// what stops a hostile v3 dab (aspect + aspectJitter + sizeJitter + bloom +
+// scatter 2 at size 160 reaches ~13 x size) from pinning the margin at
+// ensure()'s 1020 ceiling, where EVERY point of the stroke overflows the
+// 2048² buffer: a commit-pass + 16 MB re-allocation per point, persisted,
+// so every replay of that op pays it again. 640 moves no legitimate stroke:
+// the widest shipped dab is under 3 x size, so the pad of any stroke the
+// studio persists is at most 3 x 160 + 40 = 520 — inside the cap, and the
+// golden groups (every shipped shape at sizes up to 90, the overflow and
+// symmetry strokes included) prove no buffer rect or overflow point moved.
 const LEGACY_PAD_EXTENT = 3;
+const MAX_PAD = 640;
 export function strokeBufferPad(settings, dab) {
-  return (settings.size || 24) * Math.max(LEGACY_PAD_EXTENT, dabExtent(dab)) + 40;
+  return Math.min(MAX_PAD, (settings.size || 24) * Math.max(LEGACY_PAD_EXTENT, dabExtent(dab)) + 40);
 }
 
 const stampCache = new Map(); // stampId -> { image, dataUrl, ready, promise }
@@ -738,13 +776,21 @@ export function parseColorRgb(color) {
 }
 
 // shiftLightness for numeric channels: same math, no string parsing on the
-// wet-mix hot path (per-bristle tinting of the per-dab blended colour).
+// wet-mix hot path (per-bristle tinting of the per-dab blended colour, up to
+// 24 strings per 5-bit colour-bucket change). Module-level helper rather
+// than a closure per call — the call runs inside the dab loop, so it must
+// allocate nothing but the string it returns; the concatenation of rounded
+// ints is byte-identical to the template it replaces (goldens prove it).
+function shiftChannel(c, amount) {
+  const v = amount >= 0 ? c + (255 - c) * amount : c * (1 + amount);
+  return Math.max(0, Math.min(255, Math.round(v)));
+}
 function tintRgbString(r, g, b, amount) {
-  const shift = (c) => {
-    const v = amount >= 0 ? c + (255 - c) * amount : c * (1 + amount);
-    return Math.max(0, Math.min(255, Math.round(v)));
-  };
-  return `rgb(${shift(r)},${shift(g)},${shift(b)})`;
+  return "rgb(" + shiftChannel(r, amount) + "," + shiftChannel(g, amount) + "," + shiftChannel(b, amount) + ")";
+}
+// The per-bucket colour string for integer channels (see wetColor).
+function rgbString(r, g, b) {
+  return "rgb(" + r + "," + g + "," + b + ")";
 }
 
 // Wet-canvas pickup strength per brush: how strongly a dab's colour blends
@@ -1197,6 +1243,68 @@ export function makeStrokeRenderer(settings, getMix) {
     }
   }
 
+  // --- Ink bbox (world px) ---
+  // A SUPERSET of every non-transparent pixel this renderer has stamped
+  // since the last resetInk(), kept with four compares per dab, so the
+  // commit passes (prepareStrokeCommit) can work on the stroke's own rect
+  // instead of the whole allocated buffer (a 2048² buffer holds a size-80
+  // stroke that inks a tenth of it). Pixel-identical by construction: every
+  // pass is a no-op where the buffer is transparent (destination-over /
+  // source-atop / destination-out) or a self-blit of transparent pixels, so
+  // the pass rect only has to CONTAIN the ink. The reach per dab is radius x
+  // the shape's widest draw (LEGACY_REACH / ribbonReach / the sprite cell),
+  // and inkBounds() pads the result by INK_MARGIN. Survives buffer grows
+  // (world coords); the overflow sites restart it with the buffer via
+  // prepareStrokeCommit(…, final = false). Deterministic per op stream —
+  // and the passes' pixels don't depend on it anyway (spec P3).
+  let inkX0 = Infinity;
+  let inkY0 = Infinity;
+  let inkX1 = -Infinity;
+  let inkY1 = -Infinity;
+  const inkRect = { x0: 0, y0: 0, w: 0, h: 0 }; // stable: inkBounds() mutates it in place
+  const ribbonReach = bristleTable ? 0.85 + laneWobble + stretchK + 2.04 / bristleTable.length : 0;
+  const loadedReachK = isLoaded ? Math.max(ribbonReach, Math.max(stretchK, 1) * SPRITE_EXTENT) : 0;
+  let legacyReachK = LEGACY_REACH[shape] || 1;
+  if (shape === "bristle") {
+    legacyReachK = ribbonReach;
+  } else if (shape === "stamp") {
+    legacyReachK = Math.hypot(dab.roundness || 1, 1); // a rotated roundness x 1 square: its half-diagonal
+  }
+  const inkAdd = (cx, cy, reach) => {
+    if (cx - reach < inkX0) {
+      inkX0 = cx - reach;
+    }
+    if (cy - reach < inkY0) {
+      inkY0 = cy - reach;
+    }
+    if (cx + reach > inkX1) {
+      inkX1 = cx + reach;
+    }
+    if (cy + reach > inkY1) {
+      inkY1 = cy + reach;
+    }
+  };
+  const inkBounds = () => {
+    if (inkX0 > inkX1) {
+      inkRect.x0 = 0;
+      inkRect.y0 = 0;
+      inkRect.w = 0; // nothing stamped since the last reset
+      inkRect.h = 0;
+      return inkRect;
+    }
+    inkRect.x0 = Math.floor(inkX0) - INK_MARGIN;
+    inkRect.y0 = Math.floor(inkY0) - INK_MARGIN;
+    inkRect.w = Math.ceil(inkX1) + INK_MARGIN - inkRect.x0;
+    inkRect.h = Math.ceil(inkY1) + INK_MARGIN - inkRect.y0;
+    return inkRect;
+  };
+  const resetInk = () => {
+    inkX0 = Infinity;
+    inkY0 = Infinity;
+    inkX1 = -Infinity;
+    inkY1 = -Infinity;
+  };
+
   // --- Per-stroke walk state (the whole point of the instance) ---
   let lastPoint = null; // { x, y, pressure }
   let residual = 0; // distance already consumed past the last emitted dab
@@ -1311,7 +1419,7 @@ export function makeStrokeRenderer(settings, getMix) {
     wetB = kmRgb[2];
     if (key5 !== wetKey5) {
       wetKey5 = key5;
-      wetColor = `rgb(${wetR},${wetG},${wetB})`;
+      wetColor = rgbString(wetR, wetG, wetB);
       if (bristleTable) {
         for (let i = 0; i < bristleTable.length; i += 1) {
           bristleTable[i].wetColor = tintRgbString(wetR, wetG, wetB, bristleTable[i].tint);
@@ -1366,6 +1474,9 @@ export function makeStrokeRenderer(settings, getMix) {
         alpha *= t * t;
       }
     }
+    // Ink bbox: the cell's larger half-extent (a bloom stamps a second cell
+    // at BLOOM_RADIUS; the halo at HALO_RADIUS; loaded = body + ribbons).
+    inkAdd(dx, dy, radius * (isHalo ? HALO_REACH : isLoaded ? loadedReachK : Math.max(aspect, 1) * SPRITE_EXTENT * (bloomVariant >= 0 ? BLOOM_RADIUS : 1)));
     // Spacing roll — last in the order (Stage 3): the step to the next dab
     // is scaled by 1 ± spacingJitter (see stepScale).
     stepScale = 1;
@@ -1407,7 +1518,7 @@ export function makeStrokeRenderer(settings, getMix) {
       const key5 = packRgb5(wetR, wetG, wetB);
       if (key5 !== wetKey5) {
         wetKey5 = key5;
-        wetColor = `rgb(${wetR},${wetG},${wetB})`;
+        wetColor = rgbString(wetR, wetG, wetB);
         if (bristleTable) {
           for (let i = 0; i < bristleTable.length; i += 1) {
             bristleTable[i].wetColor = tintRgbString(wetR, wetG, wetB, bristleTable[i].tint);
@@ -1527,6 +1638,7 @@ export function makeStrokeRenderer(settings, getMix) {
     }
     const rot = rotJitter > 0 ? angle + (rand() - 0.5) * rotJitter : angle;
     const radius = sizePx / 2;
+    inkAdd(dx, dy, radius * legacyReachK); // ink bbox: the branch's widest draw (LEGACY_REACH)
     // Wet canvas: blend this dab's colour toward the paint already under it
     // (skipping transparent samples), and drag the carried colour along so a
     // picked-up hue smears down the rest of the stroke. Cheap: one CPU-array
@@ -1845,11 +1957,12 @@ export function makeStrokeRenderer(settings, getMix) {
   };
 
   // Stroke-end hook. Dabs are emitted as points arrive, so nothing to flush
-  // today — this exists so the per-stroke lifecycle is explicit (Stage 3
-  // taper/wet-edge will need it). Never called on overflow restarts.
+  // today — this exists so the per-stroke lifecycle is explicit (a future
+  // taper / wet-edge will need it). Never called on overflow restarts
+  // (prepareStrokeCommit final = false).
   const end = () => {};
 
-  return { addPoints, stamp, end };
+  return { addPoints, stamp, end, inkBounds, resetInk };
 }
 
 // ---------------------------------------------------------------------------
@@ -1906,6 +2019,28 @@ export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle =
 // `buffered: false` is the past-the-cap fallback (too many concurrent remote
 // strokes): no buffer, so no renderer / passes either — the legacy direct
 // per-segment path, exactly as before.
+//
+// Known divergences between the local studio and a remote / replay consumer
+// (opReplay.applyOp, App's remote branch, LiveRoomCanvas) — bounded and
+// documented here (and in ARCHITECTURE.md) rather than fixed, because each
+// fix repaints persisted history or costs the dab path:
+// - Ops carry no layer: a remote / replay consumer commits every stroke to
+//   layer 0 while the studio commits to the active layer. A pre-existing
+//   class, widened by multiply — a multiply stroke on a layer >= 1
+//   multiplies over different pixels locally than remotely.
+// - Symmetry with >= 5 copies: the studio buffers every copy, but remote /
+//   replay consumers cap concurrent buffers at 4 (MAX_STROKE_BUFFERS /
+//   REMOTE_BUFFER_CAP), so copies 5+ replay on the legacy direct-segment
+//   path — no dabs, no commit passes. Pinned by the symmetry-radial8 golden.
+// - Symmetry + an overflow-sized stroke + copies that overlap: the studio
+//   banks each copy's chunk the instant that copy's ensure() overflows, in
+//   copy order per point; a replay consumer expands the op into per-copy
+//   strokes and walks each batch by batch, so two overlapping copies' chunks
+//   can commit in the other order (visible for source-over shapes only).
+// - Non-hex colour strings: the legacy vector branches paint whatever the
+//   canvas parses, while sprite shapes tint through parseColorRgb, whose
+//   fallback is near-black — the same on every consumer, but not the colour
+//   a legacy shape would show for the same string.
 export function makeStrokeEntryCore(settings, getMix, { buffered = true } = {}) {
   const dab = getStrokeDab(settings);
   if (settings.v >= 3 && !dab) {
@@ -2071,23 +2206,25 @@ function getGrainTile() {
   return grainTile;
 }
 
-// Erode `strength` worth of tooth across `bounds` ({x0, y0, w, h}, WORLD
-// coords). Tiles are aligned to world-space multiples of the tile size — the
-// buffer ctx carries the buffer's world-origin transform, so world position
-// (not buffer position) decides the pattern phase: two strokes over the same
-// paper spot share the same tooth.
-export function applyGrain(bufferCtx, bounds, strength) {
+// Erode `strength` worth of tooth across `rect` ({x0, y0, w, h}, WORLD
+// coords: the stroke's ink rect, or the whole buffer). Tiles are aligned to
+// world-space multiples of the tile size — the buffer ctx carries the
+// buffer's world-origin transform, so world position (not buffer position)
+// decides the pattern phase: two strokes over the same paper spot share the
+// same tooth. Bounding the tile loop to the rect is pixel-neutral: a tile
+// that only covers transparent pixels erodes nothing (destination-out).
+export function applyGrain(bufferCtx, rect, strength) {
   if (!(strength > 0)) {
     return;
   }
   const tile = getGrainTile();
-  const startX = Math.floor(bounds.x0 / GRAIN_SIZE) * GRAIN_SIZE;
-  const startY = Math.floor(bounds.y0 / GRAIN_SIZE) * GRAIN_SIZE;
+  const startX = Math.floor(rect.x0 / GRAIN_SIZE) * GRAIN_SIZE;
+  const startY = Math.floor(rect.y0 / GRAIN_SIZE) * GRAIN_SIZE;
   bufferCtx.save();
   bufferCtx.globalCompositeOperation = "destination-out";
   bufferCtx.globalAlpha = strength;
-  for (let y = startY; y < bounds.y0 + bounds.h; y += GRAIN_SIZE) {
-    for (let x = startX; x < bounds.x0 + bounds.w; x += GRAIN_SIZE) {
+  for (let y = startY; y < rect.y0 + rect.h; y += GRAIN_SIZE) {
+    for (let x = startX; x < rect.x0 + rect.w; x += GRAIN_SIZE) {
       bufferCtx.drawImage(tile, x, y);
     }
   }
@@ -2102,6 +2239,30 @@ export function applyGrain(bufferCtx, bounds, strength) {
 // without canvas ctx.filter (ancient browsers) the pass no-ops entirely:
 // skipping is the parity-safe fallback (an unfiltered stamp would still
 // change pixels, differently).
+//
+// Every self-blit below is the 9-argument drawImage of `rect` — the pass
+// rect prepareStrokeCommit derives from the renderer's ink bbox — read from
+// the buffer at (rect - bounds origin) and drawn back at the same world
+// rect plus the pass's offset. Reading a sub-rect is pixel-identical to
+// drawing the whole buffer as long as the sub-rect's outermost pixel ring
+// is transparent (prepareStrokeCommit grows the rect past the ink by more
+// than each pass's offset + 1 px of bilinear footprint): the copy reads the
+// same source pixels, and everything the whole-buffer draw would have added
+// outside the rect is a transparent source over a transparent (source-atop:
+// untouched) destination.
+//
+// The filtered draws are also CLIPPED to the rect (clipPassRect): Chrome
+// renders a ctx.filter draw through a layer sized to the clip, not to the
+// drawn rect, so without the clip a 900 x 400 px stroke still paid two
+// 2048² filter layers at pen-up (~60 ms on a CPU-raster canvas) however
+// small its source sub-rect was. The clip contains every destination pixel
+// the pass can change (rect grown by the pass's offset; pixels outside are
+// transparent and source-atop leaves them alone), so it is pixel-neutral.
+function clipPassRect(ctx, rect, reach) {
+  ctx.beginPath();
+  ctx.rect(rect.x0 - reach, rect.y0 - reach, rect.w + 2 * reach, rect.h + 2 * reach);
+  ctx.clip();
+}
 
 let canvasFilterOk = null;
 function supportsCanvasFilter() {
@@ -2119,16 +2280,17 @@ function supportsCanvasFilter() {
 // Darkened copy of the stroke stamped at (+1.5, +1.5) inside its own alpha:
 // the offset leaves a lighter crescent on one rim and a pigment-pool shadow
 // on the other — the watercolor/oil "wet edge".
-function applyWetEdge(ctx, canvas, bounds, strength) {
+function applyWetEdge(ctx, canvas, bounds, rect, strength) {
   if (!supportsCanvasFilter()) {
     return;
   }
   ctx.save();
   try {
+    clipPassRect(ctx, rect, 2);
     ctx.globalCompositeOperation = "source-atop";
     ctx.globalAlpha = strength;
     ctx.filter = "brightness(0.55)";
-    ctx.drawImage(canvas, bounds.x0 + 1.5, bounds.y0 + 1.5);
+    ctx.drawImage(canvas, rect.x0 - bounds.x0, rect.y0 - bounds.y0, rect.w, rect.h, rect.x0 + 1.5, rect.y0 + 1.5, rect.w, rect.h);
   } catch {
     /* filter unsupported mid-flight: leave the buffer untouched */
   }
@@ -2137,18 +2299,21 @@ function applyWetEdge(ctx, canvas, bounds, strength) {
 
 // Top-left light emboss: a brightened copy at (-1, -1) plus a darkened copy
 // at (+1, +1), both clipped to the stroke — reads as raised paint ridges.
-function applyImpasto(ctx, canvas, bounds, strength) {
+function applyImpasto(ctx, canvas, bounds, rect, strength) {
   if (!supportsCanvasFilter()) {
     return;
   }
+  const sx = rect.x0 - bounds.x0;
+  const sy = rect.y0 - bounds.y0;
   ctx.save();
   try {
+    clipPassRect(ctx, rect, 2);
     ctx.globalCompositeOperation = "source-atop";
     ctx.globalAlpha = strength;
     ctx.filter = "brightness(1.6)";
-    ctx.drawImage(canvas, bounds.x0 - 1, bounds.y0 - 1);
+    ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0 - 1, rect.y0 - 1, rect.w, rect.h);
     ctx.filter = "brightness(0.45)";
-    ctx.drawImage(canvas, bounds.x0 + 1, bounds.y0 + 1);
+    ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0 + 1, rect.y0 + 1, rect.w, rect.h);
   } catch {
     /* filter unsupported mid-flight: leave the buffer untouched */
   }
@@ -2164,15 +2329,23 @@ function applyImpasto(ctx, canvas, bounds, strength) {
 // Bleed: four offset copies of the stroke drawn BEHIND it (destination-over)
 // at (±b, 0) / (0, ±b), each at strength / 4 — a soft fringe of pigment that
 // crept past the wet boundary. b scales with the stroke size (1.5..6 px).
-function applyBleed(ctx, canvas, bounds, strength, size) {
-  const b = clamp(0.08 * size, 1.5, 6);
+// The fringe lands OUTSIDE the ink, so the caller's rect is the ink grown by
+// more than b: every pixel the fringe can reach is inside the drawn rect,
+// and what the whole-buffer draw would add past it is a transparent source
+// (read from beyond the ink) — nothing.
+function bleedOffset(size) {
+  return clamp(0.08 * size, 1.5, 6);
+}
+function applyBleed(ctx, canvas, bounds, rect, strength, b) {
+  const sx = rect.x0 - bounds.x0;
+  const sy = rect.y0 - bounds.y0;
   ctx.save();
   ctx.globalCompositeOperation = "destination-over";
   ctx.globalAlpha = strength / 4;
-  ctx.drawImage(canvas, bounds.x0 + b, bounds.y0);
-  ctx.drawImage(canvas, bounds.x0 - b, bounds.y0);
-  ctx.drawImage(canvas, bounds.x0, bounds.y0 + b);
-  ctx.drawImage(canvas, bounds.x0, bounds.y0 - b);
+  ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0 + b, rect.y0, rect.w, rect.h);
+  ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0 - b, rect.y0, rect.w, rect.h);
+  ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0, rect.y0 + b, rect.w, rect.h);
+  ctx.drawImage(canvas, sx, sy, rect.w, rect.h, rect.x0, rect.y0 - b, rect.w, rect.h);
   ctx.restore();
 }
 
@@ -2181,31 +2354,52 @@ function applyBleed(ctx, canvas, bounds, strength, size) {
 // world-aligned like applyGrain — same phase rule, so two strokes over the
 // same spot share the same paper — twice: source-atop darkens the stroke
 // where the paper is deep, then destination-out thins it there, so the
-// valleys read denser AND the film breaks up.
-function applyGranulation(ctx, bounds, strength) {
+// valleys read denser AND the film breaks up. The tile loop is bounded to
+// `rect` like applyGrain's (neither composite touches a transparent pixel).
+function applyGranulation(ctx, rect, strength) {
   const tile = getPaperTile();
   if (!tile) {
     return;
   }
   const tileSize = tile.width;
-  const startX = Math.floor(bounds.x0 / tileSize) * tileSize;
-  const startY = Math.floor(bounds.y0 / tileSize) * tileSize;
+  const startX = Math.floor(rect.x0 / tileSize) * tileSize;
+  const startY = Math.floor(rect.y0 / tileSize) * tileSize;
   ctx.save();
   ctx.globalCompositeOperation = "source-atop";
   ctx.globalAlpha = strength * 0.55;
-  for (let y = startY; y < bounds.y0 + bounds.h; y += tileSize) {
-    for (let x = startX; x < bounds.x0 + bounds.w; x += tileSize) {
+  for (let y = startY; y < rect.y0 + rect.h; y += tileSize) {
+    for (let x = startX; x < rect.x0 + rect.w; x += tileSize) {
       ctx.drawImage(tile, x, y);
     }
   }
   ctx.globalCompositeOperation = "destination-out";
   ctx.globalAlpha = strength * 0.25;
-  for (let y = startY; y < bounds.y0 + bounds.h; y += tileSize) {
-    for (let x = startX; x < bounds.x0 + bounds.w; x += tileSize) {
+  for (let y = startY; y < rect.y0 + rect.h; y += tileSize) {
+    for (let x = startX; x < rect.x0 + rect.w; x += tileSize) {
       ctx.drawImage(tile, x, y);
     }
   }
   ctx.restore();
+}
+
+// The world rect a commit pass works on: the renderer's ink bbox grown by
+// `reach` (the pass's own offset + resampling footprint), clipped to the
+// buffer — or the whole buffer when no ink bbox is known (renderer-less
+// entries). One module-level object, filled in place; false = empty.
+const PASS_RECT = { x0: 0, y0: 0, w: 0, h: 0 };
+function passRect(bounds, ink, reach) {
+  const x0 = ink ? Math.max(bounds.x0, ink.x0 - reach) : bounds.x0;
+  const y0 = ink ? Math.max(bounds.y0, ink.y0 - reach) : bounds.y0;
+  const x1 = ink ? Math.min(bounds.x0 + bounds.w, ink.x0 + ink.w + reach) : bounds.x0 + bounds.w;
+  const y1 = ink ? Math.min(bounds.y0 + bounds.h, ink.y0 + ink.h + reach) : bounds.y0 + bounds.h;
+  if (x1 <= x0 || y1 <= y0) {
+    return false;
+  }
+  PASS_RECT.x0 = x0;
+  PASS_RECT.y0 = y0;
+  PASS_RECT.w = x1 - x0;
+  PASS_RECT.h = y1 - y0;
+  return true;
 }
 
 // One-stop pre-commit hook for a v2 stroke buffer: flush the dab renderer,
@@ -2214,9 +2408,22 @@ function applyGranulation(ctx, bounds, strength) {
 // bleed → wet edge → impasto → granulation → grain. `fx` is the entry core's
 // { ...dab, size } (or null for legacy strokes — full no-op). All consumers
 // (local, remote, spectator, history replay, and every OVERFLOW commit) share
-// this helper, so the passes can never diverge per consumer. Pass renderer =
-// null on OVERFLOW commits: the renderer's residual/lastPoint walk state must
-// survive the buffer restart untouched.
+// this helper, so the passes can never diverge per consumer. Pass `final =
+// false` on OVERFLOW commits: end() is skipped (the renderer's residual /
+// lastPoint walk state must survive the buffer restart untouched) and the
+// renderer's ink bbox is cleared for the buffer the caller restarts next.
+//
+// The passes run on the renderer's ink bbox (renderer.inkBounds(): a
+// superset of the stroke's pixels), grown per pass by its own reach and
+// clipped to the buffer — not on the whole allocated buffer, which for a
+// size-80 stroke is 2048² of mostly-transparent pixels and, on a CPU-raster
+// canvas (iPad Safari, the lab's software renderer), 4 + 1 full-buffer
+// blits per watercolor pen-up. Pixel-identical (proved by the golden
+// groups): each pass is a no-op wherever the buffer is transparent, so the
+// rect only has to contain the ink plus what a pass adds — bleed's fringe
+// (grown by ceil(b) + 1 for the passes that follow), and the wet-edge /
+// impasto offsets (1.5 px + 1 px of bilinear footprint). A renderer-less
+// entry (no ink bbox) keeps the whole-buffer passes.
 //
 // Accepted preview "pops" (the live preview is the raw buffer at the
 // stroke's opacity + composite, so a pass that changes pixels lands at
@@ -2226,31 +2433,47 @@ function applyGranulation(ctx, bounds, strength) {
 // only into the active layer — identical on a single-layer room, a visible
 // shift under a second layer, a layer opacity < 1, a trace-a-photo sheet or
 // an onion-skin ghost drawn beneath the preview.
-export function prepareStrokeCommit(buf, renderer, fx) {
-  if (!buf || !buf.has()) {
-    return;
+//
+// Known divergences (local vs remote / replay), all bounded and documented
+// rather than fixed here — see makeStrokeEntryCore's block for the list.
+export function prepareStrokeCommit(buf, renderer, fx, final = true) {
+  if (buf && buf.has()) {
+    if (renderer && final) {
+      renderer.end(buf.getCtx());
+    }
+    if (fx) {
+      runCommitPasses(buf, renderer ? renderer.inkBounds() : null, fx);
+    }
   }
-  if (renderer) {
-    renderer.end(buf.getCtx());
+  if (renderer && !final) {
+    renderer.resetInk(); // the caller buf.reset()s next: the ink starts over with the buffer
   }
-  if (!fx) {
-    return;
+}
+
+function runCommitPasses(buf, ink, fx) {
+  if (ink && !(ink.w > 0 && ink.h > 0)) {
+    return; // nothing stamped into this buffer: every pass is a no-op on transparent pixels
   }
   const ctx = buf.getCtx();
   const bounds = buf.bounds();
+  let grow = 0; // how far past the ink bbox the passes so far have put pixels
   if (fx.bleed > 0) {
-    applyBleed(ctx, buf.canvas, bounds, fx.bleed, clamp(fx.size || 24, 1, 160));
+    const b = bleedOffset(clamp(fx.size || 24, 1, 160));
+    if (passRect(bounds, ink, Math.ceil(b) + 2)) {
+      applyBleed(ctx, buf.canvas, bounds, PASS_RECT, fx.bleed, b);
+    }
+    grow = Math.ceil(b) + 1; // the fringe: a fractional offset resamples one pixel further
   }
-  if (fx.wetEdge > 0) {
-    applyWetEdge(ctx, buf.canvas, bounds, fx.wetEdge);
+  if (fx.wetEdge > 0 && passRect(bounds, ink, grow + 3)) {
+    applyWetEdge(ctx, buf.canvas, bounds, PASS_RECT, fx.wetEdge);
   }
-  if (fx.impasto > 0) {
-    applyImpasto(ctx, buf.canvas, bounds, fx.impasto);
+  if (fx.impasto > 0 && passRect(bounds, ink, grow + 3)) {
+    applyImpasto(ctx, buf.canvas, bounds, PASS_RECT, fx.impasto);
   }
-  if (fx.granulation > 0) {
-    applyGranulation(ctx, bounds, fx.granulation);
+  if (fx.granulation > 0 && passRect(bounds, ink, grow)) {
+    applyGranulation(ctx, PASS_RECT, fx.granulation);
   }
-  if (fx.grain > 0) {
-    applyGrain(ctx, bounds, fx.grain);
+  if (fx.grain > 0 && passRect(bounds, ink, grow)) {
+    applyGrain(ctx, PASS_RECT, fx.grain);
   }
 }

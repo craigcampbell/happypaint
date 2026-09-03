@@ -553,7 +553,9 @@ const serialize = (data) => {
 const text = serialize(fixture);
 const summary = groups.map((g) => `  ${g.name.padEnd(18)} ${String(g.ops.length).padStart(5)} ops${g.deterministic ? "" : "  (nondeterministic)"}`).join("\n");
 if (process.argv.includes("--check")) {
-  const existing = fs.existsSync(OUT_FILE) ? fs.readFileSync(OUT_FILE, "utf8") : null;
+  // LF-normalized like brush-lab's fixture hash: a core.autocrlf checkout
+  // hands the committed (LF) fixture back with CRLF line ends.
+  const existing = fs.existsSync(OUT_FILE) ? fs.readFileSync(OUT_FILE, "utf8").replace(/\r\n/g, "\n") : null;
   if (existing === text) {
     console.log(`make-golden-ops: ${path.relative(process.cwd(), OUT_FILE)} matches the generator\n${summary}`);
     process.exit(0);

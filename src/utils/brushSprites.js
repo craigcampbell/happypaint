@@ -439,8 +439,8 @@ function blitVariant(data, rowWidth, variant) {
 //   variants 4-7 (drybrush): t = 0.45 + 0.55 * S(0.35, 0.75, n4);
 //         a *= t + (1 - t) * S(0.6, 0.85, r)                   tooth in the body, rim keeps pooling
 // Octaves: n3 = 1, n7 = 2, n9 = 3, n6 = 4, n4 = 5.
-function buildWash(data, rowWidth, family) {
-  for (let v = 0; v < family.variants; v += 1) {
+function buildWash(data, rowWidth, family, from, to) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -472,9 +472,9 @@ function buildWash(data, rowWidth, family) {
 // it read as paper tooth at stamp scale. The 0.3 floor (spec 0.55) and the
 // 34% edge (spec 45%) keep the stroke grainy after ~6 dabs accumulate per
 // pixel — a 55% feather read as airbrush, not graphite, in a stroke.
-function buildGraphite(data, rowWidth, family) {
+function buildGraphite(data, rowWidth, family, from, to) {
   fillProfile(KIND_GRAPHITE);
-  for (let v = 0; v < family.variants; v += 1) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -498,9 +498,9 @@ function buildGraphite(data, rowWidth, family) {
 //   body  = 0.9 * (0.3 + 0.7 * S(0.4, 0.6, tex)) * edge
 //   fleck = alphaF * (1 - S(0.4, 1, dist / radiusF))
 //   a     = body screened with fleck 0, then fleck 1  (a' = a + f (1 - a))
-function buildWax(data, rowWidth, family) {
+function buildWax(data, rowWidth, family, from, to) {
   fillProfile(KIND_WAX);
-  for (let v = 0; v < family.variants; v += 1) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -575,9 +575,9 @@ function laneField(lanes, dy, signed) {
 //   lanes(y) = clamp(sum_i sign_i * bump_i(y), -1, 1)
 //   a  = (1 - S(0.7, 1, rho)) * (1 + 0.08 * lanes(y) * (0.6 + 0.4 * n5))
 // n5 fades the lanes in and out along the stroke (bristles lifting).
-function buildSoftOval(data, rowWidth, family) {
+function buildSoftOval(data, rowWidth, family, from, to) {
   fillProfile(KIND_SOFT_OVAL);
-  for (let v = 0; v < family.variants; v += 1) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -597,8 +597,8 @@ function buildSoftOval(data, rowWidth, family) {
 //   phase = roll k0 (2 rolls)
 //   r  = rho / (1 + 0.05 * (2 * n5 - 1))              rim wobble +-5%
 //   a  = (0.97 + 0.03 * (2 * n10 - 1)) * (1 - S(0.92, 1.0, r))   8% edge
-function buildMatte(data, rowWidth, family) {
-  for (let v = 0; v < family.variants; v += 1) {
+function buildMatte(data, rowWidth, family, from, to) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -621,10 +621,10 @@ function buildMatte(data, rowWidth, family) {
 //   a      = (1 - S(0.9, 1.0, e)) * (0.6 + 0.4 * L) * (0.94 + 0.06 * n8)
 // Note for Stage 2: lanes are per VARIANT, so coherent streaks along a stroke
 // need the variant rolled per stroke (seed), not per dab.
-function buildLoaded(data, rowWidth, family) {
+function buildLoaded(data, rowWidth, family, from, to) {
   pHalfY = SPRITE_UNIT / family.aspect;
   fillProfile(KIND_LOADED);
-  for (let v = 0; v < family.variants; v += 1) {
+  for (let v = from; v < to; v += 1) {
     const roll = mulberry32(latticeSeed(family.seed, v, 0));
     const ox = roll();
     const oy = roll();
@@ -647,18 +647,20 @@ function buildLoaded(data, rowWidth, family) {
 // halo (seed 0x0b5d3c9e, 2 variants, no noise): the glow pair.
 //   variant 0 (halo): a = (1 - rho)^2 for rho < 1, else 0
 //   variant 1 (core): a = 1 - S(0.6, 1, rho)
-function buildHalo(data, rowWidth) {
-  runKernel(KIND_HALO);
-  blitVariant(data, rowWidth, 0);
-  runKernel(KIND_HALO_CORE);
-  blitVariant(data, rowWidth, 1);
+function buildHalo(data, rowWidth, family, from, to) {
+  for (let v = from; v < to; v += 1) {
+    runKernel(v === 0 ? KIND_HALO : KIND_HALO_CORE);
+    blitVariant(data, rowWidth, v);
+  }
 }
 
 // softMask (1 variant, no noise): the smudge feather.
 //   a = 1 - S(0.55, 1.0, rho)
-function buildSoftMask(data, rowWidth) {
-  runKernel(KIND_SOFT_MASK);
-  blitVariant(data, rowWidth, 0);
+function buildSoftMask(data, rowWidth, family, from, to) {
+  for (let v = from; v < to; v += 1) {
+    runKernel(KIND_SOFT_MASK);
+    blitVariant(data, rowWidth, v);
+  }
 }
 
 const BUILDERS = {
@@ -674,8 +676,12 @@ const BUILDERS = {
 
 // Pure pixel build for one family: { width, height, data } RGBA (white RGB,
 // alpha = the sprite). DOM-free, so Node tests can hash it directly. `data`
-// may be supplied (an ImageData's buffer) to skip a copy.
-export function buildFamilyImage(family, data) {
+// may be supplied (an ImageData's buffer) to skip a copy. `from` / `to`
+// pick a variant range (default: the whole row) so the idle prebuild can
+// land one variant per piece — every variant is built from its own seed
+// and scratch fills, so a row assembled variant by variant is byte-identical
+// to one built in a single call (the sprite lab's paced scenario proves it).
+export function buildFamilyImage(family, data, from = 0, to = -1) {
   const index = spriteFamilyIndex(family);
   if (index < 0) {
     return null;
@@ -686,7 +692,7 @@ export function buildFamilyImage(family, data) {
   const out = data || new Uint8ClampedArray(width * height * 4);
   geometry();
   warmUp();
-  BUILDERS[entry.id](out, width, entry);
+  BUILDERS[entry.id](out, width, entry, Math.max(0, from | 0), to < 0 ? entry.variants : Math.min(entry.variants, to | 0));
   return { width, height, data: out };
 }
 
@@ -917,34 +923,133 @@ export function getTintedSprite(family, variant, r, g, b, exact = false) {
 // Build every atlas + the paper tile and allocate the tint ring, so the first
 // sprite stroke pays nothing. Called bare it builds everything synchronously
 // (~25 ms cold on a desktop). Handed an IdleDeadline — i.e. used directly as
-// the requestIdleCallback callback — it builds one piece per step while at
-// least IDLE_STEP_MS remain and re-schedules itself for the rest, so a phone
-// never spends a whole idle slot in here (a busy page that never offers a
-// slot gets the rest built in one go when the re-schedule's timeout fires).
-// Either way every piece is lazy, so a stroke that arrives mid-way just
-// builds what it needs on the spot.
-const IDLE_STEP_MS = 12; // the biggest single piece (wash, 8 variants) cold
+// the requestIdleCallback callback — it paces itself through PIECES (one
+// atlas VARIANT each, then the paper tile, then the ring: no piece is more
+// than a few ms even cold, where a whole wash row was 12+), building while
+// at least IDLE_STEP_MS of the slot remain and re-scheduling itself for the
+// rest. A slot that arrived by TIMEOUT (the page was never idle for 2 s —
+// someone is drawing) builds exactly ONE piece and re-schedules: it used to
+// build everything left in that slot, 30+ ms (2-3x on a phone) inside a
+// stroke. `isBusy` (App: a pointer is down) defers a slice without building
+// anything at all. Either way every piece is lazy, so a stroke that arrives
+// mid-way builds what it needs on the spot and the prebuild skips it.
+//
+// A family's row is assembled variant by variant into ONE ImageData and put
+// once when complete (never registered half-built): getAtlas() mid-way sees
+// no atlas and builds the whole row itself, and the pending partial is then
+// dropped at the next piece. Pixels are identical either way — each variant
+// is a pure function of its seed (sprite-lab: paced hash == cold hash).
+const IDLE_STEP_MS = 16;
 const IDLE_TIMEOUT_MS = 2000;
 let idleHandle = 0; // a self-rescheduled prebuild in flight (cancelled by release)
-export function prebuildBrushSprites(deadline) {
+// Bumped by release: a continuation scheduled before a release must not run
+// after it (it would rebuild what was just freed from piece 0), even when
+// its handle was overwritten by a second scheduler — App re-scheduling
+// while a module continuation was still pending.
+let buildGeneration = 0;
+// The prebuild's work list, in order: every (family, variant), the paper
+// tile, the tint ring. Built once; `pieceCursor` is the next piece to build
+// (reset by release, which frees everything).
+let PIECES = null;
+let pieceCursor = 0;
+let partial = null; // { index, canvas, ctx, image, done } — the row being assembled
+function pieceList() {
+  if (!PIECES) {
+    PIECES = [];
+    FAMILIES.forEach((family, index) => {
+      for (let variant = 0; variant < family.variants; variant += 1) {
+        PIECES.push({ index, variant });
+      }
+    });
+    PIECES.push({ index: -1, variant: 0 }); // paper tile
+    PIECES.push({ index: -2, variant: 0 }); // tint ring
+  }
+  return PIECES;
+}
+
+function dropPartial() {
+  if (partial) {
+    partial.canvas.width = 0;
+    partial = null;
+  }
+}
+
+function buildPiece(piece) {
+  if (piece.index === -1) {
+    getPaperTile();
+    return;
+  }
+  if (piece.index === -2) {
+    if (!slots) {
+      allocateSlots();
+    }
+    return;
+  }
+  if (atlases[piece.index]) {
+    // Built lazily by a stroke while we were pacing: nothing left to do for
+    // this family (and any half-row we had for it is stale).
+    if (partial && partial.index === piece.index) {
+      dropPartial();
+    }
+    return;
+  }
+  const entry = FAMILIES[piece.index];
+  if (!partial || partial.index !== piece.index) {
+    dropPartial();
+    const canvas = makeCanvas(entry.variants * SPRITE_PX, SPRITE_PX);
+    const ctx = canvas.getContext("2d");
+    partial = { index: piece.index, canvas, ctx, image: ctx.createImageData(canvas.width, canvas.height), done: 0 };
+  }
+  buildFamilyImage(entry.id, partial.image.data, piece.variant, piece.variant + 1);
+  partial.done += 1;
+  if (partial.done === entry.variants) {
+    partial.ctx.putImageData(partial.image, 0, 0); // the ONE putImageData per atlas
+    atlases[piece.index] = partial.canvas;
+    partial = null;
+  }
+}
+
+export function prebuildBrushSprites(deadline, isBusy) {
   if (!HAS_DOM) {
     return;
   }
+  if (idleHandle && typeof cancelIdleCallback === "function") {
+    // Called while a continuation is pending (App re-scheduling on
+    // visibilitychange): fold the two chains into this one.
+    cancelIdleCallback(idleHandle);
+  }
   idleHandle = 0;
+  const pieces = pieceList();
+  if (pieceCursor >= pieces.length) {
+    return; // complete (a later call is a no-op until release resets the cursor)
+  }
   const incremental = deadline && typeof deadline.timeRemaining === "function" && typeof requestIdleCallback === "function";
-  const pieces = FAMILIES.length + 2; // atlases, paper tile, tint ring
-  for (let i = 0; i < pieces; i += 1) {
-    if (incremental && deadline.timeRemaining() < IDLE_STEP_MS && !deadline.didTimeout) {
-      idleHandle = requestIdleCallback(prebuildBrushSprites, { timeout: IDLE_TIMEOUT_MS });
+  const busy = typeof isBusy === "function" ? isBusy : null;
+  const generation = buildGeneration;
+  const reschedule = () => {
+    idleHandle = requestIdleCallback((next) => {
+      if (generation === buildGeneration) {
+        prebuildBrushSprites(next, busy);
+      }
+    }, { timeout: IDLE_TIMEOUT_MS });
+  };
+  if (busy && busy()) {
+    // A stroke is in progress: never build under it. Come back later; if the
+    // page can't schedule us, the pieces stay lazy.
+    if (incremental) {
+      reschedule();
+    }
+    return;
+  }
+  let built = 0;
+  while (pieceCursor < pieces.length) {
+    if (incremental && (deadline.didTimeout ? built >= 1 : deadline.timeRemaining() < IDLE_STEP_MS)) {
+      reschedule();
       return;
     }
-    if (i < FAMILIES.length) {
-      getAtlas(FAMILIES[i].id);
-    } else if (i === FAMILIES.length) {
-      getPaperTile();
-    } else if (!slots) {
-      allocateSlots();
-    }
+    buildPiece(pieces[pieceCursor]);
+    pieceCursor += 1;
+    built += 1;
   }
 }
 
@@ -952,12 +1057,16 @@ export function prebuildBrushSprites(deadline) {
 // canvas memory immediately, not at GC time). Everything rebuilds lazily on
 // next use, so this is safe on studio unmount and visibilitychange hidden. A
 // prebuild still pacing itself through idle slices is cancelled too, or it
-// would rebuild everything we just freed on the next idle slot.
+// would rebuild everything we just freed on the next idle slot; its work
+// list restarts from the first piece when App re-schedules it (visible).
 export function releaseBrushSprites() {
   if (idleHandle && typeof cancelIdleCallback === "function") {
     cancelIdleCallback(idleHandle);
   }
   idleHandle = 0;
+  buildGeneration += 1;
+  pieceCursor = 0;
+  dropPartial();
   for (let i = 0; i < atlases.length; i += 1) {
     if (atlases[i]) {
       atlases[i].width = 0;

@@ -538,7 +538,94 @@
       return { freedOldAtlas: freed, rebuiltIsNew: rebuilt !== atlasBefore && rebuilt.width === SPRITE_PX * 8, slotOk: slot != null && slot.width === SPRITE_PX, paperOk: getPaperTile().width === 256 };
     };
 
-    const SCENARIOS = { build: runBuild, hash: runHash, alloc: runAlloc, rim: runRim, sheet: runSheet, strokes: runStrokes, release: runRelease };
+    // (h) PACED: the idle prebuild driven piece by piece, the way App's
+    // requestIdleCallback would, with the browser's scheduler stubbed so
+    // the prebuild's self-reschedule hands its continuation back here.
+    //   forced  — every slot is a timed-out one (timeRemaining 0): the
+    //             prebuild must build exactly ONE piece per slot, so the
+    //             per-piece times below are what a slot costs a busy page;
+    //   busy    — the first slot arrives with a pointer down: the busy
+    //             predicate must defer it without allocating anything;
+    //   sliced  — ~24 ms idle slots: several pieces per slot, re-scheduled
+    //             once under IDLE_STEP_MS remain.
+    // Both drives must hash identical to the cold synchronous build (page A's
+    // `hash` scenario): a row assembled a variant at a time is the same row.
+    const runPaced = async () => {
+      const realRic = window.requestIdleCallback;
+      const realCancel = window.cancelIdleCallback;
+      let queued = null;
+      window.requestIdleCallback = (cb) => {
+        queued = cb;
+        return 1;
+      };
+      window.cancelIdleCallback = () => {};
+      const forced = { didTimeout: true, timeRemaining: () => 0 };
+      try {
+        releaseBrushSprites();
+        // Busy: deferred, nothing built, nothing allocated, re-scheduled.
+        let busy = true;
+        const allocBefore = alloc.canvas;
+        prebuildBrushSprites(forced, () => busy);
+        const busyDeferred = queued != null && alloc.canvas === allocBefore; // re-scheduled, and (right after release) nothing allocated
+        busy = false;
+        // Forced slots: one piece each.
+        const pieces = [];
+        let guard = 0;
+        while (queued && guard < 500) {
+          const cb = queued;
+          queued = null;
+          const t0 = performance.now();
+          cb(forced);
+          pieces.push(+(performance.now() - t0).toFixed(2));
+          guard += 1;
+        }
+        const forcedHash = (await runHash()).hash;
+        const cachedCall = (() => {
+          const before = alloc.canvas;
+          prebuildBrushSprites(forced, () => false);
+          return queued == null && alloc.canvas === before; // complete: a no-op, no re-schedule
+        })();
+        // Sliced: a fresh page-like start, ~24 ms slots (several pieces each,
+        // re-scheduled once under IDLE_STEP_MS remain).
+        releaseBrushSprites();
+        queued = null;
+        const slotMs = [];
+        let slotStart = performance.now();
+        const slot = { didTimeout: false, timeRemaining: () => Math.max(0, 24 - (performance.now() - slotStart)) };
+        prebuildBrushSprites(slot, () => false);
+        slotMs.push(+(performance.now() - slotStart).toFixed(1));
+        guard = 0;
+        while (queued && guard < 500) {
+          const cb = queued;
+          queued = null;
+          slotStart = performance.now();
+          cb(slot);
+          slotMs.push(+(performance.now() - slotStart).toFixed(1));
+          guard += 1;
+        }
+        const slicedHash = (await runHash()).hash;
+        const sorted = [...pieces].sort((a, b) => b - a);
+        return {
+          busyDeferred,
+          pieces: pieces.length,
+          pieceMs: pieces,
+          maxPieceMs: sorted[0] ?? 0,
+          top3PieceMs: sorted.slice(0, 3),
+          sumPieceMs: +pieces.reduce((n, v) => n + v, 0).toFixed(2),
+          onePiecePerForcedSlot: pieces.length === 43 + 2, // every variant, the paper tile, the ring
+          cachedCallNoop: cachedCall,
+          forcedHash,
+          slicedSlots: slotMs.length,
+          slicedSlotMs: slotMs,
+          slicedHash,
+        };
+      } finally {
+        window.requestIdleCallback = realRic;
+        window.cancelIdleCallback = realCancel;
+      }
+    };
+
+    const SCENARIOS = { build: runBuild, hash: runHash, alloc: runAlloc, rim: runRim, sheet: runSheet, strokes: runStrokes, release: runRelease, paced: runPaced };
 
     const run = async (kind) => {
       const fn = SCENARIOS[kind];

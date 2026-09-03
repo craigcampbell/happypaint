@@ -9,8 +9,8 @@
 // this keeps working as the engine changes.
 //
 //   node scripts/brush-lab.mjs [--out <dir>] [--brushes a,b,c] [--port 5199]
-//   node scripts/brush-lab.mjs --golden            # guard + mixPrefetch equivalence + golden replay vs golden.json
-//   node scripts/brush-lab.mjs --golden-record     # guard + golden replay, REWRITE golden.json
+//   node scripts/brush-lab.mjs --golden            # guard + fixture --check + mixPrefetch equivalence + golden replay vs golden.json
+//   node scripts/brush-lab.mjs --golden-record     # guard + fixture --check + golden replay, REWRITE golden.json
 //   node scripts/brush-lab.mjs --guard             # static dab-path guard only (no browser)
 //   node scripts/brush-lab.mjs --only strokes,timing   # a subset of the full run's scenarios
 //   node scripts/brush-lab.mjs --gpu --only timing     # real-GPU canvas (see GPU_ARGS) — timing only
@@ -31,7 +31,9 @@
 // change did not repaint persisted history. Groups flagged
 // `deterministic: false` (legacy seedless ops roll Math.random) are hashed
 // for information and never gate. The default run verifies too when a
-// golden.json exists; `--groups a,b` narrows the replay.
+// golden.json exists; `--groups a,b` narrows the replay. Every run that
+// replays the fixture first proves the committed golden-ops.json is what
+// make-golden-ops.mjs --check regenerates (fixture / engine drift fails).
 //
 // Stage 3 gates (full run): the mixing scenario's checks (km brushes read
 // green, not grey, dry and wet; carry recovery; sample-free brushes hash
@@ -45,7 +47,7 @@
 //
 // Outputs (in --out): strokes-<brush>.png, mixing-<brush>.png, smudge.png,
 // contact-sheet.png, golden-<group>.png, lab-report.json.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -283,6 +285,11 @@ function stopVite() {
 
 // ---- Helpers ------------------------------------------------------------------
 const sha1 = (file) => createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 12);
+// The fixture is hashed LF-normalized: a core.autocrlf checkout hands the
+// same JSON back with CRLF line ends, and a byte hash would then fail
+// --golden on a fixture that IS the recorded one. (The repo stores it LF, so
+// the normalized hash equals the byte hash of a clean checkout.)
+const sha1Text = (file) => createHash("sha1").update(fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n")).digest("hex").slice(0, 12);
 // Everything a golden replay passes through — recorded for provenance.
 const engineFiles = [
   "src/utils/brushes.js",
@@ -358,7 +365,7 @@ function verifyGolden(result, { record, failures }) {
   if (record && useGpu) {
     fail("golden-record needs the software renderer (drop --gpu): golden.json is the software renderer's bytes");
   }
-  const fixtureSha = sha1(FIXTURE_FILE);
+  const fixtureSha = sha1Text(FIXTURE_FILE);
   const engine = Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))]));
   const golden = record ? null : readGolden();
   const rows = [];
@@ -430,6 +437,23 @@ function printGolden({ rows, golden, engine }) {
   }
 }
 
+// ---- Fixture gate: the committed fixture must be what the generator emits ---------
+// golden-ops.json embeds the v3 dabs via getAuthoringDab at generation time,
+// so a NATURAL_DABS edit without a regenerate (or a hand-edited fixture)
+// leaves golden.json's hashes describing ops the studio no longer persists.
+// `make-golden-ops.mjs --check` diffs the file against a fresh generation —
+// run it before any golden replay so that drift fails the lab instead of
+// silently passing against stale ops.
+function checkFixture() {
+  const script = path.join(ROOT, "scripts/lab/make-golden-ops.mjs");
+  const result = spawnSync(process.execPath, [script, "--check"], { cwd: ROOT, encoding: "utf8" });
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  if (result.status !== 0) {
+    fail(`fixture check failed (make-golden-ops.mjs --check):\n${output}\n  regenerate deliberately (node scripts/lab/make-golden-ops.mjs), then --golden-record`);
+  }
+  console.log(`brush-lab: fixture — ${output.split("\n")[0]}`);
+}
+
 // ---- Main -----------------------------------------------------------------------
 const failures = [];
 const guard = runGuard();
@@ -438,6 +462,10 @@ if (!guard.ok) {
 }
 if (mode === "guard") {
   process.exit(guard.ok ? 0 : 1);
+}
+const goldenInRun = mode !== "full" || !onlyFilter.length || onlyFilter.includes("golden");
+if (goldenInRun) {
+  checkFixture();
 }
 
 fs.mkdirSync(outDir, { recursive: true });

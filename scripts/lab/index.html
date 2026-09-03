@@ -182,6 +182,17 @@
     // stopped right after the last addPoints measures how fast Chrome can
     // QUEUE work, not draw it. A 1x1 readback is the cheapest synchronous
     // fence: it forces everything recorded on that canvas to land first.
+    //
+    // ONE-READBACK RULE: fence a timed canvas once per clock, never in a
+    // loop that spans frames. Chrome's willReadFrequently heuristic counts
+    // getImageData calls per canvas across successive frames and, once it
+    // trips, demotes that canvas to CPU rasterisation for good — a second
+    // fence on a timed buffer in a later frame would silently turn a --gpu
+    // timing run into a software one for the rest of the page (the commit
+    // column would read like the software table's, with no error anywhere).
+    // paintStroke fences the buffer once (after the add clock) and the
+    // target once per clock; the pixel readbacks the scenarios do for stats
+    // and hashes all happen after that canvas's timing is over.
     const flushGpu = (ctx) => {
       ctx.getImageData(0, 0, 1, 1);
     };
@@ -241,7 +252,7 @@
         for (const point of slice) {
           if (buf.ensure(point.x, point.y, pad).overflow) {
             absorb();
-            prepareStrokeCommit(buf, null, fx);
+            prepareStrokeCommit(buf, renderer, fx, false); // overflow chunk, as App / opReplay bank it
             buf.commit(targetCtx, settings.opacity);
             if (mix) mix.markDirty(buf.bounds());
             buf.reset();

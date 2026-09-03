@@ -1,16 +1,16 @@
 {
-  "recordedAt": "2026-09-03T08:28:14.967Z",
+  "recordedAt": "2026-09-03T09:31:44.910Z",
   "engine": {
-    "src/utils/brushes.js": "21536a87a7cc",
-    "src/utils/brushSprites.js": "7d1dd4bf3b2c",
+    "src/utils/brushes.js": "9bc497acc2cd",
+    "src/utils/brushSprites.js": "15bf938d50e1",
     "src/utils/strokeBuffer.js": "b3e8a858e965",
     "src/utils/mixMap.js": "cdd825f94bfa",
     "src/utils/layers.js": "6fd71a09d9ce",
-    "src/utils/opReplay.js": "f3cbb8244531",
+    "src/utils/opReplay.js": "de0db1178c30",
     "src/utils/symmetry.js": "880d686d96e0",
     "src/utils/shapes.js": "2e35d02580f1"
   },
-  "fixture": "a8786ffb61fb",
+  "fixture": "9c903514656f",
   "fixtureSeed": "0x5eed0001",
   "canvas": {
     "width": 4000,
@@ -18,10 +18,10 @@
   },
   "groups": {
     "legacy-unseeded": {
-      "hash": "b84735a475ccdc398e99f1327d0a41c59e0077c9b3b5f51fb3347aaedc9f9e5b",
+      "hash": "0e6b18f9989abe002f92d5e9580ca68fc23f12aa64289d4b38a99e7384993c06",
       "deterministic": false,
       "machineBound": false,
-      "painted": 3294754,
+      "painted": 3295944,
       "ops": 720
     },
     "legacy-seeded": {
@@ -95,7 +95,7 @@
       "ops": 1
     },
     "v3-sprites": {
-      "hash": "bc6234cbeefaef4a87b87b6c34d2a6a2c54584d029236484f1222d46b4b40acd",
+      "hash": "d3e474e06e7fcbfc669e1c6d763e1c03c1c94c3e8bf7d29a7e9da54b91b7da15",
       "deterministic": true,
       "machineBound": false,
       "painted": 1992296,
@@ -109,21 +109,21 @@
       "ops": 45
     },
     "v3-water-glaze": {
-      "hash": "c5743b5b6e11d1e9d3606e538f900693ffb396478fbec84d5295e1150f67c83d",
+      "hash": "eb3a6eb1be37ddbc002605ccc165a54b42a73f83615e05bc935026b55afbbeef",
       "deterministic": true,
       "machineBound": false,
       "painted": 686447,
       "ops": 77
     },
     "v3-symmetry-wash": {
-      "hash": "e26375612c690d2a4fbcc88af9a586c4d07c4432c7123404cd2747227f0f65c2",
+      "hash": "b20cc6fab87e968785d298787480eb2414fd166272a1c03681f21ffcf160fad5",
       "deterministic": true,
       "machineBound": false,
       "painted": 233019,
       "ops": 16
     },
     "v3-overflow-wash": {
-      "hash": "bfae2a42e49791de9866c9d5ebd092d909fe97a3e9b398a26a32a5737656f7d5",
+      "hash": "facf775180ae68ea3cbf407243f6ed260831c0371a9679ba00f1e6111b8896fe",
       "deterministic": true,
       "machineBound": false,
       "painted": 261431,

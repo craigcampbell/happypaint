@@ -259,9 +259,13 @@ const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge"
 
 // Defer non-urgent work (thumbnail PNG encodes) off the stroke-commit path.
 // Safari has no requestIdleCallback; a short timeout is close enough there.
-const scheduleIdle = (callback) =>
+// The default 200 ms timeout keeps the deferred work timely on a busy page;
+// pass `options` without one for work that must WAIT for a real idle slot
+// (the sprite prebuild — forced through a timeout it would land inside a
+// stroke's first frames).
+const scheduleIdle = (callback, options = { timeout: 200 }) =>
   typeof window.requestIdleCallback === "function"
-    ? window.requestIdleCallback(callback, { timeout: 200 })
+    ? window.requestIdleCallback(callback, options)
     : window.setTimeout(callback, 32);
 const cancelIdle = (handle) => {
   if (typeof window.requestIdleCallback === "function") {
@@ -1297,25 +1301,49 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       mixMapRef.current?.invalidatePrefetch();
     }
   }, []);
-  // Studio mount: build the wet-mix mirror (born fully dirty) and the brush
-  // sprite atlases (Stage 2) in idle time, so neither is paid for on a first
-  // stroke. The IdleDeadline goes through to the prebuild so it builds one
-  // atlas per idle slice and re-schedules itself for the rest (undefined on
-  // the setTimeout fallback: one synchronous build). Released again on
-  // unmount / tab hidden (see the effects below).
+  // The brush sprite atlases (Stage 2) are built in idle time so no first
+  // stroke pays for them. The IdleDeadline goes through to the prebuild so
+  // it builds one piece per idle slice and re-schedules itself for the rest
+  // (undefined on the setTimeout fallback: one synchronous build), and the
+  // busy predicate makes it defer a slice while a pointer is down — the
+  // build must never land inside a stroke. No timeout on the first schedule
+  // either: forced through App's usual 200 ms it fired at mount, exactly
+  // when a kid's first stroke starts. Scheduled on mount and again whenever
+  // the tab comes back (release on hidden frees the atlases, and without a
+  // re-schedule the first dab of each family paid a synchronous lazy build).
+  const prebuildIdleRef = useRef(0);
+  const schedulePrebuild = useCallback(() => {
+    if (prebuildIdleRef.current) {
+      cancelIdle(prebuildIdleRef.current);
+    }
+    prebuildIdleRef.current = scheduleIdle((deadline) => {
+      prebuildIdleRef.current = 0;
+      prebuildBrushSprites(deadline, () => activePointerRef.current != null);
+    }, {});
+  }, []);
+  const cancelPrebuild = useCallback(() => {
+    if (prebuildIdleRef.current) {
+      cancelIdle(prebuildIdleRef.current);
+      prebuildIdleRef.current = 0;
+    }
+  }, []);
+  // Studio mount: build the wet-mix mirror (born fully dirty) and the sprite
+  // atlases in idle time. Released again on unmount / tab hidden (see the
+  // effects below).
   useEffect(() => {
-    const handle = scheduleIdle((deadline) => {
-      prebuildBrushSprites(deadline);
+    schedulePrebuild();
+    const handle = scheduleIdle(() => {
       scheduleMixPrefetch();
     });
     return () => {
       cancelIdle(handle);
+      cancelPrebuild();
       if (mixPrefetchRef.current) {
         cancelIdle(mixPrefetchRef.current);
         mixPrefetchRef.current = 0;
       }
     };
-  }, [scheduleMixPrefetch]);
+  }, [cancelPrebuild, schedulePrebuild, scheduleMixPrefetch]);
 
   useEffect(() => {
     const recipeSettings = activeBrushRecipe ? recipeToBrushSettings(activeBrushRecipe, { color: selectedColor }) : null;
@@ -3122,7 +3150,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               const copyPoint = symmetricPoints[copyIndex];
               const copyLast = symmetricLastPoints[copyIndex] || copyPoint;
               if (copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad).overflow) {
-                prepareStrokeCommit(copy.buf, null, copy.fx);
+                prepareStrokeCommit(copy.buf, copy.renderer, copy.fx, false); // overflow chunk: no end(), ink bbox restarts
                 copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
                 markMixDirty(stroke.layer, copy.buf.bounds());
                 copy.buf.reset();
@@ -3139,10 +3167,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               // The stroke outgrew the 2048² buffer cap: bank what we have into
               // the layer and restart the buffer here (a rare, visually-minor
               // opacity seam on giant strokes — intended). Commit passes (wet
-              // edge / impasto / grain) run per committed chunk; renderer = null
-              // keeps the dab walk state (residual/lastPoint) alive across the
-              // restart.
-              prepareStrokeCommit(stroke.buf, null, stroke.fx);
+              // edge / impasto / grain) run per committed chunk; final = false
+              // skips the renderer's end() so the dab walk state
+              // (residual/lastPoint) stays alive across the restart, and
+              // restarts its ink bbox with the buffer.
+              prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.fx, false);
               stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
               markMixDirty(stroke.layer, stroke.buf.bounds()); // overflow chunk landed on the layer
               stroke.buf.reset();
@@ -4108,9 +4137,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       }
     };
     const onVisibility = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      if (typeof document === "undefined") {
+        return;
+      }
+      if (document.visibilityState === "hidden") {
         reset();
+        cancelPrebuild(); // a pending first slice would rebuild what release frees
         releaseBrushSprites(); // backgrounded: give iOS its canvas memory back (rebuilt lazily)
+      } else if (document.visibilityState === "visible") {
+        schedulePrebuild(); // back in front: rebuild the atlases in idle time, not on the next dab
       }
     };
     window.addEventListener("blur", reset);
@@ -4123,7 +4158,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       window.removeEventListener("pointercancel", onWindowPointerEnd);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [commitLocalStroke, flushStrokeNet, renderDisplay]);
+  }, [cancelPrebuild, commitLocalStroke, flushStrokeNet, renderDisplay, schedulePrebuild]);
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
 
@@ -6054,9 +6089,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
               // Outgrew the 2048² cap: bank the buffer into the layer and
               // restart it here (rare, visually-minor opacity seam). Commit
-              // passes run per chunk; renderer = null keeps the dab walk
-              // state alive across the restart.
-              prepareStrokeCommit(entry.buf, null, entry.fx);
+              // passes run per chunk; final = false keeps the dab walk
+              // state alive across the restart (no end()) and restarts the
+              // renderer's ink bbox with the buffer.
+              prepareStrokeCommit(entry.buf, entry.renderer, entry.fx, false);
               entry.buf.commit(ctx, entry.opacity);
               if (isActiveFrame(frame)) {
                 markMixDirty(frame.layers[0], entry.buf.bounds());
@@ -6473,7 +6509,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           clearedFrames.forEach((frame) => touchFrame(frame.id));
           if (clearedFrames.some((frame) => isActiveFrame(frame))) {
             mixMapRef.current?.clear(); // layer 0 is blank — empty the wet-mix mirror
-            localStrokeRef.current?.buf.reset();
+            // The in-progress local stroke loses what it painted so far: drop
+            // the buffer(s) (a symmetry stroke keeps one per copy — `buf` is
+            // on the copies, not the shared entry) and the renderer's ink
+            // bbox with them, so the commit passes at pen-up cover only what
+            // gets painted from here on.
+            const local = localStrokeRef.current;
+            if (local) {
+              for (const entry of local.copies || [local]) {
+                entry.buf.reset();
+                entry.renderer?.resetInk();
+              }
+            }
             renderDisplay();
             refreshActiveThumbnail();
           }

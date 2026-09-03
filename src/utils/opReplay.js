@@ -128,9 +128,10 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
         if (entry.buf.ensure(point.x, point.y, entry.pad).overflow) {
           // Outgrew the 2048² cap: bank into the paper and restart (rare,
           // visually-minor opacity seam on giant strokes). Commit passes run
-          // per chunk; renderer = null keeps the dab walk state across the
-          // restart.
-          prepareStrokeCommit(entry.buf, null, entry.fx);
+          // per chunk; final = false keeps the dab walk state across the
+          // restart (no end()) and restarts the renderer's ink bbox with the
+          // buffer.
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.fx, false);
           entry.buf.commit(ctx, entry.opacity);
           mix.markDirty(entry.buf.bounds());
           entry.buf.reset();

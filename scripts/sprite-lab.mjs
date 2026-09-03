@@ -35,6 +35,7 @@ const DEFAULT_PORT = 5203; // 5175 = vite.config strictPort, 5199 = brush-lab
 const DEFAULT_OUT = "C:/Users/CRAIGC~1/AppData/Local/Temp/claude/C--Users-Craig-Campbell-Projects-happypaint/66293c84-59a3-4ed7-ad44-97f3771b84dc/scratchpad/sprites";
 const BUILD_MS_TARGET = 30; // desktop headless target from the spec
 const BUILD_MS_FAIL = 80; // headless timing is noisy; only a big miss fails
+const PIECE_MS_TARGET = 8; // one idle-prebuild piece (an atlas variant / the paper tile / the ring) on a desktop
 // Stage 2 made the wash anisotropic (a strong all-round ring tiled a stroke's
 // interior with cells / arcs): the rim pools only ACROSS the stroke, so the
 // ratio is measured on the lateral band (sprites.html runRim). The check
@@ -234,7 +235,7 @@ try {
   const pageErrors = [];
   // Page A: everything. `build` runs FIRST so it measures a cold prebuild.
   const pageA = await openLabPage(browser, pageErrors);
-  for (const kind of ["build", "hash", "alloc", "rim", "sheet", "strokes", "release"]) {
+  for (const kind of ["build", "hash", "alloc", "rim", "sheet", "strokes", "release", "paced"]) {
     const started = Date.now();
     let result;
     try {
@@ -254,9 +255,13 @@ try {
   }
   await pageA.context().close();
 
-  // Page B: a fresh page, atlases rebuilt from scratch, hashed again.
+  // Page B: a fresh page — the PACED prebuild first, so its per-piece times
+  // are COLD (page A's run is warm, after the synchronous build), then the
+  // atlases it assembled are hashed against page A's.
   const pageB = await openLabPage(browser, pageErrors);
   try {
+    const paced = await pageB.evaluate(() => window.lab.run("paced"));
+    report.pageB.paced = paced;
     const result = await pageB.evaluate(() => window.lab.run("hash"));
     report.pageB.hash = { hash: result.hash, bytes: result.bytes, perFamily: result.perFamily };
   } catch (error) {
@@ -326,6 +331,29 @@ if (a.release) {
 if (a.sheet && a.sheet.report && a.sheet.report.scratchOk !== true) {
   failures.push({ scenario: "sheet", error: "scratch canvases are not two distinct 256^2 singletons" });
 }
+for (const [label, p] of [["paced", a.paced], ["paced-B", report.pageB.paced]]) {
+  if (!p) continue;
+  // The paced prebuild (one piece per timed-out slot / several per idle
+  // slot) must assemble byte-identical atlases to the cold synchronous
+  // build, defer a busy slice without building, and build exactly one
+  // piece per forced slot. Piece times are reported, not gated (headless
+  // timing is noisy): PIECE_MS_TARGET flags one that would eat a frame.
+  if (hashA && p.forcedHash !== hashA) {
+    failures.push({ scenario: label, error: `forced-slot prebuild hashes ${p.forcedHash} ≠ cold build ${hashA}` });
+  }
+  if (hashA && p.slicedHash !== hashA) {
+    failures.push({ scenario: label, error: `idle-slice prebuild hashes ${p.slicedHash} ≠ cold build ${hashA}` });
+  }
+  if (!p.busyDeferred) {
+    failures.push({ scenario: label, error: "a busy slice built or allocated something instead of deferring" });
+  }
+  if (!p.onePiecePerForcedSlot) {
+    failures.push({ scenario: label, error: `${p.pieces} forced slots for 45 pieces — a timed-out slot must build exactly one piece` });
+  }
+  if (!p.cachedCallNoop) {
+    failures.push({ scenario: label, error: "a prebuild call after completion did work or re-scheduled" });
+  }
+}
 
 fs.writeFileSync(path.join(outDir, "sprite-lab-report.json"), JSON.stringify(report, null, 2));
 
@@ -356,6 +384,14 @@ if (a.strokes) {
 }
 if (a.release) {
   console.log(`RELEASE ${Object.entries(a.release).filter(([k]) => k !== "kind" && k !== "ms").map(([k, v]) => `${k}=${v}`).join(" ")}`);
+}
+for (const [label, p] of [["warm (page A)", a.paced], ["COLD (page B)", report.pageB.paced]]) {
+  if (!p) continue;
+  const flag = p.maxPieceMs <= PIECE_MS_TARGET ? "ok" : "SLOW";
+  console.log(`PACED  ${label}: forced slots: ${p.pieces} pieces, one per slot = ${p.onePiecePerForcedSlot}; max piece ${p.maxPieceMs} ms [${flag}, target <= ${PIECE_MS_TARGET}] (top 3: ${p.top3PieceMs.join(", ")}); sum ${p.sumPieceMs} ms; busy slice deferred = ${p.busyDeferred}; complete call no-op = ${p.cachedCallNoop}`);
+  console.log(`       per piece (ms): ${p.pieceMs.join(" ")}`);
+  console.log(`       idle slices (~24 ms budget each): ${p.slicedSlots} slots, ms per slot ${p.slicedSlotMs.join("/")}`);
+  console.log(`       hash forced ${p.forcedHash === hashA ? "IDENTICAL" : "DIFFERENT"} / sliced ${p.slicedHash === hashA ? "IDENTICAL" : "DIFFERENT"} to page A's cold synchronous build`);
 }
 console.log(`\nIMAGES: ${Object.keys(report.images).length} written to ${outDir}`);
 for (const [name, info] of Object.entries(report.images)) {
