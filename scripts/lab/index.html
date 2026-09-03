@@ -10,10 +10,14 @@
   server (open the console and call lab.runScenario({ kind: "contact" })).
 
   The page drives ONLY the engine's public exports (brushes.js, strokeBuffer.js,
-  mixMap.js, layers.js) and mirrors how App.jsx uses them — settings built with
-  getAuthoringDab, one point per addPoints call, prepareStrokeCommit + commit
-  at pen-up, markDirty on the mix map after every commit — so it keeps working
-  as the engine changes underneath it. No React, no app code.
+  mixMap.js, layers.js, opReplay.js) and mirrors how App.jsx uses them —
+  settings built with getAuthoringDab, one point per addPoints call,
+  prepareStrokeCommit + commit at pen-up, markDirty on the mix map after every
+  commit — so it keeps working as the engine changes underneath it. No React,
+  no app code. The `golden` scenario replays the frozen op fixture
+  (golden-ops.json) through opReplay.replayFrameOnto and hashes the pixels;
+  measurePenUpPop / flushGpu / hashCanvas are exported on window.lab for the
+  brush-engine stages that build on this baseline.
 -->
 <html lang="en">
 <head>
@@ -37,13 +41,14 @@
 
     let engine;
     try {
-      const [brushes, strokeBuffer, mixMap, layers] = await Promise.all([
+      const [brushes, strokeBuffer, mixMap, layers, opReplay] = await Promise.all([
         import("/src/utils/brushes.js"),
         import("/src/utils/strokeBuffer.js"),
         import("/src/utils/mixMap.js"),
         import("/src/utils/layers.js"),
+        import("/src/utils/opReplay.js"),
       ]);
-      engine = { ...brushes, ...strokeBuffer, ...mixMap, ...layers };
+      engine = { ...brushes, ...strokeBuffer, ...mixMap, ...layers, ...opReplay };
     } catch (error) {
       status.textContent = `engine import failed: ${error?.message || error}`;
       window.lab = { ready: false, error: String(error?.stack || error) };
@@ -60,6 +65,9 @@
       pointRand,
       createStrokeBuffer,
       createMixMap,
+      CANVAS_WIDTH,
+      CANVAS_HEIGHT,
+      replayFrameOnto,
     } = engine;
 
     // ---- Tile geometry ----------------------------------------------------
@@ -171,15 +179,31 @@
       return { proxy, counts };
     };
 
+    // Canvas 2D records draw calls and rasterises them lazily, so a clock
+    // stopped right after the last addPoints measures how fast Chrome can
+    // QUEUE work, not draw it. A 1x1 readback is the cheapest synchronous
+    // fence: it forces everything recorded on that canvas to land first.
+    const flushGpu = (ctx) => {
+      ctx.getImageData(0, 0, 1, 1);
+    };
+
     // Paint one stroke onto `targetCtx` the way App.jsx does: per-point
     // ensure() → addPoints (batched `batch` points at a time), overflow
     // banking, then prepareStrokeCommit + a single opacity commit. Legacy
     // brushes (no authoring dab, e.g. spray) go through drawBrushSegment per
     // segment, like the app's non-dab branch. Returns timing + op counts.
+    // Timing: addMs stops only after flushGpu on the buffer (where the dabs
+    // landed) AND the target (overflow banks), commitMs after a flush of the
+    // target — both are real raster time, not queue time.
+    // Hooks: `beforeCommit(buf, settings, fx)` runs after the last point and
+    // before prepareStrokeCommit (the pen-up-pop probe); `composite` is the
+    // commit's blend mode (default source-over, what every consumer uses
+    // today — later stages test multiply here).
     const paintStroke = (targetCtx, brushId, points, opts) => {
       const { settings, fx } = makeSettings(brushId, opts);
       const batch = opts.batch || 1;
       const mix = opts.mix || null;
+      const composite = opts.composite || "source-over";
       const buf = createStrokeBuffer();
       const renderer = fx ? makeStrokeRenderer(settings, mix ? mix.sample : undefined) : null;
       const drawSettings = { ...settings, opacity: 1 };
@@ -220,7 +244,7 @@
           if (buf.ensure(point.x, point.y, pad).overflow) {
             absorb();
             prepareStrokeCommit(buf, null, fx);
-            buf.commit(targetCtx, settings.opacity);
+            buf.commit(targetCtx, settings.opacity, composite);
             if (mix) mix.markDirty(buf.bounds());
             buf.reset();
             buf.ensure(point.x, point.y, pad);
@@ -235,15 +259,114 @@
           }
         }
       }
+      // Drain the queue before stopping the clock (raw ctx, so the counting
+      // Proxy never sees this readback as a draw-path getImageData).
+      if (buf.has()) flushGpu(buf.getCtx());
+      flushGpu(targetCtx);
       const t1 = performance.now();
       absorb();
+      if (opts.beforeCommit) opts.beforeCommit(buf, settings, fx);
+      const t1b = performance.now();
       prepareStrokeCommit(buf, renderer, fx);
-      buf.commit(targetCtx, settings.opacity);
+      buf.commit(targetCtx, settings.opacity, composite);
+      flushGpu(targetCtx);
       const t2 = performance.now();
       if (mix) mix.markDirty(buf.bounds());
       const bounds = buf.bounds();
       buf.dispose();
-      return { addMs: t1 - t0, commitMs: t2 - t1, counts: totals, bounds };
+      return { addMs: t1 - t0, commitMs: t2 - t1b, counts: totals, bounds };
+    };
+
+    // RGB-on-white bytes for a rect of an RGBA canvas (what the viewer sees;
+    // raw RGBA deltas blow up at low alpha — see comparePixels).
+    const onWhiteBytes = (ctx, rect) => {
+      const data = ctx.getImageData(rect.x, rect.y, rect.w, rect.h).data;
+      const out = new Uint8ClampedArray((data.length / 4) * 3);
+      for (let i = 0, o = 0; i < data.length; i += 4, o += 3) {
+        const a = data[i + 3] / 255;
+        out[o] = data[i] * a + 255 * (1 - a);
+        out[o + 1] = data[i + 1] * a + 255 * (1 - a);
+        out[o + 2] = data[i + 2] * a + 255 * (1 - a);
+      }
+      return out;
+    };
+
+    // Pen-up "pop": how much the committed stroke differs from what the live
+    // preview showed a frame earlier. The preview (App renderStrokeFrame /
+    // remote overlays) composites the raw buffer over the document at the
+    // stroke's opacity with `composite`; the commit first runs
+    // prepareStrokeCommit (wet edge / impasto / grain) inside the buffer, then
+    // buf.commit at the same opacity + composite. Measured on white over the
+    // buffer bbox: `meanDelta` = mean |Δ| / 255 over every RGB byte in the
+    // bbox (the spec's number, diluted by untouched paper), `meanDeltaStroke`
+    // = the same over pixels the stroke actually touched, plus the max and
+    // the fraction of stroke pixels that moved by more than 2/255. Same opts
+    // as paintStroke; the stroke is painted onto targetCtx as a side effect.
+    const measurePenUpPop = (targetCtx, brushId, points, opts = {}) => {
+      const composite = opts.composite || "source-over";
+      let before = null;
+      let preview = null;
+      let rect = null;
+      const r = paintStroke(targetCtx, brushId, points, {
+        ...opts,
+        composite,
+        beforeCommit: (buf, settings) => {
+          if (!buf.has()) return;
+          const b = buf.bounds();
+          const target = targetCtx.canvas;
+          const x = Math.max(0, b.x0);
+          const y = Math.max(0, b.y0);
+          rect = { x, y, w: Math.min(target.width, b.x0 + b.w) - x, h: Math.min(target.height, b.y0 + b.h) - y };
+          if (rect.w <= 0 || rect.h <= 0) {
+            rect = null;
+            return;
+          }
+          before = onWhiteBytes(targetCtx, rect);
+          // The preview frame: document so far + buffer at opacity/composite.
+          const snap = makeCanvas(rect.w, rect.h);
+          const sctx = snap.getContext("2d");
+          sctx.drawImage(target, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+          sctx.setTransform(1, 0, 0, 1, -rect.x, -rect.y); // world coords, like the display path
+          buf.commit(sctx, settings.opacity, composite);
+          sctx.setTransform(1, 0, 0, 1, 0, 0);
+          preview = onWhiteBytes(sctx, { x: 0, y: 0, w: rect.w, h: rect.h });
+          snap.width = 0;
+        },
+      });
+      const pop = { meanDelta: 0, meanDeltaStroke: 0, maxDelta: 0, changedFraction: 0, strokePixels: 0, bbox: rect };
+      if (!rect) {
+        return { ...r, pop };
+      }
+      const after = onWhiteBytes(targetCtx, rect);
+      let sum = 0;
+      let sumStroke = 0;
+      let strokePx = 0;
+      let changed = 0;
+      let max = 0;
+      for (let p = 0; p < before.length; p += 3) {
+        const d0 = Math.abs(preview[p] - after[p]);
+        const d1 = Math.abs(preview[p + 1] - after[p + 1]);
+        const d2 = Math.abs(preview[p + 2] - after[p + 2]);
+        const d = d0 + d1 + d2;
+        sum += d;
+        const dm = Math.max(d0, d1, d2);
+        if (dm > max) max = dm;
+        // Stroke pixel = the preview or the commit changed it vs the paper before.
+        if (
+          preview[p] !== before[p] || preview[p + 1] !== before[p + 1] || preview[p + 2] !== before[p + 2] ||
+          after[p] !== before[p] || after[p + 1] !== before[p + 1] || after[p + 2] !== before[p + 2]
+        ) {
+          strokePx += 1;
+          sumStroke += d;
+          if (dm > 2) changed += 1;
+        }
+      }
+      pop.meanDelta = +(sum / before.length / 255).toFixed(5);
+      pop.meanDeltaStroke = strokePx ? +(sumStroke / (strokePx * 3) / 255).toFixed(5) : 0;
+      pop.maxDelta = max;
+      pop.changedFraction = strokePx ? +(changed / strokePx).toFixed(4) : 0;
+      pop.strokePixels = strokePx;
+      return { ...r, pop };
     };
 
     // Composite a transparent work canvas onto white (the app's paper) for the
@@ -369,6 +492,9 @@
 
     // (a) STROKES: per brush, 3 tiles (sizes 12/32/80) stacked; blue S-curve
     // then a red mirrored S-curve crossing it, so overlap behaviour shows.
+    // Both strokes go through measurePenUpPop, so `penUpPop` records how far
+    // the commit lands from the live preview (the second stroke, over paint,
+    // is the realistic case; `worst` is the larger of the two).
     const scenarioStrokes = ({ brushes, sizes = [12, 32, 80] }) => {
       const images = [];
       const report = {};
@@ -381,15 +507,17 @@
         sizes.forEach((size, index) => {
           const work = makeCanvas(TILE_W, TILE_H);
           const ctx = work.getContext("2d");
-          const a = paintStroke(ctx, brushId, makeStroke(), { color: COLORS.blue, size, seed: SEED_A });
-          const b = paintStroke(ctx, brushId, makeStroke({ flip: true }), { color: COLORS.red, size, seed: SEED_B });
+          const a = measurePenUpPop(ctx, brushId, makeStroke(), { color: COLORS.blue, size, seed: SEED_A });
+          const b = measurePenUpPop(ctx, brushId, makeStroke({ flip: true }), { color: COLORS.red, size, seed: SEED_B });
           const stats = pixelStats(work);
+          const worst = a.pop.meanDeltaStroke >= b.pop.meanDeltaStroke ? a.pop : b.pop;
           report[brushId][size] = {
             coverage: +stats.coverage.toFixed(4),
             meanRgb: stats.meanRgb,
             meanAlpha: stats.meanAlpha,
             addMs: +(a.addMs + b.addMs).toFixed(2),
             commitMs: +(a.commitMs + b.commitMs).toFixed(2),
+            penUpPop: { first: a.pop, second: b.pop, worst },
           };
           sheetCtx.drawImage(work, 0, index * TILE_H);
           label(sheetCtx, `${brushId}  size ${size}`, 12, index * TILE_H + 10);
@@ -694,6 +822,83 @@
       return { images, report };
     };
 
+    // (g) GOLDEN: replay the frozen op fixture (scripts/lab/golden-ops.json,
+    // built by make-golden-ops.mjs) group by group through
+    // opReplay.replayFrameOnto — the film-export / spectator consumer, with
+    // its own fresh mix map and per-stroke buffers per call — onto ONE reused
+    // transparent 4000x2500 world canvas (replayFrameOnto clears it), and
+    // SHA-256 the full RGBA readback. Each group replays `runs` times so an
+    // intra-run wobble shows up as `stable: false` before anyone compares
+    // against golden.json. The runner does the comparing; this just hashes.
+    const hashCanvas = async (canvas) => {
+      const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+      let painted = 0;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 0) painted += 1;
+      }
+      const digest = await crypto.subtle.digest("SHA-256", data);
+      const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+      return { hex, painted };
+    };
+
+    const loadFixture = async () => {
+      const res = await fetch("/scripts/lab/golden-ops.json", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`golden-ops.json: HTTP ${res.status} — run node scripts/lab/make-golden-ops.mjs`);
+      }
+      return res.json();
+    };
+
+    const scenarioGolden = async ({ groups: wanted, fixture, runs = 2, previews = true }) => {
+      const data = fixture || (await loadFixture());
+      if (data.canvas.width !== CANVAS_WIDTH || data.canvas.height !== CANVAS_HEIGHT) {
+        throw new Error(`fixture canvas ${data.canvas.width}x${data.canvas.height} ≠ engine ${CANVAS_WIDTH}x${CANVAS_HEIGHT}`);
+      }
+      const images = [];
+      const report = {};
+      const world = makeCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+      for (const group of data.groups) {
+        if (wanted && wanted.length && !wanted.includes(group.name)) {
+          continue;
+        }
+        status.textContent = `golden: replaying ${group.name} (${group.ops.length} ops)…`;
+        const hashes = [];
+        let painted = 0;
+        let replayMs = 0;
+        for (let run = 0; run < runs; run += 1) {
+          const t0 = performance.now();
+          await replayFrameOnto(world, group.ops);
+          replayMs += performance.now() - t0;
+          const h = await hashCanvas(world);
+          hashes.push(h.hex);
+          painted = h.painted;
+        }
+        report[group.name] = {
+          hash: hashes[0],
+          hashes,
+          stable: hashes.every((h) => h === hashes[0]),
+          deterministic: group.deterministic !== false,
+          machineBound: !!group.machineBound,
+          note: group.note || "",
+          ops: group.ops.length,
+          painted,
+          replayMs: +(replayMs / runs).toFixed(1),
+        };
+        if (previews) {
+          // 1/4-scale on white for the eyeball — the hash is on the full canvas.
+          const sheet = makeCanvas(CANVAS_WIDTH / 4, CANVAS_HEIGHT / 4);
+          const sctx = sheet.getContext("2d");
+          sctx.fillStyle = "#ffffff";
+          sctx.fillRect(0, 0, sheet.width, sheet.height);
+          sctx.drawImage(world, 0, 0, sheet.width, sheet.height);
+          label(sctx, `golden ${group.name}  ${hashes[0].slice(0, 12)}${group.deterministic === false ? "  (nondeterministic)" : ""}`, 10, 8, 14);
+          emit(images, `golden-${group.name}.png`, sheet);
+        }
+      }
+      world.width = 0;
+      return { images, report, fixture: { schema: data.schema, seed: data.seed, canvas: data.canvas, groups: data.groups.map((g) => g.name) } };
+    };
+
     const SCENARIOS = {
       strokes: scenarioStrokes,
       mixing: scenarioMixing,
@@ -701,6 +906,7 @@
       determinism: scenarioDeterminism,
       timing: scenarioTiming,
       contact: scenarioContact,
+      golden: scenarioGolden,
     };
 
     // spec = { kind, brushes?: [ids], ...scenario options }. Returns
@@ -716,7 +922,7 @@
       // Yield once so the status paints before a long synchronous scenario.
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const t0 = performance.now();
-      const result = fn({ ...spec, brushes });
+      const result = await fn({ ...spec, brushes });
       const ms = performance.now() - t0;
       status.textContent = `${kind} done in ${ms.toFixed(0)} ms`;
       return { kind, brushes, ms: +ms.toFixed(1), ...result };
@@ -734,6 +940,10 @@
       makeStroke,
       makeSettings,
       paintStroke,
+      measurePenUpPop,
+      flushGpu,
+      hashCanvas,
+      loadFixture,
       runScenario,
     };
     status.textContent = `engine loaded — brushes: ${listBrushes().join(", ")}. Call lab.runScenario({ kind }) — kinds: ${Object.keys(SCENARIOS).join(", ")}.`;

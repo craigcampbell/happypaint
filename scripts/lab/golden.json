@@ -1,0 +1,97 @@
+{
+  "recordedAt": "2026-09-03T03:22:21.033Z",
+  "engine": {
+    "src/utils/brushes.js": "de56c9a6fcba",
+    "src/utils/strokeBuffer.js": "0b6206cd3d2d",
+    "src/utils/mixMap.js": "53b25af29a67",
+    "src/utils/layers.js": "6fd71a09d9ce",
+    "src/utils/opReplay.js": "e125e5d655eb",
+    "src/utils/symmetry.js": "880d686d96e0",
+    "src/utils/shapes.js": "2e35d02580f1"
+  },
+  "fixture": "117f13bda191",
+  "fixtureSeed": "0x5eed0001",
+  "canvas": {
+    "width": 4000,
+    "height": 2500
+  },
+  "groups": {
+    "legacy-unseeded": {
+      "hash": "1e9e50d05e9904093ac088f4430e2b815b26f4cc461640111f59cb4df37f40ef",
+      "deterministic": false,
+      "machineBound": false,
+      "painted": 3293586,
+      "ops": 720
+    },
+    "legacy-seeded": {
+      "hash": "70eb565a91284745e84ef3b29ced858c208838485b19fc5fa61ad268a03bbbca",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 3336722,
+      "ops": 720
+    },
+    "v2-catalog": {
+      "hash": "4dc61d844dda2b56f51ec8ca1c47e8fc965578e3fb1838aa8fa8f3cf3967a2bc",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 2079205,
+      "ops": 975
+    },
+    "v3-natural-dry": {
+      "hash": "b81db40c6a57c9657539e2bbbf75c7183473550245cbcafea511886ca6e0aeae",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 300498,
+      "ops": 195
+    },
+    "v3-natural-wet": {
+      "hash": "6ea0d6f9675175bb95674fc7dc863141ddd912d5f37297ed54e1523df2cdf962",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 490426,
+      "ops": 231
+    },
+    "smudge-legacy": {
+      "hash": "e55a4663eff22f3b0f92e70884ff144f325c3ba0eb7637d98bdfbcf0a1361115",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 4760000,
+      "ops": 135
+    },
+    "symmetry-quad": {
+      "hash": "aa849cbf38ee1458617d7b284ef20c1867a39e6bd2752db8a77c7e797f43a635",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 289473,
+      "ops": 33
+    },
+    "symmetry-radial8": {
+      "hash": "4a5cdd3ebae8e5e8f6d61d0e31a7be631af75362cd37c49668736126f22a9810",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 203701,
+      "ops": 16
+    },
+    "overflow": {
+      "hash": "5f8215893fd3257cafa6b0ec0716a933a542d79c71785ba958239cfeb03562d6",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 173909,
+      "ops": 118
+    },
+    "shapes": {
+      "hash": "2dd6a97804dd3d205b496da6886af620a8f2be10af09c7682bac33c3fb524415",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 1293271,
+      "ops": 6
+    },
+    "text": {
+      "hash": "2ca394a7db484171eaf6249f8baee3393d110926fa64d18efe96e466f9407b9e",
+      "deterministic": true,
+      "machineBound": true,
+      "painted": 181494,
+      "ops": 1
+    }
+  }
+}

@@ -4,14 +4,27 @@
 // headless Chromium (Playwright, same launch style as brush-parity-test.mjs),
 // runs every scenario through window.lab.runScenario, writes the PNGs + a
 // lab-report.json, tears vite down, and exits non-zero on ANY failure
-// (scenario throw, determinism mismatch, blank PNG). The page drives only the
-// engine's public exports, so this keeps working as the engine changes.
+// (scenario throw, determinism mismatch, blank PNG, golden hash mismatch,
+// static guard hit). The page drives only the engine's public exports, so
+// this keeps working as the engine changes.
 //
 //   node scripts/brush-lab.mjs [--out <dir>] [--brushes a,b,c] [--port 5199]
+//   node scripts/brush-lab.mjs --golden            # guard + golden replay vs golden.json only
+//   node scripts/brush-lab.mjs --golden-record     # guard + golden replay, REWRITE golden.json
+//   node scripts/brush-lab.mjs --guard             # static dab-path guard only (no browser)
 //   BASE=http://127.0.0.1:5175 node scripts/brush-lab.mjs   # reuse a running dev server
 //
+// Golden (Stage 0 baseline): scripts/lab/golden-ops.json is a frozen op
+// fixture (see scripts/lab/make-golden-ops.mjs); every group replays through
+// opReplay.replayFrameOnto onto a transparent 4000x2500 canvas and the SHA-256
+// of the pixels must equal scripts/lab/golden.json — proof that an engine
+// change did not repaint persisted history. Groups flagged
+// `deterministic: false` (legacy seedless ops roll Math.random) are hashed
+// for information and never gate. The default run verifies too when a
+// golden.json exists; `--groups a,b` narrows the replay.
+//
 // Outputs (in --out): strokes-<brush>.png, mixing-<brush>.png, smudge.png,
-// contact-sheet.png, lab-report.json.
+// contact-sheet.png, golden-<group>.png, lab-report.json.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -22,6 +35,10 @@ import { chromium } from "playwright";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LAB_PATH = "/scripts/lab/index.html";
+const GOLDEN_FILE = path.join(ROOT, "scripts/lab/golden.json");
+const FIXTURE_FILE = path.join(ROOT, "scripts/lab/golden-ops.json");
+// BRUSH_LAB_GUARD_FILE: point the guard at a scratch copy (self-test only).
+const DAB_PATH_FILE = process.env.BRUSH_LAB_GUARD_FILE || path.join(ROOT, "src/utils/brushes.js");
 const DEFAULT_PORT = 5199; // vite.config.js pins 5175 strictPort — stay off it
 // Default output: this session's scratchpad (override with --out).
 const DEFAULT_OUT = "C:/Users/CRAIGC~1/AppData/Local/Temp/claude/C--Users-Craig-Campbell-Projects-happypaint/66293c84-59a3-4ed7-ad44-97f3771b84dc/scratchpad/lab";
@@ -41,12 +58,130 @@ const argValue = (flag) => {
 };
 const outDir = path.resolve(argValue("--out") || DEFAULT_OUT);
 const brushFilter = (argValue("--brushes") || "").split(",").map((s) => s.trim()).filter(Boolean);
+const groupFilter = (argValue("--groups") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const port = Number(argValue("--port") || DEFAULT_PORT);
 const externalBase = process.env.BASE ? process.env.BASE.replace(/\/$/, "") : null;
+const mode = args.includes("--guard")
+  ? "guard"
+  : args.includes("--golden-record")
+    ? "golden-record"
+    : args.includes("--golden")
+      ? "golden"
+      : "full";
 
 function fail(message) {
   console.error(`brush-lab: ${message}`);
   process.exit(1);
+}
+
+// ---- Static guard: the per-dab hot path ----------------------------------------
+// Scans src/utils/brushes.js between `// DAB-PATH-BEGIN` and `// DAB-PATH-END`
+// (Stage 1 adds the markers around emitDab and friends) for calls that must
+// never run per dab: pixel readbacks, ctx.filter / shadowBlur, and any
+// allocation (canvas, image, typed array). Comments are stripped first so a
+// "never a getImageData here" note can't trip it; a trailing `// guard-ok`
+// exempts one line (e.g. a `shadowBlur = 0` reset). save/restore are only
+// warned about — the brief says "avoid when setTransform will do".
+const GUARD_FORBIDDEN = [
+  { id: "getImageData", re: /\bgetImageData\s*\(/ },
+  { id: "putImageData", re: /\bputImageData\s*\(/ },
+  { id: "createImageData", re: /\bcreateImageData\s*\(/ },
+  { id: "ctx.filter", re: /\.filter\s*=/ },
+  { id: "shadowBlur", re: /\bshadowBlur\b/ },
+  { id: "createElement", re: /\bcreateElement\s*\(/ },
+  { id: "getContext", re: /\bgetContext\s*\(/ },
+  { id: "new Image", re: /\bnew\s+Image\s*\(/ },
+  { id: "new ImageData", re: /\bnew\s+ImageData\s*\(/ },
+  { id: "new OffscreenCanvas", re: /\bnew\s+OffscreenCanvas\s*\(/ },
+  { id: "typed array", re: /\bnew\s+(?:Uint8(?:Clamped)?|Uint16|Uint32|Int8|Int16|Int32|Float32|Float64)Array\s*\(/ },
+  { id: "new Array", re: /\bnew\s+Array\s*\(/ },
+  { id: "toDataURL", re: /\btoDataURL\s*\(/ },
+];
+const GUARD_WARN = [
+  { id: "save/restore", re: /\.(?:save|restore)\s*\(\s*\)/ },
+  { id: "array literal", re: /=\s*\[[^\]]*\]/ },
+];
+
+// Blank out comments while keeping line numbers (block comments become the
+// same number of newlines). Good enough for this file: no `//` inside strings.
+function stripComments(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    if (source.startsWith("/*", i)) {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += source.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop;
+    } else if (source.startsWith("//", i)) {
+      const end = source.indexOf("\n", i);
+      const stop = end === -1 ? source.length : end;
+      out += " ".repeat(stop - i);
+      i = stop;
+    } else {
+      out += source[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function runGuard() {
+  const raw = fs.readFileSync(DAB_PATH_FILE, "utf8");
+  const rawLines = raw.split("\n");
+  const lines = stripComments(raw).split("\n");
+  const regions = [];
+  let open = null;
+  rawLines.forEach((line, index) => {
+    if (/^\s*\/\/\s*DAB-PATH-BEGIN\b/.test(line)) {
+      if (open != null) {
+        fail(`guard: nested DAB-PATH-BEGIN at ${DAB_PATH_FILE}:${index + 1}`);
+      }
+      open = index;
+    } else if (/^\s*\/\/\s*DAB-PATH-END\b/.test(line)) {
+      if (open == null) {
+        fail(`guard: DAB-PATH-END without BEGIN at ${DAB_PATH_FILE}:${index + 1}`);
+      }
+      regions.push({ from: open, to: index });
+      open = null;
+    }
+  });
+  if (open != null) {
+    fail(`guard: DAB-PATH-BEGIN at line ${open + 1} never closed`);
+  }
+  if (!regions.length) {
+    console.log("brush-lab: guard — no // DAB-PATH-BEGIN / // DAB-PATH-END markers in src/utils/brushes.js yet (Stage 1 adds them); passing");
+    return { ok: true, regions: 0, hits: [], warnings: [] };
+  }
+  const hits = [];
+  const warnings = [];
+  for (const region of regions) {
+    for (let i = region.from + 1; i < region.to; i += 1) {
+      if (/\/\/\s*guard-ok\b/.test(rawLines[i])) {
+        continue;
+      }
+      const code = lines[i];
+      for (const rule of GUARD_FORBIDDEN) {
+        if (rule.re.test(code)) {
+          hits.push({ line: i + 1, id: rule.id, code: rawLines[i].trim() });
+        }
+      }
+      for (const rule of GUARD_WARN) {
+        if (rule.re.test(code)) {
+          warnings.push({ line: i + 1, id: rule.id, code: rawLines[i].trim() });
+        }
+      }
+    }
+  }
+  const scanned = regions.reduce((n, r) => n + (r.to - r.from - 1), 0);
+  console.log(`brush-lab: guard — ${regions.length} DAB-PATH region(s), ${scanned} lines: ${hits.length} forbidden, ${warnings.length} warning(s)`);
+  for (const hit of hits) {
+    console.error(`  FORBIDDEN ${hit.id.padEnd(16)} brushes.js:${hit.line}  ${hit.code}`);
+  }
+  for (const warning of warnings) {
+    console.log(`  warn      ${warning.id.padEnd(16)} brushes.js:${warning.line}  ${warning.code}`);
+  }
+  return { ok: hits.length === 0, regions: regions.length, scanned, hits, warnings };
 }
 
 // ---- Vite dev server (child process) ----------------------------------------
@@ -114,7 +249,16 @@ function stopVite() {
 
 // ---- Helpers ------------------------------------------------------------------
 const sha1 = (file) => createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 12);
-const engineFiles = ["src/utils/brushes.js", "src/utils/strokeBuffer.js", "src/utils/mixMap.js", "src/utils/layers.js"];
+// Everything a golden replay passes through — recorded for provenance.
+const engineFiles = [
+  "src/utils/brushes.js",
+  "src/utils/strokeBuffer.js",
+  "src/utils/mixMap.js",
+  "src/utils/layers.js",
+  "src/utils/opReplay.js",
+  "src/utils/symmetry.js",
+  "src/utils/shapes.js",
+];
 
 const writeImage = (image) => {
   const match = /^data:image\/png;base64,(.+)$/.exec(image.dataUrl);
@@ -163,13 +307,102 @@ const pad = (value, width, right = false) => {
   return right ? s.padStart(width) : s.padEnd(width);
 };
 
+// ---- Golden compare / record -------------------------------------------------------
+// One row per group. Deterministic groups gate: an intra-run wobble
+// (`stable: false`) or a hash that differs from golden.json fails the run; a
+// fixture file that changed since the recording fails everything (the old
+// hashes say nothing about new ops). Nondeterministic groups print INFO.
+function readGolden() {
+  if (!fs.existsSync(GOLDEN_FILE)) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(GOLDEN_FILE, "utf8"));
+}
+
+function verifyGolden(result, { record, failures }) {
+  const fixtureSha = sha1(FIXTURE_FILE);
+  const engine = Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))]));
+  const golden = record ? null : readGolden();
+  const rows = [];
+  if (!record && !golden) {
+    console.log("brush-lab: golden — no scripts/lab/golden.json yet; hashes below are unverified (run --golden-record to baseline)");
+  }
+  if (golden && golden.fixture !== fixtureSha) {
+    failures.push({ scenario: "golden", error: `golden-ops.json (${fixtureSha}) is not the fixture golden.json was recorded from (${golden.fixture}) — re-record deliberately` });
+  }
+  for (const [name, g] of Object.entries(result.report)) {
+    let status;
+    let detail = "";
+    if (!g.deterministic) {
+      status = "INFO";
+      detail = g.stable ? "nondeterministic group came out stable this run" : "nondeterministic (as flagged)";
+    } else if (!g.stable) {
+      status = "FAIL";
+      detail = `unstable within one run: ${g.hashes.map((h) => h.slice(0, 12)).join(" ≠ ")}`;
+      failures.push({ scenario: "golden", error: `${name}: ${detail}` });
+    } else if (record || !golden) {
+      status = record ? "REC " : "NEW ";
+    } else if (!golden.groups[name]) {
+      status = "FAIL";
+      detail = "group missing from golden.json — re-record";
+      failures.push({ scenario: "golden", error: `${name}: ${detail}` });
+    } else if (golden.groups[name].hash === g.hash) {
+      status = "PASS";
+    } else {
+      status = "FAIL";
+      detail = `expected ${golden.groups[name].hash.slice(0, 12)} (painted ${golden.groups[name].painted})${g.machineBound ? " — machine-bound group (system fonts)" : ""}`;
+      failures.push({ scenario: "golden", error: `${name}: hash ${g.hash.slice(0, 12)} ≠ golden ${golden.groups[name].hash.slice(0, 12)}` });
+    }
+    rows.push({ status, name, g, detail });
+  }
+  if (record) {
+    const out = {
+      recordedAt: new Date().toISOString(),
+      engine,
+      fixture: fixtureSha,
+      fixtureSeed: result.fixture?.seed,
+      canvas: result.fixture?.canvas,
+      groups: Object.fromEntries(
+        Object.entries(result.report).map(([name, g]) => [name, { hash: g.hash, deterministic: g.deterministic, machineBound: g.machineBound, painted: g.painted, ops: g.ops }]),
+      ),
+    };
+    fs.writeFileSync(GOLDEN_FILE, `${JSON.stringify(out, null, 2)}\n`);
+  }
+  return { rows, golden, engine, fixtureSha };
+}
+
+function printGolden({ rows, golden, engine }) {
+  console.log("\nGOLDEN (opReplay.replayFrameOnto of scripts/lab/golden-ops.json onto a transparent 4000x2500 canvas; SHA-256 of the RGBA readback, 2 replays per group)");
+  console.log(`${pad("status", 6)} ${pad("group", 18)} ${pad("hash", 14)} ${pad("det", 4)} ${pad("stable", 6)} ${pad("ops", 5, true)} ${pad("painted", 9, true)} ${pad("ms/run", 7, true)}  note`);
+  for (const row of rows) {
+    const { g } = row;
+    console.log(`${pad(row.status, 6)} ${pad(row.name, 18)} ${pad(g.hash.slice(0, 12), 14)} ${pad(g.deterministic ? "yes" : "NO", 4)} ${pad(g.stable ? "yes" : "NO", 6)} ${pad(g.ops, 5, true)} ${pad(g.painted, 9, true)} ${pad(g.replayMs, 7, true)}  ${row.detail || g.note}`);
+  }
+  if (golden) {
+    const changed = engineFiles.filter((f) => golden.engine?.[f] && golden.engine[f] !== engine[f]);
+    console.log(changed.length
+      ? `  engine files changed since golden.json (${golden.recordedAt}): ${changed.join(", ")}`
+      : `  engine files unchanged since golden.json (${golden.recordedAt})`);
+  }
+}
+
 // ---- Main -----------------------------------------------------------------------
-fs.mkdirSync(outDir, { recursive: true });
 const failures = [];
+const guard = runGuard();
+if (!guard.ok) {
+  failures.push({ scenario: "guard", error: `${guard.hits.length} forbidden call(s) on the dab path — see above` });
+}
+if (mode === "guard") {
+  process.exit(guard.ok ? 0 : 1);
+}
+
+fs.mkdirSync(outDir, { recursive: true });
 const report = {
   generatedAt: new Date().toISOString(),
+  mode,
   engine: Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))])),
   brushFilter,
+  guard: { ok: guard.ok, regions: guard.regions, hits: guard.hits, warnings: guard.warnings },
   scenarios: {},
   images: {},
   failures,
@@ -179,6 +412,7 @@ const base = externalBase || (await startVite());
 console.log(`brush-lab: lab page at ${base}${LAB_PATH}`);
 console.log(`brush-lab: output → ${outDir}`);
 
+let goldenResult = null;
 const browser = await chromium.launch();
 try {
   const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
@@ -207,18 +441,24 @@ try {
   }
   console.log(`brush-lab: brushes = ${brushes.join(", ")}`);
 
-  const scenarios = [
-    { kind: "strokes" },
-    { kind: "mixing" },
-    { kind: "smudge" },
-    { kind: "determinism" },
-    { kind: "timing" },
-    { kind: "contact" },
-  ];
+  const goldenSpec = { kind: "golden", groups: groupFilter };
+  const scenarios = mode === "full"
+    ? [
+      { kind: "strokes" },
+      { kind: "mixing" },
+      { kind: "smudge" },
+      { kind: "determinism" },
+      { kind: "timing" },
+      { kind: "contact" },
+      goldenSpec,
+    ]
+    : [goldenSpec];
   for (const spec of scenarios) {
     const started = Date.now();
     let result;
     try {
+      // (page.evaluate has no timeout — the golden replay, 2 x 11 groups on a
+      // 40MB canvas, runs to completion.)
       result = await page.evaluate((s) => window.lab.runScenario(s), { ...spec, brushes: brushFilter });
     } catch (error) {
       failures.push({ scenario: spec.kind, error: String(error?.message || error) });
@@ -238,6 +478,10 @@ try {
     if (spec.kind === "determinism" && result.ok === false) {
       failures.push({ scenario: spec.kind, error: "determinism mismatch — see report.scenarios.determinism" });
     }
+    if (spec.kind === "golden") {
+      goldenResult = verifyGolden(result, { record: mode === "golden-record", failures });
+      report.golden = { file: GOLDEN_FILE, fixture: goldenResult.fixtureSha, recorded: mode === "golden-record", rows: goldenResult.rows.map((r) => ({ status: r.status.trim(), group: r.name, hash: r.g.hash, detail: r.detail })) };
+    }
     console.log(`brush-lab: ${spec.kind} done (${Date.now() - started} ms, ${(images || []).length} image(s))`);
   }
   if (pageErrors.length) {
@@ -253,11 +497,25 @@ fs.writeFileSync(path.join(outDir, "lab-report.json"), JSON.stringify(report, nu
 // ---- Console summary ---------------------------------------------------------
 const timing = report.scenarios.timing?.report || {};
 if (Object.keys(timing).length) {
-  console.log("\nTIMING (600-point stroke; addPoints median of 5, plain ctx; commit = prepareStrokeCommit + buf.commit)");
+  console.log("\nTIMING (600-point stroke; addPoints median of 5 on a plain ctx, clock stopped after a 1x1 getImageData fence on the buffer + target;");
+  console.log("  commit = prepareStrokeCommit + buf.commit + fence; ops from ONE separate untimed Proxy-counted run)");
   console.log(`${pad("brush", 11)} ${pad("size", 4, true)} ${pad("add ms", 8, true)} ${pad("commit", 7, true)} ${pad("ops", 7, true)} ${pad("ops/dab", 7, true)} ${pad("~dabs", 6, true)} ${pad("ms/100dab", 9, true)} ${pad("us/op", 6, true)} ${pad("save", 5, true)} ${pad("gID", 4, true)}`);
   for (const [brush, sizes] of Object.entries(timing)) {
     for (const [size, t] of Object.entries(sizes)) {
       console.log(`${pad(brush, 11)} ${pad(size, 4, true)} ${pad(t.addMsMedian, 8, true)} ${pad(t.commitMsMedian, 7, true)} ${pad(t.ops, 7, true)} ${pad(t.opsPerDab, 7, true)} ${pad(t.dabsEst, 6, true)} ${pad(t.msPer100Dabs ?? "-", 9, true)} ${pad(t.usPerOp ?? "-", 6, true)} ${pad(t.saveCalls, 5, true)} ${pad(t.getImageDataOnDrawPath, 4, true)}`);
+    }
+  }
+}
+const strokes = report.scenarios.strokes?.report || {};
+if (Object.keys(strokes).length) {
+  console.log("\nPEN-UP POP (preview = buffer over the paper at opacity, source-over; commit = prepareStrokeCommit passes + the same commit; on white over the buffer bbox;");
+  console.log("  bbox = mean |Δ|/255 over the whole bbox, stroke = over pixels the stroke touched, max = largest channel Δ, moved = stroke px with Δ > 2; worst of the 2 strokes per tile)");
+  console.log(`${pad("brush", 11)} ${pad("size", 4, true)} ${pad("bbox", 8, true)} ${pad("stroke", 8, true)} ${pad("max", 4, true)} ${pad("moved", 6, true)} ${pad("stroke px", 10, true)}`);
+  for (const [brush, sizes] of Object.entries(strokes)) {
+    for (const [size, s] of Object.entries(sizes)) {
+      const p = s.penUpPop?.worst;
+      if (!p) continue;
+      console.log(`${pad(brush, 11)} ${pad(size, 4, true)} ${pad(p.meanDelta, 8, true)} ${pad(p.meanDeltaStroke, 8, true)} ${pad(p.maxDelta, 4, true)} ${pad(p.changedFraction, 6, true)} ${pad(p.strokePixels, 10, true)}`);
     }
   }
 }
@@ -283,9 +541,15 @@ if (report.scenarios.smudge) {
   const s = report.scenarios.smudge.report;
   console.log(`\nSMUDGE boundary band mean before=[${s.boundaryMeanBefore}] after=[${s.boundaryMeanAfter}] blended columns@row150=${s.blendedColumnsAtRow150} (${s.pointsFed} points, ${s.ms} ms)`);
 }
+if (goldenResult) {
+  printGolden(goldenResult);
+  if (mode === "golden-record") {
+    console.log(`  recorded → ${GOLDEN_FILE}`);
+  }
+}
 console.log(`\nIMAGES: ${Object.keys(report.images).length} written to ${outDir}`);
 for (const [name, info] of Object.entries(report.images)) {
-  console.log(`  ${pad(name, 26)} ${info.width}x${info.height} non-white ${info.nonWhite} (${info.nonWhiteFraction}) ${info.blank ? "BLANK" : "ok"}`);
+  console.log(`  ${pad(name, 30)} ${info.width}x${info.height} non-white ${info.nonWhite} (${info.nonWhiteFraction}) ${info.blank ? "BLANK" : "ok"}`);
 }
 console.log(`report: ${path.join(outDir, "lab-report.json")}`);
 
