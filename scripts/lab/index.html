@@ -1,0 +1,742 @@
+<!doctype html>
+<!--
+  Brush lab — a headless harness page for the brush engine.
+
+  Served by the vite DEV server only (vite serves any .html under the project
+  root in dev; this folder is NOT part of the production build, and nothing here
+  is imported by src/). Driven by scripts/brush-lab.mjs through Playwright via
+  `window.lab.runScenario(spec)`; it also works by hand at
+  http://127.0.0.1:5175/scripts/lab/index.html with the normal `npm run dev`
+  server (open the console and call lab.runScenario({ kind: "contact" })).
+
+  The page drives ONLY the engine's public exports (brushes.js, strokeBuffer.js,
+  mixMap.js, layers.js) and mirrors how App.jsx uses them — settings built with
+  getAuthoringDab, one point per addPoints call, prepareStrokeCommit + commit
+  at pen-up, markDirty on the mix map after every commit — so it keeps working
+  as the engine changes underneath it. No React, no app code.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Brush lab</title>
+  <style>
+    body { margin: 0; padding: 12px; font: 13px/1.4 system-ui, sans-serif; background: #e9e6df; color: #222; }
+    #status { white-space: pre-wrap; margin-bottom: 8px; }
+    #out canvas { display: block; margin: 8px 0; box-shadow: 0 1px 4px rgba(0,0,0,.25); max-width: 100%; }
+    #out h3 { margin: 12px 0 2px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div id="status">loading engine…</div>
+  <div id="out"></div>
+  <script type="module">
+    // Dynamic imports from the vite dev server root, so a broken engine module
+    // surfaces as a loud page error (window.lab.error) instead of a hang.
+    const status = document.getElementById("status");
+    const out = document.getElementById("out");
+
+    let engine;
+    try {
+      const [brushes, strokeBuffer, mixMap, layers] = await Promise.all([
+        import("/src/utils/brushes.js"),
+        import("/src/utils/strokeBuffer.js"),
+        import("/src/utils/mixMap.js"),
+        import("/src/utils/layers.js"),
+      ]);
+      engine = { ...brushes, ...strokeBuffer, ...mixMap, ...layers };
+    } catch (error) {
+      status.textContent = `engine import failed: ${error?.message || error}`;
+      window.lab = { ready: false, error: String(error?.stack || error) };
+      throw error;
+    }
+
+    const {
+      brushCatalog,
+      getAuthoringDab,
+      makeStrokeRenderer,
+      makeSmudgeRenderer,
+      prepareStrokeCommit,
+      drawBrushSegment,
+      pointRand,
+      createStrokeBuffer,
+      createMixMap,
+    } = engine;
+
+    // ---- Tile geometry ----------------------------------------------------
+    const TILE_W = 900;
+    const TILE_H = 600;
+    const STROKE_POINTS = 600;
+    // Fixed seeds: every lab run rolls the same dice, so two runs (before /
+    // after an engine change) differ only by the engine.
+    const SEED_A = 0x1234abcd;
+    const SEED_B = 0x0badf00d;
+    const COLORS = { blue: "#2f6fd6", red: "#e04b2a", yellow: "#f9d423", mixBlue: "#1e88e5" };
+
+    const listBrushes = (filter) => {
+      const ids = brushCatalog.map((b) => b.id).filter((id) => id !== "eraser" && id !== "smudge");
+      if (!filter || !filter.length) {
+        return ids;
+      }
+      const wanted = new Set(filter);
+      return ids.filter((id) => wanted.has(id));
+    };
+
+    const makeCanvas = (w, h) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      return canvas;
+    };
+
+    const q4 = (v) => Math.round(v * 4) / 4; // the wire's quarter-px quantization
+
+    // Standard S-curve stroke: ~600 points across a tile-relative box, pressure
+    // 0.15 → 1 (at 55% of the path) → 0.3, quarter-px quantized coords, and a
+    // stationary duplicate point every 97 points (the pressure-only updates a
+    // real pointer stream produces — the engine must skip them without moving
+    // its walk state). `flip` mirrors the curve vertically so a second stroke
+    // crosses the first.
+    const makeStroke = ({ x0 = 0, y0 = 0, w = TILE_W, h = TILE_H, flip = false, count = STROKE_POINTS, pressure = null } = {}) => {
+      const points = [];
+      const left = x0 + w * 0.09;
+      const right = x0 + w * 0.91;
+      const midY = y0 + h * 0.5;
+      const amp = h * 0.27;
+      for (let i = 0; i < count; i += 1) {
+        const t = i / (count - 1);
+        const x = left + (right - left) * t;
+        const y = midY + (flip ? -1 : 1) * amp * Math.sin(t * Math.PI * 2);
+        let p;
+        if (pressure != null) {
+          p = pressure;
+        } else if (t < 0.55) {
+          p = 0.15 + 0.85 * (t / 0.55);
+        } else {
+          p = 1 - 0.7 * ((t - 0.55) / 0.45);
+        }
+        const point = { x: q4(x), y: q4(y), pressure: Math.round(p * 1000) / 1000 };
+        points.push(point);
+        if (i > 0 && i % 97 === 0) {
+          // stationary duplicate: same coords, slightly different pressure
+          points.push({ x: point.x, y: point.y, pressure: Math.min(1, point.pressure + 0.02) });
+        }
+      }
+      return points;
+    };
+
+    // Build settings exactly like App.jsx startStroke does for a fresh stroke.
+    const makeSettings = (brushId, { color, size, opacity = 1, seed, wet = false }) => {
+      const authoring = getAuthoringDab(brushId);
+      const settings = { brush: brushId, color, size, opacity, variation: 0, seed };
+      if (authoring) {
+        settings.v = authoring.version;
+        if (authoring.version >= 3) {
+          settings.dab = authoring.dab;
+        }
+        if (wet) {
+          settings.wet = true;
+        }
+      }
+      return { settings, fx: authoring ? authoring.dab : null };
+    };
+
+    // A ctx Proxy that counts the raster calls the engine makes — so timing
+    // can be normalised per dab / per op. Forwards everything else untouched.
+    const COUNTED = new Set(["fill", "stroke", "drawImage", "fillRect", "strokeRect", "fillText", "putImageData"]);
+    const makeCountingCtx = (ctx) => {
+      const counts = { ops: 0, fill: 0, stroke: 0, drawImage: 0, fillRect: 0, getImageData: 0, save: 0 };
+      const proxy = new Proxy(ctx, {
+        get(target, prop) {
+          const value = target[prop];
+          if (typeof value !== "function") {
+            return value;
+          }
+          return (...args) => {
+            if (COUNTED.has(prop)) {
+              counts.ops += 1;
+              counts[prop] = (counts[prop] || 0) + 1;
+            } else if (prop === "getImageData") {
+              counts.getImageData += 1;
+            } else if (prop === "save") {
+              counts.save += 1;
+            }
+            return value.apply(target, args);
+          };
+        },
+        set(target, prop, value) {
+          target[prop] = value;
+          return true;
+        },
+      });
+      return { proxy, counts };
+    };
+
+    // Paint one stroke onto `targetCtx` the way App.jsx does: per-point
+    // ensure() → addPoints (batched `batch` points at a time), overflow
+    // banking, then prepareStrokeCommit + a single opacity commit. Legacy
+    // brushes (no authoring dab, e.g. spray) go through drawBrushSegment per
+    // segment, like the app's non-dab branch. Returns timing + op counts.
+    const paintStroke = (targetCtx, brushId, points, opts) => {
+      const { settings, fx } = makeSettings(brushId, opts);
+      const batch = opts.batch || 1;
+      const mix = opts.mix || null;
+      const buf = createStrokeBuffer();
+      const renderer = fx ? makeStrokeRenderer(settings, mix ? mix.sample : undefined) : null;
+      const drawSettings = { ...settings, opacity: 1 };
+      const pad = settings.size * 3 + 40;
+      const totals = { ops: 0, fill: 0, stroke: 0, drawImage: 0, fillRect: 0, getImageData: 0, save: 0 };
+      // The buffer's ctx can be swapped by a grow (ensure) — re-wrap when it
+      // changes and fold the old counter into the totals.
+      let counter = null;
+      const absorb = () => {
+        if (counter) {
+          for (const key of Object.keys(totals)) totals[key] += counter.counts[key] || 0;
+          counter = null;
+        }
+      };
+      const drawCtx = () => {
+        const ctx = buf.getCtx();
+        if (!opts.count) {
+          return ctx;
+        }
+        if (!counter || counter.raw !== ctx) {
+          absorb();
+          counter = { raw: ctx, ...makeCountingCtx(ctx) };
+        }
+        return counter.proxy;
+      };
+      if (opts.preEnsure) {
+        // Size the buffer over the WHOLE stroke up front so no mid-stroke
+        // grow happens (a grow re-allocates and drawImage-copies the buffer,
+        // which is not pixel-lossless on AA edges — see the determinism
+        // scenario). Not the app's flow; used to isolate the renderer walk.
+        for (const point of points) buf.ensure(point.x, point.y, pad);
+      }
+      let lastPoint = points[0];
+      const t0 = performance.now();
+      for (let i = 0; i < points.length; i += batch) {
+        const slice = points.slice(i, i + batch);
+        for (const point of slice) {
+          if (buf.ensure(point.x, point.y, pad).overflow) {
+            absorb();
+            prepareStrokeCommit(buf, null, fx);
+            buf.commit(targetCtx, settings.opacity);
+            if (mix) mix.markDirty(buf.bounds());
+            buf.reset();
+            buf.ensure(point.x, point.y, pad);
+          }
+        }
+        if (renderer) {
+          renderer.addPoints(drawCtx(), slice);
+        } else {
+          for (const point of slice) {
+            drawBrushSegment(drawCtx(), lastPoint, point, drawSettings, pointRand(settings.seed, point.x, point.y));
+            lastPoint = point;
+          }
+        }
+      }
+      const t1 = performance.now();
+      absorb();
+      prepareStrokeCommit(buf, renderer, fx);
+      buf.commit(targetCtx, settings.opacity);
+      const t2 = performance.now();
+      if (mix) mix.markDirty(buf.bounds());
+      const bounds = buf.bounds();
+      buf.dispose();
+      return { addMs: t1 - t0, commitMs: t2 - t1, counts: totals, bounds };
+    };
+
+    // Composite a transparent work canvas onto white (the app's paper) for the
+    // saved PNGs. The engine always paints onto TRANSPARENT layer canvases, so
+    // work canvases stay transparent — a white fill would make the wet mix map
+    // pick up "white paint" everywhere.
+    const onWhite = (work) => {
+      const outCanvas = makeCanvas(work.width, work.height);
+      const ctx = outCanvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+      ctx.drawImage(work, 0, 0);
+      return outCanvas;
+    };
+
+    const label = (ctx, text, x, y, size = 16) => {
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.font = `600 ${size}px system-ui, sans-serif`;
+      ctx.fillStyle = "#222";
+      ctx.textBaseline = "top";
+      ctx.fillText(text, x, y);
+      ctx.restore();
+    };
+
+    // Pixel stats over an RGBA canvas (a one-off getImageData: this is the
+    // test, not the draw path). `rect` is optional {x, y, w, h}.
+    const pixelStats = (canvas, rect) => {
+      const ctx = canvas.getContext("2d");
+      const r = rect || { x: 0, y: 0, w: canvas.width, h: canvas.height };
+      const data = ctx.getImageData(r.x, r.y, r.w, r.h).data;
+      let painted = 0;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
+      let sa = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const a = data[i + 3];
+        if (a > 0) {
+          painted += 1;
+          sr += data[i];
+          sg += data[i + 1];
+          sb += data[i + 2];
+          sa += a;
+        }
+      }
+      const n = painted || 1;
+      return {
+        pixels: r.w * r.h,
+        painted,
+        coverage: painted / (r.w * r.h),
+        meanRgb: [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)],
+        meanAlpha: Math.round(sa / n),
+      };
+    };
+
+    // Mean RGB as seen on white paper (alpha-composited).
+    const meanOnWhite = (canvas, rect) => {
+      const ctx = canvas.getContext("2d");
+      const data = ctx.getImageData(rect.x, rect.y, rect.w, rect.h).data;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
+      const n = data.length / 4;
+      for (let i = 0; i < data.length; i += 4) {
+        const a = data[i + 3] / 255;
+        sr += data[i] * a + 255 * (1 - a);
+        sg += data[i + 1] * a + 255 * (1 - a);
+        sb += data[i + 2] * a + 255 * (1 - a);
+      }
+      return [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)];
+    };
+
+    // Exact RGBA comparison. `maxChannelDelta` is on the raw (un-premultiplied)
+    // bytes getImageData hands back, which blows tiny differences up at low
+    // alpha (alpha 2: premultiplied 1 vs 2 reads as 128 vs 255), so
+    // `maxVisibleDelta` also reports the largest difference as SEEN on white
+    // paper — the number that says whether a mismatch is cosmetic.
+    const comparePixels = (a, b) => {
+      const da = a.getContext("2d").getImageData(0, 0, a.width, a.height).data;
+      const db = b.getContext("2d").getImageData(0, 0, b.width, b.height).data;
+      let differing = 0;
+      let maxDelta = 0;
+      let maxVisible = 0;
+      for (let i = 0; i < da.length; i += 4) {
+        const d = Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2]), Math.abs(da[i + 3] - db[i + 3]));
+        if (d > 0) {
+          differing += 1;
+          if (d > maxDelta) maxDelta = d;
+          const aa = da[i + 3] / 255;
+          const ab = db[i + 3] / 255;
+          for (let c = 0; c < 3; c += 1) {
+            const va = da[i + c] * aa + 255 * (1 - aa);
+            const vb = db[i + c] * ab + 255 * (1 - ab);
+            const dv = Math.abs(va - vb);
+            if (dv > maxVisible) maxVisible = dv;
+          }
+        }
+      }
+      return { identical: differing === 0, differingPixels: differing, maxChannelDelta: maxDelta, maxVisibleDelta: Math.round(maxVisible) };
+    };
+
+    const median = (values) => {
+      const sorted = [...values].sort((a, b) => a - b);
+      const mid = sorted.length >> 1;
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    };
+
+    const show = (title, canvas) => {
+      const h3 = document.createElement("h3");
+      h3.textContent = title;
+      out.appendChild(h3);
+      out.appendChild(canvas);
+    };
+
+    const emit = (images, name, canvas) => {
+      images.push({ name, dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height });
+      show(name, canvas);
+    };
+
+    // ---- Scenarios ----------------------------------------------------------
+
+    // (a) STROKES: per brush, 3 tiles (sizes 12/32/80) stacked; blue S-curve
+    // then a red mirrored S-curve crossing it, so overlap behaviour shows.
+    const scenarioStrokes = ({ brushes, sizes = [12, 32, 80] }) => {
+      const images = [];
+      const report = {};
+      for (const brushId of brushes) {
+        const sheet = makeCanvas(TILE_W, TILE_H * sizes.length);
+        const sheetCtx = sheet.getContext("2d");
+        sheetCtx.fillStyle = "#ffffff";
+        sheetCtx.fillRect(0, 0, sheet.width, sheet.height);
+        report[brushId] = {};
+        sizes.forEach((size, index) => {
+          const work = makeCanvas(TILE_W, TILE_H);
+          const ctx = work.getContext("2d");
+          const a = paintStroke(ctx, brushId, makeStroke(), { color: COLORS.blue, size, seed: SEED_A });
+          const b = paintStroke(ctx, brushId, makeStroke({ flip: true }), { color: COLORS.red, size, seed: SEED_B });
+          const stats = pixelStats(work);
+          report[brushId][size] = {
+            coverage: +stats.coverage.toFixed(4),
+            meanRgb: stats.meanRgb,
+            meanAlpha: stats.meanAlpha,
+            addMs: +(a.addMs + b.addMs).toFixed(2),
+            commitMs: +(a.commitMs + b.commitMs).toFixed(2),
+          };
+          sheetCtx.drawImage(work, 0, index * TILE_H);
+          label(sheetCtx, `${brushId}  size ${size}`, 12, index * TILE_H + 10);
+          if (index > 0) {
+            sheetCtx.fillStyle = "#c9c4b8";
+            sheetCtx.fillRect(0, index * TILE_H, TILE_W, 1);
+          }
+          work.width = 0;
+        });
+        emit(images, `strokes-${brushId}.png`, sheet);
+      }
+      return { images, report };
+    };
+
+    // (b) MIXING: yellow over blue and blue over yellow, dry then wet, for the
+    // paint-like brushes. The second stroke runs ALONG the first for a stretch
+    // (not just across it) so wet pickup has something to drag. Overlap
+    // region = the shared stretch; its mean RGB on white is recorded.
+    const MIX_BRUSHES = ["watercolor", "oil", "acrylic", "gouache", "marker", "paint"];
+    const mixPath = ({ x0, y0, w, h, along }) => {
+      // `along`: a gentle wave across the tile (stroke A); otherwise a path
+      // that dives onto A's wave, rides it for the middle 40%, then leaves.
+      const points = [];
+      const count = STROKE_POINTS;
+      const waveY = (t) => y0 + h * 0.5 + h * 0.08 * Math.sin(t * Math.PI * 3);
+      for (let i = 0; i < count; i += 1) {
+        const t = i / (count - 1);
+        const x = x0 + w * (0.08 + 0.84 * t);
+        let y;
+        if (along) {
+          y = waveY(t);
+        } else if (t < 0.3) {
+          const u = t / 0.3;
+          y = y0 + h * 0.86 + (waveY(0.3) - (y0 + h * 0.86)) * (u * u);
+        } else if (t < 0.7) {
+          y = waveY(t);
+        } else {
+          const u = (t - 0.7) / 0.3;
+          y = waveY(0.7) + ((y0 + h * 0.12) - waveY(0.7)) * (u * u);
+        }
+        points.push({ x: q4(x), y: q4(y), pressure: 0.75 });
+      }
+      return points;
+    };
+    const scenarioMixing = ({ brushes, size = 40 }) => {
+      const wanted = MIX_BRUSHES.filter((id) => brushes.includes(id));
+      const images = [];
+      const report = {};
+      const tw = TILE_W / 2;
+      const th = TILE_H / 2;
+      for (const brushId of wanted) {
+        const work = makeCanvas(TILE_W, TILE_H);
+        const ctx = work.getContext("2d");
+        // One mix map over the whole work canvas — this canvas plays layer 0.
+        const mix = createMixMap(() => work, work.width, work.height);
+        report[brushId] = {};
+        const cells = [
+          { wet: false, first: "mixBlue", second: "yellow", key: "dry_yellowOverBlue" },
+          { wet: false, first: "yellow", second: "mixBlue", key: "dry_blueOverYellow" },
+          { wet: true, first: "mixBlue", second: "yellow", key: "wet_yellowOverBlue" },
+          { wet: true, first: "yellow", second: "mixBlue", key: "wet_blueOverYellow" },
+        ];
+        cells.forEach((cell, index) => {
+          const x0 = (index % 2) * tw;
+          const y0 = Math.floor(index / 2) * th;
+          const box = { x0, y0, w: tw, h: th };
+          paintStroke(ctx, brushId, mixPath({ ...box, along: true }), { color: COLORS[cell.first], size, seed: SEED_A, wet: cell.wet, mix });
+          paintStroke(ctx, brushId, mixPath({ ...box, along: false }), { color: COLORS[cell.second], size, seed: SEED_B, wet: cell.wet, mix });
+          // Overlap = the shared middle stretch, a band size/2 tall around
+          // the wave's centre line; firstOnly = a patch the second stroke
+          // never reaches, for reference.
+          const overlap = { x: Math.round(x0 + tw * 0.4), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.2), h: Math.round(size / 2) };
+          const firstOnly = { x: Math.round(x0 + tw * 0.1), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.08), h: Math.round(size / 2) };
+          report[brushId][cell.key] = {
+            overlapMeanRgb: meanOnWhite(work, overlap),
+            firstStrokeMeanRgb: meanOnWhite(work, firstOnly),
+            overlapRect: overlap,
+          };
+        });
+        const sheet = onWhite(work);
+        const sctx = sheet.getContext("2d");
+        cells.forEach((cell, index) => {
+          const x0 = (index % 2) * tw;
+          const y0 = Math.floor(index / 2) * th;
+          const name = (key) => (key === "mixBlue" ? "blue" : key);
+          label(sctx, `${brushId}  ${cell.wet ? "wet" : "dry"}  ${name(cell.second)} over ${name(cell.first)}`, x0 + 10, y0 + 8, 14);
+          const r = report[brushId][cell.key].overlapRect;
+          sctx.strokeStyle = "rgba(0,0,0,.35)";
+          sctx.lineWidth = 1;
+          sctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w, r.h);
+        });
+        sctx.fillStyle = "#c9c4b8";
+        sctx.fillRect(tw, 0, 1, TILE_H);
+        sctx.fillRect(0, th, TILE_W, 1);
+        emit(images, `mixing-${brushId}.png`, sheet);
+        work.width = 0;
+      }
+      return { images, report };
+    };
+
+    // (c) SMUDGE: hard red|blue boundary, then the smudge renderer dragged
+    // back and forth across it at pressure 0.7, size 40, strength 0.6. Smudge
+    // paints DIRECTLY on layer 0 (the work canvas), one point at a time.
+    const scenarioSmudge = ({ size = 40, strength = 0.6 }) => {
+      const work = makeCanvas(TILE_W, TILE_H);
+      const ctx = work.getContext("2d");
+      const boundary = TILE_W / 2;
+      ctx.fillStyle = COLORS.red;
+      ctx.fillRect(60, 60, boundary - 60, TILE_H - 120);
+      ctx.fillStyle = COLORS.mixBlue;
+      ctx.fillRect(boundary, 60, boundary - 60, TILE_H - 120);
+      const band = { x: boundary - 40, y: 100, w: 80, h: 400 };
+      const before = meanOnWhite(work, band);
+      const settings = { brush: "smudge", color: "#000000", size, opacity: 1, variation: 0, seed: SEED_A, strength };
+      const renderer = makeSmudgeRenderer(settings, work);
+      // Four horizontal passes at different heights, alternating direction,
+      // plus one diagonal — quarter-px quantized, one point per addPoints.
+      const passes = [
+        { y: 150, from: boundary - 160, to: boundary + 160 },
+        { y: 250, from: boundary + 160, to: boundary - 160 },
+        { y: 350, from: boundary - 160, to: boundary + 160 },
+        { y: 450, from: boundary + 160, to: boundary - 160 },
+      ];
+      const t0 = performance.now();
+      let fed = 0;
+      for (const pass of passes) {
+        for (let i = 0; i < 120; i += 1) {
+          const t = i / 119;
+          renderer.addPoints(ctx, [{ x: q4(pass.from + (pass.to - pass.from) * t), y: q4(pass.y + 6 * Math.sin(t * Math.PI * 4)), pressure: 0.7 }]);
+          fed += 1;
+        }
+      }
+      for (let i = 0; i < 160; i += 1) {
+        const t = i / 159;
+        renderer.addPoints(ctx, [{ x: q4(boundary - 200 + 400 * t), y: q4(520 - 440 * t), pressure: 0.7 }]);
+        fed += 1;
+      }
+      renderer.end(ctx);
+      const ms = performance.now() - t0;
+      // How wide is the blended band now? Count columns near the boundary
+      // (row 150 ± 2) whose colour is neither the pure red nor the pure blue.
+      const rowData = ctx.getImageData(boundary - 120, 148, 240, 5).data;
+      let blendedColumns = 0;
+      for (let col = 0; col < 240; col += 1) {
+        let r = 0;
+        let b = 0;
+        for (let row = 0; row < 5; row += 1) {
+          const i = (row * 240 + col) * 4;
+          r += rowData[i];
+          b += rowData[i + 2];
+        }
+        r /= 5;
+        b /= 5;
+        if (r > 40 && b > 40 && Math.abs(r - b) < 180) blendedColumns += 1;
+      }
+      const sheet = onWhite(work);
+      label(sheet.getContext("2d"), `smudge  size ${size}  strength ${strength}  pressure 0.7`, 12, 10);
+      const images = [];
+      emit(images, "smudge.png", sheet);
+      work.width = 0;
+      return {
+        images,
+        report: {
+          pointsFed: fed,
+          ms: +ms.toFixed(2),
+          boundaryMeanBefore: before,
+          boundaryMeanAfter: meanOnWhite(sheet, band),
+          blendedColumnsAtRow150: blendedColumns,
+        },
+      };
+    };
+
+    // (d) DETERMINISM: same seed + same points through two fresh renderers
+    // (the app's per-point flow) must be pixel-identical; so must batch-1 vs
+    // batch-7 point feeding. The batching pair is rendered into PRE-SIZED
+    // buffers so only the renderer walk varies: a mid-stroke buffer grow
+    // drawImage-copies the old canvas, and that copy is not pixel-lossless on
+    // anti-aliased edges (measured: a few px, tiny deltas), and batching moves
+    // the grow relative to the dabs. The app's consumers all ensure() per
+    // point, so they share one grow history — that lossiness is reported
+    // separately as `growCopy` (informational, not a failure).
+    const scenarioDeterminism = ({ brushes, size = 32 }) => {
+      const report = {};
+      let allIdentical = true;
+      for (const brushId of brushes) {
+        const render = (batch, preEnsure) => {
+          const work = makeCanvas(TILE_W, TILE_H);
+          paintStroke(work.getContext("2d"), brushId, makeStroke(), { color: COLORS.blue, size, seed: SEED_A, batch, preEnsure });
+          return work;
+        };
+        const one = render(1, false);
+        const two = render(1, false);
+        const onePre = render(1, true);
+        const sevenPre = render(7, true);
+        const rerun = comparePixels(one, two);
+        const batching = comparePixels(onePre, sevenPre);
+        const growCopy = comparePixels(one, onePre);
+        const painted = pixelStats(one).painted;
+        report[brushId] = {
+          rerunIdentical: rerun.identical,
+          batchIdentical: batching.identical,
+          rerun,
+          batching,
+          growCopy: { lossless: growCopy.identical, differingPixels: growCopy.differingPixels, maxChannelDelta: growCopy.maxChannelDelta, maxVisibleDelta: growCopy.maxVisibleDelta },
+          paintedPixels: painted,
+        };
+        if (!rerun.identical || !batching.identical || painted === 0) allIdentical = false;
+        [one, two, onePre, sevenPre].forEach((c) => { c.width = 0; });
+      }
+      return { images: [], report, ok: allIdentical };
+    };
+
+    // (e) TIMING: 5 runs of the 600-point stroke per brush/size (median ms,
+    // plain ctx — no Proxy in the timed runs), commit timed separately, then
+    // ONE extra counted run through the Proxy for raster-op totals. Dabs are
+    // estimated from ops ÷ ops-per-dab, where ops-per-dab is calibrated from
+    // isolated single-point taps (the engine contract: a first point stamps
+    // exactly one dab). Per-dab op counts vary for fleck shapes, so it's a
+    // mean, not an exact count.
+    const scenarioTiming = ({ brushes, sizes = [32, 80], runs = 5 }) => {
+      const report = {};
+      const points = makeStroke();
+      for (const brushId of brushes) {
+        report[brushId] = {};
+        for (const size of sizes) {
+          const addTimes = [];
+          const commitTimes = [];
+          for (let run = 0; run < runs; run += 1) {
+            const work = makeCanvas(TILE_W, TILE_H);
+            const r = paintStroke(work.getContext("2d"), brushId, points, { color: COLORS.blue, size, seed: SEED_A });
+            addTimes.push(r.addMs);
+            commitTimes.push(r.commitMs);
+            work.width = 0;
+          }
+          const work = makeCanvas(TILE_W, TILE_H);
+          const counted = paintStroke(work.getContext("2d"), brushId, points, { color: COLORS.blue, size, seed: SEED_A, count: true });
+          work.width = 0;
+          // Calibration: 24 isolated taps → mean ops per single dab.
+          let tapOps = 0;
+          const taps = 24;
+          for (let i = 0; i < taps; i += 1) {
+            const tapCanvas = makeCanvas(256, 256);
+            const r = paintStroke(tapCanvas.getContext("2d"), brushId, [{ x: 100 + i * 3.25, y: 90 + (i % 5) * 7.5, pressure: 0.6 }], { color: COLORS.blue, size, seed: SEED_A + i, count: true });
+            tapOps += r.counts.ops;
+            tapCanvas.width = 0;
+          }
+          const opsPerDab = tapOps / taps;
+          const dabsEst = opsPerDab > 0 ? counted.counts.ops / opsPerDab : 0;
+          const addMedian = median(addTimes);
+          report[brushId][size] = {
+            addMsMedian: +addMedian.toFixed(2),
+            addMsRuns: addTimes.map((v) => +v.toFixed(2)),
+            commitMsMedian: +median(commitTimes).toFixed(2),
+            ops: counted.counts.ops,
+            opsBreakdown: { fill: counted.counts.fill, stroke: counted.counts.stroke, drawImage: counted.counts.drawImage, fillRect: counted.counts.fillRect },
+            getImageDataOnDrawPath: counted.counts.getImageData,
+            saveCalls: counted.counts.save,
+            opsPerDab: +opsPerDab.toFixed(2),
+            dabsEst: Math.round(dabsEst),
+            msPer100Dabs: dabsEst > 0 ? +((addMedian / dabsEst) * 100).toFixed(3) : null,
+            usPerOp: counted.counts.ops > 0 ? +((addMedian * 1000) / counted.counts.ops).toFixed(2) : null,
+            countedRunMs: +counted.addMs.toFixed(2),
+          };
+        }
+      }
+      return { images: [], report };
+    };
+
+    // (f) CONTACT SHEET: one size-32 blue stroke per brush, name under it.
+    const scenarioContact = ({ brushes, size = 32 }) => {
+      const cellW = 300;
+      const cellH = 200;
+      const cols = Math.min(5, brushes.length);
+      const rows = Math.ceil(brushes.length / cols);
+      const sheet = makeCanvas(cellW * cols, cellH * rows);
+      const sctx = sheet.getContext("2d");
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      const work = makeCanvas(sheet.width, sheet.height);
+      const wctx = work.getContext("2d");
+      const report = {};
+      brushes.forEach((brushId, index) => {
+        const x0 = (index % cols) * cellW;
+        const y0 = Math.floor(index / cols) * cellH;
+        const box = { x0: x0 + 10, y0: y0 + 10, w: cellW - 20, h: cellH - 60 };
+        const r = paintStroke(wctx, brushId, makeStroke(box), { color: COLORS.blue, size, seed: SEED_A });
+        report[brushId] = { addMs: +r.addMs.toFixed(2), coverage: +pixelStats(work, { x: x0, y: y0, w: cellW, h: cellH }).coverage.toFixed(4) };
+      });
+      sctx.drawImage(work, 0, 0);
+      work.width = 0;
+      brushes.forEach((brushId, index) => {
+        const x0 = (index % cols) * cellW;
+        const y0 = Math.floor(index / cols) * cellH;
+        const entry = brushCatalog.find((b) => b.id === brushId);
+        label(sctx, `${entry?.name || brushId}  (${brushId})`, x0 + 12, y0 + cellH - 38, 15);
+        sctx.fillStyle = "#c9c4b8";
+        sctx.fillRect(x0, y0 + cellH - 1, cellW, 1);
+        sctx.fillRect(x0 + cellW - 1, y0, 1, cellH);
+      });
+      const images = [];
+      emit(images, "contact-sheet.png", sheet);
+      return { images, report };
+    };
+
+    const SCENARIOS = {
+      strokes: scenarioStrokes,
+      mixing: scenarioMixing,
+      smudge: scenarioSmudge,
+      determinism: scenarioDeterminism,
+      timing: scenarioTiming,
+      contact: scenarioContact,
+    };
+
+    // spec = { kind, brushes?: [ids], ...scenario options }. Returns
+    // { kind, brushes, ms, report, images: [{ name, dataUrl, width, height }], ok? }.
+    const runScenario = async (spec = {}) => {
+      const kind = spec.kind || "contact";
+      const fn = SCENARIOS[kind];
+      if (!fn) {
+        throw new Error(`unknown scenario "${kind}" (have: ${Object.keys(SCENARIOS).join(", ")})`);
+      }
+      const brushes = listBrushes(spec.brushes);
+      status.textContent = `running ${kind} for ${brushes.join(", ")}…`;
+      // Yield once so the status paints before a long synchronous scenario.
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const t0 = performance.now();
+      const result = fn({ ...spec, brushes });
+      const ms = performance.now() - t0;
+      status.textContent = `${kind} done in ${ms.toFixed(0)} ms`;
+      return { kind, brushes, ms: +ms.toFixed(1), ...result };
+    };
+
+    window.lab = {
+      ...engine,
+      ready: true,
+      error: null,
+      TILE_W,
+      TILE_H,
+      COLORS,
+      scenarios: Object.keys(SCENARIOS),
+      listBrushes,
+      makeStroke,
+      makeSettings,
+      paintStroke,
+      runScenario,
+    };
+    status.textContent = `engine loaded — brushes: ${listBrushes().join(", ")}. Call lab.runScenario({ kind }) — kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
+  </script>
+</body>
+</html>
