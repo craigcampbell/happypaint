@@ -434,8 +434,9 @@ const v3MarkerMultiplyGroup = () => {
 };
 
 // (j) Watercolor glaze: dry yellow over blue (the multiply commit is the
-// mixing), then wet blue over a v3 gouache under-layer (the legacy pickup
-// lerp with the dab's own pickup 0.35).
+// mixing), then wet blue over a v3 gouache under-layer (recorded in Stage 2
+// with the legacy pickup lerp; Stage 3 moved it to the pigment mixer before
+// anything shipped — the dab's own pickup 0.35 either way).
 const v3WaterGlazeGroup = () => {
   const cell = grid(2, 1, 80);
   const dry = cell(0);
@@ -461,6 +462,35 @@ const v3SymmetryWashGroup = () => {
 const v3OverflowWashGroup = () =>
   strokeOps("overflowWash", v3Settings("watercolor", { color: COLORS.mixBlue, size: 60, opacity: 0.9 }), longWave({ x: 300, y: 400 }, { x: 3700, y: 1900 }));
 
+// ---- Stage 3 group ------------------------------------------------------------------
+// (m) Pigment mixing: for each km brush (oil / acrylic / paint / gouache),
+// a DRY blue stroke crossing a v3 gouache yellow under-layer (the dry `mix`
+// samples the mix map), the same WET (pickup + drag), and CARRY RECOVERY —
+// a wet stroke through a fill-rect blue patch that runs on over blank paper
+// (the carried colour must fade back to the brush colour). Dabs embedded
+// via getAuthoringDab at generation time, like every Stage-2 group.
+const V3_KM_BRUSHES = ["oil", "acrylic", "paint", "gouache"];
+const v3PigmentGroup = () => {
+  const ops = [];
+  const cell = grid(3, V3_KM_BRUSHES.length, 30);
+  V3_KM_BRUSHES.forEach((brush, row) => {
+    const dry = cell(row * 3);
+    const wet = cell(row * 3 + 1);
+    const recover = cell(row * 3 + 2);
+    ops.push(...strokeOps(`km${brush}Under`, v3Settings("gouache", { color: COLORS.yellow, size: 56 }), wavePath(dry, true)));
+    ops.push(...strokeOps(`km${brush}Dry`, v3Settings(brush, { color: COLORS.mixBlue, size: 40 }), wavePath(dry, false)));
+    ops.push(...strokeOps(`km${brush}WetUnder`, v3Settings("gouache", { color: COLORS.yellow, size: 56 }), wavePath(wet, true)));
+    ops.push(...strokeOps(`km${brush}Wet`, v3Settings(brush, { color: COLORS.mixBlue, size: 40, wet: true }), wavePath(wet, false)));
+    // Recovery: patch over the left third of the cell, the stroke starts
+    // just inside it and leaves ~700 px of paper to relax over.
+    const patch = { x0: recover.x0 + recover.w * 0.05, x1: recover.x0 + recover.w * 0.33 };
+    const y = recover.y0 + recover.h / 2;
+    ops.push({ kind: "shape", tool: "rect", start: { x: Math.round(patch.x0), y: Math.round(y - 120) }, end: { x: Math.round(patch.x1), y: Math.round(y + 120) }, opts: { color: COLORS.mixBlue, size: 8, opacity: 1, fillShape: true } });
+    ops.push(...strokeOps(`km${brush}Recover`, v3Settings(brush, { color: COLORS.yellow, size: 40, wet: true }), flatLine(recover, y, { count: 160, pressure: 0.75 })));
+  });
+  return ops;
+};
+
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
   {
@@ -485,6 +515,8 @@ const groups = [
   { name: "v3-water-glaze", deterministic: true, note: "v:3 watercolor: dry yellow over blue (multiply glaze) + wet blue over a v3 gouache under-layer (pickup 0.35)", ops: v3WaterGlazeGroup() },
   { name: "v3-symmetry-wash", deterministic: true, note: "settings.symmetry quad (4 copies) of a v:3 watercolor stroke", ops: v3SymmetryWashGroup() },
   { name: "v3-overflow-wash", deterministic: true, note: "v:3 watercolor spanning > 2200 px so the 2048² buffer cap banks mid-stroke chunks", ops: v3OverflowWashGroup() },
+  // Stage 3 (appended).
+  { name: "v3-pigment", deterministic: true, note: "Stage 3: v:3 oil/acrylic/paint/gouache (mixModel km) dry + wet across a v3 gouache under-layer, and a wet carry-recovery stroke through a fill-rect patch onto blank paper", ops: v3PigmentGroup() },
 ];
 
 const fixture = {

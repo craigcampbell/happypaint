@@ -5,20 +5,25 @@
 // Part 1 (Stage 2, kept): the v2 dab marker at 50% keeps uniform opacity and
 // ±14-luma parity across local / live remote / history reload.
 // Part 2 (Stage 2, kept): every listed brush draws.
-// Part 3 (Brush Engine Stage 1 + 2): EXACT parity — v3 oil, acrylic (sprite
-// `loaded` + ribbons, source-over), watercolor (wash sprites + bleed /
-// wet-edge / granulation passes, MULTIPLY commit), marker (multiply) and
-// pencil (graphite sprites, multiply) strokes must each hash SHA-256-identical
-// on the display canvas (the stroke's screen rect) on the local client, a
-// live remote client, and that remote after a history reload. This is what
-// the local-exactness fix buys: the local dab walk is fed the very point
-// objects the wire carries, so the same engine on the same browser lands the
-// same bytes on all three. The display canvas is the doc drawn through the
-// page's view, so both pages must lay out identically: the host's header
-// carries more pills and wraps to a second row below ~1500px, which shifts
-// the canvas and changes the fit zoom — hence the wide viewport, and `layout`
-// reports the two geometries. The five strokes sit in two columns above and
-// below Part 1's X (its pixels would otherwise land inside a rect).
+// Part 3 (Brush Engine Stage 1 + 2 + 3): EXACT parity — v3 oil, acrylic
+// (sprite `loaded` + ribbons, source-over), watercolor (wash sprites + bleed /
+// wet-edge / granulation passes, MULTIPLY commit), marker (multiply), pencil
+// (graphite sprites, multiply), and a paint + gouache pigment-mixing rect
+// (Stage 3: three strokes in three colours crossing each other, so the dry
+// `mix` of the later strokes samples the mix map — exactness there proves
+// the idle prefetch / lazy flush equivalence end to end) must each hash
+// SHA-256-identical on the display canvas (the rect's screen area) on the
+// local client, a live remote client, and that remote after a history
+// reload. This is what the local-exactness fix buys: the local dab walk is
+// fed the very point objects the wire carries, so the same engine on the
+// same browser lands the same bytes on all three. The display canvas is the
+// doc drawn through the page's view, so both pages must lay out identically:
+// the host's header carries more pills and wraps to a second row below
+// ~1500px, which shifts the canvas and changes the fit zoom — hence the wide
+// viewport, and `layout` reports the two geometries. The rects sit in two
+// columns above and below Part 1's X (its pixels would otherwise land inside
+// a rect); every rect is hashed only after ALL of Part 3 has landed, so a
+// rect may hold several strokes.
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 const BASE = process.env.BASE || 'http://localhost:8787';
@@ -42,6 +47,13 @@ const pickBrush = (name) => p1.evaluate((n) => {
   if (chip) chip.click();
   return !!chip;
 }, name);
+// A palette swatch (aria-label "Use #rrggbb"); the starter palette has every
+// colour Part 3 asks for.
+const pickColor = (hex) => p1.evaluate((h) => {
+  const swatch = document.querySelector(`.color-swatch[aria-label="Use ${h}"]`);
+  if (swatch) swatch.click();
+  return !!swatch;
+}, hex);
 
 const r = await p1.evaluate(() => { const e = document.querySelector('.overlay-canvas').getBoundingClientRect(); return { x: e.x, y: e.y, w: e.width, h: e.height }; });
 const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
@@ -94,31 +106,58 @@ const sha = (bytes) => createHash('sha256').update(Buffer.from(bytes)).digest('h
 const exact = {};
 // Rows at cy ± 200 / ± 330 keep every rect clear of Part 1's X (|dy| <= ~132);
 // two 400-px columns per row, 120 px apart, each rect holding only its own
-// stroke (± 40 sine + brush radius + the watercolor bleed stay inside ± 60).
+// strokes (± 40 sine + brush radius + the watercolor bleed stay inside ± 60).
+// A rect lists its strokes in draw order: brush, optional palette colour
+// (default: whatever is selected), `flip` mirrors the sine so it crosses the
+// previous stroke, `line` draws it straight through the middle.
 const v3 = [
-  { name: 'Oil', y: cy - 330, x0: cx - 460 },
-  { name: 'Acrylic', y: cy - 330, x0: cx + 60 },
-  { name: 'Watercolor', y: cy - 200, x0: cx - 460 },
-  { name: 'Marker', y: cy - 200, x0: cx + 60 },
-  { name: 'Pencil', y: cy + 200, x0: cx - 460 },
+  { name: 'Oil', y: cy - 330, x0: cx - 460, strokes: [{ brush: 'Oil' }] },
+  { name: 'Acrylic', y: cy - 330, x0: cx + 60, strokes: [{ brush: 'Acrylic' }] },
+  { name: 'Watercolor', y: cy - 200, x0: cx - 460, strokes: [{ brush: 'Watercolor' }] },
+  { name: 'Marker', y: cy - 200, x0: cx + 60, strokes: [{ brush: 'Marker' }] },
+  { name: 'Pencil', y: cy + 200, x0: cx - 460, strokes: [{ brush: 'Pencil' }] },
+  // Stage 3: blue gouache, yellow paint crossing it (paint's dry `mix`
+  // samples the gouache), red gouache straight through both (gouache's dry
+  // `mix` samples both) — three km strokes in one rect.
+  {
+    name: 'PaintGouache',
+    y: cy + 200,
+    x0: cx + 60,
+    strokes: [
+      { brush: 'Gouache', color: '#1e88e5' },
+      { brush: 'Paint', color: '#fbd400', flip: true },
+      { brush: 'Gouache', color: '#e53935', line: true },
+    ],
+  },
 ];
-for (const { name, y, x0 } of v3) {
-  const ok = await pickBrush(name);
-  if (!ok) { exact[name] = 'chip-not-found'; continue; }
-  await p1.waitForTimeout(150);
-  await p1.mouse.move(x0, y); await p1.mouse.down();
-  for (let t = 0; t <= 1.001; t += 0.04) { await p1.mouse.move(x0 + 400 * t, y + 40 * Math.sin(t * 7), { steps: 3 }); await p1.waitForTimeout(9); }
-  await p1.mouse.up(); await p1.waitForTimeout(1600);
-  await p1.mouse.move(cx, cy + 380); await p1.waitForTimeout(300); // park the pointer off the rect
-  const rect = { x: x0 - 70, y: y - 60, w: 540, h: 120 };
-  const local = await hashRect(p1, rect);
-  const live = await hashRect(p2, rect);
-  exact[name] = {
-    rect,
-    painted: { local: local.painted, live: live.painted },
-    local: sha(local.bytes),
-    live: sha(live.bytes),
-  };
+for (const spec of v3) {
+  const { x0, y } = spec;
+  for (const stroke of spec.strokes) {
+    if (stroke.color) {
+      const okColor = await pickColor(stroke.color);
+      if (!okColor) { exact[spec.name] = `swatch-not-found ${stroke.color}`; break; }
+      await p1.waitForTimeout(100);
+    }
+    const ok = await pickBrush(stroke.brush);
+    if (!ok) { exact[spec.name] = 'chip-not-found'; break; }
+    await p1.waitForTimeout(150);
+    const amp = stroke.line ? 0 : stroke.flip ? -40 : 40;
+    await p1.mouse.move(x0, y); await p1.mouse.down();
+    for (let t = 0; t <= 1.001; t += 0.04) { await p1.mouse.move(x0 + 400 * t, y + amp * Math.sin(t * 7), { steps: 3 }); await p1.waitForTimeout(9); }
+    await p1.mouse.up(); await p1.waitForTimeout(1600);
+  }
+  if (typeof exact[spec.name] === 'string') continue;
+  exact[spec.name] = { rect: { x: x0 - 70, y: y - 60, w: 540, h: 120 } };
+}
+await p1.mouse.move(cx, cy + 380); await p1.waitForTimeout(600); // park the pointer off every rect
+for (const { name } of v3) {
+  const e = exact[name];
+  if (!e || typeof e !== 'object') continue;
+  const local = await hashRect(p1, e.rect);
+  const live = await hashRect(p2, e.rect);
+  e.painted = { local: local.painted, live: live.painted };
+  e.local = sha(local.bytes);
+  e.live = sha(live.bytes);
 }
 await p2.reload({ waitUntil: 'networkidle' }); await p2.waitForTimeout(2500);
 for (const { name } of v3) {

@@ -472,6 +472,36 @@
       return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     };
 
+    // HSL hue (degrees, NaN for grey) + saturation of an RGB triple: the
+    // mixing gate's units ("green, not grey").
+    const hueSat = ([r, g, b]) => {
+      r /= 255;
+      g /= 255;
+      b /= 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      const l = (max + min) / 2;
+      if (d === 0) return { hue: NaN, sat: 0, luma: +l.toFixed(3) };
+      const sat = d / (1 - Math.abs(2 * l - 1));
+      let h;
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+      if (h < 0) h += 360;
+      return { hue: +h.toFixed(1), sat: +sat.toFixed(3), luma: +l.toFixed(3) };
+    };
+    const rgbDistance = (a, b) => Math.round(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+
+    // Brushes whose NEXT stroke mixes pigment (Stage 3): the authoring dab
+    // says mixModel "km" and has a dry mix or a wet pickup to sample with.
+    const kmParams = (brushId) => {
+      const dab = getAuthoringDab(brushId)?.dab;
+      if (!dab || dab.mixModel !== "km") return null;
+      return { dry: (dab.mix || 0) > 0, wet: (dab.pickup || 0) > 0 };
+    };
+
     const show = (title, canvas) => {
       const h3 = document.createElement("h3");
       h3.textContent = title;
@@ -531,8 +561,25 @@
     // (b) MIXING: yellow over blue and blue over yellow, dry then wet, for the
     // paint-like brushes. The second stroke runs ALONG the first for a stretch
     // (not just across it) so wet pickup has something to drag. Overlap
-    // region = the shared stretch; its mean RGB on white is recorded.
+    // region = the shared stretch; its mean RGB on white is recorded, with
+    // its HSL hue / saturation — the Stage-3 gate:
+    //   km brushes (oil / acrylic / paint / gouache): yellow over blue reads
+    //     GREEN dry AND wet — hue 70..170°, saturation >= 0.2 (not grey);
+    //   watercolor: dry mixing is the multiply glaze (mix 0) — hue 70..170°
+    //     (its saturation floor is lower: a thin wash on white is pale);
+    //   sample-free brushes (marker, ink, pencil, crayon, glow, spray): a
+    //     stroke pair with a mix map — dry or flagged wet — hashes identical
+    //     to one without (they never sample, so Stage 3 can't touch them).
+    // Plus CARRY RECOVERY (km brushes with a wet pickup): a wet yellow stroke
+    // crosses a blue patch, then runs 300 px on over blank paper — the mean
+    // colour of its last 20% must be closer to the brush colour than to blue
+    // (the carried colour fades out; the legacy lerp never recovered).
     const MIX_BRUSHES = ["watercolor", "oil", "acrylic", "gouache", "marker", "paint"];
+    const MIX_HUE = [70, 170];
+    const MIX_SAT = 0.2;
+    const WASH_SAT = 0.08;
+    const RECOVERY_PATCH = { x: 60, w: 200 }; // the blue patch, in tile px
+    const RECOVERY_TAIL = 300; // px of blank paper after the patch
     const mixPath = ({ x0, y0, w, h, along }) => {
       // `along`: a gentle wave across the tile (stroke A); otherwise a path
       // that dives onto A's wave, rides it for the middle 40%, then leaves.
@@ -562,9 +609,42 @@
       const wanted = MIX_BRUSHES.filter((id) => brushes.includes(id));
       const images = [];
       const report = {};
+      const checks = [];
+      const check = (brushId, name, pass, detail) => {
+        checks.push({ brush: brushId, name, pass, detail });
+        return pass;
+      };
       const tw = TILE_W / 2;
       const th = TILE_H / 2;
+      const inHue = (hs) => hs.hue >= MIX_HUE[0] && hs.hue <= MIX_HUE[1];
+      // Sample-free brushes: the same stroke pair with and without a mix map
+      // (dry, and flagged wet) must hash identical. Every brush in the run
+      // without km params is checked — not just the mixing tiles'.
+      const sampleFree = {};
+      for (const brushId of brushes) {
+        if (kmParams(brushId)) continue;
+        const render = (withMap, wet) => {
+          const work = makeCanvas(tw, th);
+          const ctx = work.getContext("2d");
+          const mix = withMap ? createMixMap(() => work, work.width, work.height) : null;
+          const box = { x0: 0, y0: 0, w: tw, h: th };
+          paintStroke(ctx, brushId, mixPath({ ...box, along: true }), { color: COLORS.mixBlue, size, seed: SEED_A, wet, mix });
+          paintStroke(ctx, brushId, mixPath({ ...box, along: false }), { color: COLORS.yellow, size, seed: SEED_B, wet, mix });
+          return work;
+        };
+        const plain = render(false, false);
+        const dryMap = render(true, false);
+        const wetMap = render(true, true);
+        const dry = comparePixels(plain, dryMap);
+        const wet = comparePixels(plain, wetMap);
+        const overlap = { x: Math.round(tw * 0.4), y: Math.round(th * 0.5 - size / 4), w: Math.round(tw * 0.2), h: Math.round(size / 2) };
+        const mean = meanOnWhite(plain, overlap);
+        sampleFree[brushId] = { overlapMeanRgb: mean, ...hueSat(mean), dryIdentical: dry.identical, wetIdentical: wet.identical, dryDiff: dry.differingPixels, wetDiff: wet.differingPixels };
+        check(brushId, "sampleFree", dry.identical && wet.identical, `a mix map changes a sample-free brush (dry diff ${dry.differingPixels}px, wet diff ${wet.differingPixels}px)`);
+        [plain, dryMap, wetMap].forEach((c) => { c.width = 0; });
+      }
       for (const brushId of wanted) {
+        const km = kmParams(brushId);
         const work = makeCanvas(TILE_W, TILE_H);
         const ctx = work.getContext("2d");
         // One mix map over the whole work canvas — this canvas plays layer 0.
@@ -587,14 +667,76 @@
           // never reaches, for reference.
           const overlap = { x: Math.round(x0 + tw * 0.4), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.2), h: Math.round(size / 2) };
           const firstOnly = { x: Math.round(x0 + tw * 0.1), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.08), h: Math.round(size / 2) };
+          const overlapMeanRgb = meanOnWhite(work, overlap);
+          const hs = hueSat(overlapMeanRgb);
           report[brushId][cell.key] = {
-            overlapMeanRgb: meanOnWhite(work, overlap),
+            overlapMeanRgb,
+            ...hs,
             firstStrokeMeanRgb: meanOnWhite(work, firstOnly),
             overlapRect: overlap,
           };
+          if (cell.key === "dry_yellowOverBlue" || cell.key === "wet_yellowOverBlue") {
+            // The gate: yellow over blue reads green. km brushes dry via
+            // `mix`, wet via `pickup`; watercolor dry via the multiply glaze.
+            const gated = brushId === "watercolor" ? cell.key === "dry_yellowOverBlue" : !!km && (cell.wet ? km.wet : km.dry);
+            if (gated) {
+              const satFloor = brushId === "watercolor" ? WASH_SAT : MIX_SAT;
+              check(brushId, cell.key, inHue(hs) && hs.sat >= satFloor, `overlap [${overlapMeanRgb}] hue ${hs.hue} sat ${hs.sat} (want hue ${MIX_HUE[0]}..${MIX_HUE[1]}, sat >= ${satFloor})`);
+            }
+          }
         });
-        const sheet = onWhite(work);
+        // CARRY RECOVERY strip (km brushes with a wet pickup): blue patch,
+        // wet yellow stroke through it and RECOVERY_TAIL px beyond.
+        let recovery = null;
+        let strip = null;
+        if (km && km.wet) {
+          strip = makeCanvas(TILE_W, th);
+          const stripCtx = strip.getContext("2d");
+          const y = th / 2;
+          stripCtx.fillStyle = COLORS.mixBlue;
+          stripCtx.fillRect(RECOVERY_PATCH.x, y - 100, RECOVERY_PATCH.w, 200);
+          const patchEnd = RECOVERY_PATCH.x + RECOVERY_PATCH.w;
+          const x1 = patchEnd + RECOVERY_TAIL;
+          const points = [];
+          for (let i = 0; i < STROKE_POINTS; i += 1) {
+            const t = i / (STROKE_POINTS - 1);
+            points.push({ x: q4(40 + (x1 - 40) * t), y: q4(y), pressure: 0.75 });
+          }
+          const stripMix = createMixMap(() => strip, strip.width, strip.height);
+          paintStroke(stripCtx, brushId, points, { color: COLORS.yellow, size, seed: SEED_A, wet: true, mix: stripMix });
+          const band = (x, w) => ({ x: Math.round(x), y: Math.round(y - size / 4), w: Math.round(w), h: Math.round(size / 2) });
+          const tailStart = x1 - RECOVERY_TAIL * 0.2;
+          const last = meanOnWhite(strip, band(tailStart, x1 - tailStart - 4));
+          const onPatch = meanOnWhite(strip, band(RECOVERY_PATCH.x + 60, RECOVERY_PATCH.w - 80));
+          const justAfter = meanOnWhite(strip, band(patchEnd + 8, 40));
+          const yellow = [249, 212, 35];
+          const blue = [30, 136, 229];
+          recovery = {
+            onPatchMeanRgb: onPatch,
+            onPatch: hueSat(onPatch),
+            justAfterMeanRgb: justAfter,
+            lastFifthMeanRgb: last,
+            lastFifth: hueSat(last),
+            distanceToBrush: rgbDistance(last, yellow),
+            distanceToBlue: rgbDistance(last, blue),
+            tailPx: RECOVERY_TAIL,
+          };
+          recovery.recovered = recovery.distanceToBrush < recovery.distanceToBlue;
+          check(brushId, "carryRecovery", recovery.recovered, `last 20% of a ${RECOVERY_TAIL}px tail [${last}] is ${recovery.distanceToBrush} from the brush colour, ${recovery.distanceToBlue} from blue`);
+          report[brushId].recovery = recovery;
+        }
+        const sheet = makeCanvas(TILE_W, TILE_H + (strip ? th : 0));
         const sctx = sheet.getContext("2d");
+        sctx.fillStyle = "#ffffff";
+        sctx.fillRect(0, 0, sheet.width, sheet.height);
+        sctx.drawImage(work, 0, 0);
+        if (strip) {
+          sctx.drawImage(strip, 0, TILE_H);
+          label(sctx, `${brushId}  wet yellow across a blue patch, then ${RECOVERY_TAIL} px of paper  →  last 20% [${recovery.lastFifthMeanRgb}] ${recovery.recovered ? "recovered" : "STUCK"}`, 10, TILE_H + 8, 14);
+          sctx.fillStyle = "#c9c4b8";
+          sctx.fillRect(0, TILE_H, TILE_W, 1);
+          strip.width = 0;
+        }
         cells.forEach((cell, index) => {
           const x0 = (index % 2) * tw;
           const y0 = Math.floor(index / 2) * th;
@@ -611,7 +753,7 @@
         emit(images, `mixing-${brushId}.png`, sheet);
         work.width = 0;
       }
-      return { images, report };
+      return { images, report, sampleFree, checks, ok: checks.every((c) => c.pass) };
     };
 
     // (c) SMUDGE: hard red|blue boundary, then the smudge renderer dragged
@@ -722,6 +864,31 @@
         };
         if (!rerun.identical || !batching.identical || painted === 0) allIdentical = false;
         [one, two, onePre, sevenPre].forEach((c) => { c.width = 0; });
+        // Stage 3: the same pair with the km path ACTIVE — a committed
+        // under-stroke + mix map, then the tested stroke wet (pickup) or dry
+        // (mix) over it, so its dabs sample and mix. The under-stroke is dry
+        // and deterministic, so only the km walk varies.
+        const km = kmParams(brushId);
+        if (km) {
+          const wet = km.wet;
+          const renderKm = (batch, preEnsure) => {
+            const work = makeCanvas(TILE_W, TILE_H);
+            const ctx = work.getContext("2d");
+            const mix = createMixMap(() => work, work.width, work.height);
+            paintStroke(ctx, brushId, makeStroke({ flip: true }), { color: COLORS.mixBlue, size, seed: SEED_B, mix });
+            paintStroke(ctx, brushId, makeStroke(), { color: COLORS.yellow, size, seed: SEED_A, wet, mix, batch, preEnsure });
+            return work;
+          };
+          const kOne = renderKm(1, false);
+          const kTwo = renderKm(1, false);
+          const kOnePre = renderKm(1, true);
+          const kSevenPre = renderKm(7, true);
+          const kRerun = comparePixels(kOne, kTwo);
+          const kBatching = comparePixels(kOnePre, kSevenPre);
+          report[brushId].km = { wet, rerunIdentical: kRerun.identical, batchIdentical: kBatching.identical, rerun: kRerun, batching: kBatching };
+          if (!kRerun.identical || !kBatching.identical) allIdentical = false;
+          [kOne, kTwo, kOnePre, kSevenPre].forEach((c) => { c.width = 0; });
+        }
       }
       return { images: [], report, ok: allIdentical };
     };
@@ -733,6 +900,13 @@
     // isolated single-point taps (the engine contract: a first point stamps
     // exactly one dab). Per-dab op counts vary for fleck shapes, so it's a
     // mean, not an exact count.
+    const KM_RUNS = 7; // interleaved blank / solid / gradient iterations for the km delta
+    // A ctx that does nothing: every method is a no-op, every property write
+    // is accepted. The renderer's walk + colour maths run in full against it
+    // (it never reads the ctx back when handed a `base`), so a walk against
+    // it times the CPU side of the dab path alone.
+    const NOOP = () => {};
+    const NOOP_CTX = new Proxy({}, { get: () => NOOP, set: () => true });
     const scenarioTiming = ({ brushes, sizes = [32, 80], runs = 5 }) => {
       const report = {};
       const points = makeStroke();
@@ -763,9 +937,114 @@
           const opsPerDab = tapOps / taps;
           const dabsEst = opsPerDab > 0 ? counted.counts.ops / opsPerDab : 0;
           const addMedian = median(addTimes);
+          // Stage 3: the same stroke with the km path sampling on EVERY dab —
+          // over a solid under-fill (the typical case: crossing a stroke, the
+          // carry settles, few colour-bucket changes) and over a gradient
+          // (the worst case: the bucket changes every few dabs, so the tint
+          // ring re-tints and the ribbon strings rebuild). The mix map is
+          // prefetched (flush) first, like the app's idle prefetch, so the
+          // delta is per-dab cost only. Dry (mix) unless the brush only picks
+          // up wet.
+          let km = null;
+          const params = kmParams(brushId);
+          if (params) {
+            const wet = !params.dry;
+            // Interleaved runs — blank / solid / gradient per iteration — so
+            // a machine-state drift between separate loops can't read as a
+            // km cost (the software rasteriser drifts by more than the budget
+            // between loops); best-of-N per case, KM_RUNS iterations.
+            const blank = [];
+            const solid = [];
+            const gradient = [];
+            const timeOver = (paintUnder) => {
+              const work = makeCanvas(TILE_W, TILE_H);
+              const ctx = work.getContext("2d");
+              let mix = null;
+              if (paintUnder) {
+                paintUnder(ctx);
+                mix = createMixMap(() => work, work.width, work.height);
+                mix.flush();
+              }
+              const r = paintStroke(ctx, brushId, points, { color: COLORS.blue, size, seed: SEED_A, wet: mix ? wet : false, mix });
+              work.width = 0;
+              return r.addMs;
+            };
+            const fillSolid = (ctx) => {
+              ctx.fillStyle = COLORS.yellow;
+              ctx.fillRect(0, 0, TILE_W, TILE_H);
+            };
+            const fillGradient = (ctx) => {
+              const g = ctx.createLinearGradient(0, 0, TILE_W, TILE_H);
+              g.addColorStop(0, COLORS.yellow);
+              g.addColorStop(0.5, COLORS.red);
+              g.addColorStop(1, COLORS.mixBlue);
+              ctx.fillStyle = g;
+              ctx.fillRect(0, 0, TILE_W, TILE_H);
+            };
+            for (let run = 0; run < KM_RUNS; run += 1) {
+              blank.push(timeOver(null));
+              solid.push(timeOver(fillSolid));
+              gradient.push(timeOver(fillGradient));
+            }
+            const per100 = (ms) => (dabsEst > 0 ? +((ms / dabsEst) * 100).toFixed(3) : null);
+            // The km CPU cost on its own: the same dab walk against a no-op
+            // ctx (nothing rasterises), with and without a sampling mix map.
+            // What is left is exactly what Stage 3 added per dab — the mix
+            // (3 mixLatent + latentToRgb), the bucket bookkeeping and the
+            // odd tint-ring re-tint on a bucket change — free of the raster
+            // clock, whose run-to-run swing on either renderer is several
+            // times this budget. Interleaved, best-of-KM_RUNS. This is the
+            // number the KM budget gates on; the raster deltas above are
+            // reported for context.
+            const cpuNoMix = [];
+            const cpuMix = [];
+            const walkCpu = (withMix) => {
+              const work = makeCanvas(TILE_W, TILE_H);
+              const ctx = work.getContext("2d");
+              let mix = null;
+              if (withMix) {
+                fillSolid(ctx);
+                mix = createMixMap(() => work, work.width, work.height);
+                mix.flush();
+              }
+              const { settings } = makeSettings(brushId, { color: COLORS.blue, size, seed: SEED_A, wet: withMix ? wet : false });
+              const { buf, renderer, pad } = makeStrokeEntryCore(settings, mix ? mix.sample : undefined);
+              for (const point of points) buf.ensure(point.x, point.y, pad);
+              const base = buf.base();
+              const t0 = performance.now();
+              for (const point of points) renderer.addPoints(NOOP_CTX, [point], base);
+              const ms = performance.now() - t0;
+              buf.dispose();
+              work.width = 0;
+              return ms;
+            };
+            for (let run = 0; run < KM_RUNS; run += 1) {
+              cpuNoMix.push(walkCpu(false));
+              cpuMix.push(walkCpu(true));
+            }
+            km = {
+              wet,
+              runs: KM_RUNS,
+              cpuMsNoMix: +Math.min(...cpuNoMix).toFixed(3),
+              cpuMsMix: +Math.min(...cpuMix).toFixed(3),
+              cpuDeltaPer100Dabs: per100(Math.min(...cpuMix) - Math.min(...cpuNoMix)),
+              addMsMedianBlank: +median(blank).toFixed(2),
+              addMsMedianSolid: +median(solid).toFixed(2),
+              addMsMedianGradient: +median(gradient).toFixed(2),
+              addMsMinBlank: +Math.min(...blank).toFixed(2),
+              addMsMinSolid: +Math.min(...solid).toFixed(2),
+              addMsMinGradient: +Math.min(...gradient).toFixed(2),
+              // Deltas from the best-of-N runs: a cost measure that a slow
+              // outlier run can't inflate.
+              deltaPer100DabsSolid: per100(Math.min(...solid) - Math.min(...blank)),
+              deltaPer100DabsGradient: per100(Math.min(...gradient) - Math.min(...blank)),
+              deltaPer100DabsSolidMedian: per100(median(solid) - median(blank)),
+            };
+          }
           report[brushId][size] = {
             addMsMedian: +addMedian.toFixed(2),
             addMsRuns: addTimes.map((v) => +v.toFixed(2)),
+            km,
             commitMsMedian: +median(commitTimes).toFixed(2),
             ops: counted.counts.ops,
             opsBreakdown: { fill: counted.counts.fill, stroke: counted.counts.stroke, drawImage: counted.counts.drawImage, fillRect: counted.counts.fillRect },
@@ -917,9 +1196,25 @@
     // point), eraser, a second wet stroke over the erased stretch. The lazy
     // mirror is stale there by design (no mark, no re-read), and the ledger
     // must NOT re-dirty past a sample — prefetch must still equal lazy.
+    // What is compared: the SAMPLE SEQUENCE every variant's dabs read (P5's
+    // actual invariant — the same bytes at the same op-order points) and the
+    // pixels. On the GPU renderer a readback (the prefetch's flush draws
+    // layer 0 into the mirror) can leave a ±1 rounding wobble on a couple
+    // of pixels of the strokes that follow — raster noise, not op order —
+    // so there, identical samples with a <= 1-unit visible pixel delta still
+    // count as equivalent; the software renderer (golden's) must be exact.
+    // Teeth = the naive prefetch READS different bytes than lazy on A.
     const WET_BRUSHES = ["oil", "acrylic", "watercolor", "gouache"]; // WET_PICKUP > 0
     const ERASER = { brush: "eraser", size: 90, opacity: 1, variation: 0 }; // variation 0: no dice
-    const scenarioMixPrefetch = async ({ brushes, size = 48 }) => {
+    const fnv = (values) => {
+      let h = 2166136261;
+      for (const v of values) {
+        h ^= v;
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(16).padStart(8, "0");
+    };
+    const scenarioMixPrefetch = async ({ brushes, size = 48, gpu = false }) => {
       const wanted = WET_BRUSHES.filter((id) => brushes.includes(id));
       const eraserLine = () => {
         const points = [];
@@ -950,10 +1245,20 @@
         const work = makeCanvas(TILE_W, TILE_H);
         const ctx = work.getContext("2d");
         const mix = createMixMap(() => work, work.width, work.height); // this canvas plays layer 0
+        // Every byte the dabs read, in order (null = 0, a colour = rgb + 1).
+        const samples = [];
+        const sampler = {
+          ...mix,
+          sample: (x, y) => {
+            const s = mix.sample(x, y);
+            samples.push(s ? ((s[0] << 16) | (s[1] << 8) | s[2]) + 1 : 0);
+            return s;
+          },
+        };
         for (const step of script) {
           if (step.op === "stroke") {
             // paintStroke commits + markDirty, like App / opReplay.
-            paintStroke(ctx, brushId, step.points, { color: step.color, size, seed: step.seed, wet: !!step.wet, mix });
+            paintStroke(ctx, brushId, step.points, { color: step.color, size, seed: step.seed, wet: !!step.wet, mix: sampler });
             if (variant.flush) mix.flush(); // App's idle prefetch (pen up)
           } else if (step.op === "erase") {
             let last = step.points[0];
@@ -964,7 +1269,7 @@
             if (variant.invalidate) mix.invalidatePrefetch(); // App's unmarked-write hook
           }
         }
-        return work;
+        return { work, sampleKey: `${samples.length}:${fnv(samples)}`, nonNull: samples.filter((s) => s !== 0).length };
       };
       const images = [];
       const report = {};
@@ -974,13 +1279,28 @@
         for (const [name, script] of Object.entries(scripts)) {
           const rendered = {};
           const hashes = {};
+          const sampleKeys = {};
+          let nonNull = 0;
           for (const [variantName, variant] of Object.entries(variants)) {
-            rendered[variantName] = render(brushId, script, variant);
-            hashes[variantName] = (await hashCanvas(rendered[variantName])).hex;
+            const r = render(brushId, script, variant);
+            rendered[variantName] = r.work;
+            sampleKeys[variantName] = r.sampleKey;
+            if (variantName === "lazy") nonNull = r.nonNull;
+            hashes[variantName] = (await hashCanvas(r.work)).hex;
           }
-          const equivalent = hashes.prefetch === hashes.lazy;
-          const teeth = name === "A" ? hashes.naive !== hashes.lazy : null;
-          report[brushId][name] = { equivalent, teeth, hashes: Object.fromEntries(Object.entries(hashes).map(([k, v]) => [k, v.slice(0, 12)])) };
+          const samplesEquivalent = sampleKeys.prefetch === sampleKeys.lazy;
+          const pixels = comparePixels(rendered.lazy, rendered.prefetch);
+          const equivalent = samplesEquivalent && (pixels.identical || (gpu && pixels.maxVisibleDelta <= 1));
+          const teeth = name === "A" ? sampleKeys.naive !== sampleKeys.lazy : null;
+          report[brushId][name] = {
+            equivalent,
+            samplesEquivalent,
+            samplesNonNull: nonNull,
+            pixelDiff: { differingPixels: pixels.differingPixels, maxVisibleDelta: pixels.maxVisibleDelta, toleratedGpuWobble: !pixels.identical && equivalent },
+            teeth,
+            hashes: Object.fromEntries(Object.entries(hashes).map(([k, v]) => [k, v.slice(0, 12)])),
+            sampleKeys,
+          };
           if (!equivalent || teeth === false) ok = false;
           if (name === "A") {
             // Eyeball sheet: lazy | prefetch | naive, 1/2 scale on white.

@@ -1,5 +1,6 @@
 import { createStrokeBuffer } from "./strokeBuffer";
 import { FAMILIES, SPRITE_PX, SPRITE_UNIT, getPaperTile, getTintedSprite, packRgb5, spriteFamilyIndex } from "./brushSprites";
+import { LATENT_SIZE, latentToRgb, mixLatent, rgbToLatent } from "./pigment";
 
 // Sprite lifecycle hooks (App.jsx: idle prebuild of the fixed-seed atlases
 // after the studio mounts — pass the IdleDeadline through so the build paces
@@ -40,6 +41,8 @@ export { prebuildBrushSprites, releaseBrushSprites } from "./brushSprites";
 //   aspect     — sprite stretch along the tangent (x:y); aspectJitter adds a
 //                per-dab roll on top
 //   sizeJitter / flowJitter — per-dab size / alpha rolls (wash: stop cells tiling)
+//   spacingJitter — per-dab ±fraction on the step to the next dab (wash: no
+//                fixed period for the rims to braid on)
 //   variants   — how many of the family's atlas variants a stroke may roll
 //   bloom      — wash: chance of a second 1.3x, 0.3-alpha stamp of another variant
 //   dry        — wash: chance (x (1 - pressure)) of a drybrush tooth variant, and
@@ -47,8 +50,16 @@ export { prebuildBrushSprites, releaseBrushSprites } from "./brushSprites";
 //   startFlow  — wash: extra pigment load over the first 6 sizes of travel
 //   bleed / granulation — watercolor commit passes (filter-free), see prepareStrokeCommit
 //   laneCull   — loaded: stamp only as many bristle lanes as the dab is wide
-//   mixModel / mix / pickup / drag — pigment mixing (Stage 3); pickup + drag
-//                already drive the legacy wet-pickup lerp when settings.wet
+//   mixModel   — "km": the dab colour is a Kubelka-Munk pigment mix of what
+//                the bristles carry and the paint under the dab (Stage 3:
+//                kmSample in makeStrokeRenderer); absent = the frozen legacy
+//                RGB-lerp wet pickup
+//   mix        — km: the fraction of the under-paint a DRY dab takes on
+//                (0 = a dry stroke never samples)
+//   pickup     — the fraction a WET dab (settings.wet) takes on; absent =
+//                the legacy WET_PICKUP table
+//   drag       — how fast the carried colour drifts toward what the stroke
+//                passes over (wet; x 0.35 for a dry km stroke)
 //
 // minSize values are tuned for a ≥3x thin-to-thick pressure range (Stage 3):
 // with the 1.35 gamma, full press is 3-6x the lightest touch per brush.
@@ -233,12 +244,15 @@ const NATURAL_DABS = {
     minSize: 0.34,
     flow: 0.17,
     shape: "wash",
-    scatter: 0.04,
-    // The wash sprite is anisotropic (firm rim across the stroke, soft along
-    // it), so the dab must follow the tangent: only a small wobble.
-    rotJitter: 0.3,
-    sizeJitter: 0.15,
-    flowJitter: 0.3,
+    // Rims that land on a fixed period braid into a scallop down the stroke
+    // (Stage 2's look): throw each dab sideways, vary its size and its step,
+    // and let it turn — the wash sprite's rim is firmest across the stroke,
+    // so the turn stays under half a right angle.
+    scatter: 0.09,
+    rotJitter: 0.55,
+    sizeJitter: 0.22,
+    flowJitter: 0.35,
+    spacingJitter: 0.3,
     bloom: 0.33,
     dry: 0.6,
     startFlow: 1.3,
@@ -264,8 +278,12 @@ const NATURAL_DABS = {
     impasto: 0.16,
     loaded: 1,
     load: 1.18,
-    depletion: 0.018,
-    reload: 0.004,
+    // The ribbons ARE the streaks now (the sprite body is the coverage), so
+    // their paint load must last: at the old 0.018/dab it was gone four
+    // brush-widths in, leaving 0.1-alpha slivers and a flat body. ~0.004
+    // net per dab = a long stroke dries out toward its end, not its start.
+    depletion: 0.005,
+    reload: 0.003,
     tooth: 0.34,
     bristleMemory: 0.72,
     laneWobble: 0.14,
@@ -286,7 +304,7 @@ const NATURAL_DABS = {
     impasto: 0.1,
     loaded: 1,
     load: 0.95,
-    depletion: 0.03,
+    depletion: 0.008, // faster-drying than oil (see the oil note), still ~10 brush-widths
     reload: 0.002,
     tooth: 0.24,
     bristleMemory: 0.58,
@@ -368,6 +386,7 @@ export function normalizeInlineDab(dab) {
     aspectJitter: clampNumber(dab.aspectJitter, 0, 0, 1),
     sizeJitter: clampNumber(dab.sizeJitter, 0, 0, 0.5),
     flowJitter: clampNumber(dab.flowJitter, 0, 0, 0.6),
+    spacingJitter: clampNumber(dab.spacingJitter, 0, 0, 0.5),
     variants: clampInt(dab.variants, 8, 1, 8),
     bloom: clampNumber(dab.bloom, 0, 0, 0.6),
     dry: clampNumber(dab.dry, 0, 0, 1),
@@ -735,6 +754,34 @@ const WET_PICKUP = { oil: 0.3, acrylic: 0.25, watercolor: 0.45, gouache: 0.2 };
 // the "drag" that smears a picked-up colour along the rest of the stroke.
 const WET_DRAG = 0.15;
 
+// Pigment mixing (Stage 3: dabs with mixModel "km"). mixLatent's `t` is a
+// Kubelka-Munk concentration share — pigment b lands at weight t² (times its
+// luminance) against (1 - t)² for a — so t = 0.15 is a ~3% blend, not the
+// 15% the same number means to the legacy lerp. The dab's mix / pickup /
+// drag keep the lerp's meaning (the FRACTION of the under colour a dab takes
+// on); this maps a fraction to the t at which two equal-luminance pigments
+// contribute in the ratio share : 1 - share. Computed once per stroke.
+function kmShareToT(share) {
+  if (!(share > 0)) {
+    return 0;
+  }
+  if (share >= 1) {
+    return 1;
+  }
+  const a = Math.sqrt(share);
+  return a / (a + Math.sqrt(1 - share));
+}
+// How much of its own pigment a loaded brush re-supplies per dab (a fraction,
+// mapped like the dab params): the carried colour drifts back toward the
+// brush colour at this rate — over paint, so a long ride settles at a mix
+// instead of converging to the under-paint, and over blank paper, so a
+// picked-up colour fades out over ~20 dabs instead of persisting for the
+// rest of the stroke (Stage 0 found the legacy lerp never recovers). Frozen
+// once shipped, like WET_DRAG: changing it repaints every persisted km
+// stroke that crossed paint.
+const KM_RELOAD = 0.08;
+const KM_RELOAD_T = kmShareToT(KM_RELOAD);
+
 // Per-point generator derived from the stroke seed + the point's COORDINATES
 // (not its index): wire batching boundaries and the wire-level duplicate-point
 // dedupe can drop/regroup points, so an index-based sequence would desync the
@@ -981,6 +1028,10 @@ const LOADED_VARIANT_SALT = 0x51ab3e7d;
 const LOADED_TINT_GAIN = 3.5;
 // The wash bloom (second stamp) alpha, as a fraction of the dab's.
 const BLOOM_ALPHA = 0.3;
+// The `loaded` body sprite's alpha, as a fraction of the dab's flow. The
+// body lands UNDER the ribbons (see emitSpriteDab), so this only decides how
+// solid a single dab / tap is and how fast the film closes at a stroke edge.
+const LOADED_BODY_ALPHA = 0.8;
 
 // `getMix` (optional): a sampler (x, y) -> [r, g, b] | null over the 1/8-scale
 // LAYER-0 mix map. Only consulted when the op's settings carry wet: true AND
@@ -995,8 +1046,21 @@ export function makeStrokeRenderer(settings, getMix) {
   const seedValue = seed == null ? 0 : seed;
   const size = clamp(settings.size || 24, 1, 160);
   const pickupK = dab.pickup == null ? WET_PICKUP[settings.brush] || 0 : dab.pickup;
-  const wetPickup = settings.wet && typeof getMix === "function" ? pickupK : 0;
   const dragK = dab.drag == null ? WET_DRAG : dab.drag;
+  const sampler = typeof getMix === "function" ? getMix : null;
+  // Which colour path this stroke is on. Ops whose dab says mixModel "km"
+  // mix pigment (kmSample below); every other op — v2 catalog dabs, the
+  // Stage-0 v3 bristle dabs, anything hostile — keeps the frozen RGB-lerp
+  // wet pickup. A wet km stroke takes on `pickup` of the under-paint, a dry
+  // one `mix` (0 = never samples: watercolor's multiply glaze is its dry
+  // mixing). Stamp tips are excluded: their tint cache is keyed per colour
+  // string, and a varying colour would grow it per dab.
+  const kmModel = dab.mixModel === "km";
+  const wetPickup = !kmModel && settings.wet && sampler ? pickupK : 0;
+  const kmShare = kmModel && sampler && dab.shape !== "stamp" ? (settings.wet ? pickupK : dab.mix || 0) : 0;
+  const kmActive = kmShare > 0;
+  const kmPickupT = kmShareToT(kmShare);
+  const kmDragT = kmShareToT(settings.wet ? dragK : dragK * 0.35);
   // Carried wet colour (floats, so the diffusion stays smooth). Starts at the
   // brush colour and is dragged toward every non-transparent sample it crosses.
   let mixR = 0;
@@ -1032,6 +1096,7 @@ export function makeStrokeRenderer(settings, getMix) {
   const aspectJitterK = dab.aspectJitter || 0;
   const sizeJitterK = dab.sizeJitter || 0;
   const flowJitterK = dab.flowJitter || 0;
+  const spacingJitterK = plainSprite ? dab.spacingJitter || 0 : 0;
   const bloomK = isWash ? dab.bloom || 0 : 0;
   const dryK = isWash ? dab.dry || 0 : 0;
   const startFlowK = dab.startFlow || 1;
@@ -1045,6 +1110,33 @@ export function makeStrokeRenderer(settings, getMix) {
   const dryG = dryRgb ? dryRgb[1] : 0;
   const dryB = dryRgb ? dryRgb[2] : 0;
   const exactTint = wetPickup <= 0;
+  // Per dab: the km path points this at the bucket slot while the mixed
+  // colour differs from the raw one, and back at the exact slot once the
+  // carry has relaxed (or the mix lands in the raw colour's bucket).
+  let dabExact = exactTint;
+  // --- Pigment mixing state (Stage 3), used by kmSample ---
+  // Allocated on the FIRST non-null sample, so a km stroke over blank paper
+  // never pays for it and never runs a mix. carry = what the bristles hold,
+  // brush = the reservoir that re-supplies it, under = the sampled paint
+  // (re-decomposed only when the 8-px mix-map cell colour changes), out =
+  // the deposited mix. Per renderer, not module-level: remote strokes
+  // interleave with the local one, each carrying its own colour.
+  let kmCarry = null;
+  let kmBrush = null;
+  let kmUnder = null;
+  let kmOut = null;
+  let kmUnderKey = -1; // packed 24-bit colour kmUnder was decomposed from
+  let kmDirty = false; // carry != brush colour: keep relaxing (and painting the carry)
+  const kmRgb = [0, 0, 0]; // latentToRgb scratch
+  const kmRaw = kmActive ? parseColorRgb(color) : null;
+  const kmRawKey5 = kmRaw ? packRgb5(kmRaw[0], kmRaw[1], kmRaw[2]) : -1;
+  const ensureKmState = () => {
+    kmCarry = rgbToLatent(kmRaw[0], kmRaw[1], kmRaw[2], new Float64Array(LATENT_SIZE));
+    kmBrush = new Float64Array(LATENT_SIZE);
+    kmBrush.set(kmCarry);
+    kmUnder = new Float64Array(LATENT_SIZE);
+    kmOut = new Float64Array(LATENT_SIZE);
+  };
   // `loaded` lanes are baked per VARIANT, so a coherent streak along the
   // stroke needs ONE variant per stroke — rolled here from the seed like the
   // bristle table, not per dab.
@@ -1098,7 +1190,7 @@ export function makeStrokeRenderer(settings, getMix) {
         entry.tint *= LOADED_TINT_GAIN; // after the roll: the dice order stays frozen
       }
       // Pre-built string for the dry path; the legacy wet path re-tints per
-      // dab, the sprite path re-tints `wetColor` per colour bucket.
+      // dab, the sprite / km paths re-tint `wetColor` per colour bucket.
       entry.color = shiftLightness(color, entry.tint);
       entry.wetColor = entry.color;
       bristleTable.push(entry);
@@ -1110,6 +1202,10 @@ export function makeStrokeRenderer(settings, getMix) {
   let residual = 0; // distance already consumed past the last emitted dab
   let started = false;
   let walked = 0; // cumulative path length: the wash's startFlow load decays over it
+  // The last dab's spacing roll (sprite shapes with spacingJitter): addPoints
+  // scales the step to the NEXT dab by it, so dabs stop landing on a fixed
+  // period. 1 for every other dab / shape.
+  let stepScale = 1;
 
   // pressure^1.35 taper: light touches thin out faster than linear, and the
   // widened minSize band gives every brush a ≥3x thin-to-thick range.
@@ -1124,7 +1220,8 @@ export function makeStrokeRenderer(settings, getMix) {
   //   bristle: scatter → rot (lanes roll their own pointRand generators)
   //   wash / graphite / wax / softOval / matte: variant → scatter → rot →
   //     aspectJitter → sizeJitter → flowJitter; wash then → bloom roll
-  //     (→ bloom variant, only when it fires) → dry roll
+  //     (→ bloom variant, only when it fires) → dry roll; then (all five)
+  //     → spacing roll (Stage 3, spacingJitter > 0 only — appended LAST)
   //   halo: scatter → rot (no variant roll: halo + core are fixed variants)
   //   loaded: (variant rolled ONCE per stroke from the seed) scatter → rot,
   //     then the lanes' own pointRoll gap dice
@@ -1151,14 +1248,77 @@ export function makeStrokeRenderer(settings, getMix) {
     ctx.drawImage(slot, -SPRITE_HALF, -SPRITE_HALF, SPRITE_PX, SPRITE_PX);
   };
 
-  // The tinted slot for `variant` in this dab's colour: the exact slot for a
-  // dry stroke, the 5-bit bucket for a wet one (wetR/G/B set by the caller).
+  // The tinted slot for `variant` in this dab's colour: the exact slot while
+  // the dab colour IS the raw colour (dry, or km fully relaxed), the 5-bit
+  // bucket while it differs (wetR/G/B set by the caller).
   let wetR = 0;
   let wetG = 0;
   let wetB = 0;
-  const tintedSlot = (variant) => (exactTint
+  const tintedSlot = (variant) => (dabExact
     ? getTintedSprite(shape, variant, dryR, dryG, dryB, true)
     : getTintedSprite(shape, variant, wetR, wetG, wetB));
+
+  // The km dab colour at (x, y) — Stage 3. Leaves wetR/G/B, the cached
+  // strings (rebuilt only on a 5-bit bucket change) and dabExact set for the
+  // stamp. With a non-null sample: the bristles take on the under-paint
+  // (drag), the reservoir re-supplies its own pigment (KM_RELOAD), and what
+  // lands is the carry mixed with the under-paint once more (pickup). Over
+  // blank paper the reservoir keeps re-supplying, so a picked-up colour
+  // fades back to the brush colour instead of persisting; once the carry
+  // lands back in the raw colour's 5-bit bucket it snaps there and every
+  // further blank-paper dab is the RAW colour at zero cost (spec P4). Every
+  // step is a pure function of the op stream + the samples (no dice), so
+  // local / remote / replay agree. Three mixLatent + one latentToRgb per
+  // sampled dab (~1 µs), one + one while relaxing, nothing once relaxed; no
+  // allocation (the latents are the renderer's, the sample array is the mix
+  // map's reused one — read before the next sample, never kept).
+  const kmSample = (x, y) => {
+    const sampled = getMix(x, y);
+    if (sampled) {
+      if (!kmCarry) {
+        ensureKmState();
+      }
+      const key = (sampled[0] << 16) | (sampled[1] << 8) | sampled[2];
+      if (key !== kmUnderKey) {
+        kmUnderKey = key;
+        rgbToLatent(sampled[0], sampled[1], sampled[2], kmUnder);
+      }
+      mixLatent(kmCarry, kmUnder, kmDragT, kmCarry);
+      mixLatent(kmCarry, kmBrush, KM_RELOAD_T, kmCarry);
+      mixLatent(kmCarry, kmUnder, kmPickupT, kmOut);
+      latentToRgb(kmOut, kmRgb);
+      kmDirty = true;
+    } else if (kmDirty) {
+      mixLatent(kmCarry, kmBrush, KM_RELOAD_T, kmCarry);
+      latentToRgb(kmCarry, kmRgb);
+    } else {
+      dabExact = true;
+      return;
+    }
+    const key5 = packRgb5(kmRgb[0], kmRgb[1], kmRgb[2]);
+    dabExact = key5 === kmRawKey5;
+    if (dabExact) {
+      if (!sampled) {
+        // Relaxed back into the raw bucket: canonical state, and no more
+        // mixing until the next sample.
+        kmCarry.set(kmBrush);
+        kmDirty = false;
+      }
+      return;
+    }
+    wetR = kmRgb[0];
+    wetG = kmRgb[1];
+    wetB = kmRgb[2];
+    if (key5 !== wetKey5) {
+      wetKey5 = key5;
+      wetColor = `rgb(${wetR},${wetG},${wetB})`;
+      if (bristleTable) {
+        for (let i = 0; i < bristleTable.length; i += 1) {
+          bristleTable[i].wetColor = tintRgbString(wetR, wetG, wetB, bristleTable[i].tint);
+        }
+      }
+    }
+  };
 
   // The v3 sprite dab (rand order: see the table above).
   const emitSpriteDab = (ctx, rand, x, y, pressure, angle, sizePx, flowAlpha) => {
@@ -1206,6 +1366,12 @@ export function makeStrokeRenderer(settings, getMix) {
         alpha *= t * t;
       }
     }
+    // Spacing roll — last in the order (Stage 3): the step to the next dab
+    // is scaled by 1 ± spacingJitter (see stepScale).
+    stepScale = 1;
+    if (spacingJitterK > 0) {
+      stepScale = 1 + (rand() * 2 - 1) * spacingJitterK;
+    }
     // Fresh load: extra pigment over the first 6 sizes of travel (`walked`
     // lives on the renderer, so it survives overflow restarts).
     if (startFlowK > 1) {
@@ -1217,8 +1383,9 @@ export function makeStrokeRenderer(settings, getMix) {
     if (alpha > 1) {
       alpha = 1;
     }
-    // Colour. Wet: the legacy lerp toward the paint under the dab (Stage 3
-    // swaps in the pigment mixer); the tint strings follow the 5-bit bucket.
+    // Colour. Legacy wet (no mixModel): the frozen RGB lerp toward the paint
+    // under the dab; km: the pigment mix (kmSample). The tint strings follow
+    // the 5-bit bucket either way.
     let fallback = color;
     if (wetPickup > 0) {
       const sampled = getMix(dx, dy);
@@ -1248,6 +1415,11 @@ export function makeStrokeRenderer(settings, getMix) {
         }
       }
       fallback = wetColor;
+    } else if (kmActive) {
+      kmSample(dx, dy);
+      if (!dabExact) {
+        fallback = wetColor;
+      }
     }
     const b = strokeBase;
     const slot = tintedSlot(variant);
@@ -1272,9 +1444,18 @@ export function makeStrokeRenderer(settings, getMix) {
       return;
     }
     if (isLoaded) {
-      // The solid loaded-paint body, stretched along the tangent; the
-      // bristle ribbons below streak it.
-      stampSprite(ctx, b, slot, dx, dy, c, s, radius * stretchK, radius, alpha * 0.8);
+      // The solid loaded-paint body, stretched along the tangent, laid UNDER
+      // what the stroke already holds (destination-over): it fills coverage
+      // without burying the previous dabs' bristle ribbons — a body stamped
+      // over them buried a ribbon under the dozen bodies that followed it
+      // (0.55^12 of it left), and no ribbon alpha or tint gain got streaks
+      // through that. The ribbons below ride on top, so the streaks are
+      // exactly what the ribbons paint and the body is the paper-facing
+      // film. Still one drawImage per dab; the composite is put back for
+      // the ribbons.
+      ctx.globalCompositeOperation = "destination-over";
+      stampSprite(ctx, b, slot, dx, dy, c, s, radius * stretchK, radius, alpha * LOADED_BODY_ALPHA);
+      ctx.globalCompositeOperation = "source-over";
       ctx.setTransform(b.s, 0, 0, b.s, b.tx, b.ty);
       // Bristle ribbons, as the frozen `bristle` loaded-paint branch draws
       // them (lane wobble, tooth gaps, paint-load depletion, bristle memory)
@@ -1306,7 +1487,7 @@ export function makeStrokeRenderer(settings, getMix) {
         const width = Math.max(0.35, ribbonHalf * bristle.width * (0.45 + load * 0.65));
         const length = Math.max(0.8, radius * stretchK * bristle.length * (0.35 + load * 0.55));
         const ribbonAlpha = clamp(alpha * bristle.alpha * toothAlpha * (0.2 + Math.min(load, 1) * 0.85), 0.01, 1);
-        ctx.strokeStyle = exactTint ? bristle.color : bristle.wetColor;
+        ctx.strokeStyle = dabExact ? bristle.color : bristle.wetColor;
         ctx.globalAlpha = ribbonAlpha;
         ctx.lineWidth = width;
         ctx.beginPath();
@@ -1369,6 +1550,13 @@ export function makeStrokeRenderer(settings, getMix) {
         wetB = mixB;
       }
       dabColor = `rgb(${Math.round(wetR)},${Math.round(wetG)},${Math.round(wetB)})`;
+    } else if (kmActive) {
+      // A km dab on a legacy shape (nothing authored ships this, but an
+      // inline dab may say so): the pigment mix as the fill colour.
+      kmSample(dx, dy);
+      if (!dabExact) {
+        dabColor = wetColor;
+      }
     }
     ctx.fillStyle = dabColor;
     if (shape === "stamp") {
@@ -1474,7 +1662,7 @@ export function makeStrokeRenderer(settings, getMix) {
           const length = Math.max(0.8, radius * stretchK * bristle.length * (0.35 + load * 0.55));
           const alpha = clamp(flowAlpha * bristle.alpha * toothAlpha * (0.2 + Math.min(load, 1) * 0.85), 0.01, 1);
 
-          ctx.strokeStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
+          ctx.strokeStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : dabExact ? bristle.color : bristle.wetColor;
           ctx.fillStyle = ctx.strokeStyle;
           ctx.globalAlpha = alpha;
           ctx.lineWidth = width;
@@ -1512,7 +1700,7 @@ export function makeStrokeRenderer(settings, getMix) {
         for (const bristle of bristleTable) {
           // Wet dabs re-tint the blended colour per bristle (numeric, cheap);
           // dry dabs reuse the strings pre-built at construction.
-          ctx.fillStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : bristle.color;
+          ctx.fillStyle = wetPickup > 0 ? tintRgbString(wetR, wetG, wetB, bristle.tint) : dabExact ? bristle.color : bristle.wetColor;
           ctx.globalAlpha = flowAlpha * bristle.alpha;
           ctx.beginPath();
           ctx.ellipse(
@@ -1595,7 +1783,7 @@ export function makeStrokeRenderer(settings, getMix) {
         started = true;
         emitDab(ctx, raw.x, raw.y, pressure, 0);
         emitted += 1;
-        residual = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(pressure));
+        residual = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(pressure) * stepScale);
         lastPoint = { x: raw.x, y: raw.y, pressure };
         continue;
       }
@@ -1615,7 +1803,7 @@ export function makeStrokeRenderer(settings, getMix) {
         const p = lastPoint.pressure + (pressure - lastPoint.pressure) * t;
         emitDab(ctx, lastPoint.x + sdx * t, lastPoint.y + sdy * t, p, angle);
         emitted += 1;
-        let step = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(p));
+        let step = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(p) * stepScale);
         if (emitted > DAB_CAP) {
           // Giant-flick guardrail: past the cap the step doubles, and doubles
           // again per additional cap-block — stays smooth enough, can't jank.

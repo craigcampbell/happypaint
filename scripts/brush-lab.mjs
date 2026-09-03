@@ -33,6 +33,16 @@
 // for information and never gate. The default run verifies too when a
 // golden.json exists; `--groups a,b` narrows the replay.
 //
+// Stage 3 gates (full run): the mixing scenario's checks (km brushes read
+// green, not grey, dry and wet; carry recovery; sample-free brushes hash
+// identical with and without a mix map), the km determinism pair, the
+// mixPrefetch sample-sequence equivalence, and the km CPU budget (KM_BUDGET
+// ms per 100 dabs of dab-walk CPU work with every dab sampling; the software
+// renderer gets KM_BUDGET_SOFTWARE for its slower tint-ring re-tints). Under
+// --gpu the golden rows are informational (recorded on the software
+// renderer) and a <= 1-unit pixel wobble after a readback is tolerated in
+// mixPrefetch when the sample sequences match.
+//
 // Outputs (in --out): strokes-<brush>.png, mixing-<brush>.png, smudge.png,
 // contact-sheet.png, golden-<group>.png, lab-report.json.
 import { spawn } from "node:child_process";
@@ -75,6 +85,16 @@ const externalBase = process.env.BASE ? process.env.BASE.replace(/\/$/, "") : nu
 const useGpu = args.includes("--gpu");
 // A GPU-accelerated 2D canvas in headless Chromium (Windows: ANGLE on D3D11).
 const GPU_ARGS = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-gpu-blocklist", "--enable-accelerated-2d-canvas"];
+// Stage 3: max ms per 100 dabs of CPU work the pigment path may add when
+// every dab samples (the representative, GPU-renderer number). The software
+// renderer gets an allowance: a colour that drifts across many 5-bit buckets
+// (a dry oil stroke settling over a contrasting colour) re-tints a 128² tint
+// ring slot per transition, and SwiftShader rasterises that ~5x slower than
+// a GPU — a bounded per-transition cost, not a per-dab one, but it lands in
+// the same clock.
+const KM_BUDGET = 0.3;
+const KM_BUDGET_SOFTWARE = 0.5;
+const kmBudget = useGpu ? KM_BUDGET : KM_BUDGET_SOFTWARE;
 const mode = args.includes("--guard")
   ? "guard"
   : args.includes("--golden-record")
@@ -335,6 +355,9 @@ function readGolden() {
 }
 
 function verifyGolden(result, { record, failures }) {
+  if (record && useGpu) {
+    fail("golden-record needs the software renderer (drop --gpu): golden.json is the software renderer's bytes");
+  }
   const fixtureSha = sha1(FIXTURE_FILE);
   const engine = Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))]));
   const golden = record ? null : readGolden();
@@ -361,6 +384,12 @@ function verifyGolden(result, { record, failures }) {
       status = "FAIL";
       detail = "group missing from golden.json — re-record";
       failures.push({ scenario: "golden", error: `${name}: ${detail}` });
+    } else if (useGpu) {
+      // golden.json is recorded on the software renderer (see the header):
+      // the GPU's anti-aliasing lands different bytes, so a --gpu run only
+      // reports the comparison. Stability within the run still gates above.
+      status = "GPU ";
+      detail = golden.groups[name].hash === g.hash ? "matches the software golden" : "GPU renderer AA differs from the software renderer golden.json was recorded with — informational";
     } else if (golden.groups[name].hash === g.hash) {
       status = "PASS";
     } else {
@@ -486,7 +515,7 @@ try {
     try {
       // (page.evaluate has no timeout — the golden replay, 2 x 11 groups on a
       // 40MB canvas, runs to completion.)
-      result = await page.evaluate((s) => window.lab.runScenario(s), { ...spec, brushes: brushFilter });
+      result = await page.evaluate((s) => window.lab.runScenario(s), { ...spec, brushes: brushFilter, gpu: useGpu });
     } catch (error) {
       failures.push({ scenario: spec.kind, error: String(error?.message || error) });
       console.error(`brush-lab: scenario ${spec.kind} THREW: ${error?.message || error}`);
@@ -504,6 +533,26 @@ try {
     }
     if (spec.kind === "determinism" && result.ok === false) {
       failures.push({ scenario: spec.kind, error: "determinism mismatch — see report.scenarios.determinism" });
+    }
+    if (spec.kind === "mixing" && result.ok === false) {
+      for (const c of (result.checks || []).filter((c) => !c.pass)) {
+        failures.push({ scenario: spec.kind, error: `${c.brush} ${c.name}: ${c.detail}` });
+      }
+    }
+    if (spec.kind === "timing") {
+      // Stage 3 budget: the km path may add <= KM_BUDGET ms per 100 dabs of
+      // CPU work when every dab samples (the dab walk against a no-op ctx,
+      // with vs without a sampling mix map, best-of-N); blank paper adds 0
+      // by construction (no sample, no mix). The raster deltas (solid /
+      // gradient under-paint) are reported for context, not gated: both
+      // renderers swing several times this budget run to run.
+      for (const [brush, sizes] of Object.entries(result.report || {})) {
+        for (const [size, t] of Object.entries(sizes)) {
+          if (t.km && t.km.cpuDeltaPer100Dabs != null && t.km.cpuDeltaPer100Dabs > kmBudget) {
+            failures.push({ scenario: spec.kind, error: `${brush} ${size}: km path adds ${t.km.cpuDeltaPer100Dabs} ms/100 dabs of CPU work (budget ${kmBudget} on the ${report.renderer} renderer)` });
+          }
+        }
+      }
     }
     if (spec.kind === "mixPrefetch" && result.ok === false) {
       failures.push({ scenario: spec.kind, error: "wet-mix prefetch is not op-order-equivalent to the lazy flush (or the case lost its teeth) — see report.scenarios.mixPrefetch" });
@@ -535,6 +584,18 @@ if (Object.keys(timing).length) {
       console.log(`${pad(brush, 11)} ${pad(size, 4, true)} ${pad(t.addMsMedian, 8, true)} ${pad(t.commitMsMedian, 7, true)} ${pad(t.ops, 7, true)} ${pad(t.opsPerDab, 7, true)} ${pad(t.dabsEst, 6, true)} ${pad(t.msPer100Dabs ?? "-", 9, true)} ${pad(t.usPerOp ?? "-", 6, true)} ${pad(t.saveCalls, 5, true)} ${pad(t.getImageDataOnDrawPath, 4, true)}`);
     }
   }
+  const kmRows = Object.entries(timing).flatMap(([brush, sizes]) => Object.entries(sizes).filter(([, t]) => t.km).map(([size, t]) => [brush, size, t]));
+  if (kmRows.length) {
+    console.log("\nKM PATH (Stage 3; cpu = the dab walk against a no-op ctx, with vs without a sampling mix map — the pigment maths + bucket bookkeeping alone, best-of-N;");
+    console.log(`  Δcpu per 100 dabs is what the budget gates: ${KM_BUDGET} ms on the GPU renderer, ${KM_BUDGET_SOFTWARE} ms on the software one (its ring re-tints); this run: ${kmBudget}.`);
+    console.log("  raster = the same stroke rasterised over blank paper / solid / gradient under-paint (best-of-N, prefetched map): context only)");
+    console.log(`${pad("brush", 11)} ${pad("size", 4, true)} ${pad("path", 4)} ${pad("cpu", 7, true)} ${pad("cpu+km", 7, true)} ${pad("Δcpu/100", 9, true)} ${pad("blank", 7, true)} ${pad("solid", 7, true)} ${pad("grad", 7, true)} ${pad("Δsolid", 8, true)} ${pad("Δgrad", 8, true)}`);
+    for (const [brush, size, t] of kmRows) {
+      const k = t.km;
+      const flag = k.cpuDeltaPer100Dabs != null && k.cpuDeltaPer100Dabs > kmBudget ? "  OVER BUDGET" : "";
+      console.log(`${pad(brush, 11)} ${pad(size, 4, true)} ${pad(k.wet ? "wet" : "dry", 4)} ${pad(k.cpuMsNoMix, 7, true)} ${pad(k.cpuMsMix, 7, true)} ${pad(k.cpuDeltaPer100Dabs ?? "-", 9, true)} ${pad(k.addMsMinBlank, 7, true)} ${pad(k.addMsMinSolid, 7, true)} ${pad(k.addMsMinGradient, 7, true)} ${pad(k.deltaPer100DabsSolid ?? "-", 8, true)} ${pad(k.deltaPer100DabsGradient ?? "-", 8, true)}${flag}`);
+    }
+  }
 }
 const strokes = report.scenarios.strokes?.report || {};
 if (Object.keys(strokes).length) {
@@ -554,28 +615,51 @@ if (Object.keys(determinism).length) {
   console.log("\nDETERMINISM (size 32: rerun = two fresh renderers, same seed, per-point flow; batch = 1-point vs 7-point feeding into pre-sized buffers;");
   console.log("  growCopy = per-point-grow flow vs pre-sized buffer — informational: a buffer grow's drawImage copy is not pixel-lossless)");
   for (const [brush, d] of Object.entries(determinism)) {
-    const flag = d.rerunIdentical && d.batchIdentical ? "ok  " : "FAIL";
+    const kmOk = !d.km || (d.km.rerunIdentical && d.km.batchIdentical);
+    const flag = d.rerunIdentical && d.batchIdentical && kmOk ? "ok  " : "FAIL";
     const batchNote = d.batchIdentical ? "" : ` (diff ${d.batching.differingPixels}px, max delta ${d.batching.maxChannelDelta})`;
     const grow = d.growCopy.lossless ? "lossless" : `${d.growCopy.differingPixels}px raw<=${d.growCopy.maxChannelDelta} visible<=${d.growCopy.maxVisibleDelta}`;
-    console.log(`  ${flag} ${pad(brush, 11)} rerun=${d.rerunIdentical} batch=${d.batchIdentical}${batchNote} painted=${d.paintedPixels} growCopy=${grow}`);
+    const km = d.km ? ` km(${d.km.wet ? "wet" : "dry"}): rerun=${d.km.rerunIdentical} batch=${d.km.batchIdentical}${d.km.batchIdentical ? "" : ` (diff ${d.km.batching.differingPixels}px)`}` : "";
+    console.log(`  ${flag} ${pad(brush, 11)} rerun=${d.rerunIdentical} batch=${d.batchIdentical}${batchNote} painted=${d.paintedPixels} growCopy=${grow}${km}`);
   }
 }
 const mixing = report.scenarios.mixing?.report || {};
 if (Object.keys(mixing).length) {
-  console.log("\nMIXING overlap mean RGB on white (yellow #f9d423 × blue #1e88e5, size 40)");
+  console.log("\nMIXING overlap mean RGB on white (yellow #f9d423 × blue #1e88e5, size 40) with HSL hue° / saturation; gate = yellow over blue hue 70..170, sat >= 0.2 (watercolor: dry only, sat >= 0.08)");
+  console.log(`${pad("brush", 11)} ${pad("dry yellow/blue", 30)} ${pad("dry blue/yellow", 30)} ${pad("wet yellow/blue", 30)} ${pad("wet blue/yellow", 30)}`);
+  const cellText = (v) => (v ? `[${v.overlapMeanRgb}] h${v.hue} s${v.sat}` : "-");
   for (const [brush, cells] of Object.entries(mixing)) {
-    console.log(`  ${pad(brush, 11)} ${Object.entries(cells).map(([k, v]) => `${k}=[${v.overlapMeanRgb}]`).join("  ")}`);
+    console.log(`${pad(brush, 11)} ${pad(cellText(cells.dry_yellowOverBlue), 30)} ${pad(cellText(cells.dry_blueOverYellow), 30)} ${pad(cellText(cells.wet_yellowOverBlue), 30)} ${pad(cellText(cells.wet_blueOverYellow), 30)}`);
   }
+  const recoveries = Object.entries(mixing).filter(([, cells]) => cells.recovery);
+  if (recoveries.length) {
+    console.log("\nCARRY RECOVERY (wet yellow, size 40, across a 200px blue patch then 300px of paper: on patch → just after → last 20%; gate = last 20% closer to the brush colour than to blue)");
+    for (const [brush, cells] of recoveries) {
+      const r = cells.recovery;
+      console.log(`  ${r.recovered ? "ok  " : "FAIL"} ${pad(brush, 11)} patch [${r.onPatchMeanRgb}] h${r.onPatch.hue}  after [${r.justAfterMeanRgb}]  last20% [${r.lastFifthMeanRgb}] h${r.lastFifth.hue}  d(brush)=${r.distanceToBrush} d(blue)=${r.distanceToBlue}`);
+    }
+  }
+  const sampleFree = report.scenarios.mixing?.sampleFree || {};
+  if (Object.keys(sampleFree).length) {
+    console.log("\nSAMPLE-FREE brushes (the stroke pair with a mix map, dry and wet, must hash identical to one without; overlap on white for reference)");
+    for (const [brush, s] of Object.entries(sampleFree)) {
+      console.log(`  ${s.dryIdentical && s.wetIdentical ? "ok  " : "FAIL"} ${pad(brush, 11)} overlap [${s.overlapMeanRgb}] h${s.hue} s${s.sat}  dryIdentical=${s.dryIdentical} wetIdentical=${s.wetIdentical}`);
+    }
+  }
+  const failed = (report.scenarios.mixing?.checks || []).filter((c) => !c.pass);
+  console.log(failed.length ? `  ${failed.length} mixing check(s) FAILED` : `  all ${(report.scenarios.mixing?.checks || []).length} mixing checks passed`);
 }
 const mixPrefetch = report.scenarios.mixPrefetch?.report || {};
 if (Object.keys(mixPrefetch).length) {
   console.log("\nMIX PREFETCH (idle prefetch + invalidatePrefetch vs the lazy flush, same op script; A = commit → eraser → wet stroke, B = commit → wet → eraser → wet;");
-  console.log("  equivalent = prefetch hash == lazy hash (gates), teeth = the naive prefetch (no invalidate) differs from lazy on A (gates))");
+  console.log("  equivalent = the dabs read the same sample bytes in the same order AND the pixels match (GPU renderer: a <= 1-unit wobble is tolerated) — gates;");
+  console.log("  teeth = the naive prefetch (no invalidate) reads different bytes than lazy on A — gates)");
   for (const [brush, scripts] of Object.entries(mixPrefetch)) {
     const a = scripts.A;
     const b = scripts.B;
     const flag = a.equivalent && a.teeth && b.equivalent ? "ok  " : "FAIL";
-    console.log(`  ${flag} ${pad(brush, 11)} A: equivalent=${a.equivalent} teeth=${a.teeth} [lazy ${a.hashes.lazy} prefetch ${a.hashes.prefetch} naive ${a.hashes.naive}]  B: equivalent=${b.equivalent} [lazy ${b.hashes.lazy} prefetch ${b.hashes.prefetch}]`);
+    const px = (s) => (s.pixelDiff && s.pixelDiff.differingPixels ? ` px≠${s.pixelDiff.differingPixels}(Δ${s.pixelDiff.maxVisibleDelta}${s.pixelDiff.toleratedGpuWobble ? ", gpu wobble" : ""})` : "");
+    console.log(`  ${flag} ${pad(brush, 11)} A: equivalent=${a.equivalent} samples=${a.samplesEquivalent}(${a.samplesNonNull} read) teeth=${a.teeth}${px(a)} [lazy ${a.hashes.lazy} prefetch ${a.hashes.prefetch} naive ${a.hashes.naive}]  B: equivalent=${b.equivalent} samples=${b.samplesEquivalent}${px(b)} [lazy ${b.hashes.lazy} prefetch ${b.hashes.prefetch}]`);
   }
 }
 if (report.scenarios.smudge) {
