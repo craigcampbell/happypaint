@@ -11,12 +11,18 @@
 // Only re-drawn when brush / colour / size / zoom change — never per pointer
 // move — so it stays off the draw hot path (see updateBrushCursor in App.jsx).
 import { dabExtent, drawSingleDab, mulberry32, previewDabFor } from "./brushes";
+import { SPRITE_PX, SPRITE_UNIT, getSoftMask } from "./brushSprites";
 
 const TWO_PI = Math.PI * 2;
 // Translucent tip so the paint underneath stays readable. Applied by App.jsx
 // as the tip canvas's CSS opacity (the engine stamps at its own flow alpha —
 // baking a multiplier into every shape would mean re-implementing them here).
 export const BRUSH_TIP_ALPHA = 0.62;
+// The smudge engine's soft pad: the softMask sprite drawn at cell = dab size
+// x this puts its unit radius (SPRITE_UNIT px of the SPRITE_PX cell) on the
+// dab's rim — the same number makeSmudgeV3Renderer stamps with.
+const SMUDGE_PAD_CELL = SPRITE_PX / (2 * SPRITE_UNIT);
+const SMUDGE_TIP_GREY = "rgba(122,135,148,0.9)";
 
 // Widest extent of one dab as a multiple of `size` — the cursor canvas box has
 // to hold the whole tip, and paint ellipses / bristle ribbons / flecks reach
@@ -33,8 +39,9 @@ export function brushTipExtent(brushId, tool) {
 }
 
 // `size` = dab diameter in CSS px; `box` = the (square) canvas size in CSS px.
-// The context must already be DPR-scaled and cleared.
-export function drawBrushTip(ctx, { brush, tool, size, color, box }) {
+// The context must already be DPR-scaled and cleared. `smudgeMode` picks
+// the smudge tip: "blend" shows the engine's soft pad, "drag" the streak.
+export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = "drag" }) {
   const cx = box / 2;
   const cy = box / 2;
   const radius = size / 2;
@@ -45,7 +52,21 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box }) {
   }
   const rand = mulberry32(4242);
   if (brush === "smudge") {
-    // No pigment: a neutral streak fading along the drag direction.
+    const mask = smudgeMode === "blend" ? getSoftMask() : null;
+    if (mask) {
+      // Blend softens in place, so the tip is the pad itself: the engine's
+      // soft-mask disc (white + alpha) tinted the neutral grey with one
+      // source-in fill — the canvas holds nothing but this tip.
+      const cell = size * SMUDGE_PAD_CELL;
+      ctx.drawImage(mask, cx - cell / 2, cy - cell / 2, cell, cell);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = SMUDGE_TIP_GREY;
+      ctx.fillRect(0, 0, box, box);
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+    // Drag (or the pad sprite not built yet): a neutral streak fading along
+    // the drag direction — paint travels with the finger.
     const grad = ctx.createLinearGradient(cx - radius * 1.4, 0, cx + radius * 1.4, 0);
     grad.addColorStop(0, "rgba(122,135,148,0.9)");
     grad.addColorStop(1, "rgba(122,135,148,0.05)");

@@ -45,6 +45,14 @@
 // renderer) and a <= 1-unit pixel wobble after a readback is tolerated in
 // mixPrefetch when the sample sequences match.
 //
+// Stage 4 gates (full run): the smudge scenario's checks — v3 drag / blend
+// feathered vs the legacy square (no hard edge across the motion, no
+// corner signature), the drag carry (colour travels, then thins out; blend
+// carries nothing), rerun + batching determinism per mode — and the smudge
+// per-dab budget on the real 4000x2500 layer (SMUDGE_BUDGET ms per dab for
+// drag and blend; the legacy column is the self-referential drawImage they
+// replace, ~8 ms per dab there, reported for contrast).
+//
 // Outputs (in --out): strokes-<brush>.png, mixing-<brush>.png, smudge.png,
 // contact-sheet.png, golden-<group>.png, lab-report.json.
 import { spawn, spawnSync } from "node:child_process";
@@ -97,6 +105,19 @@ const GPU_ARGS = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-g
 const KM_BUDGET = 0.3;
 const KM_BUDGET_SOFTWARE = 0.5;
 const kmBudget = useGpu ? KM_BUDGET : KM_BUDGET_SOFTWARE;
+// Stage 4: max ms per dab for the v3 smudge modes (drag / blend, size 40,
+// pressure 0.7) on the real 4000x2500 layer — fenced, median of 3 runs.
+// The GPU number is the representative gate (measured ~0.06 / ~0.10 ms per
+// dab for drag / blend on an RTX 5090, against the legacy renderer's ~8 ms
+// self-referential drawImage on the software rasteriser). SwiftShader's
+// figure for the same code swings ±40% between runs (0.32-0.63 ms per dab
+// for drag across isolated / loaded runs), so the software allowance is
+// loose: it exists to catch a regression back to legacy-class cost, not to
+// rank the modes.
+const SMUDGE_BUDGET = 0.15;
+const SMUDGE_BUDGET_SOFTWARE = 1;
+const smudgeBudget = useGpu ? SMUDGE_BUDGET : SMUDGE_BUDGET_SOFTWARE;
+const SMUDGE_BUDGET_SIZE = "4000x2500";
 const mode = args.includes("--guard")
   ? "guard"
   : args.includes("--golden-record")
@@ -582,6 +603,21 @@ try {
         }
       }
     }
+    if (spec.kind === "smudge") {
+      if (result.ok === false) {
+        for (const c of (result.report?.checks || []).filter((c) => !c.pass)) {
+          failures.push({ scenario: spec.kind, error: `${c.name}: ${c.detail}` });
+        }
+      }
+      // Stage 4 budget: drag / blend per-dab cost on the real layer size.
+      const big = result.report?.timing?.[SMUDGE_BUDGET_SIZE] || {};
+      for (const mode of ["drag", "blend"]) {
+        const t = big[mode];
+        if (t && t.msPerDab != null && t.msPerDab > smudgeBudget) {
+          failures.push({ scenario: spec.kind, error: `${mode} costs ${t.msPerDab} ms/dab at ${SMUDGE_BUDGET_SIZE} (budget ${smudgeBudget} on the ${report.renderer} renderer)` });
+        }
+      }
+    }
     if (spec.kind === "mixPrefetch" && result.ok === false) {
       failures.push({ scenario: spec.kind, error: "wet-mix prefetch is not op-order-equivalent to the lazy flush (or the case lost its teeth) — see report.scenarios.mixPrefetch" });
     }
@@ -692,7 +728,37 @@ if (Object.keys(mixPrefetch).length) {
 }
 if (report.scenarios.smudge) {
   const s = report.scenarios.smudge.report;
-  console.log(`\nSMUDGE boundary band mean before=[${s.boundaryMeanBefore}] after=[${s.boundaryMeanAfter}] blended columns@row150=${s.blendedColumnsAtRow150} (${s.pointsFed} points, ${s.ms} ms)`);
+  console.log("\nSMUDGE (legacy square vs v3 drag / blend over a red|blue field, size 40, strength 0.6, pressure 0.7; boundary band mean on white before=[" + s.boundaryMeanBefore + "];");
+  console.log("  edge = max / p99 colour step ACROSS the motion inside the passes' bands, corners = px with a strong step along AND across — v3 must be below legacy)");
+  console.log(`${pad("mode", 8)} ${pad("after", 16)} ${pad("blended", 8, true)} ${pad("edge max", 9, true)} ${pad("p99", 5, true)} ${pad("corners", 8, true)} ${pad("points", 7, true)} ${pad("ms", 8, true)}`);
+  for (const [mode, m] of Object.entries(s.modes || {})) {
+    console.log(`${pad(mode, 8)} ${pad(`[${m.boundaryMeanAfter}]`, 16)} ${pad(m.blendedColumnsAtRow150, 8, true)} ${pad(m.edge.maxAcross, 9, true)} ${pad(m.edge.p99Across, 5, true)} ${pad(m.edge.corners, 8, true)} ${pad(m.pointsFed, 7, true)} ${pad(m.ms, 8, true)}`);
+  }
+  if (s.carry) {
+    console.log("\nSMUDGE CARRY (a stroke from inside a red field onto 300px of paper: mean on white of the first 4 dabs past the field, and of the last 15% of the tail;");
+    console.log("  gate: drag first band closer to red than paper, drag + blend last band closer to paper than red)");
+    for (const [mode, c] of Object.entries(s.carry)) {
+      console.log(`  ${pad(mode, 6)} first ${c.firstBandPx}px [${c.firstMeanRgb}] d(red)=${c.firstToRed} d(paper)=${c.firstToPaper}   last 15% [${c.lastMeanRgb}] d(red)=${c.lastToRed} d(paper)=${c.lastToPaper}`);
+    }
+  }
+  if (s.timing) {
+    console.log(`\nSMUDGE TIMING (700-px 600-point stroke through a red|blue band, size 40, pressure 0.7; median of 3 fenced runs; dabs from one Proxy-counted run; budget ${smudgeBudget} ms/dab for drag / blend at ${SMUDGE_BUDGET_SIZE} on the ${report.renderer} renderer)`);
+    console.log(`${pad("canvas", 10)} ${pad("mode", 7)} ${pad("add ms", 9, true)} ${pad("commit", 7, true)} ${pad("dabs", 5, true)} ${pad("ms/dab", 8, true)} ${pad("draws", 6, true)} ${pad("save", 5, true)} ${pad("gID", 4, true)}  runs`);
+    for (const [size, modes] of Object.entries(s.timing)) {
+      for (const [mode, t] of Object.entries(modes)) {
+        const over = size === SMUDGE_BUDGET_SIZE && mode !== "legacy" && t.msPerDab != null && t.msPerDab > smudgeBudget ? "  OVER BUDGET" : "";
+        console.log(`${pad(size, 10)} ${pad(mode, 7)} ${pad(t.msMedian, 9, true)} ${pad(t.commitMsMedian ?? 0, 7, true)} ${pad(t.dabs, 5, true)} ${pad(t.msPerDab ?? "-", 8, true)} ${pad(t.targetDraws, 6, true)} ${pad(t.saveCalls, 5, true)} ${pad(t.getImageDataOnDrawPath, 4, true)}  [${t.msRuns.join(", ")}]${over}`);
+      }
+    }
+  }
+  if (s.determinism) {
+    for (const [mode, d] of Object.entries(s.determinism)) {
+      const flag = d.rerunIdentical && d.batchIdentical ? "ok  " : "FAIL";
+      console.log(`  ${flag} smudge ${pad(mode, 6)} rerun=${d.rerunIdentical} batch=${d.batchIdentical}${d.batchIdentical ? "" : ` (diff ${d.batching.differingPixels}px, max delta ${d.batching.maxChannelDelta})`} painted=${d.paintedPixels}`);
+    }
+  }
+  const failed = (s.checks || []).filter((c) => !c.pass);
+  console.log(failed.length ? `  ${failed.length} smudge check(s) FAILED` : `  all ${(s.checks || []).length} smudge checks passed`);
 }
 if (goldenResult) {
   printGolden(goldenResult);

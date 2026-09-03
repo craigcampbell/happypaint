@@ -1,16 +1,16 @@
 {
-  "recordedAt": "2026-09-03T09:31:44.910Z",
+  "recordedAt": "2026-09-03T10:40:09.270Z",
   "engine": {
-    "src/utils/brushes.js": "9bc497acc2cd",
-    "src/utils/brushSprites.js": "15bf938d50e1",
+    "src/utils/brushes.js": "c1e8bad20d96",
+    "src/utils/brushSprites.js": "60f145325b5c",
     "src/utils/strokeBuffer.js": "b3e8a858e965",
     "src/utils/mixMap.js": "cdd825f94bfa",
     "src/utils/layers.js": "6fd71a09d9ce",
-    "src/utils/opReplay.js": "de0db1178c30",
+    "src/utils/opReplay.js": "2e21bd18ddae",
     "src/utils/symmetry.js": "880d686d96e0",
     "src/utils/shapes.js": "2e35d02580f1"
   },
-  "fixture": "9c903514656f",
+  "fixture": "751163d1afeb",
   "fixtureSeed": "0x5eed0001",
   "canvas": {
     "width": 4000,
@@ -18,10 +18,10 @@
   },
   "groups": {
     "legacy-unseeded": {
-      "hash": "0e6b18f9989abe002f92d5e9580ca68fc23f12aa64289d4b38a99e7384993c06",
+      "hash": "d4e4a457e1a4a9501b262ff35af47470b08af9b2d560c4ced3217faa8a5e226e",
       "deterministic": false,
       "machineBound": false,
-      "painted": 3295944,
+      "painted": 3316740,
       "ops": 720
     },
     "legacy-seeded": {
@@ -135,6 +135,13 @@
       "machineBound": false,
       "painted": 1032560,
       "ops": 409
+    },
+    "v3-smudge": {
+      "hash": "d93a4cab7181c08de94faea1eeb7963bca96a41f117b09f9d5b5019f19aeedab",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 4770226,
+      "ops": 262
     }
   }
 }

@@ -7,6 +7,7 @@ import {
   getTexture,
   makeSmudgeRenderer,
   makeStrokeEntryCore,
+  normalizeSmudgeSettings,
   paletteCatalog,
   paperTextures,
   pointRand,
@@ -702,10 +703,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // stroke's opacity, at pen-up. Null while idle / while erasing.
   // { buf, layer, settings, drawSettings, seed, pad }
   const localStrokeRef = useRef(null);
-  // In-progress LOCAL smudge walker (private rooms). Smudge never buffers — it
-  // sample-and-drags LAYER 0 directly — so it lives beside, not inside,
-  // localStrokeRef. Null while idle / for every other brush.
-  const localSmudgeRef = useRef(null);
   // Wet-canvas mixing: 1/8-scale CPU mirror of LAYER 0 (see utils/mixMap).
   // Lazily created; commit paths mark it dirty, wet dabs sample it.
   const mixMapRef = useRef(null);
@@ -880,6 +877,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // pulls paint), independent of brush opacity so switching brushes doesn't
   // clobber it. Rides the op so replay is deterministic.
   const [smudgeStrength, setSmudgeStrength] = useState(0.5);
+  // Smudge | Blend (brush engine Stage 4): "drag" pushes paint along with
+  // the finger and carries colour; "blend" softens in place. Rides the op as
+  // settings.smudgeMode (with v: 3) so every consumer renders the same mode.
+  // Session-local on purpose — no localStorage.
+  const [smudgeMode, setSmudgeMode] = useState("drag");
   const [fillShape, setFillShape] = useState(false);
   const [textSize, setTextSize] = useState(64);
   const [gallery, setGallery] = useState([]);
@@ -1355,6 +1357,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       size: brushSize,
       variation: brushVariation,
       strength: smudgeStrength, // smudge blend strength (ignored by other brushes)
+      smudgeMode, // smudge only: "drag" | "blend"
       v: recipeSettings?.v,
       dab: recipeSettings?.dab,
       texture: selectedTexture,
@@ -1372,6 +1375,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     selectedColor,
     selectedTexture,
     selectedTool,
+    smudgeMode,
     smudgeStrength,
     studioUnlocked,
     textSize,
@@ -3052,9 +3056,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.fx);
       stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
       markMixDirty(stroke.layer, stroke.buf.bounds()); // wet-mix mirror (layer 0 only)
+      if (stroke.layer.id !== activeLayerIdRef.current) {
+        // A smudge lands on layer 0 while another layer is active: its
+        // pixels now sit inside the "below" composite cache — invalidate so
+        // the next frame recomposites (same cost remote ops already pay).
+        invalidateCompositeCache();
+      }
     }
     stroke.buf.dispose();
-  }, [markMixDirty]);
+  }, [invalidateCompositeCache, markMixDirty]);
 
   // Relay this pointer's position to the room as a live cursor (throttled to
   // ~50ms). Coordinates are normalised 0..1 so each friend can place the cursor
@@ -3094,13 +3104,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const net = strokeNetRef.current;
       // Non-eraser strokes paint into the offscreen stroke buffer at FULL
       // opacity with coordinate-seeded randomness (#62); the eraser stays on
-      // the legacy direct destination-out path (stroke === null), and smudge
-      // (smudge !== null) sample-and-drags LAYER 0 directly — no buffer.
+      // the legacy direct destination-out path (stroke === null). A v3
+      // smudge is a buffered stroke too — its renderer samples layer 0 and
+      // its buffer commits to layer 0 (see startStroke).
       const stroke = localStrokeRef.current;
-      const smudge = localSmudgeRef.current;
       // Dab walks (makeStrokeRenderer / makeSmudgeRenderer) must see EXACTLY
       // the point sequence the wire carries — see wirePoint below.
-      const dabWalk = stroke ? (stroke.copies ? stroke.copies[0].renderer : stroke.renderer) != null : smudge != null;
+      const dabWalk = stroke ? (stroke.copies ? stroke.copies[0].renderer : stroke.renderer) != null : false;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
@@ -3185,15 +3195,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             } else {
               drawBrushSegment(stroke.buf.getCtx(), lastPoint, walkPoint, stroke.drawSettings, pointRand(stroke.seed, walkPoint.x, walkPoint.y));
             }
-          } else if (smudge) {
-            // Smudge always targets LAYER 0 — even when another layer is active
-            // — because every peer replays smudge ops against layer 0 (see
-            // startStroke). One point at a time, same as the wire consumers.
-            const layer0 = layersRef.current[0];
-            if (layer0) {
-              smudge.addPoints(layer0.canvas.getContext("2d"), [walkPoint]);
-              invalidateMixPrefetch(layer0); // direct, unmarked layer-0 write
-            }
           } else {
             symmetricPoints.forEach((copyPoint, copyIndex) => {
               drawBrushSegment(context, symmetricLastPoints[copyIndex] || copyPoint, copyPoint, settings);
@@ -3218,18 +3219,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // stroke grow live rather than only on pen-up.
       flushStrokeNet(false);
 
-      // Smudging layer 0 while another layer is active mutates pixels inside
-      // the "below" composite cache — invalidate so the frame path falls back
-      // to a full recomposite (same cost remote ops already pay when idle).
-      if (smudge && activeLayerIdRef.current !== layersRef.current[0]?.id) {
-        invalidateCompositeCache();
-      }
-
       // Coalesced, cache-backed display update (W1/W2/W5): at most one
       // below + active + above composite per painted frame.
       scheduleStrokeFrame();
     },
-    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, invalidateMixPrefetch, markMixDirty, roomOrchestra, scheduleStrokeFrame],
+    [flushStrokeNet, getActiveLayer, getPoint, invalidateMixPrefetch, markMixDirty, roomOrchestra, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -3439,7 +3433,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Safety net: if a dropped pointerup ever orphaned a stroke buffer,
       // commit it before opening a new one (no-op in the normal flow).
       commitLocalStroke();
-      localSmudgeRef.current = null;
       // Smudge is private-room only EXCEPT the finger-paint room, where smearing
       // is the toy. The picker ghosts it in other kid_safe rooms; this fallback
       // guards restored drafts / audience races — without the fingerPaint
@@ -3500,7 +3493,15 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // smears with the identical alpha — deterministic parity. Only smudge
       // reads it, so we don't bloat every other brush's op.
       if (brushId === "smudge") {
+        netSettings.opacity = 1; // Strength IS smudge's strength — the opacity slider is hidden for it
         netSettings.strength = settings.strength;
+        // Stage 4: v:3 + the Smudge | Blend mode ride the wire too, read
+        // through the engine's one normalizer (anything but "blend" is
+        // "drag"). Every consumer — this walker included — builds its
+        // renderer from these settings, and ops without v keep the legacy
+        // square renderer everywhere, so old history never repaints.
+        netSettings.v = 3;
+        netSettings.smudgeMode = normalizeSmudgeSettings({ v: 3, smudgeMode: settings.smudgeMode }).mode;
       }
       if (authoringDab) {
         netSettings.v = authoringDab.version;
@@ -3522,23 +3523,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         sentSettings: false,
         last: null, // last appended net point (wire-level dedupe)
       };
-      // Stage-1 buffered stroke (#62) for everything but the eraser and
-      // smudge. A buffered eraser preview would appear to punch holes through
-      // LOWER layers mid-stroke, so erasing keeps the direct destination-out
-      // path; smudge sample-and-drags LAYER 0 in place (buffering it would
-      // sample stale pixels and double-stamp on commit).
-      if (brushId === "smudge") {
-        localStrokeRef.current = null;
-        const layer0 = layersRef.current[0];
-        localSmudgeRef.current = layer0 ? makeSmudgeRenderer(netSettings, layer0.canvas) : null;
-      } else if (brushId !== "eraser") {
+      // Stage-1 buffered stroke (#62) for everything but the eraser. A
+      // buffered eraser preview would appear to punch holes through LOWER
+      // layers mid-stroke, so erasing keeps the direct destination-out path.
+      // Smudge (Stage 4) buffers like every brush but samples AND commits
+      // LAYER 0 whatever layer is active: ops carry no layer, every peer
+      // replays smudge against layer 0, and a smudge that sampled a
+      // different layer than its peers would smear different paint. (Its
+      // preview draws above the active layer; paint on higher layers over
+      // the smear pops under it at pen-up — the documented multi-layer
+      // divergence class, see makeStrokeEntryCore.)
+      if (brushId !== "eraser") {
         // ONE shared entry core (buffer / dab renderer / commit passes / pad /
         // opacity / commit composite) — the same builder applyRemoteOp and
         // opReplay start from, so nothing about this stroke is decided
         // differently on the local side. Symmetry: one core per copy (each
         // copy has its own buffer + walk state); the shared fields ride on
         // the stroke.
-        const core = makeStrokeEntryCore(netSettings, sampleMix);
+        const layer0 = layersRef.current[0];
+        const core = makeStrokeEntryCore(netSettings, sampleMix, { smudgeSource: brushId === "smudge" && layer0 ? layer0.canvas : null });
         if (!core) {
           // A v3 dab that can't normalize draws nowhere (remotes drop it too).
           setStatus("That brush can't be used here");
@@ -3549,7 +3552,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           return;
         }
         const sharedStroke = {
-          layer: getActiveLayer(),
+          layer: brushId === "smudge" ? layer0 : getActiveLayer(),
           settings: netSettings,
           seed,
           drawSettings: core.drawSettings,
@@ -3690,11 +3693,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         // at the stroke's opacity (#62 — a single pen-down/up tap commits its
         // one dab here too), then flush any pending per-move composite and do
         // one full recomposite (this also invalidates the per-stroke caches).
-        // Smudge already landed on layer 0 dab by dab — just drop its walker.
         flushStrokeNet(true);
         strokeNetRef.current = null;
         commitLocalStroke();
-        localSmudgeRef.current = null;
         flushStrokeFrame();
         renderDisplay();
         markChanged("Stroke saved");
@@ -3740,7 +3741,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       flushStrokeNet(true);
       strokeNetRef.current = null;
       commitLocalStroke();
-      localSmudgeRef.current = null;
       activePointerRef.current = null;
       activePointerTypeRef.current = null;
       lastPointRef.current = null;
@@ -3789,7 +3789,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const ctx = tip.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, box, box);
-    drawBrushTip(ctx, { brush: selectedBrush, tool: selectedTool, size: d, color: selectedColor, box });
+    drawBrushTip(ctx, { brush: selectedBrush, tool: selectedTool, size: d, color: selectedColor, box, smudgeMode });
   };
 
   const updateBrushCursor = (clientX, clientY) => {
@@ -3813,8 +3813,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const brushKey = selectedTool === "brush" ? selectedBrush : "shape";
     ring.dataset.brush = brushKey;
     // Re-stamp the tip only when what it shows has changed; a plain pointer
-    // move just translates the ring (the draw hot path stays clean).
-    const sig = `${brushKey}|${selectedColor}|${Math.round(d * 4)}`;
+    // move just translates the ring (the draw hot path stays clean). The
+    // smudge tip differs per mode (streak vs soft pad), so the mode is part
+    // of the signature for that brush only.
+    const sig = `${brushKey}|${selectedColor}|${Math.round(d * 4)}|${brushKey === "smudge" ? smudgeMode : ""}`;
     if (sig !== brushTipSigRef.current) {
       brushTipSigRef.current = sig;
       renderBrushTip(d);
@@ -6026,35 +6028,41 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           if (roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
             return;
           }
-          // Smudge sample-and-drags LAYER 0 directly — no stroke buffer.
-          // Everyone replays it against layer 0 in server op order, so history
-          // replay is deterministic; live overlap divergence is accepted and
-          // self-heals on the next history frame.
-          const strokes = remoteStrokesRef.current;
-          let entry = strokes.get(op.strokeId);
-          if (!entry) {
-            entry = {
-              buf: null, // nothing to buffer / commit — end just cleans up
-              opacity: 1,
-              lastTouch: 0,
-              renderer: null,
-              fx: null,
-              frameId: frame.id,
-              smudge: makeSmudgeRenderer(settings, ctx.canvas),
-            };
-            strokes.set(op.strokeId, entry);
-            ensureRemoteSweep();
+          // Legacy smudge ops (no `v`) edit LAYER 0 directly — no stroke
+          // buffer; everyone replays them against layer 0 in server op
+          // order, so history replay is deterministic and live overlap
+          // divergence self-heals on the next history frame. v3 ops (Stage
+          // 4) fall through to the buffered path below like every brush:
+          // makeStrokeEntryCore builds their drag / blend renderer over this
+          // frame's layer 0 (smudgeSource) and the buffer commits there —
+          // the same normalizer decides in every consumer.
+          if (!normalizeSmudgeSettings(settings).v3) {
+            const strokes = remoteStrokesRef.current;
+            let entry = strokes.get(op.strokeId);
+            if (!entry) {
+              entry = {
+                buf: null, // nothing to buffer / commit — end just cleans up
+                opacity: 1,
+                lastTouch: 0,
+                renderer: null,
+                fx: null,
+                frameId: frame.id,
+                smudge: makeSmudgeRenderer(settings, ctx.canvas),
+              };
+              strokes.set(op.strokeId, entry);
+              ensureRemoteSweep();
+            }
+            entry.lastTouch = Date.now();
+            for (const point of op.points || []) {
+              entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
+            }
+            invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+            touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
+            if (op.end) {
+              commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
+            }
+            return;
           }
-          entry.lastTouch = Date.now();
-          for (const point of op.points || []) {
-            entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
-          }
-          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
-          touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
-          if (op.end) {
-            commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
-          }
-          return;
         }
         if (!entry) {
           let buffered = 0;
@@ -6069,7 +6077,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // Past the cap (buffered: false) the stroke is flagged (buf: null)
           // onto the legacy direct per-segment path — its end-op then has
           // nothing to commit. Null = a v3 op whose inline dab can't render.
-          const core = makeStrokeEntryCore(settings, sampleMix, { buffered: buffered < REMOTE_BUFFER_CAP });
+          const core = makeStrokeEntryCore(settings, sampleMix, { buffered: buffered < REMOTE_BUFFER_CAP, smudgeSource: ctx.canvas });
           if (!core) {
             return;
           }
@@ -6173,7 +6181,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       localStrokeRef.current?.buf?.dispose();
       for (const copy of localStrokeRef.current?.copies || []) copy.buf?.dispose();
       localStrokeRef.current = null;
-      localSmudgeRef.current = null;
       releaseBrushSprites(); // sprite atlases / tint ring: rebuilt lazily by the next studio
     },
     [],
@@ -9484,7 +9491,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <h2>Color</h2>
             <p className="tool-hint">
               {isSmudgeActive
-                ? "👉 Smudge blends the paint that's already on the canvas — no colour needed. Set how hard it pushes with Strength below."
+                ? "👉 Smudge works with the paint that's already on the canvas — no colour needed. Pick Smudge or Blend and set how hard it pushes with Strength below."
                 : "🧽 The eraser clears back to paper — no colour needed."}
             </p>
           </section>
@@ -9575,6 +9582,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             />
             <output>{brushSize}</output>
           </label>
+          {isSmudgeActive ? (
+            <div className="smudge-mode" role="group" aria-label="Smudge mode">
+              <div className="seg-toggle">
+                <button
+                  type="button"
+                  className={smudgeMode === "drag" ? "is-on" : ""}
+                  aria-pressed={smudgeMode === "drag"}
+                  onClick={() => setSmudgeMode("drag")}
+                >
+                  Smudge
+                </button>
+                <button
+                  type="button"
+                  className={smudgeMode === "blend" ? "is-on" : ""}
+                  aria-pressed={smudgeMode === "blend"}
+                  onClick={() => setSmudgeMode("blend")}
+                >
+                  Blend
+                </button>
+              </div>
+              <p className="tool-hint">
+                {smudgeMode === "drag"
+                  ? "Smudge pulls paint along with your finger — colours travel and fade out."
+                  : "Blend softens the paint where you rub — edges melt without moving."}
+              </p>
+            </div>
+          ) : null}
           {isSmudgeActive ? (
             <label>
               <span>Strength</span>

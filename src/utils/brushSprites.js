@@ -727,6 +727,7 @@ export function buildPaperImage(data) {
 
 const atlases = new Array(FAMILIES.length).fill(null);
 let paperTile = null;
+let softMaskInverse = null;
 let smudgeScratch = null;
 let carryScratch = null;
 
@@ -777,6 +778,31 @@ export function getPaperTile() {
 // The smudge feather (softMask atlas, 1 variant = the whole 128^2 canvas).
 export function getSoftMask() {
   return getAtlas("softMask");
+}
+
+// The feather's INVERSE: black, alpha = 1 - softMask, opaque right out to
+// the cell corners. Drawn with destination-out it multiplies a canvas by
+// the feather exactly as destination-in with the mask would (dst x (1 - (1
+// - m)) = dst x m; the bytes are 255 - the mask's, so the factor is the
+// same 8-bit value) — but as a BOUNDED draw: destination-in is canvas-wide
+// (it must clear everything outside the source), which on a 256^2 scratch
+// is two full-canvas passes per dab, the smudge's biggest software cost.
+// Built from the mask atlas by an opaque fill + one destination-out draw:
+// integer-exact on every engine, no formula of its own to freeze.
+export function getSoftMaskInverse() {
+  if (!HAS_DOM) {
+    return null;
+  }
+  if (!softMaskInverse) {
+    const canvas = makeCanvas(SPRITE_PX, SPRITE_PX);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(getSoftMask(), 0, 0);
+    softMaskInverse = canvas;
+  }
+  return softMaskInverse;
 }
 
 // Module-singleton 256^2 scratches for the Stage-4 blend brush: the sampled
@@ -1086,6 +1112,10 @@ export function releaseBrushSprites() {
   if (paperTile) {
     paperTile.width = 0;
     paperTile = null;
+  }
+  if (softMaskInverse) {
+    softMaskInverse.width = 0;
+    softMaskInverse = null;
   }
   if (smudgeScratch) {
     smudgeScratch.width = 0;

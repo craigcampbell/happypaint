@@ -15,7 +15,7 @@
 //
 // Ops mirror the wire exactly (App.jsx startStroke + flushStrokeNet):
 //   - settings in startStroke's key order: brush, color, size, opacity,
-//     variation, seed, [symmetry], [strength], [v], [dab], [wet];
+//     variation, seed, [symmetry], [strength], [v], [smudgeMode], [dab], [wet];
 //   - quarter-px points with 3-dp pressure, wire-level duplicate dedupe, a
 //     stationary pressure-only update every 41 points (survives dedupe);
 //   - ~7-point batches per op with the settings object on EVERY op (only
@@ -491,6 +491,70 @@ const v3PigmentGroup = () => {
   return ops;
 };
 
+// ---- Stage 4 group ------------------------------------------------------------------
+// (n) v3 smudge (settings.v 3 + settings.smudgeMode, opacity 1 as startStroke
+// forces it): "drag" and "blend" strokes across the fill-rect red|blue field
+// with the lab's pressure ramp, a hard drag, blend circling on the boundary,
+// a soft size-90 pass of each mode, a drag that starts inside the red field
+// and runs onto blank paper (the carry fades), and one op with an UNKNOWN
+// mode, which must render as drag. All replay through opReplay's buffered
+// smudge path (makeStrokeEntryCore with the canvas as smudgeSource).
+const v3SmudgeSettings = ({ size, strength, mode }) => ({
+  brush: "smudge",
+  color: "#000000",
+  size,
+  opacity: 1,
+  variation: 0,
+  seed: nextSeed(),
+  strength,
+  v: 3,
+  smudgeMode: mode,
+});
+const v3SmudgeGroup = () => {
+  const boundary = 2000;
+  const ops = [
+    { kind: "shape", tool: "rect", start: { x: 600, y: 400 }, end: { x: boundary, y: 2100 }, opts: { color: COLORS.red, size: 8, opacity: 1, fillShape: true } },
+    { kind: "shape", tool: "rect", start: { x: boundary, y: 400 }, end: { x: 3400, y: 2100 }, opts: { color: COLORS.mixBlue, size: 8, opacity: 1, fillShape: true } },
+  ];
+  // A wobbling pass with the pressure ramp (the lab's 0.15 → 1 → 0.3).
+  const pass = (y, from, to, count = 120) => {
+    const points = [];
+    for (let i = 0; i < count; i += 1) {
+      const t = i / (count - 1);
+      points.push({ x: from + (to - from) * t, y: y + 6 * Math.sin(t * Math.PI * 4), pressure: pressureAt(t) });
+    }
+    return points;
+  };
+  const drag = v3SmudgeSettings({ size: 40, strength: 0.6, mode: "drag" });
+  ops.push(...strokeOps("dragA", drag, pass(600, boundary - 260, boundary + 260)));
+  ops.push(...strokeOps("dragB", drag, pass(800, boundary + 260, boundary - 260)));
+  ops.push(...strokeOps("dragHard", v3SmudgeSettings({ size: 40, strength: 0.9, mode: "drag" }), pass(1000, boundary - 260, boundary + 260)));
+  const diagonal = [];
+  for (let i = 0; i < 200; i += 1) {
+    const t = i / 199;
+    diagonal.push({ x: boundary - 500 + 1000 * t, y: 1950 - 1400 * t, pressure: pressureAt(t) });
+  }
+  ops.push(...strokeOps("dragDiagonal", drag, diagonal));
+  const blend = v3SmudgeSettings({ size: 40, strength: 0.6, mode: "blend" });
+  ops.push(...strokeOps("blendA", blend, pass(1200, boundary - 260, boundary + 260)));
+  ops.push(...strokeOps("blendB", blend, pass(1400, boundary + 260, boundary - 260)));
+  // Three loops around a point on the boundary: repeated circling converges.
+  const circle = [];
+  for (let i = 0; i < 240; i += 1) {
+    const a = (i / 240) * Math.PI * 6;
+    circle.push({ x: boundary + 90 * Math.cos(a), y: 1650 + 90 * Math.sin(a), pressure: 0.75 });
+  }
+  ops.push(...strokeOps("blendCircle", v3SmudgeSettings({ size: 60, strength: 0.5, mode: "blend" }), circle));
+  ops.push(...strokeOps("dragSoft", v3SmudgeSettings({ size: 90, strength: 0.3, mode: "drag" }), pass(1850, boundary - 400, boundary + 400, 200)));
+  ops.push(...strokeOps("blendSoft", v3SmudgeSettings({ size: 90, strength: 0.3, mode: "blend" }), pass(2000, boundary + 400, boundary - 400, 200)));
+  // Carry: from inside the red field (x 1000) out past its left edge (x 600)
+  // and 500 px on over blank paper — the load fades to nothing.
+  ops.push(...strokeOps("dragCarry", drag, pass(1300, 1000, 100, 160)));
+  // Unknown mode: normalizeSmudgeSettings must read it as "drag" forever.
+  ops.push(...strokeOps("dragUnknownMode", v3SmudgeSettings({ size: 40, strength: 0.6, mode: "wobble" }), pass(470, boundary - 260, boundary + 260)));
+  return ops;
+};
+
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
   {
@@ -517,6 +581,8 @@ const groups = [
   { name: "v3-overflow-wash", deterministic: true, note: "v:3 watercolor spanning > 2200 px so the 2048² buffer cap banks mid-stroke chunks", ops: v3OverflowWashGroup() },
   // Stage 3 (appended).
   { name: "v3-pigment", deterministic: true, note: "Stage 3: v:3 oil/acrylic/paint/gouache (mixModel km) dry + wet across a v3 gouache under-layer, and a wet carry-recovery stroke through a fill-rect patch onto blank paper", ops: v3PigmentGroup() },
+  // Stage 4 (appended).
+  { name: "v3-smudge", deterministic: true, note: "Stage 4: v:3 smudge drag / blend (pressure ramp, hard, soft size 90, blend circling, an unknown mode → drag) over a fill-rect red|blue field, and a drag that leaves the field onto blank paper", ops: v3SmudgeGroup() },
 ];
 
 const fixture = {

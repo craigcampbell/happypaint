@@ -15,6 +15,7 @@ import {
   isBrushStampReady,
   makeSmudgeRenderer,
   makeStrokeEntryCore,
+  normalizeSmudgeSettings,
   pointRand,
   preloadBrushStamp,
   prepareStrokeCommit,
@@ -92,9 +93,14 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
       else lastMap.set(op.strokeId, last);
       return;
     }
-    if (settings.brush === "smudge") {
-      // Smudge (private rooms) sample-and-drags the paper directly — the off
-      // canvas IS this consumer's layer 0. No buffer; end just cleans up.
+    if (settings.brush === "smudge" && !normalizeSmudgeSettings(settings).v3) {
+      // Legacy smudge (no `v`) edits the paper directly — the off canvas IS
+      // this consumer's layer 0 — with the frozen square renderer; no
+      // buffer, end just cleans up. v3 smudge ops (Stage 4) take the
+      // buffered path below like every brush: makeStrokeEntryCore builds
+      // their drag / blend renderer over this canvas (smudgeSource) and the
+      // buffer commits onto it — the same routing as the studio's local and
+      // remote branches, through the same normalizer.
       let smudgeEntry = strokes.get(op.strokeId);
       if (!smudgeEntry) {
         smudgeEntry = { buf: null, lastTouch: 0, smudge: makeSmudgeRenderer(settings, ctx.canvas) };
@@ -116,7 +122,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
       // remote branches use, so nothing about a stroke is decided differently
       // here. Past the buffer cap (buffered: false) it is the legacy direct
       // per-segment fallback; null = a v3 op whose inline dab can't render.
-      const core = makeStrokeEntryCore(settings, mix.sample, { buffered: buffered < MAX_STROKE_BUFFERS });
+      const core = makeStrokeEntryCore(settings, mix.sample, { buffered: buffered < MAX_STROKE_BUFFERS, smudgeSource: ctx.canvas });
       if (!core) return;
       entry = { ...core, settings, lastTouch: 0 };
       strokes.set(op.strokeId, entry);

@@ -4445,6 +4445,40 @@ button:disabled {
   font-weight: 600;
   line-height: 1.35;
 }
+/* Smudge | Blend segmented toggle (the smudge brush's Stroke section): one
+   pill track, the active half lifted white. Sits above the Strength slider
+   with a one-line hint for whichever mode is on. */
+.smudge-mode {
+  display: grid;
+  gap: 8px;
+}
+.seg-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #e8edf3;
+}
+.seg-toggle button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #44566a;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.seg-toggle button.is-on {
+  background: #fff;
+  color: #174c4d;
+  box-shadow: 0 1px 3px rgba(20, 40, 60, 0.18);
+}
+@media (max-width: 1024px), (pointer: coarse) {
+  .seg-toggle button { min-height: 44px; }
+}
 /* Touch: room-info controls (Invite + 🌐/🔒/⚠️ icon buttons) hit 44px (B3). */
 @media (max-width: 1024px), (pointer: coarse) {
   .mp-chat-room .mp-chat-invite {

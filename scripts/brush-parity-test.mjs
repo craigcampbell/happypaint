@@ -11,7 +11,11 @@
 // (graphite sprites, multiply), and a paint + gouache pigment-mixing rect
 // (Stage 3: three strokes in three colours crossing each other, so the dry
 // `mix` of the later strokes samples the mix map — exactness there proves
-// the idle prefetch / lazy flush equivalence end to end) must each hash
+// the idle prefetch / lazy flush equivalence end to end), and a smudge rect
+// (Stage 4: two v3 marker strokes, then a Smudge (drag) stroke straight
+// through and a Blend stroke crossing — the room is private by
+// construction, ROOM being a random code rather than MAIN, so the chip is
+// live and the server relays the v:3 smudge ops) must each hash
 // SHA-256-identical on the display canvas (the rect's screen area) on the
 // local client, a live remote client, and that remote after a history
 // reload. This is what the local-exactness fix buys: the local dab walk is
@@ -54,6 +58,12 @@ const pickColor = (hex) => p1.evaluate((h) => {
   if (swatch) swatch.click();
   return !!swatch;
 }, hex);
+// The Smudge | Blend segmented toggle in the Stroke section (smudge only).
+const setSmudgeMode = (mode) => p1.evaluate((m) => {
+  const btn = [...document.querySelectorAll('.seg-toggle button')].find((b) => new RegExp(m === 'drag' ? 'smudge' : 'blend', 'i').test(b.textContent));
+  if (btn) btn.click();
+  return !!btn;
+}, mode);
 
 const r = await p1.evaluate(() => { const e = document.querySelector('.overlay-canvas').getBoundingClientRect(); return { x: e.x, y: e.y, w: e.width, h: e.height }; });
 const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
@@ -109,7 +119,8 @@ const exact = {};
 // strokes (± 40 sine + brush radius + the watercolor bleed stay inside ± 60).
 // A rect lists its strokes in draw order: brush, optional palette colour
 // (default: whatever is selected), `flip` mirrors the sine so it crosses the
-// previous stroke, `line` draws it straight through the middle.
+// previous stroke, `line` draws it straight through the middle, `mode` picks
+// Smudge | Blend for the smudge brush; `len` shortens a rect's strokes.
 const v3 = [
   { name: 'Oil', y: cy - 330, x0: cx - 460, strokes: [{ brush: 'Oil' }] },
   { name: 'Acrylic', y: cy - 330, x0: cx + 60, strokes: [{ brush: 'Acrylic' }] },
@@ -129,9 +140,26 @@ const v3 = [
       { brush: 'Gouache', color: '#e53935', line: true },
     ],
   },
+  // Stage 4: blue + yellow v3 marker strokes as the paint, then Smudge
+  // (drag) straight through and Blend crossing. Row cy, right of Part 1's
+  // X (which reaches cx ± 60 at |dy| <= 60), shortened to stay inside the
+  // canvas like the other right-column rects.
+  {
+    name: 'Smudge',
+    y: cy,
+    x0: cx + 190,
+    len: 260,
+    strokes: [
+      { brush: 'Marker', color: '#1e88e5' },
+      { brush: 'Marker', color: '#fbd400', flip: true },
+      { brush: 'Smudge', mode: 'drag', line: true },
+      { brush: 'Smudge', mode: 'blend', flip: true },
+    ],
+  },
 ];
 for (const spec of v3) {
   const { x0, y } = spec;
+  const len = spec.len || 400;
   for (const stroke of spec.strokes) {
     if (stroke.color) {
       const okColor = await pickColor(stroke.color);
@@ -141,13 +169,18 @@ for (const spec of v3) {
     const ok = await pickBrush(stroke.brush);
     if (!ok) { exact[spec.name] = 'chip-not-found'; break; }
     await p1.waitForTimeout(150);
+    if (stroke.mode) {
+      const okMode = await setSmudgeMode(stroke.mode);
+      if (!okMode) { exact[spec.name] = `mode-toggle-not-found ${stroke.mode}`; break; }
+      await p1.waitForTimeout(100);
+    }
     const amp = stroke.line ? 0 : stroke.flip ? -40 : 40;
     await p1.mouse.move(x0, y); await p1.mouse.down();
-    for (let t = 0; t <= 1.001; t += 0.04) { await p1.mouse.move(x0 + 400 * t, y + amp * Math.sin(t * 7), { steps: 3 }); await p1.waitForTimeout(9); }
+    for (let t = 0; t <= 1.001; t += 0.04) { await p1.mouse.move(x0 + len * t, y + amp * Math.sin(t * 7), { steps: 3 }); await p1.waitForTimeout(9); }
     await p1.mouse.up(); await p1.waitForTimeout(1600);
   }
   if (typeof exact[spec.name] === 'string') continue;
-  exact[spec.name] = { rect: { x: x0 - 70, y: y - 60, w: 540, h: 120 } };
+  exact[spec.name] = { rect: { x: x0 - 70, y: y - 60, w: len + 140, h: 120 } };
 }
 await p1.mouse.move(cx, cy + 380); await p1.waitForTimeout(600); // park the pointer off every rect
 for (const { name } of v3) {

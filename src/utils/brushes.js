@@ -1,5 +1,5 @@
 import { createStrokeBuffer } from "./strokeBuffer";
-import { FAMILIES, SPRITE_PX, SPRITE_UNIT, getPaperTile, getTintedSprite, packRgb5, spriteFamilyIndex } from "./brushSprites";
+import { FAMILIES, SPRITE_PX, SPRITE_UNIT, getCarryScratch, getPaperTile, getSmudgeScratch, getSoftMaskInverse, getTintedSprite, packRgb5, spriteFamilyIndex } from "./brushSprites";
 import { LATENT_SIZE, latentToRgb, mixLatent, rgbToLatent } from "./pigment";
 
 // Sprite lifecycle hooks (App.jsx: idle prebuild of the fixed-seed atlases
@@ -157,10 +157,14 @@ export const brushCatalog = [
   },
   {
     // No `dab`: smudge is special-cased BY ID in every consumer. It has no
-    // pigment of its own (noColor) — it sample-and-drags LAYER 0's existing
-    // paint via makeSmudgeRenderer, directly, with no stroke buffer. Private
-    // rooms only: in kid_safe rooms the picker ghosts it, startStroke falls
-    // back to marker, and both client and server drop incoming smudge ops.
+    // pigment of its own (noColor) — it moves / softens LAYER 0's existing
+    // paint via makeSmudgeRenderer. Its ops carry settings.v = 3 +
+    // settings.smudgeMode ("drag" | "blend" — the Smudge | Blend toggle) +
+    // settings.strength and run as buffered strokes that sample layer 0
+    // (makeStrokeEntryCore); legacy ops (no `v`) keep the frozen square
+    // renderer, which draws on layer 0 directly. Private rooms only: in
+    // kid_safe rooms the picker ghosts it, startStroke falls back to
+    // marker, and both client and server drop incoming smudge ops.
     id: "smudge",
     name: "Smudge",
     icon: "👉",
@@ -2041,7 +2045,46 @@ export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle =
 //   canvas parses, while sprite shapes tint through parseColorRgb, whose
 //   fallback is near-black — the same on every consumer, but not the colour
 //   a legacy shape would show for the same string.
-export function makeStrokeEntryCore(settings, getMix, { buffered = true } = {}) {
+// - v3 smudge strokes that interleave inside ONE consumer share the carry
+//   scratch (a module singleton, cleared at every stroke start): a remote
+//   smudge landing during a local one, or two users' smudge ops interleaved
+//   in history, mix their carried colour / blur temp. Bounded (a dab lands
+//   at <= strength alpha of a feathered pad) and inside smudge's accepted
+//   live-overlap divergence anyway — every consumer samples layer 0 as it
+//   stands when the stroke starts, so two smudges over the same paint never
+//   matched pixel-for-pixel across consumers. Past a remote / replay
+//   consumer's buffer cap (4 open strokes) a v3 smudge op is skipped (it
+//   has no direct fallback), the way a 5th symmetry copy loses its dabs.
+export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeSource = null } = {}) {
+  if (settings.brush === "smudge") {
+    // v3 smudge (Stage 4): a buffered stroke like every brush — its dabs
+    // land in the buffer and commit once at pen-up — whose renderer SAMPLES
+    // `smudgeSource`, the consumer's layer 0 as it stands before the stroke.
+    // That is the whole point: a finger that re-samples its own deposits
+    // (the direct legacy way) recycles them, and above strength ~0.3 the
+    // smear self-sustains at a fixed point and never fades (measured — see
+    // makeSmudgeV3Renderer); sampling the pre-stroke paper lets the load
+    // fade at its own rate. No dab, no commit passes, source-over, opacity
+    // 1 (Strength IS smudge's strength; the opacity slider is hidden for it
+    // and the op's opacity is ignored, as the legacy renderer ignored it).
+    // Legacy smudge ops (no `v`) never reach here — every consumer routes
+    // them to the direct legacy renderer first. Past a consumer's buffer
+    // cap (buffered: false) there is no direct fallback for v3: null, and
+    // the op is skipped the same way live and in history replay.
+    const smudge = normalizeSmudgeSettings(settings);
+    if (!smudge.v3 || !buffered || !smudgeSource) {
+      return null;
+    }
+    return {
+      buf: createStrokeBuffer(),
+      renderer: makeSmudgeRenderer(settings, smudgeSource),
+      fx: null,
+      composite: "source-over",
+      opacity: 1,
+      drawSettings: { ...settings, opacity: 1 },
+      pad: strokeBufferPad(settings, null),
+    };
+  }
   const dab = getStrokeDab(settings);
   if (settings.v >= 3 && !dab) {
     return null;
@@ -2067,23 +2110,109 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true } = {}) 
 }
 
 // ---------------------------------------------------------------------------
-// Smudge (private rooms only): a dab walk that carries NO pigment. Each dab
-// samples a square of LAYER 0 slightly BEHIND the motion and re-stamps it at
-// the dab position at partial alpha — sample-and-drag, like a finger through
-// wet paint. It draws DIRECTLY onto layer 0 (never a stroke buffer): the op
-// stream is the source of truth and every consumer replays it against layer 0
-// in server op order, so history replay is deterministic; live concurrent
-// overlap can diverge briefly and self-heals on the next history frame.
-// drawImage with source === destination canvas is well-defined (the source
-// rect is snapshotted first), and the sampled rect is tiny — no full-canvas
-// reads, no getImageData, so the hot path stays lean.
+// Smudge (private rooms only): a dab walk that carries NO pigment — it moves
+// and softens the paint already on LAYER 0. Ops carry no layer, so every
+// consumer samples and lands smudge on layer 0 (the studio too, whatever
+// layer is active) in server op order: history replay is deterministic, and
+// live concurrent overlap can diverge briefly and self-heals on the next
+// history frame.
+//
+// Two generations share the brush id "smudge"; the OP decides which one
+// renders it (never the catalog, never a client setting):
+// - LEGACY (no settings.v): makeLegacySmudgeRenderer — every dab re-stamps a
+//   SQUARE of layer 0 sampled slightly behind the motion through one
+//   self-referential drawImage, DIRECTLY onto layer 0 (no buffer). Frozen
+//   verbatim: persisted history replays through it byte-for-byte (the
+//   smudge-legacy golden pins it).
+// - v3 (settings.v >= 3, Stage 4): makeSmudgeV3Renderer — the feathered
+//   "drag" and "blend" modes named by settings.smudgeMode, run as a normal
+//   BUFFERED stroke (makeStrokeEntryCore) that samples the pre-stroke layer
+//   0 and commits once at pen-up. A stale client that predates v3 renders
+//   these ops with the legacy square instead: bounded, cosmetic, and the
+//   server needs no change (server.js still drops every smudge op in a
+//   kid_safe room by brush id).
+// normalizeSmudgeSettings is the ONE reading of a smudge op's generation /
+// mode / strength, and makeSmudgeRenderer is the ONE factory that applies
+// it — the studio's local walker (startStroke), applyRemoteOp, opReplay
+// (spectators, history, film export) and the lab all build their renderer
+// through it, so no consumer can route an op differently.
 
 const SMUDGE_SPACING = 0.18;
 const SMUDGE_MIN_SIZE = 0.3;
 const SMUDGE_STRENGTH = 0.45; // default per-dab re-stamp alpha (no strength set)
 const SMUDGE_DRAG = 0.35; // sample offset behind the motion, fraction of dab size
 
+// v3 (Stage 4) constants. Frozen once shipped: a v3 op carries only its mode
+// and strength, so these numbers ARE the persisted look.
+const SMUDGE_BLEND_SPACING = 0.22;
+// drag: the carry's EMA weight per dab — the rate the finger's load turns
+// over, so ~1 / pickup dabs is how far a picked-up colour rides (half-life
+// ~10 dabs at a feather touch, ~30 when pressed hard: the smudge-length
+// curve of every finger tool). Interpolated on the pressure-driven strength.
+const SMUDGE_PICKUP_LIGHT = 0.07;
+const SMUDGE_PICKUP_HARD = 0.02;
+const SMUDGE_PAD = 128; // drag: the carry pad, px of the carry singleton — the finger's face in dab space
+// The feather drawn over the pad after every pickup (the inverse mask,
+// destination-out) so its rim can't fill up to a hard disc across many
+// dabs: the cell size and origin of the mask for a SMUDGE_PAD-wide dab
+// (same rule as SMUDGE_MASK_CELL).
+const SMUDGE_PAD_MASK_CELL = SMUDGE_PAD * (SPRITE_PX / (2 * SPRITE_UNIT));
+const SMUDGE_PAD_MASK_ORIGIN = (SMUDGE_PAD - SMUDGE_PAD_MASK_CELL) / 2;
+// Blend's box pyramid: level i of the halving chain lives in the carry (odd
+// i) or the scratch (even i) at these x offsets (y 0), sized for the largest
+// dab (160 px -> 80 / 40 / 20 / 10 / 5); an even last level is parked at
+// BLEND_FINAL_X in the carry so the up-sample never reads the canvas it
+// writes. The scratch regions sit right of the footprint's 160-px column
+// (plus its 1-px clear margin). Module constants: no per-dab allocation.
+const BLEND_CARRY_X = [0, 128, 176]; // levels 1, 3, 5
+const BLEND_SCRATCH_X = [168, 216]; // levels 2, 4
+const BLEND_FINAL_X = 200;
+// The soft-mask sprite's unit radius is SPRITE_UNIT px of its SPRITE_PX cell.
+// Drawn at cell = dab size x this, centred on the dab, its feather (alpha 1
+// inside 0.55 radii, 0 at the rim) reaches exactly the dab's edge.
+const SMUDGE_MASK_CELL = SPRITE_PX / (2 * SPRITE_UNIT);
+
+// The one reading of a smudge op's settings — every consumer's renderer is
+// built from this. `v3` picks the generation (an op without v >= 3 is the
+// frozen legacy square, whatever else it carries); `mode` is "blend" only
+// when the op says exactly that, otherwise "drag" (missing, unknown or
+// hostile values degrade to drag, never throw); `strength` is the Strength
+// slider clamped the way the legacy renderer clamps it, a non-numeric value
+// falling back to the default; `size` is clamped like every brush.
+export function normalizeSmudgeSettings(settings) {
+  const s = settings || {};
+  const v3 = s.v >= 3;
+  const strength = typeof s.strength === "number" && Number.isFinite(s.strength) ? s.strength : SMUDGE_STRENGTH;
+  const size = typeof s.size === "number" && Number.isFinite(s.size) && s.size > 0 ? s.size : 24;
+  return {
+    v3,
+    mode: v3 && s.smudgeMode === "blend" ? "blend" : "drag",
+    strength: clamp(strength, 0.05, 0.95),
+    size: clamp(size, 1, 160),
+  };
+}
+
+// The smudge renderer for an op: { addPoints(ctx, points), end() }.
+// `sourceCanvas` is layer 0 (the paint being smeared); `ctx` is where the
+// dabs land — layer 0 itself for a legacy op, the stroke buffer's
+// world-transformed context for a v3 op. Fed one point per addPoints call
+// by every consumer, like the dab renderers, so wire batching can't move a
+// dab.
 export function makeSmudgeRenderer(settings, sourceCanvas) {
+  const smudge = normalizeSmudgeSettings(settings);
+  if (!smudge.v3) {
+    return makeLegacySmudgeRenderer(settings, sourceCanvas);
+  }
+  return makeSmudgeV3Renderer(smudge, sourceCanvas);
+}
+
+// LEGACY smudge (ops without `v`): sample-and-drag of a SQUARE rect via a
+// self-referential drawImage. drawImage with source === destination canvas
+// is well-defined (the source rect is snapshotted first) — but that
+// snapshot is the WHOLE 4000x2500 layer, ~8 ms per dab, which is why v3
+// below never draws layer -> layer. FROZEN: this body must stay byte-for-
+// byte (the smudge-legacy golden), so read it as history, not as a template.
+function makeLegacySmudgeRenderer(settings, sourceCanvas) {
   const size = clamp(settings.size || 24, 1, 160);
   // How hard the finger pulls paint: the per-dab re-stamp alpha. User-set via
   // the Strength slider (settings.strength, 0..1); falls back to the default.
@@ -2176,6 +2305,313 @@ export function makeSmudgeRenderer(settings, sourceCanvas) {
   const end = () => {};
 
   return { addPoints, end };
+}
+
+// v3 smudge (Stage 4): the feathered blend brush. Both modes stamp a SOFT
+// disc (the fixed-seed softMask sprite — the same feather on every client)
+// instead of the legacy square, and pressure drives how hard the finger
+// presses. Per-dab state lives in two module-singleton 256^2 scratches
+// (brushSprites.getSmudgeScratch / getCarryScratch): the sampled footprint
+// and the finger's carry — never a per-stroke allocation.
+//
+// "drag" (default): the footprint is sampled TRAILING the motion by
+//   SMUDGE_DRAG x size, and what lands under the dab is the CARRY — the
+//   finger's load, an EMA (weight SMUDGE_PICKUP_LIGHT..HARD) of the
+//   footprints it touched, kept in a dab-relative pad — at the pressure-
+//   driven strength. Paint moves with the finger (the load lags the dab by
+//   the trail plus the EMA's memory), and past an edge the load fades by
+//   (1 - pickup) per dab: the carried colour thins out over ~10 dabs at a
+//   feather touch and rides ~3x further when pressed hard (the lab's carry
+//   metric). This only works because the footprint is the PRE-STROKE paper
+//   (the stroke lands in a buffer): a finger that re-samples its own
+//   deposits recycles them, and with ~4 overlapping dabs that loop's gain
+//   exceeds 1 above strength ~0.3 — measured both ways (a direct re-stamp,
+//   and carry-only on the live layer), the last 15% of a 300-px tail onto
+//   blank paper still read as the field colour at ~0.85-0.95 alpha.
+// "blend": the footprint is sampled CENTRED (no trail), box-blurred by an
+//   exact 2x-halving pyramid (a bilinear drawImage at exactly half size is
+//   a 2x2 texel average; chained to a ~4-px image and drawn back up in one
+//   bilinear draw, it is a blur of about a quarter of the dab from plain
+//   drawImage calls), and laid back at strength. Nothing moves, so circling
+//   over an edge converges to a smooth average and can never smear a
+//   drawing away.
+//
+// Determinism: no dice at all. The walk and the carry are pure functions of
+// the fed point sequence, and every draw is a scaled drawImage of pixels the
+// same engine produced, so local / remote / replay agree byte-for-byte on
+// one engine (cross-engine resampling kernels may drift — accepted, as for
+// every bilinear stamp). The carry is a singleton: two smudge strokes that
+// interleave in one consumer (a live remote stroke during a local one, or
+// two users' ops interleaved in history) share it — a bounded, documented
+// divergence (see makeStrokeEntryCore's list), cleared at every stroke start.
+function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
+  const blend = mode === "blend";
+  const spacing = blend ? SMUDGE_BLEND_SPACING : SMUDGE_SPACING;
+  const dabSizeAt = (pressure) => size * (SMUDGE_MIN_SIZE + (1 - SMUDGE_MIN_SIZE) * Math.pow(pressure, 1.35));
+  // Pressure drives strength: 0.35x the slider at a feather touch, rising
+  // (faster near full pressure) to the slider value when pressed hard.
+  const strengthAt = (pressure) => strength * (0.35 + 0.65 * pressure * (0.5 + 0.5 * pressure));
+  // The feather as its INVERSE (alpha 1 - mask, opaque to the cell corners):
+  // a destination-out draw of it multiplies by the feather like
+  // destination-in with the mask would, but bounded to the drawn cell —
+  // destination-in is canvas-wide (see getSoftMaskInverse).
+  const feather = getSoftMaskInverse();
+
+  // The scratches are re-fetched per addPoints call (not cached for the
+  // stroke): releaseBrushSprites (tab hidden) can drop them mid-stroke, and
+  // a fresh singleton must replace the dead canvas instead of throwing.
+  // A carry seen for the first time is cleared — the finger starts clean.
+  // Once per stroke in the normal case; never per dab.
+  let scratch = null;
+  let scratchCtx = null;
+  let carry = null;
+  let carryCtx = null;
+  const bindScratches = () => {
+    const nextScratch = getSmudgeScratch();
+    if (nextScratch !== scratch) {
+      scratch = nextScratch;
+      scratchCtx = scratch ? scratch.getContext("2d") : null;
+      if (scratchCtx) {
+        scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
+        scratchCtx.globalAlpha = 1;
+      }
+    }
+    const nextCarry = getCarryScratch();
+    if (nextCarry !== carry) {
+      carry = nextCarry;
+      carryCtx = carry ? carry.getContext("2d") : null;
+      if (carryCtx) {
+        carryCtx.setTransform(1, 0, 0, 1, 0, 0);
+        carryCtx.globalCompositeOperation = "source-over";
+        carryCtx.globalAlpha = 1;
+        carryCtx.fillStyle = "#000000"; // the fade's destination-out fill: opaque, so globalAlpha alone sets the decay
+        carryCtx.clearRect(0, 0, carry.width, carry.height);
+      }
+    }
+    return scratchCtx != null && carryCtx != null && feather != null;
+  };
+
+  // The dab's footprint on layer 0: the sample rect clamped to the canvas,
+  // the destination shifted by the same amount so the sampled pixels keep
+  // their exact offset — the legacy rule. Written into these slots, so a
+  // dab allocates nothing.
+  let fx = 0; // clamped sample origin on layer 0
+  let fy = 0;
+  let fw = 0; // clamped sample size
+  let fh = 0;
+  let fdx = 0; // where the footprint lands
+  let fdy = 0;
+  const clipFootprint = (ux, uy, sizePx, x, y) => {
+    const half = sizePx / 2;
+    fx = ux;
+    fy = uy;
+    fw = sizePx;
+    fh = sizePx;
+    fdx = x - half;
+    fdy = y - half;
+    if (fx < 0) {
+      fdx -= fx;
+      fw += fx;
+      fx = 0;
+    }
+    if (fy < 0) {
+      fdy -= fy;
+      fh += fy;
+      fy = 0;
+    }
+    if (fx + fw > sourceCanvas.width) {
+      fw = sourceCanvas.width - fx;
+    }
+    if (fy + fh > sourceCanvas.height) {
+      fh = sourceCanvas.height - fy;
+    }
+    return fw >= 1 && fh >= 1;
+  };
+
+  // DAB-PATH-BEGIN — the v3 smudge per-dab path (Stage 4). Layer 0 is only
+  // ever a drawImage SOURCE into the scratch or a DESTINATION for the
+  // scratch / carry, never both in one call (a self-referential drawImage
+  // snapshots the whole 4000x2500 layer: ~8 ms per dab, the legacy cost).
+  // Every step is a tiny fill / drawImage bounded to a <= 190^2 rect (the
+  // feather's cell around a 160-px dab): no readbacks, no allocation, no
+  // save/restore, no canvas-wide composite (clearRect + source-over stand
+  // in for 'copy'; the inverse feather + destination-out for the mask's
+  // destination-in). `ctx` is the stroke buffer's context (world
+  // coordinates through its origin transform): the deposits accumulate
+  // there and commit once at pen-up.
+
+  // Layer 0's [fx, fy, fw, fh] -> scratch (0, 0), then feathered by the
+  // inverse mask centred on the UNCLIPPED dab, so an edge-clipped dab keeps
+  // the same disc the way the legacy square keeps its offset. The rect is
+  // inscribed in the feather's cell, so the destination-out clears every
+  // pixel of the rect outside the disc; what lies outside the cell is
+  // never read (the deposits read [0, 0, fw, fh] only).
+  const sampleFootprint = (ux, uy, sizePx) => {
+    scratchCtx.globalCompositeOperation = "source-over";
+    scratchCtx.globalAlpha = 1;
+    scratchCtx.clearRect(0, 0, fw + 1, fh + 1);
+    scratchCtx.drawImage(sourceCanvas, fx, fy, fw, fh, 0, 0, fw, fh);
+    scratchCtx.globalCompositeOperation = "destination-out";
+    const cell = sizePx * SMUDGE_MASK_CELL;
+    scratchCtx.drawImage(feather, ux - fx + (sizePx - cell) / 2, uy - fy + (sizePx - cell) / 2, cell, cell);
+  };
+
+  const emitDrag = (ctx, x, y, pressure, angle) => {
+    const sizePx = dabSizeAt(pressure);
+    const half = sizePx / 2;
+    const shift = sizePx * SMUDGE_DRAG;
+    // Source trails the motion; stamping it at the dab drags paint forward.
+    const ux = x - Math.cos(angle) * shift - half;
+    const uy = y - Math.sin(angle) * shift - half;
+    if (!clipFootprint(ux, uy, sizePx, x, y)) {
+      return;
+    }
+    sampleFootprint(ux, uy, sizePx);
+    // Carry: the finger's load, an EMA of the trailing footprints in
+    // dab-relative pad space (the pad is the finger's face whatever the dab
+    // size is; a clipped dab maps onto its share of the pad). Fade by
+    // pickup (destination-out) FIRST, then fill the freed capacity from the
+    // footprint (destination-over): for a loaded finger that is exactly
+    // pad = (1 - pickup) x pad + pickup x footprint; a clean finger loads
+    // fully on its first touch; blank paper (a transparent footprint)
+    // refills nothing, so only the fade remains and the colour thins out.
+    const padK = SMUDGE_PAD / sizePx;
+    const px = (fx - ux) * padK;
+    const py = (fy - uy) * padK;
+    const pw = fw * padK;
+    const ph = fh * padK;
+    const alpha = strengthAt(pressure);
+    carryCtx.globalCompositeOperation = "destination-out";
+    carryCtx.globalAlpha = SMUDGE_PICKUP_LIGHT + (SMUDGE_PICKUP_HARD - SMUDGE_PICKUP_LIGHT) * alpha;
+    carryCtx.fillRect(0, 0, SMUDGE_PAD, SMUDGE_PAD);
+    carryCtx.globalCompositeOperation = "destination-over";
+    carryCtx.globalAlpha = 1;
+    carryCtx.drawImage(scratch, 0, 0, fw, fh, px, py, pw, ph);
+    // Re-feather the pad: with a slow turnover its rim would otherwise fill
+    // up to a hard disc over many dabs (each pickup adds most where the pad
+    // is thinnest); the mask keeps the profile a smooth feather.
+    carryCtx.globalCompositeOperation = "destination-out";
+    carryCtx.drawImage(feather, SMUDGE_PAD_MASK_ORIGIN, SMUDGE_PAD_MASK_ORIGIN, SMUDGE_PAD_MASK_CELL, SMUDGE_PAD_MASK_CELL);
+    // Deposit the load under the dab at the pressure-driven strength: paint
+    // picked up a few dabs back lands here, so an edge is dragged forward
+    // and the colour it carries fades over the dabs that follow.
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(carry, px, py, pw, ph, fdx, fdy, fw, fh);
+  };
+
+  const emitBlend = (ctx, x, y, pressure) => {
+    const sizePx = dabSizeAt(pressure);
+    const half = sizePx / 2;
+    const ux = x - half; // centred: no trail, nothing moves
+    const uy = y - half;
+    if (!clipFootprint(ux, uy, sizePx, x, y)) {
+      return;
+    }
+    sampleFootprint(ux, uy, sizePx);
+    scratchCtx.globalCompositeOperation = "source-over";
+    // Box pyramid: halve down to a ~4-px image (a comparison ladder, no
+    // log per dab), ping-ponging scratch -> carry -> scratch -> carry so no
+    // draw ever reads the canvas it writes. Integer level sizes so every
+    // client sees the same texel grid; the +1 clears keep each level's
+    // edge texels blank for the bilinear reads.
+    const levels = fw >= 90 ? 5 : fw >= 45 ? 4 : fw >= 23 ? 3 : fw >= 11 ? 2 : 1;
+    let src = scratch;
+    let sx = 0;
+    let sw = fw;
+    let sh = fh;
+    for (let i = 1; i <= levels; i += 1) {
+      const dw = Math.max(1, Math.round(sw / 2));
+      const dh = Math.max(1, Math.round(sh / 2));
+      const toCarry = (i & 1) === 1;
+      const dctx = toCarry ? carryCtx : scratchCtx;
+      const dx = toCarry ? BLEND_CARRY_X[i >> 1] : BLEND_SCRATCH_X[(i >> 1) - 1];
+      dctx.clearRect(dx, 0, dw + 1, dh + 1);
+      dctx.drawImage(src, sx, 0, sw, sh, dx, 0, dw, dh);
+      src = toCarry ? carry : scratch;
+      sx = dx;
+      sw = dw;
+      sh = dh;
+    }
+    if (src === scratch) {
+      // An even level count ends in the scratch: park it in the carry so
+      // the up-sample below reads the carry and writes the scratch.
+      carryCtx.clearRect(BLEND_FINAL_X, 0, sw + 1, sh + 1);
+      carryCtx.drawImage(scratch, sx, 0, sw, sh, BLEND_FINAL_X, 0, sw, sh);
+      sx = BLEND_FINAL_X;
+    }
+    scratchCtx.clearRect(0, 0, fw + 1, fh + 1);
+    scratchCtx.drawImage(carry, sx, 0, sw, sh, 0, 0, fw, fh);
+    ctx.globalAlpha = strengthAt(pressure);
+    ctx.drawImage(scratch, 0, 0, fw, fh, fdx, fdy, fw, fh);
+  };
+  // DAB-PATH-END
+
+  // The legacy walk (per-stroke residual + stationary-point skip, fed one
+  // point at a time by every consumer), with the mode's spacing and no
+  // per-point object: three numbers hold the last point.
+  const emit = blend ? emitBlend : emitDrag;
+  let lastX = 0;
+  let lastY = 0;
+  let lastP = 0;
+  let residual = 0;
+  let started = false;
+
+  const addPoints = (ctx, points) => {
+    if (!bindScratches()) {
+      return; // no DOM / no sprites: nothing to smear with
+    }
+    // The layer ctx is left canonical by everything that draws on it, but
+    // the deposit relies on source-over — assert it once per call.
+    ctx.globalCompositeOperation = "source-over";
+    let emitted = 0;
+    for (const raw of points) {
+      const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
+      if (!started) {
+        started = true;
+        // First point has no direction yet: prime the walk, no dab.
+        residual = Math.max(DAB_MIN_STEP, spacing * dabSizeAt(pressure));
+        lastX = raw.x;
+        lastY = raw.y;
+        lastP = pressure;
+        continue;
+      }
+      const sdx = raw.x - lastX;
+      const sdy = raw.y - lastY;
+      const d = Math.hypot(sdx, sdy);
+      if (d < 1e-6) {
+        continue; // stationary pressure-only update — see makeStrokeRenderer
+      }
+      const angle = blend ? 0 : Math.atan2(sdy, sdx);
+      let pos = residual;
+      while (pos <= d) {
+        const t = pos / d;
+        const p = lastP + (pressure - lastP) * t;
+        emit(ctx, lastX + sdx * t, lastY + sdy * t, p, angle);
+        emitted += 1;
+        let step = Math.max(DAB_MIN_STEP, spacing * dabSizeAt(p));
+        if (emitted > DAB_CAP) {
+          step *= Math.min(16, 2 ** Math.floor(emitted / DAB_CAP)); // giant-flick guardrail
+        }
+        pos += step;
+      }
+      residual = pos - d;
+      lastX = raw.x;
+      lastY = raw.y;
+      lastP = pressure;
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  // Nothing to flush at pen-up (every dab already landed in the buffer),
+  // no ink bbox to keep (smudge has no commit passes — fx is null, so
+  // prepareStrokeCommit never asks; null means "the whole buffer" anyway)
+  // and nothing to restart on an overflow bank: the walk and the carry
+  // survive a buffer restart as they are, like every dab renderer's.
+  const end = () => {};
+  const inkBounds = () => null;
+  const resetInk = () => {};
+
+  return { addPoints, end, inkBounds, resetInk };
 }
 
 // ---------------------------------------------------------------------------

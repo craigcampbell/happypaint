@@ -767,75 +767,400 @@
       return { images, report, sampleFree, checks, ok: checks.every((c) => c.pass) };
     };
 
-    // (c) SMUDGE: hard red|blue boundary, then the smudge renderer dragged
-    // back and forth across it at pressure 0.7, size 40, strength 0.6. Smudge
-    // paints DIRECTLY on layer 0 (the work canvas), one point at a time.
-    const scenarioSmudge = ({ size = 40, strength = 0.6 }) => {
-      const work = makeCanvas(TILE_W, TILE_H);
-      const ctx = work.getContext("2d");
-      const boundary = TILE_W / 2;
+    // (c) SMUDGE (Stage 4): the three smudge renderers — the legacy square
+    // (ops without `v`), v3 "drag" and v3 "blend" — side by side over the
+    // same hard red|blue field: four horizontal passes across the boundary
+    // at pressure 0.7 plus one diagonal with the lab's pressure ramp, size
+    // 40, strength 0.6, a fresh renderer (stroke) per pass, one point per
+    // addPoints call. Smudge paints DIRECTLY on layer 0 (the work canvas).
+    // Gated (checks):
+    //   edge — inside each horizontal pass's band, the largest colour step
+    //     PERPENDICULAR to the motion (max channel |Δ| on white between
+    //     vertically adjacent pixels — red #e04b2a and blue #1e88e5 are
+    //     near-isoluminant, so luminance alone would be blind here): the
+    //     legacy square leaves its box edges as hard steps; drag / blend
+    //     must feather (max AND 99th-percentile step below legacy's) and
+    //     show no 90-degree corner signature (pixels with a strong step
+    //     both along AND across the motion — a square's edge meeting the
+    //     field boundary — fewer than legacy's and at most a handful);
+    //   carry — a drag stroke that starts inside a red field and runs 300
+    //     px onto blank paper: its first ~4 dabs past the field read closer
+    //     to red than to paper (colour travels with the finger), the last
+    //     15% of the tail closer to paper (it thins out); blend must not
+    //     carry (its tail is paper too);
+    //   timing — ms per dab at 900x600 AND the real 4000x2500 layer, one
+    //     1x1 fence per timed canvas, legacy / drag / blend at size 40 (the
+    //     runner budgets drag / blend at 4000x2500 — the legacy column is
+    //     the ~8 ms self-referential drawImage it replaces);
+    //   determinism — rerun + batch 1 vs 7 per v3 mode, pixel-identical.
+    const SMUDGE_MODES = ["legacy", "drag", "blend"];
+    // Target drawImage calls per dab, per renderer — the engine contract the
+    // timing's dab count is derived from: legacy re-stamps its square once,
+    // drag lays the carry once, blend lays the blurred footprint once.
+    const SMUDGE_TARGET_DRAWS = { legacy: 1, drag: 1, blend: 1 };
+    const SMUDGE_SIZE = 40;
+    const SMUDGE_STRENGTH = 0.6;
+    const SMUDGE_PRESSURE = 0.7;
+    const SMUDGE_CORNER_FLOOR = 12; // v3 corner px allowed (AA noise), on top of "< legacy"
+    const SMUDGE_RED = [224, 75, 42];
+    const PAPER = [255, 255, 255];
+    const CARRY_FIELD = { x0: 60, x1: 300 }; // the red field of the carry strip; the stroke starts inside it
+    const CARRY_TAIL = 300; // px of blank paper the carry stroke runs on for
+    const CARRY_FIRST_DABS = 4;
+    // Ops exactly as startStroke puts them on the wire (key order included):
+    // legacy = no `v`; v3 = v:3 + smudgeMode.
+    const smudgeSettingsFor = (mode, size = SMUDGE_SIZE, strength = SMUDGE_STRENGTH) => {
+      const settings = { brush: "smudge", color: "#000000", size, opacity: 1, variation: 0, seed: SEED_A, strength };
+      if (mode !== "legacy") {
+        settings.v = 3;
+        settings.smudgeMode = mode;
+      }
+      return settings;
+    };
+    const smudgeField = (ctx, boundary) => {
       ctx.fillStyle = COLORS.red;
       ctx.fillRect(60, 60, boundary - 60, TILE_H - 120);
       ctx.fillStyle = COLORS.mixBlue;
       ctx.fillRect(boundary, 60, boundary - 60, TILE_H - 120);
-      const band = { x: boundary - 40, y: 100, w: 80, h: 400 };
-      const before = meanOnWhite(work, band);
-      const settings = { brush: "smudge", color: "#000000", size, opacity: 1, variation: 0, seed: SEED_A, strength };
-      const renderer = makeSmudgeRenderer(settings, work);
-      // Four horizontal passes at different heights, alternating direction,
-      // plus one diagonal — quarter-px quantized, one point per addPoints.
-      const passes = [
-        { y: 150, from: boundary - 160, to: boundary + 160 },
-        { y: 250, from: boundary + 160, to: boundary - 160 },
-        { y: 350, from: boundary - 160, to: boundary + 160 },
-        { y: 450, from: boundary + 160, to: boundary - 160 },
-      ];
-      const t0 = performance.now();
-      let fed = 0;
-      for (const pass of passes) {
+    };
+    // Horizontal passes (x relative to the boundary), alternating direction.
+    const SMUDGE_PASSES = [
+      { y: 150, from: -160, to: 160 },
+      { y: 250, from: 160, to: -160 },
+      { y: 350, from: -160, to: 160 },
+      { y: 450, from: 160, to: -160 },
+    ];
+    const smudgeStrokes = (boundary) => {
+      const strokes = SMUDGE_PASSES.map((pass) => {
+        const points = [];
         for (let i = 0; i < 120; i += 1) {
           const t = i / 119;
-          renderer.addPoints(ctx, [{ x: q4(pass.from + (pass.to - pass.from) * t), y: q4(pass.y + 6 * Math.sin(t * Math.PI * 4)), pressure: 0.7 }]);
-          fed += 1;
+          points.push({ x: q4(boundary + pass.from + (pass.to - pass.from) * t), y: q4(pass.y + 6 * Math.sin(t * Math.PI * 4)), pressure: SMUDGE_PRESSURE });
         }
-      }
+        return points;
+      });
+      const diagonal = [];
       for (let i = 0; i < 160; i += 1) {
         const t = i / 159;
-        renderer.addPoints(ctx, [{ x: q4(boundary - 200 + 400 * t), y: q4(520 - 440 * t), pressure: 0.7 }]);
-        fed += 1;
+        const p = t < 0.55 ? 0.15 + 0.85 * (t / 0.55) : 1 - 0.7 * ((t - 0.55) / 0.45);
+        diagonal.push({ x: q4(boundary - 200 + 400 * t), y: q4(520 - 440 * t), pressure: Math.round(p * 1000) / 1000 });
       }
-      renderer.end(ctx);
-      const ms = performance.now() - t0;
-      // How wide is the blended band now? Count columns near the boundary
-      // (row 150 ± 2) whose colour is neither the pure red nor the pure blue.
-      const rowData = ctx.getImageData(boundary - 120, 148, 240, 5).data;
-      let blendedColumns = 0;
-      for (let col = 0; col < 240; col += 1) {
-        let r = 0;
-        let b = 0;
-        for (let row = 0; row < 5; row += 1) {
-          const i = (row * 240 + col) * 4;
-          r += rowData[i];
-          b += rowData[i + 2];
+      strokes.push(diagonal);
+      return strokes;
+    };
+    // Feed strokes the way every consumer does — `batch` points per
+    // addPoints call (1 = the app, 7 = the wire's batches), a fresh
+    // renderer per stroke. Legacy: the direct renderer on the work canvas
+    // (layer 0). v3: the buffered path (makeStrokeEntryCore with the work
+    // canvas as smudgeSource — its renderer samples the pre-stroke paper,
+    // the buffer commits at pen-up), exactly like App / opReplay.
+    const feedSmudge = (ctx, work, mode, strokes, batch = 1) => {
+      let fed = 0;
+      for (const points of strokes) {
+        const settings = smudgeSettingsFor(mode);
+        if (mode === "legacy") {
+          const renderer = makeSmudgeRenderer(settings, work);
+          for (let i = 0; i < points.length; i += batch) {
+            renderer.addPoints(ctx, points.slice(i, i + batch));
+          }
+          renderer.end(ctx);
+        } else {
+          const { buf, renderer, fx, pad, opacity } = makeStrokeEntryCore(settings, undefined, { smudgeSource: work });
+          for (let i = 0; i < points.length; i += batch) {
+            const slice = points.slice(i, i + batch);
+            for (const point of slice) {
+              if (buf.ensure(point.x, point.y, pad).overflow) {
+                prepareStrokeCommit(buf, renderer, fx, false);
+                buf.commit(ctx, opacity);
+                buf.reset();
+                buf.ensure(point.x, point.y, pad);
+              }
+            }
+            renderer.addPoints(buf.getCtx(), slice, buf.base());
+          }
+          prepareStrokeCommit(buf, renderer, fx);
+          buf.commit(ctx, opacity);
+          buf.dispose();
         }
-        r /= 5;
-        b /= 5;
-        if (r > 40 && b > 40 && Math.abs(r - b) < 180) blendedColumns += 1;
+        fed += points.length;
       }
-      const sheet = onWhite(work);
-      label(sheet.getContext("2d"), `smudge  size ${size}  strength ${strength}  pressure 0.7`, 12, 10);
-      const images = [];
-      emit(images, "smudge.png", sheet);
-      work.width = 0;
+      return fed;
+    };
+    // One timed stroke per renderer: legacy = the direct walk, fenced on
+    // the target; v3 = the buffered walk into a PRE-SIZED buffer (no grow
+    // inside the clock), fenced on the buffer, then the commit fenced on
+    // the target. `count` wraps the drawing ctx in the Proxy (untimed run).
+    const timeSmudgeStroke = (ctx, work, mode, points, count = false) => {
+      const settings = smudgeSettingsFor(mode);
+      if (mode === "legacy") {
+        const renderer = makeSmudgeRenderer(settings, work);
+        const target = count ? makeCountingCtx(ctx) : null;
+        const t0 = performance.now();
+        for (const point of points) renderer.addPoints(target ? target.proxy : ctx, [point]);
+        flushGpu(ctx);
+        return { addMs: performance.now() - t0, commitMs: 0, counts: target ? target.counts : null };
+      }
+      const { buf, renderer, fx, pad, opacity } = makeStrokeEntryCore(settings, undefined, { smudgeSource: work });
+      for (const point of points) buf.ensure(point.x, point.y, pad);
+      const base = buf.base();
+      const target = count ? makeCountingCtx(buf.getCtx()) : null;
+      const drawCtx = target ? target.proxy : buf.getCtx();
+      const t0 = performance.now();
+      for (const point of points) renderer.addPoints(drawCtx, [point], base);
+      flushGpu(buf.getCtx());
+      const t1 = performance.now();
+      prepareStrokeCommit(buf, renderer, fx);
+      buf.commit(ctx, opacity);
+      flushGpu(ctx);
+      const t2 = performance.now();
+      buf.dispose();
+      return { addMs: t1 - t0, commitMs: t2 - t1, counts: target ? target.counts : null };
+    };
+    const renderSmudgeTile = (mode, batch = 1) => {
+      const work = makeCanvas(TILE_W, TILE_H);
+      const ctx = work.getContext("2d");
+      const boundary = TILE_W / 2;
+      smudgeField(ctx, boundary);
+      const t0 = performance.now();
+      const fed = feedSmudge(ctx, work, mode, smudgeStrokes(boundary), batch);
+      return { work, fed, ms: performance.now() - t0 };
+    };
+    // Colour steps on white inside a rect: max channel |Δ| to the pixel
+    // below (ACROSS a horizontal pass's motion) and to the right (along it).
+    // A "corner" pixel has both above `T`.
+    const edgeStats = (canvas, rect, T = 40) => {
+      const rgb = onWhiteBytes(canvas.getContext("2d"), rect);
+      const w = rect.w;
+      const at = (x, y) => (y * w + x) * 3;
+      const step = (i, j) => Math.max(Math.abs(rgb[i] - rgb[j]), Math.abs(rgb[i + 1] - rgb[j + 1]), Math.abs(rgb[i + 2] - rgb[j + 2]));
+      const across = [];
+      let corners = 0;
+      for (let y = 0; y < rect.h - 1; y += 1) {
+        for (let x = 0; x < w - 1; x += 1) {
+          const i = at(x, y);
+          const dy = step(i, at(x, y + 1));
+          const dx = step(i, at(x + 1, y));
+          across.push(dy);
+          if (dy > T && dx > T) corners += 1;
+        }
+      }
+      across.sort((a, b) => a - b);
+      return { maxAcross: across[across.length - 1], p99Across: across[Math.floor(across.length * 0.99)], corners };
+    };
+    // The bands of the four horizontal passes: ±32 rows around each pass
+    // (dab radius ~15 + the 6-px wobble + the feather), the middle 240
+    // columns (clear of the passes' ends, whose leading edges run ACROSS
+    // the motion by design).
+    const smudgeEdgeReport = (canvas, boundary) => {
+      const out = { maxAcross: 0, p99Across: 0, corners: 0 };
+      for (const pass of SMUDGE_PASSES) {
+        const s = edgeStats(canvas, { x: boundary - 120, y: pass.y - 32, w: 240, h: 64 });
+        out.maxAcross = Math.max(out.maxAcross, s.maxAcross);
+        out.p99Across = Math.max(out.p99Across, s.p99Across);
+        out.corners += s.corners;
+      }
+      return out;
+    };
+    // The carry strip: a red field, one straight stroke from inside it to
+    // CARRY_TAIL px past its edge. Band means on white just past the field
+    // (the first CARRY_FIRST_DABS dabs) and over the last 15% of the tail.
+    const renderCarryStrip = (mode) => {
+      const strip = makeCanvas(TILE_W, TILE_H / 2);
+      const ctx = strip.getContext("2d");
+      const y = TILE_H / 4;
+      ctx.fillStyle = COLORS.red;
+      ctx.fillRect(CARRY_FIELD.x0, y - 100, CARRY_FIELD.x1 - CARRY_FIELD.x0, 200);
+      const x1 = CARRY_FIELD.x1 + CARRY_TAIL;
+      const points = [];
+      for (let i = 0; i < 400; i += 1) {
+        const t = i / 399;
+        points.push({ x: q4(120 + (x1 - 120) * t), y: q4(y), pressure: SMUDGE_PRESSURE });
+      }
+      feedSmudge(ctx, strip, mode, [points]);
+      // Dab geometry at pressure 0.7 — the engine's numbers (minSize 0.3,
+      // pressure^1.35, spacing 0.18 drag / 0.22 blend).
+      const dabPx = SMUDGE_SIZE * (0.3 + 0.7 * Math.pow(SMUDGE_PRESSURE, 1.35));
+      const step = (mode === "blend" ? 0.22 : 0.18) * dabPx;
+      const band = (x, w) => ({ x: Math.round(x), y: Math.round(y - dabPx / 4), w: Math.max(1, Math.round(w)), h: Math.round(dabPx / 2) });
+      const first = meanOnWhite(strip, band(CARRY_FIELD.x1 + 1, CARRY_FIRST_DABS * step));
+      const last = meanOnWhite(strip, band(x1 - CARRY_TAIL * 0.15, CARRY_TAIL * 0.15 - 2));
       return {
-        images,
-        report: {
+        strip,
+        firstMeanRgb: first,
+        lastMeanRgb: last,
+        firstToRed: rgbDistance(first, SMUDGE_RED),
+        firstToPaper: rgbDistance(first, PAPER),
+        lastToRed: rgbDistance(last, SMUDGE_RED),
+        lastToPaper: rgbDistance(last, PAPER),
+        firstBandPx: Math.round(CARRY_FIRST_DABS * step),
+        tailPx: CARRY_TAIL,
+      };
+    };
+    // Per-dab cost per renderer at both canvas sizes: a 700-px, 600-point
+    // stroke through a red|blue band, `runs` fenced runs (median), then ONE
+    // untimed Proxy-counted run for the dab count (target drawImage calls ÷
+    // SMUDGE_TARGET_DRAWS). Fresh canvas per run — one fence per canvas.
+    const smudgeTiming = ({ runs = 3 } = {}) => {
+      const dims = [
+        { key: "900x600", w: TILE_W, h: TILE_H },
+        { key: "4000x2500", w: CANVAS_WIDTH, h: CANVAS_HEIGHT },
+      ];
+      const out = {};
+      for (const d of dims) {
+        out[d.key] = {};
+        const cx = d.w / 2;
+        const cy = d.h / 2;
+        const points = [];
+        for (let i = 0; i < STROKE_POINTS; i += 1) {
+          const t = i / (STROKE_POINTS - 1);
+          points.push({ x: q4(cx - 350 + 700 * t), y: q4(cy + 20 * Math.sin(t * Math.PI * 3)), pressure: SMUDGE_PRESSURE });
+        }
+        const paintUnder = (ctx) => {
+          ctx.fillStyle = COLORS.red;
+          ctx.fillRect(cx - 400, cy - 80, 400, 160);
+          ctx.fillStyle = COLORS.mixBlue;
+          ctx.fillRect(cx, cy - 80, 400, 160);
+        };
+        for (const mode of SMUDGE_MODES) {
+          const times = [];
+          const commits = [];
+          for (let run = 0; run < runs; run += 1) {
+            const work = makeCanvas(d.w, d.h);
+            const ctx = work.getContext("2d");
+            paintUnder(ctx);
+            const r = timeSmudgeStroke(ctx, work, mode, points);
+            times.push(r.addMs);
+            commits.push(r.commitMs);
+            work.width = 0;
+          }
+          const work = makeCanvas(d.w, d.h);
+          const ctx = work.getContext("2d");
+          paintUnder(ctx);
+          const { counts } = timeSmudgeStroke(ctx, work, mode, points, true);
+          work.width = 0;
+          const dabs = counts.drawImage / SMUDGE_TARGET_DRAWS[mode];
+          const ms = median(times);
+          out[d.key][mode] = {
+            msMedian: +ms.toFixed(2),
+            msRuns: times.map((v) => +v.toFixed(2)),
+            commitMsMedian: +median(commits).toFixed(2),
+            dabs,
+            msPerDab: dabs > 0 ? +(ms / dabs).toFixed(4) : null,
+            targetDraws: counts.drawImage,
+            saveCalls: counts.save,
+            getImageDataOnDrawPath: counts.getImageData,
+          };
+        }
+      }
+      return out;
+    };
+    const smudgeDeterminism = () => {
+      const report = {};
+      let ok = true;
+      for (const mode of ["drag", "blend"]) {
+        const a = renderSmudgeTile(mode, 1).work;
+        const b = renderSmudgeTile(mode, 1).work;
+        const c = renderSmudgeTile(mode, 7).work;
+        const rerun = comparePixels(a, b);
+        const batching = comparePixels(a, c);
+        report[mode] = { rerunIdentical: rerun.identical, batchIdentical: batching.identical, rerun, batching, paintedPixels: pixelStats(a).painted };
+        if (!rerun.identical || !batching.identical) ok = false;
+        [a, b, c].forEach((cv) => { cv.width = 0; });
+      }
+      return { report, ok };
+    };
+    const scenarioSmudge = ({ runs = 3 }) => {
+      const boundary = TILE_W / 2;
+      const band = { x: boundary - 40, y: 100, w: 80, h: 400 };
+      const images = [];
+      const checks = [];
+      const check = (name, pass, detail) => {
+        checks.push({ name, pass, detail });
+        return pass;
+      };
+      const reference = makeCanvas(TILE_W, TILE_H);
+      smudgeField(reference.getContext("2d"), boundary);
+      const before = meanOnWhite(reference, band);
+      reference.width = 0;
+      const modes = {};
+      const tiles = {};
+      for (const mode of SMUDGE_MODES) {
+        const { work, fed, ms } = renderSmudgeTile(mode);
+        const ctx = work.getContext("2d");
+        // Stage-0 number, kept: columns near the boundary (row 150 ± 2)
+        // whose colour is neither the pure red nor the pure blue.
+        const rowData = ctx.getImageData(boundary - 120, 148, 240, 5).data;
+        let blendedColumns = 0;
+        for (let col = 0; col < 240; col += 1) {
+          let r = 0;
+          let b = 0;
+          for (let row = 0; row < 5; row += 1) {
+            const i = (row * 240 + col) * 4;
+            r += rowData[i];
+            b += rowData[i + 2];
+          }
+          r /= 5;
+          b /= 5;
+          if (r > 40 && b > 40 && Math.abs(r - b) < 180) blendedColumns += 1;
+        }
+        modes[mode] = {
           pointsFed: fed,
           ms: +ms.toFixed(2),
-          boundaryMeanBefore: before,
-          boundaryMeanAfter: meanOnWhite(sheet, band),
+          boundaryMeanAfter: meanOnWhite(work, band),
           blendedColumnsAtRow150: blendedColumns,
-        },
+          edge: smudgeEdgeReport(work, boundary),
+        };
+        tiles[mode] = work;
+      }
+      const legacyEdge = modes.legacy.edge;
+      for (const mode of ["drag", "blend"]) {
+        const e = modes[mode].edge;
+        check(`${mode} noHardEdge`, e.maxAcross < legacyEdge.maxAcross && e.p99Across < legacyEdge.p99Across, `max step across the motion ${e.maxAcross} (p99 ${e.p99Across}) vs legacy ${legacyEdge.maxAcross} (p99 ${legacyEdge.p99Across})`);
+        check(`${mode} noCorners`, e.corners < legacyEdge.corners && e.corners <= SMUDGE_CORNER_FLOOR, `${e.corners} corner px vs legacy ${legacyEdge.corners} (allowed <= ${SMUDGE_CORNER_FLOOR})`);
+      }
+      const carry = {};
+      const strips = {};
+      for (const mode of ["drag", "blend"]) {
+        const { strip, ...r } = renderCarryStrip(mode);
+        strips[mode] = strip;
+        carry[mode] = r;
+        if (mode === "drag") {
+          check("drag carryTravels", r.firstToRed < r.firstToPaper, `first ${CARRY_FIRST_DABS} dabs (${r.firstBandPx}px) past the field [${r.firstMeanRgb}]: ${r.firstToRed} from red, ${r.firstToPaper} from paper`);
+          check("drag carryThinsOut", r.lastToPaper < r.lastToRed, `last 15% of the ${CARRY_TAIL}px tail [${r.lastMeanRgb}]: ${r.lastToPaper} from paper, ${r.lastToRed} from red`);
+        } else {
+          check("blend noCarry", r.lastToPaper < r.lastToRed, `last 15% of the ${CARRY_TAIL}px tail [${r.lastMeanRgb}]: ${r.lastToPaper} from paper, ${r.lastToRed} from red`);
+        }
+      }
+      const timing = smudgeTiming({ runs });
+      const determinism = smudgeDeterminism();
+      check("determinism", determinism.ok, Object.entries(determinism.report).map(([m, d]) => `${m}: rerun=${d.rerunIdentical} batch=${d.batchIdentical}`).join(", "));
+      // Sheet: row 1 = legacy | drag | blend tiles; row 2 = the drag | blend carry strips.
+      const stripH = TILE_H / 2;
+      const sheet = makeCanvas(TILE_W * 3, TILE_H + stripH);
+      const sctx = sheet.getContext("2d");
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      SMUDGE_MODES.forEach((mode, index) => {
+        sctx.drawImage(tiles[mode], index * TILE_W, 0);
+        const e = modes[mode].edge;
+        label(sctx, `smudge ${mode}  size ${SMUDGE_SIZE}  strength ${SMUDGE_STRENGTH}  pressure ${SMUDGE_PRESSURE}  —  edge step max ${e.maxAcross} p99 ${e.p99Across}, corners ${e.corners}`, index * TILE_W + 12, 10, 14);
+        tiles[mode].width = 0;
+      });
+      ["drag", "blend"].forEach((mode, index) => {
+        sctx.drawImage(strips[mode], index * TILE_W, TILE_H);
+        const r = carry[mode];
+        label(sctx, `${mode}  from a red field onto ${CARRY_TAIL}px of paper  →  first ${CARRY_FIRST_DABS} dabs [${r.firstMeanRgb}]  last 15% [${r.lastMeanRgb}]`, index * TILE_W + 12, TILE_H + 8, 14);
+        strips[mode].width = 0;
+      });
+      sctx.fillStyle = "#c9c4b8";
+      sctx.fillRect(TILE_W, 0, 1, sheet.height);
+      sctx.fillRect(TILE_W * 2, 0, 1, sheet.height);
+      sctx.fillRect(0, TILE_H, sheet.width, 1);
+      emit(images, "smudge.png", sheet);
+      return {
+        images,
+        report: { boundaryMeanBefore: before, modes, carry, timing, determinism: determinism.report, checks },
+        ok: checks.every((c) => c.pass),
       };
     };
 
