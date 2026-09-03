@@ -1,11 +1,20 @@
 import { useEffect, useRef } from "react";
-import { mulberry32 } from "../utils/brushes";
+import { dabExtent, drawSingleDab, mulberry32, previewDabFor } from "../utils/brushes";
+
+// Chip canvas (CSS px == canvas px) and the dab size that fits it.
+const CHIP_W = 46;
+const CHIP_H = 30;
+const CHIP_DAB = 18;
 
 // A tiny live preview of a brush's mark in the currently-selected colour, shown
 // on the brush chips instead of an emoji. ONE centered dab per chip (not a
-// stroke) so the picker stays calm and readable: marker/paint = clean solid
-// dot, pencil/crayon = dot with a few paper-tooth flecks, glow = its neon
-// halo, spray = a small cluster of dots, eraser = dashed "removes" nib.
+// stroke) so the picker stays calm and readable. The dab is the engine's own
+// stamp (drawSingleDab → makeStrokeRenderer's emitDab, v3-first) at full
+// pressure with a fixed seed, so the chip shows exactly what the brush lays
+// down and never shimmers. Hand-drawn special cases: eraser = dashed "removes"
+// nib, smudge = neutral drag streak, spray = dot cluster (legacy path, no dab),
+// ink = a thick-to-hairline sweep (its dab is a plain disc — the taper IS the
+// brush, and a disc would just duplicate the marker chip).
 export default function BrushPreview({ brush, color }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -14,6 +23,9 @@ export default function BrushPreview({ brush, color }) {
     const ctx = cv.getContext("2d");
     const w = cv.width;
     const h = cv.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, w, h);
     if (brush === "eraser") {
       // Nothing to paint — show a dashed eraser nib so it reads as "removes".
@@ -54,27 +66,6 @@ export default function BrushPreview({ brush, color }) {
       ctx.globalAlpha = 1;
       return;
     }
-    if (brush === "oil" || brush === "acrylic") {
-      // Streaky bristle character: a few stacked elongated ribbons, like one
-      // dab of the real bristle stamp.
-      const lanes = brush === "oil" ? 5 : 4;
-      for (let i = 0; i < lanes; i += 1) {
-        const offsetY = (i - (lanes - 1) / 2) * 3.4;
-        ctx.globalAlpha = 0.55 + rand() * 0.45;
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + offsetY, 12 + rand() * 5, 1.5 + rand(), 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      return;
-    }
-    if (brush === "gouache") {
-      // Matte poster paint: the real dab's 1.3x tangent stretch, flat + opaque.
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, 11.7, 9, 0, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
     if (brush === "ink") {
       // All about taper: a thick-to-hairline sweep instead of a plain dot.
       ctx.beginPath();
@@ -85,50 +76,18 @@ export default function BrushPreview({ brush, color }) {
       ctx.fill();
       return;
     }
-    if (brush === "watercolor") {
-      // Translucent wash: faint full dab under a denser core, like the real
-      // water stamp — reads as a soft wet pool.
-      ctx.globalAlpha = 0.32;
+    // One centered dab of the real brush, shrunk so its widest reach (bristle
+    // ribbons, the glow halo, thrown flecks) still fits the chip.
+    const dab = previewDabFor(brush);
+    const size = dab ? Math.min(CHIP_DAB, (w - 4) / dabExtent(dab)) : CHIP_DAB;
+    if (!drawSingleDab(ctx, { brush, color: fill, size, x: cx, y: cy, pressure: 1, angle: 0, seed: 12345 })) {
+      // Unknown id (no dab params): one clean round dab.
       ctx.beginPath();
-      ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+      ctx.arc(cx, cy, CHIP_DAB / 2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 0.55;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      return;
     }
-    if (brush === "glow") {
-      // The dab under its neon shadow, like the real glow stamp.
-      ctx.shadowColor = fill;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fill(); // second pass deepens the halo
-      ctx.shadowBlur = 0;
-      return;
-    }
-    // One clean centered dab (marker/paint solid; pencil/crayon textured below).
-    ctx.beginPath();
-    ctx.arc(cx, cy, 9, 0, Math.PI * 2);
-    ctx.fill();
-    if (brush === "pencil" || brush === "crayon") {
-      // A few paper-tooth flecks so the graphite/waxy character still reads.
-      ctx.globalCompositeOperation = "destination-out";
-      for (let i = 0; i < 3; i += 1) {
-        const angle = rand() * Math.PI * 2;
-        const dist = 2 + rand() * 5;
-        ctx.globalAlpha = 0.45 + rand() * 0.35;
-        ctx.beginPath();
-        ctx.arc(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist, 1 + rand(), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = 1;
-    }
+    ctx.shadowBlur = 0; // glow leaves the ctx clean for the next render
   }, [brush, color]);
 
-  return <canvas ref={ref} width={46} height={30} className="brush-preview" aria-hidden="true" />;
+  return <canvas ref={ref} width={CHIP_W} height={CHIP_H} className="brush-preview" aria-hidden="true" />;
 }

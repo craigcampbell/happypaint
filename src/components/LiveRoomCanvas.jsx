@@ -143,8 +143,10 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(off, b.x, b.y, b.w, b.h, ox, oy, dw, dh);
       // Overlay in-progress buffered strokes (uniform stroke opacity, #62)
-      // with the same world→screen mapping, clipped to the framed page so a
-      // buffer poking outside the crop can't paint over the letterbox.
+      // with the same world→screen mapping AND the stroke's commit composite
+      // (entry.composite, from the shared entry core) so pen-up can't "pop",
+      // clipped to the framed page so a buffer poking outside the crop can't
+      // paint over the letterbox.
       if (strokes.size > 0) {
         ctx.save();
         ctx.beginPath();
@@ -154,7 +156,9 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
           if (entry.buf && entry.buf.has()) {
             const s = entry.buf;
             ctx.globalAlpha = entry.opacity;
+            ctx.globalCompositeOperation = entry.composite || "source-over";
             ctx.drawImage(s.canvas, ox + (s.x0 - b.x) * scale, oy + (s.y0 - b.y) * scale, s.w * scale, s.h * scale);
+            ctx.globalCompositeOperation = "source-over";
           }
         }
         ctx.restore();

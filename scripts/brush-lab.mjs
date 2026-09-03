@@ -9,7 +9,7 @@
 // this keeps working as the engine changes.
 //
 //   node scripts/brush-lab.mjs [--out <dir>] [--brushes a,b,c] [--port 5199]
-//   node scripts/brush-lab.mjs --golden            # guard + golden replay vs golden.json only
+//   node scripts/brush-lab.mjs --golden            # guard + mixPrefetch equivalence + golden replay vs golden.json
 //   node scripts/brush-lab.mjs --golden-record     # guard + golden replay, REWRITE golden.json
 //   node scripts/brush-lab.mjs --guard             # static dab-path guard only (no browser)
 //   BASE=http://127.0.0.1:5175 node scripts/brush-lab.mjs   # reuse a running dev server
@@ -450,9 +450,10 @@ try {
       { kind: "determinism" },
       { kind: "timing" },
       { kind: "contact" },
+      { kind: "mixPrefetch" },
       goldenSpec,
     ]
-    : [goldenSpec];
+    : [{ kind: "mixPrefetch" }, goldenSpec];
   for (const spec of scenarios) {
     const started = Date.now();
     let result;
@@ -477,6 +478,9 @@ try {
     }
     if (spec.kind === "determinism" && result.ok === false) {
       failures.push({ scenario: spec.kind, error: "determinism mismatch — see report.scenarios.determinism" });
+    }
+    if (spec.kind === "mixPrefetch" && result.ok === false) {
+      failures.push({ scenario: spec.kind, error: "wet-mix prefetch is not op-order-equivalent to the lazy flush (or the case lost its teeth) — see report.scenarios.mixPrefetch" });
     }
     if (spec.kind === "golden") {
       goldenResult = verifyGolden(result, { record: mode === "golden-record", failures });
@@ -535,6 +539,17 @@ if (Object.keys(mixing).length) {
   console.log("\nMIXING overlap mean RGB on white (yellow #f9d423 × blue #1e88e5, size 40)");
   for (const [brush, cells] of Object.entries(mixing)) {
     console.log(`  ${pad(brush, 11)} ${Object.entries(cells).map(([k, v]) => `${k}=[${v.overlapMeanRgb}]`).join("  ")}`);
+  }
+}
+const mixPrefetch = report.scenarios.mixPrefetch?.report || {};
+if (Object.keys(mixPrefetch).length) {
+  console.log("\nMIX PREFETCH (idle prefetch + invalidatePrefetch vs the lazy flush, same op script; A = commit → eraser → wet stroke, B = commit → wet → eraser → wet;");
+  console.log("  equivalent = prefetch hash == lazy hash (gates), teeth = the naive prefetch (no invalidate) differs from lazy on A (gates))");
+  for (const [brush, scripts] of Object.entries(mixPrefetch)) {
+    const a = scripts.A;
+    const b = scripts.B;
+    const flag = a.equivalent && a.teeth && b.equivalent ? "ok  " : "FAIL";
+    console.log(`  ${flag} ${pad(brush, 11)} A: equivalent=${a.equivalent} teeth=${a.teeth} [lazy ${a.hashes.lazy} prefetch ${a.hashes.prefetch} naive ${a.hashes.naive}]  B: equivalent=${b.equivalent} [lazy ${b.hashes.lazy} prefetch ${b.hashes.prefetch}]`);
   }
 }
 if (report.scenarios.smudge) {

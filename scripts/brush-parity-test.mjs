@@ -1,10 +1,26 @@
-// Stage 2 verification: (1) v2 dab marker keeps uniform opacity + EXACT 3-way
-// parity (local / live remote / history replay); (2) every dab brush draws.
+// Brush-engine 3-way parity harness (Playwright, against a server serving
+// dist/ — `npm run build` then `PORT=8790 node server.js`; BASE defaults to
+// server.js's own default port).
+//
+// Part 1 (Stage 2, kept): the v2 dab marker at 50% keeps uniform opacity and
+// ±14-luma parity across local / live remote / history reload.
+// Part 2 (Stage 2, kept): every listed brush draws.
+// Part 3 (Brush Engine Stage 1): EXACT parity — a v3 oil and a v3 acrylic
+// stroke must hash SHA-256-identical on the display canvas (the stroke's
+// screen rect) on the local client, a live remote client, and that remote
+// after a history reload. This is what the local-exactness fix buys: the
+// local dab walk is fed the very point objects the wire carries, so the same
+// engine on the same browser lands the same bytes on all three. The display
+// canvas is the doc drawn through the page's view, so both pages must lay
+// out identically: the host's header carries more pills and wraps to a
+// second row below ~1500px, which shifts the canvas and changes the fit
+// zoom — hence the wide viewport, and `layout` reports the two geometries.
+import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
-const BASE = process.env.BASE || 'http://localhost:3000';
+const BASE = process.env.BASE || 'http://localhost:8787';
 const ROOM = 'ZZS2' + Math.floor(Math.random() * 900 + 100);
 const b = await chromium.launch();
-const ctx = await b.newContext({ viewport: { width: 1280, height: 850 } });
+const ctx = await b.newContext({ viewport: { width: 1600, height: 850 } });
 
 const p2 = await ctx.newPage();
 await p2.goto(`${BASE}/join/${ROOM}`, { waitUntil: 'networkidle' }); await p2.waitForTimeout(2000);
@@ -25,6 +41,13 @@ const pickBrush = (name) => p1.evaluate((n) => {
 
 const r = await p1.evaluate(() => { const e = document.querySelector('.overlay-canvas').getBoundingClientRect(); return { x: e.x, y: e.y, w: e.width, h: e.height }; });
 const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+const geometry = (page) => page.evaluate(() => {
+  const d = document.querySelector('.display-canvas');
+  const rr = d.getBoundingClientRect();
+  return [Math.round(rr.x), Math.round(rr.y), Math.round(rr.width), Math.round(rr.height), d.width, d.height, window.devicePixelRatio];
+});
+const layout = { local: await geometry(p1), live: await geometry(p2) };
+layout.identical = layout.local.join(',') === layout.live.join(',');
 
 // --- Part 1: parity with the v2 marker at 50% ---
 await setOpacity(50);
@@ -48,8 +71,56 @@ const rc = await sample(p2, cx, cy), rb = await sample(p2, cx - 80, cy - 80);
 await p2.reload({ waitUntil: 'networkidle' }); await p2.waitForTimeout(2500);
 const hc = await sample(p2, cx, cy), hb = await sample(p2, cx - 80, cy - 80);
 
-// --- Part 2: each dab brush draws (short strokes in a row, full opacity) ---
+// --- Part 3 (runs BEFORE the legacy spray of Part 2 lands anywhere near):
+// exact display-canvas hashes for v3 oil + acrylic strokes. Each stroke gets
+// its own screen rect (CSS px, the same on every page — same viewport, same
+// default view), read back from the display canvas in canvas px.
 await setOpacity(95);
+const hashRect = (page, rect) => page.evaluate(({ rect }) => {
+  const el = document.querySelector('.display-canvas'); const g = el.getContext('2d');
+  const rr = el.getBoundingClientRect(); const sx = el.width / rr.width, sy = el.height / rr.height;
+  const x = Math.round((rect.x - rr.x) * sx), y = Math.round((rect.y - rr.y) * sy);
+  const w = Math.round(rect.w * sx), h = Math.round(rect.h * sy);
+  const data = g.getImageData(x, y, w, h).data;
+  let painted = 0;
+  for (let i = 0; i < data.length; i += 4) if (data[i] < 250 || data[i + 1] < 250 || data[i + 2] < 250) painted += 1;
+  return { bytes: Array.from(data), painted, w, h };
+}, { rect });
+const sha = (bytes) => createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+const exact = {};
+const v3 = [{ name: 'Oil', y: cy - 300 }, { name: 'Acrylic', y: cy + 300 }];
+for (const { name, y } of v3) {
+  const ok = await pickBrush(name);
+  if (!ok) { exact[name] = 'chip-not-found'; continue; }
+  await p1.waitForTimeout(150);
+  const x0 = cx - 260;
+  await p1.mouse.move(x0, y); await p1.mouse.down();
+  for (let t = 0; t <= 1.001; t += 0.04) { await p1.mouse.move(x0 + 520 * t, y + 40 * Math.sin(t * 7), { steps: 3 }); await p1.waitForTimeout(9); }
+  await p1.mouse.up(); await p1.waitForTimeout(1600);
+  await p1.mouse.move(cx, cy + 380); await p1.waitForTimeout(300); // park the pointer off the rect
+  const rect = { x: x0 - 90, y: y - 110, w: 700, h: 220 };
+  const local = await hashRect(p1, rect);
+  const live = await hashRect(p2, rect);
+  exact[name] = {
+    rect,
+    painted: { local: local.painted, live: live.painted },
+    local: sha(local.bytes),
+    live: sha(live.bytes),
+  };
+}
+await p2.reload({ waitUntil: 'networkidle' }); await p2.waitForTimeout(2500);
+for (const { name } of v3) {
+  const e = exact[name];
+  if (!e || typeof e !== 'object') continue;
+  const history = await hashRect(p2, e.rect);
+  e.history = sha(history.bytes);
+  e.painted.history = history.painted;
+  e.drew = e.painted.local > 200;
+  e.exactLive = e.local === e.live;
+  e.exactHistory = e.local === e.history;
+}
+
+// --- Part 2: each dab brush draws (short strokes in a row, full opacity) ---
 const brushResults = {};
 const names = ['Pencil', 'Crayon', 'Paint', 'Glow', 'Spray'];
 let bx = cx - 200;
@@ -67,8 +138,10 @@ for (const n of names) {
 }
 await p1.screenshot({ path: '.stage2-brushes.png', clip: { x: r.x, y: r.y, width: r.w, height: r.h } });
 await b.close();
+const exactOk = layout.identical && v3.every(({ name }) => exact[name]?.drew && exact[name]?.exactLive && exact[name]?.exactHistory);
 console.log(JSON.stringify({
   ROOM,
+  layout,
   parity: {
     local: { cross: lc, body: lb }, live: { cross: rc, body: rb }, history: { cross: hc, body: hb },
     uniformLocal: Math.abs(lum(lc) - lum(lb)) <= 14,
@@ -77,6 +150,8 @@ console.log(JSON.stringify({
     parityLive: Math.abs(lum(rb) - lum(lb)) <= 14,
     parityHistory: Math.abs(lum(hb) - lum(lb)) <= 14,
   },
+  exact,
+  exactOk,
   brushes: brushResults,
 }, null, 2));
-process.exit(0);
+process.exit(exactOk ? 0 : 1);

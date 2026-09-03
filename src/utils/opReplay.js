@@ -14,12 +14,11 @@ import {
   getStrokeDab,
   isBrushStampReady,
   makeSmudgeRenderer,
-  makeStrokeRenderer,
+  makeStrokeEntryCore,
   pointRand,
   preloadBrushStamp,
   prepareStrokeCommit,
 } from "./brushes";
-import { createStrokeBuffer } from "./strokeBuffer";
 import { createMixMap } from "./mixMap";
 import { drawShape, drawText } from "./shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "./layers";
@@ -112,24 +111,14 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
     if (!entry) {
       let buffered = 0;
       for (const open of strokes.values()) if (open.buf) buffered += 1;
-      // Stage-2 routing (identical to the studio's local + remote branch):
-      // v >= 2 AND the brush has dab params → makeStrokeRenderer. The renderer
-      // needs the full-alpha buffer, so the past-the-cap (buf: null) fallback
-      // stays on legacy segments.
-      const dab = getStrokeDab(settings);
-      if (settings.v >= 3 && !dab) return;
-      const buf = buffered < MAX_STROKE_BUFFERS ? createStrokeBuffer() : null; // null → direct fallback
-      entry = {
-        buf,
-        settings,
-        drawSettings: { ...settings, opacity: 1 },
-        opacity: Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity)),
-        pad: (settings.size || 24) * 3 + 40, // covers glow shadowBlur + spray scatter
-        lastTouch: 0,
-        // Per-stroke dab walk state → wire batching can't move dabs.
-        renderer: dab && buf ? makeStrokeRenderer(settings, mix.sample) : null,
-        fx: dab && buf ? dab : null, // commit passes: wet edge / impasto / grain
-      };
+      // The shared entry core (buffer / dab renderer / commit passes / pad /
+      // opacity / commit composite) — the same builder the studio's local +
+      // remote branches use, so nothing about a stroke is decided differently
+      // here. Past the buffer cap (buffered: false) it is the legacy direct
+      // per-segment fallback; null = a v3 op whose inline dab can't render.
+      const core = makeStrokeEntryCore(settings, mix.sample, { buffered: buffered < MAX_STROKE_BUFFERS });
+      if (!core) return;
+      entry = { ...core, settings, lastTouch: 0 };
       strokes.set(op.strokeId, entry);
     }
     entry.lastTouch = Date.now();
@@ -149,7 +138,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
         }
         if (entry.renderer) {
           // One point at a time so batch boundaries can never matter.
-          entry.renderer.addPoints(entry.buf.getCtx(), [point]);
+          entry.renderer.addPoints(entry.buf.getCtx(), [point], entry.buf.base());
         } else {
           drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
         }

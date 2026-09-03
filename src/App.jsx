@@ -6,16 +6,17 @@ import {
   getStrokeDab,
   getTexture,
   makeSmudgeRenderer,
-  makeStrokeRenderer,
+  makeStrokeEntryCore,
   paletteCatalog,
   paperTextures,
   pointRand,
+  prebuildBrushSprites,
   preloadBrushStamp,
   isBrushStampReady,
   prepareStrokeCommit,
+  releaseBrushSprites,
 } from "./utils/brushes";
-import { brushTipExtent, drawBrushTip } from "./utils/brushTip";
-import { createStrokeBuffer } from "./utils/strokeBuffer";
+import { BRUSH_TIP_ALPHA, brushTipExtent, drawBrushTip } from "./utils/brushTip";
 import { createMixMap } from "./utils/mixMap";
 import {
   CANVAS_WIDTH,
@@ -262,6 +263,13 @@ const scheduleIdle = (callback) =>
   typeof window.requestIdleCallback === "function"
     ? window.requestIdleCallback(callback, { timeout: 200 })
     : window.setTimeout(callback, 32);
+const cancelIdle = (handle) => {
+  if (typeof window.requestIdleCallback === "function") {
+    window.cancelIdleCallback(handle);
+  } else {
+    window.clearTimeout(handle);
+  }
+};
 const MAX_PALETTE_COLORS = 10;
 // Touch contacts are ignored for this long after any pen activity (contact OR
 // hover), so a hand resting on a Cintiq / iPad can't paint or pinch while the
@@ -1243,19 +1251,68 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // materializes the map once a wet dab actually samples (born fully dirty, so
   // whatever is already on layer 0 is mirrored on first use). The mark* calls
   // below are O(1) bbox unions — the pixel refresh happens lazily in sample().
-  const sampleMix = useCallback((x, y) => {
+  const ensureMixMap = useCallback(() => {
     if (!mixMapRef.current) {
       mixMapRef.current = createMixMap(() => layersRef.current[0]?.canvas || null, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
-    return mixMapRef.current.sample(x, y);
+    return mixMapRef.current;
   }, []);
+  const sampleMix = useCallback((x, y) => ensureMixMap().sample(x, y), [ensureMixMap]);
+  // Idle PREFETCH of the mirror refresh: after a commit dirties layer 0's
+  // mirror, re-read it while the pen is up instead of on the first wet dab of
+  // the next stroke (that read — a downscaled drawImage + a small
+  // getImageData — was the one stroke-start stall the wet path had). Strictly
+  // a prefetch: sample() still flushes itself when dirty, so a dab never reads
+  // a stale mirror, and a flush that lands mid-stroke (pointer down) is
+  // skipped — the lazy path handles it in op order, exactly as before.
+  const mixPrefetchRef = useRef(0);
+  const scheduleMixPrefetch = useCallback(() => {
+    if (mixPrefetchRef.current) {
+      return;
+    }
+    mixPrefetchRef.current = scheduleIdle(() => {
+      mixPrefetchRef.current = 0;
+      if (activePointerRef.current == null) {
+        ensureMixMap().flush();
+      }
+    });
+  }, [ensureMixMap]);
   // A stroke-buffer/image commit landed on `layer` — if that's layer 0, the
-  // mix map's mirror of that bbox is stale now.
+  // mix map's mirror of that bbox is stale now (and worth prefetching).
   const markMixDirty = useCallback((layer, bounds) => {
-    if (mixMapRef.current && layer && layer === layersRef.current[0]) {
-      mixMapRef.current.markDirty(bounds);
+    if (layer && layer === layersRef.current[0]) {
+      mixMapRef.current?.markDirty(bounds);
+      scheduleMixPrefetch();
+    }
+  }, [scheduleMixPrefetch]);
+  // An UNMARKED write landed on `layer` (eraser / smudge / shape / text /
+  // sticker — the paths that draw the layer directly and never markDirty):
+  // if that's layer 0, anything the idle prefetch read since the last wet
+  // sample may be stale, and history / spectators / the other clients (lazy
+  // maps, no prefetch) would re-read it at their next sample. Hand it back
+  // to the dirty list so we read it at the same op-order point (P5). O(1);
+  // calling it for a write that no prefetch preceded is a no-op.
+  const invalidateMixPrefetch = useCallback((layer) => {
+    if (layer && layer === layersRef.current[0]) {
+      mixMapRef.current?.invalidatePrefetch();
     }
   }, []);
+  // Studio mount: build the wet-mix mirror (born fully dirty) and the brush
+  // sprite atlases (Stage 2) in idle time, so neither is paid for on a first
+  // stroke. Released again on unmount / tab hidden (see the effects below).
+  useEffect(() => {
+    const handle = scheduleIdle(() => {
+      prebuildBrushSprites();
+      scheduleMixPrefetch();
+    });
+    return () => {
+      cancelIdle(handle);
+      if (mixPrefetchRef.current) {
+        cancelIdle(mixPrefetchRef.current);
+        mixPrefetchRef.current = 0;
+      }
+    };
+  }, [scheduleMixPrefetch]);
 
   useEffect(() => {
     const recipeSettings = activeBrushRecipe ? recipeToBrushSettings(activeBrushRecipe, { color: selectedColor }) : null;
@@ -1592,8 +1649,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         continue;
       }
       if (entry.buf && entry.buf.has()) {
+        // At the stroke's opacity AND its commit composite (entry.composite,
+        // from the shared entry core), so the pen-up commit can't "pop".
         context.save();
         context.globalAlpha = entry.opacity;
+        context.globalCompositeOperation = entry.composite;
         context.drawImage(entry.buf.canvas, entry.buf.x0, entry.buf.y0);
         context.restore();
       }
@@ -1716,12 +1776,24 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       context.globalAlpha = 1;
       // Live preview of the buffered local stroke (#62): the buffer holds the
       // stroke at full opacity, so drawing it here at strokeOpacity x layer
-      // opacity matches exactly what the pen-up commit will look like.
+      // opacity, with the stroke's own commit composite, matches exactly what
+      // the pen-up commit will look like. Symmetry strokes preview every
+      // copy's buffer.
       const stroke = localStrokeRef.current;
-      if (stroke && stroke.buf.has()) {
+      if (stroke) {
         context.save();
-        context.globalAlpha = stroke.settings.opacity * active.opacity;
-        context.drawImage(stroke.buf.canvas, stroke.buf.x0, stroke.buf.y0);
+        context.globalAlpha = stroke.opacity * active.opacity;
+        context.globalCompositeOperation = stroke.composite;
+        // Branch instead of allocating a one-element array per frame.
+        if (stroke.copies) {
+          for (const part of stroke.copies) {
+            if (part.buf.has()) {
+              context.drawImage(part.buf.canvas, part.buf.x0, part.buf.y0);
+            }
+          }
+        } else if (stroke.buf.has()) {
+          context.drawImage(stroke.buf.canvas, stroke.buf.x0, stroke.buf.y0);
+        }
         context.restore();
       }
     }
@@ -2934,7 +3006,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       for (const copy of stroke.copies) {
         if (copy.buf.has()) {
           prepareStrokeCommit(copy.buf, copy.renderer, copy.fx);
-          copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+          copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
           markMixDirty(stroke.layer, copy.buf.bounds());
         }
         copy.buf.dispose();
@@ -2944,9 +3016,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (stroke.buf.has()) {
       // Stage-2/3: flush the dab renderer + run the brush's commit passes
       // (wet edge / impasto / paper grain) INSIDE the buffer, then stamp once
-      // at the stroke's opacity (legacy strokes: no-op).
+      // at the stroke's opacity with the buffer's own composite (legacy
+      // strokes: no-op passes, source-over).
       prepareStrokeCommit(stroke.buf, stroke.renderer, stroke.fx);
-      stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
+      stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
       markMixDirty(stroke.layer, stroke.buf.bounds()); // wet-mix mirror (layer 0 only)
     }
     stroke.buf.dispose();
@@ -2994,63 +3067,107 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // (smudge !== null) sample-and-drags LAYER 0 directly — no buffer.
       const stroke = localStrokeRef.current;
       const smudge = localSmudgeRef.current;
+      // Dab walks (makeStrokeRenderer / makeSmudgeRenderer) must see EXACTLY
+      // the point sequence the wire carries — see wirePoint below.
+      const dabWalk = stroke ? (stroke.copies ? stroke.copies[0].renderer : stroke.renderer) != null : smudge != null;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
         const lastPoint = lastPointRef.current || point;
-        const activeSymmetry = normalizeSymmetry(net?.settings?.symmetry || "none");
-        const symmetricPoints = transformPointBySymmetry(point, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
-        const symmetricLastPoints = transformPointBySymmetry(lastPoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
-        if (stroke?.copies) {
-          stroke.copies.forEach((copy, copyIndex) => {
-            const copyPoint = symmetricPoints[copyIndex];
-            const copyLast = symmetricLastPoints[copyIndex] || copyPoint;
-            if (copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad).overflow) {
-              prepareStrokeCommit(copy.buf, null, copy.fx);
-              copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
-              markMixDirty(stroke.layer, copy.buf.bounds());
-              copy.buf.reset();
-              copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad);
+        // The WIRE point is computed FIRST: quarter-px quantized (dab
+        // placement integrates spacing along the path, so sub-px fidelity is
+        // visible) and deduped against the previous sent point (a point that
+        // quantizes onto it with the same pressure repaints nothing on replay,
+        // so it costs no op bytes). `wirePoint` IS the object pushed to
+        // net.pending — and it is the object the dab renderers, buf.ensure()
+        // and the symmetry expansion are fed below, so the local dab walk,
+        // buffer-grow history and copy paths are byte-identical to what every
+        // remote / spectator / replay consumer derives from the op. A point
+        // the dedupe drops is not fed at all (remotes never see it; the walk
+        // would skip it as stationary anyway). Legacy drawBrushSegment
+        // strokes (spray / eraser / custom) keep the raw point as they always
+        // have; lastPointRef, the orchestra and the cursor relay stay raw.
+        let wirePoint = null;
+        const nx = Math.round(point.x * 4) / 4;
+        const ny = Math.round(point.y * 4) / 4;
+        const prev = net ? net.last : null;
+        if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - point.pressure) >= 0.01) {
+          wirePoint = { x: nx, y: ny, pressure: point.pressure };
+          // Pen tilt rides the wire as small ints (Stage 3 dynamics will
+          // read them; harmless for Stage-2 rendering).
+          if (nativeEvent.pointerType === "pen") {
+            const tx = Math.round(pointerEvent.tiltX || 0);
+            const ty = Math.round(pointerEvent.tiltY || 0);
+            if (tx !== 0 || ty !== 0) {
+              wirePoint.tx = tx;
+              wirePoint.ty = ty;
             }
-            if (copy.renderer) {
-              copy.renderer.addPoints(copy.buf.getCtx(), [copyPoint]);
+          }
+          if (net) {
+            net.pending.push(wirePoint);
+            net.last = wirePoint;
+          }
+        }
+        // What the painter is fed: the wire object for dab walks, the raw
+        // point for legacy segments. Null = deduped, nothing to paint.
+        const walkPoint = dabWalk ? wirePoint : point;
+        if (walkPoint) {
+          const activeSymmetry = normalizeSymmetry(net?.settings?.symmetry || "none");
+          const symmetricPoints = transformPointBySymmetry(walkPoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+          const symmetricLastPoints = transformPointBySymmetry(lastPoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+          if (stroke?.copies) {
+            stroke.copies.forEach((copy, copyIndex) => {
+              const copyPoint = symmetricPoints[copyIndex];
+              const copyLast = symmetricLastPoints[copyIndex] || copyPoint;
+              if (copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad).overflow) {
+                prepareStrokeCommit(copy.buf, null, copy.fx);
+                copy.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
+                markMixDirty(stroke.layer, copy.buf.bounds());
+                copy.buf.reset();
+                copy.buf.ensure(copyPoint.x, copyPoint.y, stroke.pad);
+              }
+              if (copy.renderer) {
+                copy.renderer.addPoints(copy.buf.getCtx(), [copyPoint], copy.buf.base());
+              } else {
+                drawBrushSegment(copy.buf.getCtx(), copyLast, copyPoint, stroke.drawSettings, pointRand(stroke.seed + copyIndex, copyPoint.x, copyPoint.y));
+              }
+            });
+          } else if (stroke) {
+            if (stroke.buf.ensure(walkPoint.x, walkPoint.y, stroke.pad).overflow) {
+              // The stroke outgrew the 2048² buffer cap: bank what we have into
+              // the layer and restart the buffer here (a rare, visually-minor
+              // opacity seam on giant strokes — intended). Commit passes (wet
+              // edge / impasto / grain) run per committed chunk; renderer = null
+              // keeps the dab walk state (residual/lastPoint) alive across the
+              // restart.
+              prepareStrokeCommit(stroke.buf, null, stroke.fx);
+              stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.opacity);
+              markMixDirty(stroke.layer, stroke.buf.bounds()); // overflow chunk landed on the layer
+              stroke.buf.reset();
+              stroke.buf.ensure(walkPoint.x, walkPoint.y, stroke.pad);
+            }
+            if (stroke.renderer) {
+              // Stage-2 dab path: the renderer interpolates spaced stamps from
+              // its OWN per-stroke lastPoint/residual — feed one point at a time
+              // (matching how remote batches are unpacked per point).
+              stroke.renderer.addPoints(stroke.buf.getCtx(), [walkPoint], stroke.buf.base());
             } else {
-              drawBrushSegment(copy.buf.getCtx(), copyLast, copyPoint, stroke.drawSettings, pointRand(stroke.seed + copyIndex, copyPoint.x, copyPoint.y));
+              drawBrushSegment(stroke.buf.getCtx(), lastPoint, walkPoint, stroke.drawSettings, pointRand(stroke.seed, walkPoint.x, walkPoint.y));
             }
-          });
-        } else if (stroke) {
-          if (stroke.buf.ensure(point.x, point.y, stroke.pad).overflow) {
-            // The stroke outgrew the 2048² buffer cap: bank what we have into
-            // the layer and restart the buffer here (a rare, visually-minor
-            // opacity seam on giant strokes — intended). Commit passes (wet
-            // edge / impasto / grain) run per committed chunk; renderer = null
-            // keeps the dab walk state (residual/lastPoint) alive across the
-            // restart.
-            prepareStrokeCommit(stroke.buf, null, stroke.fx);
-            stroke.buf.commit(stroke.layer.canvas.getContext("2d"), stroke.settings.opacity);
-            markMixDirty(stroke.layer, stroke.buf.bounds()); // overflow chunk landed on the layer
-            stroke.buf.reset();
-            stroke.buf.ensure(point.x, point.y, stroke.pad);
-          }
-          if (stroke.renderer) {
-            // Stage-2 dab path: the renderer interpolates spaced stamps from
-            // its OWN per-stroke lastPoint/residual — feed one point at a time
-            // (matching how remote batches are unpacked per point).
-            stroke.renderer.addPoints(stroke.buf.getCtx(), [point]);
+          } else if (smudge) {
+            // Smudge always targets LAYER 0 — even when another layer is active
+            // — because every peer replays smudge ops against layer 0 (see
+            // startStroke). One point at a time, same as the wire consumers.
+            const layer0 = layersRef.current[0];
+            if (layer0) {
+              smudge.addPoints(layer0.canvas.getContext("2d"), [walkPoint]);
+              invalidateMixPrefetch(layer0); // direct, unmarked layer-0 write
+            }
           } else {
-            drawBrushSegment(stroke.buf.getCtx(), lastPoint, point, stroke.drawSettings, pointRand(stroke.seed, point.x, point.y));
+            symmetricPoints.forEach((copyPoint, copyIndex) => {
+              drawBrushSegment(context, symmetricLastPoints[copyIndex] || copyPoint, copyPoint, settings);
+            });
+            invalidateMixPrefetch(active); // eraser / spray / custom draw the layer directly
           }
-        } else if (smudge) {
-          // Smudge always targets LAYER 0 — even when another layer is active
-          // — because every peer replays smudge ops against layer 0 (see
-          // startStroke). One point at a time, same as the wire consumers.
-          const layer0 = layersRef.current[0];
-          if (layer0) {
-            smudge.addPoints(layer0.canvas.getContext("2d"), [point]);
-          }
-        } else {
-          symmetricPoints.forEach((copyPoint, copyIndex) => {
-            drawBrushSegment(context, symmetricLastPoints[copyIndex] || copyPoint, copyPoint, settings);
-          });
         }
         if (roomOrchestra) {
           orchestraRef.current?.playStroke({
@@ -3063,31 +3180,6 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           });
         }
         lastPointRef.current = point;
-        if (net) {
-          // Wire dedupe: a point that quantizes onto the previous one with
-          // (near-)identical pressure repaints nothing on replay, so don't
-          // spend op bytes on it. Local render keeps the raw point. Quarter-px
-          // (not whole-px) since Stage 2: dab placement integrates spacing
-          // along the path, so sub-px point fidelity is visible now.
-          const nx = Math.round(point.x * 4) / 4;
-          const ny = Math.round(point.y * 4) / 4;
-          const prev = net.last;
-          if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - point.pressure) >= 0.01) {
-            const netPoint = { x: nx, y: ny, pressure: point.pressure };
-            // Pen tilt rides the wire as small ints (Stage 3 dynamics will
-            // read them; harmless for Stage-2 rendering).
-            if (nativeEvent.pointerType === "pen") {
-              const tx = Math.round(pointerEvent.tiltX || 0);
-              const ty = Math.round(pointerEvent.tiltY || 0);
-              if (tx !== 0 || ty !== 0) {
-                netPoint.tx = tx;
-                netPoint.ty = ty;
-              }
-            }
-            net.pending.push(netPoint);
-            net.last = netPoint;
-          }
-        }
       }
 
       // Stream the buffered points to the room (throttled), so friends see the
@@ -3105,7 +3197,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // below + active + above composite per painted frame.
       scheduleStrokeFrame();
     },
-    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markMixDirty, roomOrchestra, scheduleStrokeFrame],
+    [flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, invalidateMixPrefetch, markMixDirty, roomOrchestra, scheduleStrokeFrame],
   );
 
   // ---- Pointer lifecycle. Branches by tool but shares capture/setup. ----
@@ -3280,6 +3372,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             opacity: settings.opacity,
             fontSize: settings.textSize,
           });
+          invalidateMixPrefetch(active); // direct, unmarked layer write
           if (roomAnimationRef.current || activeFrameIndexRef.current === 0) {
             const textOp = {
               kind: "text",
@@ -3407,30 +3500,37 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         const layer0 = layersRef.current[0];
         localSmudgeRef.current = layer0 ? makeSmudgeRenderer(netSettings, layer0.canvas) : null;
       } else if (brushId !== "eraser") {
+        // ONE shared entry core (buffer / dab renderer / commit passes / pad /
+        // opacity / commit composite) — the same builder applyRemoteOp and
+        // opReplay start from, so nothing about this stroke is decided
+        // differently on the local side. Symmetry: one core per copy (each
+        // copy has its own buffer + walk state); the shared fields ride on
+        // the stroke.
+        const core = makeStrokeEntryCore(netSettings, sampleMix);
+        if (!core) {
+          // A v3 dab that can't normalize draws nowhere (remotes drop it too).
+          setStatus("That brush can't be used here");
+          event.currentTarget.releasePointerCapture?.(event.pointerId);
+          activePointerRef.current = null;
+          activeCanvasRectRef.current = null;
+          strokeNetRef.current = null;
+          return;
+        }
         const sharedStroke = {
           layer: getActiveLayer(),
           settings: netSettings,
-          drawSettings: { ...netSettings, opacity: 1 },
           seed,
-          pad: settings.size * 3 + 40, // covers glow shadowBlur + spray scatter
-          // Stage-2 dab renderer: holds lastPoint/residual PER STROKE so wire
-          // batching can't move dabs. Null → legacy segment path.
+          drawSettings: core.drawSettings,
+          opacity: core.opacity,
+          composite: core.composite,
+          pad: core.pad,
         };
         localStrokeRef.current = strokeSymmetry.copies > 1
           ? {
             ...sharedStroke,
-            copies: Array.from({ length: strokeSymmetry.copies }, () => ({
-              buf: createStrokeBuffer(),
-              renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
-              fx: dab || null,
-            })),
+            copies: [core, ...Array.from({ length: strokeSymmetry.copies - 1 }, () => makeStrokeEntryCore(netSettings, sampleMix))],
           }
-          : {
-            ...sharedStroke,
-            buf: createStrokeBuffer(),
-            renderer: dab ? makeStrokeRenderer(netSettings, sampleMix) : null,
-            fx: dab || null, // commit passes: wet edge / impasto / paper grain
-        };
+          : { ...sharedStroke, ...core };
       } else {
         localStrokeRef.current = null;
       }
@@ -3440,7 +3540,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // finishStroke's markChanged("Stroke saved") covers the status update.
       dirtyRef.current = true;
     },
-    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, sampleMix, shouldRejectPointer, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, invalidateMixPrefetch, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, sampleMix, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -3530,6 +3630,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             fillShape: settingsRef.current.fillShape,
           };
           drawShape(active.canvas.getContext("2d"), tool, start, end, shapeOpts);
+          invalidateMixPrefetch(active); // direct, unmarked layer write
           if (roomAnimationRef.current || activeFrameIndexRef.current === 0) {
             const shapeOp = {
               kind: "shape",
@@ -3583,7 +3684,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       // Drawing streak: the first real stroke of the day ticks it (day-guarded).
       bumpStreakRef.current?.();
     },
-    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, restorePenEraserOverride, updateHistoryCounts],
+    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, invalidateMixPrefetch, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, restorePenEraserOverride, updateHistoryCounts],
   );
 
   // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
@@ -3650,6 +3751,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // Centred on the ring (50% = the ring's padding box, inside its border).
     tip.style.left = `calc(50% - ${box / 2}px)`;
     tip.style.top = `calc(50% - ${box / 2}px)`;
+    // Translucent tip: the engine stamps the dab at its own flow alpha, the
+    // element's opacity keeps the paint underneath readable.
+    tip.style.opacity = String(BRUSH_TIP_ALPHA);
     const ctx = tip.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, box, box);
@@ -4003,6 +4107,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     const onVisibility = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
         reset();
+        releaseBrushSprites(); // backgrounded: give iOS its canvas memory back (rebuilt lazily)
       }
     };
     window.addEventListener("blur", reset);
@@ -5516,6 +5621,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         if (image) {
           pushHistory();
           active.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          invalidateMixPrefetch(active); // direct, unmarked layer write
           renderDisplay();
           syncLayerState();
           markChanged("Sticker stamped");
@@ -5615,7 +5721,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         setShowPaintSpace(false);
       }
     },
-    [getActiveLayer, handleApplyBrushRecipe, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [getActiveLayer, handleApplyBrushRecipe, invalidateMixPrefetch, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // ---- Initialization ----
@@ -5866,6 +5972,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             drawBrushSegment(ctx, last || point, point, settings);
             last = point;
           }
+          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
           touchFrame(frame.id); // pixels landed directly — proxy/thumb are stale
           if (op.end) {
             lastMap.delete(op.strokeId);
@@ -5904,6 +6011,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           for (const point of op.points || []) {
             entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
           }
+          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
           touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
           if (op.end) {
             commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
@@ -5917,29 +6025,21 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               buffered += 1;
             }
           }
-          const opacity = Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity));
-          // Stage-2 routing (identical to the local + spectator branch):
-          // v >= 2 AND the brush has dab params → makeStrokeRenderer, whose
-          // per-stroke walk state makes the 40ms wire batching irrelevant to
-          // dab placement. The renderer needs the full-alpha buffer, so the
-          // rare past-the-cap (buf: null) fallback stays on legacy segments.
-          const dab = getStrokeDab(settings);
-          if (settings.v >= 3 && !dab) {
+          // The shared entry core (buffer / dab renderer / commit passes / pad
+          // / opacity / commit composite) — the same builder the local stroke
+          // and opReplay start from, so nothing is decided differently here.
+          // Past the cap (buffered: false) the stroke is flagged (buf: null)
+          // onto the legacy direct per-segment path — its end-op then has
+          // nothing to commit. Null = a v3 op whose inline dab can't render.
+          const core = makeStrokeEntryCore(settings, sampleMix, { buffered: buffered < REMOTE_BUFFER_CAP });
+          if (!core) {
             return;
           }
-          // Past the cap, this stroke is flagged (buf: null) onto the legacy
-          // direct per-segment path — its end-op then has nothing to commit.
-          const buf = buffered < REMOTE_BUFFER_CAP ? createStrokeBuffer() : null;
           entry = {
-            buf,
+            ...core,
             settings,
-            drawSettings: { ...settings, opacity: 1 },
-            opacity,
-            pad: (settings.size || 24) * 3 + 40,
             lastTouch: 0,
             frameId: frame.id, // the stroke's home frame — commit + overlays use it
-            renderer: dab && buf ? makeStrokeRenderer(settings, sampleMix) : null,
-            fx: dab && buf ? dab : null, // commit passes need the buffer
           };
           strokes.set(op.strokeId, entry);
           ensureRemoteSweep();
@@ -5964,7 +6064,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             }
             if (entry.renderer) {
               // One point at a time so batch boundaries can never matter.
-              entry.renderer.addPoints(entry.buf.getCtx(), [point]);
+              entry.renderer.addPoints(entry.buf.getCtx(), [point], entry.buf.base());
             } else {
               drawBrushSegment(entry.buf.getCtx(), last || point, point, entry.drawSettings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
             }
@@ -5975,6 +6075,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
             last = point;
           }
+          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
           touchFrame(frame.id); // over-cap legacy path draws the layer directly
         }
         if (op.end) {
@@ -5984,9 +6085,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         }
       } else if (op.kind === "shape") {
         drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
+        invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
         touchFrame(frame.id);
       } else if (op.kind === "text") {
         drawText(ctx, op.point, op.text, op.opts || {});
+        invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
         const image = new Image();
@@ -6008,7 +6111,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         image.src = op.dataUrl;
       }
     },
-    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
+    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, invalidateMixPrefetch, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
   );
 
   useEffect(() => {
@@ -6032,6 +6135,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       for (const copy of localStrokeRef.current?.copies || []) copy.buf?.dispose();
       localStrokeRef.current = null;
       localSmudgeRef.current = null;
+      releaseBrushSprites(); // sprite atlases / tint ring: rebuilt lazily by the next studio
     },
     [],
   );

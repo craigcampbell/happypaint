@@ -18,7 +18,14 @@
 // Origin-offset model: the buffer covers the world rect {x0, y0, w, h} and its
 // context carries a translate(-x0, -y0) transform, so callers draw in WORLD
 // coordinates. Display compositing reads `canvas` + `x0/y0/w/h` (or bounds())
-// directly.
+// directly. base() hands the same transform to the dab renderer as ONE stable
+// object ({ s, tx, ty }, mutated in place — never reallocated), so a sprite
+// dab can compose world x local with a single setTransform and addPoints can
+// put the origin transform back with one call instead of save/restore.
+//
+// `composite` is the stroke's commit blend mode (getStrokeComposite in
+// brushes.js — stored here once at creation by makeStrokeEntryCore) so every
+// commit site inherits it by default and none can drift.
 
 const MIN_SIZE = 512;
 const MAX_SIZE = 2048;
@@ -42,6 +49,9 @@ export function createStrokeBuffer() {
     y0: 0,
     w: 0,
     h: 0,
+    composite: "source-over",
+    // The world->buffer transform as one reused object (see base()).
+    _base: { s: 1, tx: 0, ty: 0 },
 
     // Make sure the buffer covers (x ± pad, y ± pad). Cheap bounds check in
     // the common case. Consecutive stroke points are each ensured, and the
@@ -84,6 +94,8 @@ export function createStrokeBuffer() {
         this.y0 = ny0;
         this.w = w;
         this.h = h;
+        this._base.tx = -nx0;
+        this._base.ty = -ny0;
         return ENSURE_OK;
       }
       // First allocation: a power-of-2 square centred on the point.
@@ -97,6 +109,8 @@ export function createStrokeBuffer() {
       this.canvas.height = size;
       this.ctx = this.canvas.getContext("2d");
       this.ctx.setTransform(1, 0, 0, 1, -this.x0, -this.y0);
+      this._base.tx = -this.x0;
+      this._base.ty = -this.y0;
       return ENSURE_OK;
     },
 
@@ -113,9 +127,18 @@ export function createStrokeBuffer() {
       return { x0: this.x0, y0: this.y0, w: this.w, h: this.h };
     },
 
+    // The buffer ctx's world-origin transform, { s: 1, tx: -x0, ty: -y0 }, as
+    // ONE stable object: mutated by ensure()/reset(), never reallocated, so a
+    // renderer can hold it for the whole stroke (across grows) with no
+    // per-point allocation. Identity until the first ensure().
+    base() {
+      return this._base;
+    },
+
     // Stamp the whole buffer onto a target context ONCE at the stroke's
-    // opacity — the uniform-opacity commit.
-    commit(targetCtx, opacity, composite = "source-over") {
+    // opacity — the uniform-opacity commit — with the stroke's composite
+    // (this.composite, set at creation; the parameter exists for probes).
+    commit(targetCtx, opacity, composite = this.composite) {
       if (!this.canvas) {
         return;
       }
@@ -135,6 +158,8 @@ export function createStrokeBuffer() {
       this.ctx = null;
       this.w = 0;
       this.h = 0;
+      this._base.tx = 0;
+      this._base.ty = 0;
     },
 
     dispose() {

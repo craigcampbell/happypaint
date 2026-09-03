@@ -58,12 +58,11 @@
     const {
       brushCatalog,
       getAuthoringDab,
-      makeStrokeRenderer,
+      makeStrokeEntryCore,
       makeSmudgeRenderer,
       prepareStrokeCommit,
       drawBrushSegment,
       pointRand,
-      createStrokeBuffer,
       createMixMap,
       CANVAS_WIDTH,
       CANVAS_HEIGHT,
@@ -196,18 +195,17 @@
     // landed) AND the target (overflow banks), commitMs after a flush of the
     // target — both are real raster time, not queue time.
     // Hooks: `beforeCommit(buf, settings, fx)` runs after the last point and
-    // before prepareStrokeCommit (the pen-up-pop probe); `composite` is the
-    // commit's blend mode (default source-over, what every consumer uses
-    // today — later stages test multiply here).
+    // before prepareStrokeCommit (the pen-up-pop probe); `composite`
+    // overrides the commit's blend mode (default: the stroke's own, from
+    // getStrokeComposite via the shared entry core — source-over for every
+    // brush today; later stages test multiply here).
     const paintStroke = (targetCtx, brushId, points, opts) => {
-      const { settings, fx } = makeSettings(brushId, opts);
+      const { settings } = makeSettings(brushId, opts);
       const batch = opts.batch || 1;
       const mix = opts.mix || null;
-      const composite = opts.composite || "source-over";
-      const buf = createStrokeBuffer();
-      const renderer = fx ? makeStrokeRenderer(settings, mix ? mix.sample : undefined) : null;
-      const drawSettings = { ...settings, opacity: 1 };
-      const pad = settings.size * 3 + 40;
+      // The same entry core App.jsx / opReplay build their strokes from.
+      const { buf, renderer, fx, drawSettings, pad } = makeStrokeEntryCore(settings, mix ? mix.sample : undefined);
+      if (opts.composite) buf.composite = opts.composite;
       const totals = { ops: 0, fill: 0, stroke: 0, drawImage: 0, fillRect: 0, getImageData: 0, save: 0 };
       // The buffer's ctx can be swapped by a grow (ensure) — re-wrap when it
       // changes and fold the old counter into the totals.
@@ -244,14 +242,14 @@
           if (buf.ensure(point.x, point.y, pad).overflow) {
             absorb();
             prepareStrokeCommit(buf, null, fx);
-            buf.commit(targetCtx, settings.opacity, composite);
+            buf.commit(targetCtx, settings.opacity);
             if (mix) mix.markDirty(buf.bounds());
             buf.reset();
             buf.ensure(point.x, point.y, pad);
           }
         }
         if (renderer) {
-          renderer.addPoints(drawCtx(), slice);
+          renderer.addPoints(drawCtx(), slice, buf.base());
         } else {
           for (const point of slice) {
             drawBrushSegment(drawCtx(), lastPoint, point, drawSettings, pointRand(settings.seed, point.x, point.y));
@@ -268,7 +266,7 @@
       if (opts.beforeCommit) opts.beforeCommit(buf, settings, fx);
       const t1b = performance.now();
       prepareStrokeCommit(buf, renderer, fx);
-      buf.commit(targetCtx, settings.opacity, composite);
+      buf.commit(targetCtx, settings.opacity); // the buffer's own composite
       flushGpu(targetCtx);
       const t2 = performance.now();
       if (mix) mix.markDirty(buf.bounds());
@@ -303,13 +301,11 @@
     // the fraction of stroke pixels that moved by more than 2/255. Same opts
     // as paintStroke; the stroke is painted onto targetCtx as a side effect.
     const measurePenUpPop = (targetCtx, brushId, points, opts = {}) => {
-      const composite = opts.composite || "source-over";
       let before = null;
       let preview = null;
       let rect = null;
       const r = paintStroke(targetCtx, brushId, points, {
         ...opts,
-        composite,
         beforeCommit: (buf, settings) => {
           if (!buf.has()) return;
           const b = buf.bounds();
@@ -327,7 +323,7 @@
           const sctx = snap.getContext("2d");
           sctx.drawImage(target, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
           sctx.setTransform(1, 0, 0, 1, -rect.x, -rect.y); // world coords, like the display path
-          buf.commit(sctx, settings.opacity, composite);
+          buf.commit(sctx, settings.opacity); // the stroke's composite, like the live preview
           sctx.setTransform(1, 0, 0, 1, 0, 0);
           preview = onWhiteBytes(sctx, { x: 0, y: 0, w: rect.w, h: rect.h });
           snap.width = 0;
@@ -899,6 +895,111 @@
       return { images, report, fixture: { schema: data.schema, seed: data.seed, canvas: data.canvas, groups: data.groups.map((g) => g.name) } };
     };
 
+
+    // (g) MIX PREFETCH: App.jsx prefetches the wet-mix mirror refresh in idle
+    // time after a commit; every other consumer (history replay, spectators,
+    // the other clients) flushes lazily inside sample(). The two must read
+    // the same bytes at the same op-order points (P5), and layer 0 has
+    // writers that never markDirty (eraser / smudge / shape / text draw the
+    // layer directly) — so the map keeps a ledger of what its prefetches read
+    // and invalidatePrefetch() (called by App at every unmarked write) hands
+    // it back. One op script, rendered three ways:
+    //   lazy     — markDirty after commits, sample() flushes (opReplay);
+    //   prefetch — + mix.flush() after every commit (the idle prefetch) and
+    //              mix.invalidatePrefetch() after every unmarked write (App);
+    //   naive    — flush after every commit, never invalidate (the bug).
+    // Script A: dry blue stroke, eraser straight through it (direct, unmarked),
+    // wet yellow stroke along the same path. A wet dab over the erased stretch
+    // must see paper (the lazy map re-reads after the eraser); a prefetch that
+    // read before the eraser still sees blue. prefetch must hash-equal lazy,
+    // and naive must differ (proof the case has teeth).
+    // Script B: dry blue, a wet stroke (its first dab is the lazy flush
+    // point), eraser, a second wet stroke over the erased stretch. The lazy
+    // mirror is stale there by design (no mark, no re-read), and the ledger
+    // must NOT re-dirty past a sample — prefetch must still equal lazy.
+    const WET_BRUSHES = ["oil", "acrylic", "watercolor", "gouache"]; // WET_PICKUP > 0
+    const ERASER = { brush: "eraser", size: 90, opacity: 1, variation: 0 }; // variation 0: no dice
+    const scenarioMixPrefetch = async ({ brushes, size = 48 }) => {
+      const wanted = WET_BRUSHES.filter((id) => brushes.includes(id));
+      const eraserLine = () => {
+        const points = [];
+        for (let i = 0; i <= 40; i += 1) {
+          points.push({ x: q4(TILE_W * (0.05 + 0.9 * (i / 40))), y: q4(TILE_H * 0.5), pressure: 0.8 });
+        }
+        return points;
+      };
+      const scripts = {
+        A: [
+          { op: "stroke", color: COLORS.mixBlue, seed: SEED_A, points: makeStroke() },
+          { op: "erase", points: eraserLine() },
+          { op: "stroke", color: COLORS.yellow, seed: SEED_B, wet: true, points: makeStroke() },
+        ],
+        B: [
+          { op: "stroke", color: COLORS.mixBlue, seed: SEED_A, points: makeStroke() },
+          { op: "stroke", color: COLORS.yellow, seed: SEED_B, wet: true, points: makeStroke({ flip: true }) },
+          { op: "erase", points: eraserLine() },
+          { op: "stroke", color: COLORS.red, seed: SEED_A, wet: true, points: makeStroke() },
+        ],
+      };
+      const variants = {
+        lazy: { flush: false, invalidate: false },
+        prefetch: { flush: true, invalidate: true },
+        naive: { flush: true, invalidate: false },
+      };
+      const render = (brushId, script, variant) => {
+        const work = makeCanvas(TILE_W, TILE_H);
+        const ctx = work.getContext("2d");
+        const mix = createMixMap(() => work, work.width, work.height); // this canvas plays layer 0
+        for (const step of script) {
+          if (step.op === "stroke") {
+            // paintStroke commits + markDirty, like App / opReplay.
+            paintStroke(ctx, brushId, step.points, { color: step.color, size, seed: step.seed, wet: !!step.wet, mix });
+            if (variant.flush) mix.flush(); // App's idle prefetch (pen up)
+          } else if (step.op === "erase") {
+            let last = step.points[0];
+            for (const point of step.points) {
+              drawBrushSegment(ctx, last, point, ERASER); // direct, unmarked
+              last = point;
+            }
+            if (variant.invalidate) mix.invalidatePrefetch(); // App's unmarked-write hook
+          }
+        }
+        return work;
+      };
+      const images = [];
+      const report = {};
+      let ok = wanted.length > 0;
+      for (const brushId of wanted) {
+        report[brushId] = {};
+        for (const [name, script] of Object.entries(scripts)) {
+          const rendered = {};
+          const hashes = {};
+          for (const [variantName, variant] of Object.entries(variants)) {
+            rendered[variantName] = render(brushId, script, variant);
+            hashes[variantName] = (await hashCanvas(rendered[variantName])).hex;
+          }
+          const equivalent = hashes.prefetch === hashes.lazy;
+          const teeth = name === "A" ? hashes.naive !== hashes.lazy : null;
+          report[brushId][name] = { equivalent, teeth, hashes: Object.fromEntries(Object.entries(hashes).map(([k, v]) => [k, v.slice(0, 12)])) };
+          if (!equivalent || teeth === false) ok = false;
+          if (name === "A") {
+            // Eyeball sheet: lazy | prefetch | naive, 1/2 scale on white.
+            const sheet = makeCanvas(TILE_W * 1.5, TILE_H / 2 + 24);
+            const sctx = sheet.getContext("2d");
+            sctx.fillStyle = "#ffffff";
+            sctx.fillRect(0, 0, sheet.width, sheet.height);
+            Object.entries(rendered).forEach(([variantName, work], index) => {
+              sctx.drawImage(work, index * (TILE_W / 2), 24, TILE_W / 2, TILE_H / 2);
+              label(sctx, `${brushId}  ${variantName}  ${hashes[variantName].slice(0, 12)}`, index * (TILE_W / 2) + 8, 4, 14);
+            });
+            emit(images, `mixprefetch-${brushId}.png`, sheet);
+          }
+          Object.values(rendered).forEach((c) => { c.width = 0; });
+        }
+      }
+      return { images, report, ok };
+    };
+
     const SCENARIOS = {
       strokes: scenarioStrokes,
       mixing: scenarioMixing,
@@ -906,6 +1007,7 @@
       determinism: scenarioDeterminism,
       timing: scenarioTiming,
       contact: scenarioContact,
+      mixPrefetch: scenarioMixPrefetch,
       golden: scenarioGolden,
     };
 

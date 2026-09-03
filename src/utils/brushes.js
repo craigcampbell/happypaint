@@ -1,3 +1,5 @@
+import { createStrokeBuffer } from "./strokeBuffer";
+
 // Each brush carries an `icon` (emoji) so the picker reads as a fun, kid-friendly
 // art box rather than a list of text chips.
 //
@@ -276,6 +278,71 @@ export function getStrokeDab(settings) {
     return getDab(settings.brush);
   }
   return null;
+}
+
+// The blend mode a stroke's buffer commits (and previews) with — a pure
+// function of the op settings, decided in ONE place so local / remote /
+// spectator / replay can never disagree. Only a dab that asks for "multiply"
+// AND a colour dark enough for multiply to read (luma < 0.92; near-white
+// multiplied over paper would vanish) gets it; everything else, including
+// every persisted op today (no dab carries `blend` yet), is source-over.
+// `dab` may be passed by callers that already normalized it (one
+// normalizeInlineDab per pen-down, not two).
+export function getStrokeComposite(settings, dab = getStrokeDab(settings)) {
+  if (!dab || dab.blend !== "multiply") {
+    return "source-over";
+  }
+  const [r, g, b] = parseColorRgb(settings.color);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luma < 0.92 ? "multiply" : "source-over";
+}
+
+// Widest reach of ONE dab as a multiple of `size` (dab diameter = 1): what a
+// box has to be to hold the whole stamp — stretched ellipses, fanned bristle
+// ribbons, pencil/crayon flecks, the glow halo. Shared by the cursor tip and
+// the chips (box sizing) and the stroke-buffer pad. Numbers come from the
+// shape branches in emitDab (fleck throw + fleck radius, ribbon length, blur
+// spread); a new shape id adds its own case here.
+export function dabExtent(dab) {
+  const d = dab || {};
+  let extent;
+  switch (d.shape) {
+    case "ellipse":
+      extent = 1.6;
+      break;
+    case "gouache":
+      extent = 1.3;
+      break;
+    case "bristle":
+      extent = Math.max(1, d.stretch || 1);
+      break;
+    case "pencil":
+      extent = 1.9; // flecks thrown up to 0.8 x size, radius up to 0.14 x size
+      break;
+    case "crayon":
+      extent = 1.9; // flecks up to 0.55 x size out, radius up to 0.375 x size
+      break;
+    case "glow":
+      extent = 2.7; // shadowBlur 0.85 x size spreads about that far past the disc
+      break;
+    case "stamp":
+      extent = Math.max(1, d.roundness || 1) * 1.42; // rotated square: its diagonal
+      break;
+    default:
+      extent = 1; // round, water
+  }
+  // Scatter throws the dab centre sideways by up to scatter x size.
+  return extent + 2 * (d.scatter || 0);
+}
+
+// The stroke buffer's ensure() margin around each point. Today's legacy pad
+// (size x 3 + 40) is the floor: every shape shipped so far reaches less than
+// 3 x size, and shrinking the pad would move buffer allocations / overflow
+// points and so repaint persisted strokes. A wider dab (a hostile inline
+// stretch/scatter) grows it instead of clipping.
+const LEGACY_PAD_EXTENT = 3;
+export function strokeBufferPad(settings, dab) {
+  return (settings.size || 24) * Math.max(LEGACY_PAD_EXTENT, dabExtent(dab)) + 40;
 }
 
 const stampCache = new Map(); // stampId -> { image, dataUrl, ready, promise }
@@ -789,6 +856,13 @@ export function makeStrokeRenderer(settings, getMix) {
   // One stamp. `rand` consumption order is FIXED per brush (scatter → rot →
   // shape flecks), so the same seed + dab coordinate rolls the same dice on
   // every client.
+  //
+  // DAB-PATH-BEGIN — the per-dab hot path. scripts/brush-lab.mjs --guard scans
+  // this region: no readbacks, no ctx.filter / shadowBlur, no allocation. The
+  // shape branches below are FROZEN legacy stamps (persisted v1/v2/v3 ops
+  // replay through them byte-for-byte); their save/restore and the glow
+  // shadowBlur are grandfathered with `guard-ok` — Stage 2 ships new shape
+  // ids on the sprite path rather than rewriting these.
   const emitDab = (ctx, x, y, pressure, angle) => {
     const rand = seed != null ? pointRand(seed, x, y) : Math.random;
     const sizePx = dabSizeAt(pressure);
@@ -833,23 +907,23 @@ export function makeStrokeRenderer(settings, getMix) {
         return;
       }
       ctx.globalAlpha = flowAlpha;
-      ctx.save();
+      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(dab.roundness || 1, 1);
       ctx.drawImage(stamp, -radius, -radius, radius * 2, radius * 2);
-      ctx.restore();
+      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "ellipse") {
       // Loaded-brush paint: elongated 1.6x along the stroke tangent.
       ctx.globalAlpha = flowAlpha;
-      ctx.save();
+      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(1.6, 1);
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, TWO_PI);
       ctx.fill();
-      ctx.restore();
+      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "pencil") {
       // Small graphite core + 2-3 tiny flecks of tooth around it.
       ctx.globalAlpha = flowAlpha;
@@ -888,14 +962,14 @@ export function makeStrokeRenderer(settings, getMix) {
       // stroke tangent — soft, flat, opaque. Its light grain + wet-edge
       // character lands in the commit passes, not per dab.
       ctx.globalAlpha = flowAlpha;
-      ctx.save();
+      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(1.3, 1);
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, TWO_PI);
       ctx.fill();
-      ctx.restore();
+      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "bristle") {
       // Oil/acrylic: N elongated sub-dab ribbons fanned perpendicular to the
       // tangent, stretched `stretchK` along it. All per-bristle variation
@@ -907,7 +981,7 @@ export function makeStrokeRenderer(settings, getMix) {
         const ty = Math.sin(rot);
         const nx = -Math.sin(rot);
         const ny = Math.cos(rot);
-        ctx.save();
+        ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         for (let i = 0; i < bristleTable.length; i += 1) {
@@ -960,9 +1034,9 @@ export function makeStrokeRenderer(settings, getMix) {
           bristle.lastY = bristle.lastY == null ? by : bristle.lastY * bristleMemory + by * (1 - bristleMemory);
           bristle.paintLoad = clamp(load - depletion * (0.35 + pressure * 0.9) + reload * pressure * (1.5 - load), 0.02, 1.5);
         }
-        ctx.restore();
+        ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       } else {
-        ctx.save();
+        ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
         ctx.translate(dx, dy);
         ctx.rotate(rot);
         for (const bristle of bristleTable) {
@@ -982,7 +1056,7 @@ export function makeStrokeRenderer(settings, getMix) {
           );
           ctx.fill();
         }
-        ctx.restore();
+        ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       }
     } else if (shape === "water") {
       // Watercolor: a faint full-size wash under a denser core — a soft-edged
@@ -1001,7 +1075,7 @@ export function makeStrokeRenderer(settings, getMix) {
       // expensive — glow's wider spacing (0.22) pays for it.
       ctx.globalAlpha = flowAlpha;
       ctx.shadowColor = color;
-      ctx.shadowBlur = sizePx * 0.85;
+      ctx.shadowBlur = sizePx * 0.85; // guard-ok — frozen legacy glow branch (Stage 2 replaces it for v3 ops)
       ctx.beginPath();
       ctx.arc(dx, dy, radius, 0, TWO_PI);
       ctx.fill();
@@ -1010,7 +1084,7 @@ export function makeStrokeRenderer(settings, getMix) {
       ctx.beginPath();
       ctx.arc(dx, dy, Math.max(0.5, radius * 0.35), 0, TWO_PI);
       ctx.fill();
-      ctx.shadowBlur = 0;
+      ctx.shadowBlur = 0; // guard-ok — frozen legacy glow branch (Stage 2 replaces it for v3 ops)
     } else {
       // "round": crisp solid circle (marker).
       ctx.globalAlpha = flowAlpha;
@@ -1019,12 +1093,22 @@ export function makeStrokeRenderer(settings, getMix) {
       ctx.fill();
     }
   };
+  // DAB-PATH-END
 
   // Walk dabs from lastPoint through each incoming point. All consumers feed
-  // this the same point sequence (wire consumers literally so; local feeds the
-  // raw pre-quantize points), so with per-stroke residual + coordinate-seeded
-  // dice the dab layout is batching-independent.
-  const addPoints = (ctx, points) => {
+  // this the same point sequence — the local client feeds the very object the
+  // wire sends (quarter-px quantized + deduped, see drawBrushFromEvent) — so
+  // with per-stroke residual + coordinate-seeded dice the dab layout is
+  // batching-independent and pixel-identical on every client.
+  //
+  // `base` (optional) is the buffer's world-origin transform from
+  // strokeBuffer.base(). Sprite shapes (Stage 2) compose it with their own
+  // per-dab placement in a single setTransform, so after the point loop the
+  // origin transform is put back ONCE here — one call per addPoints, not a
+  // save/restore pair per dab. The legacy vector branches above never leave
+  // the transform changed, so re-setting it is pixel-neutral for them. Omit
+  // it for identity-space consumers (brush studio preview, chips, cursor tip).
+  const addPoints = (ctx, points, base) => {
     let emitted = 0;
     ctx.globalCompositeOperation = "source-over";
     for (const raw of points) {
@@ -1068,6 +1152,18 @@ export function makeStrokeRenderer(settings, getMix) {
       lastPoint = { x: raw.x, y: raw.y, pressure };
     }
     ctx.globalAlpha = 1;
+    if (base) {
+      ctx.setTransform(base.s, 0, 0, base.s, base.tx, base.ty);
+    }
+  };
+
+  // One dab, outside the walk: no residual/lastPoint bookkeeping, so the
+  // preview surfaces (cursor tip, chips via drawSingleDab) show exactly the
+  // stamp emitDab lays down without opening a stroke. Identity space.
+  const stamp = (ctx, x, y, pressure, angle) => {
+    ctx.globalCompositeOperation = "source-over";
+    emitDab(ctx, x, y, clamp(pressure == null ? 1 : pressure, 0.06, 1), angle || 0);
+    ctx.globalAlpha = 1;
   };
 
   // Stroke-end hook. Dabs are emitted as points arrive, so nothing to flush
@@ -1075,8 +1171,87 @@ export function makeStrokeRenderer(settings, getMix) {
   // taper/wet-edge will need it). Never called on overflow restarts.
   const end = () => {};
 
-  return { addPoints, end };
+  return { addPoints, stamp, end };
 }
+
+// ---------------------------------------------------------------------------
+// The single-dab primitive for the preview surfaces (brushTip.js cursor tip,
+// BrushPreview.jsx chips): ONE stamp of `brush` (v3-first through
+// getAuthoringDab, so the tip previews the dab the engine will embed in the
+// next stroke) or of explicit `settings`, at (x, y) in the ctx's own space.
+// Scatter is zeroed so the stamp sits where asked; everything else — flecks,
+// ribbons, halo, rotation jitter — is the engine's own emitDab with a fixed
+// seed, so the preview never shimmers between renders. A v2 catalog dab is
+// re-expressed as an inline v3 dab (normalizeInlineDab fills exactly the
+// defaults emitDab would read), which renders identically.
+export function previewDabFor(brushOrSettings) {
+  const settings = typeof brushOrSettings === "string" ? null : brushOrSettings;
+  const dab = settings
+    ? getStrokeDab(settings)
+    : getAuthoringDab(brushOrSettings)?.dab || null;
+  return dab ? { ...dab, scatter: 0 } : null;
+}
+
+export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle = 0, pressure = 1, seed = 4242 }) {
+  const dab = previewDabFor(settings || brush);
+  if (!dab) {
+    return false;
+  }
+  const previewSettings = {
+    brush: settings?.brush || brush || "marker",
+    color: color || settings?.color || "#111827",
+    size,
+    opacity: 1,
+    seed,
+    v: 3,
+    dab,
+  };
+  makeStrokeRenderer(previewSettings).stamp(ctx, x, y, pressure, angle);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// The ONE per-stroke entry builder every consumer starts from — App.jsx
+// (local stroke + each symmetry copy + remote strokes), opReplay.applyOp
+// (history / spectator / film) — so the buffer, the dab renderer, the commit
+// passes, the pad, the opacity and the commit composite are decided in a
+// single place and can never drift between consumers. Callers spread the
+// result into their entry and add their own fields (frameId, lastTouch,
+// settings, seed...). Returns null for a v3 op whose inline dab failed to
+// normalize (nothing can draw it).
+//
+// `buffered: false` is the past-the-cap fallback (too many concurrent remote
+// strokes): no buffer, so no renderer / passes either — the legacy direct
+// per-segment path, exactly as before.
+export function makeStrokeEntryCore(settings, getMix, { buffered = true } = {}) {
+  const dab = getStrokeDab(settings);
+  if (settings.v >= 3 && !dab) {
+    return null;
+  }
+  const buf = buffered ? createStrokeBuffer() : null;
+  const composite = getStrokeComposite(settings, dab);
+  if (buf) {
+    buf.composite = composite; // every buf.commit() inherits it by default
+  }
+  return {
+    buf,
+    // Per-stroke dab walk state → wire batching can't move dabs. Null →
+    // legacy segment path (no dab params, or no buffer).
+    renderer: dab && buf ? makeStrokeRenderer(settings, getMix) : null,
+    fx: dab && buf ? dab : null, // commit passes: wet edge / impasto / grain
+    composite,
+    opacity: Math.min(1, Math.max(0.05, settings.opacity == null ? 1 : settings.opacity)),
+    drawSettings: { ...settings, opacity: 1 }, // legacy segments paint at full alpha into the buffer
+    pad: strokeBufferPad(settings, dab),
+  };
+}
+
+// Sprite lifecycle hooks (Stage 2 wires these to brushSprites.js: idle
+// prebuild of the fixed-seed atlases after the studio mounts; release of every
+// backing store on unmount / tab hidden so iOS gets its canvas memory back).
+// App.jsx already calls them at those moments; nothing to build or free yet.
+export function prebuildBrushSprites() {}
+export function releaseBrushSprites() {}
 
 // ---------------------------------------------------------------------------
 // Smudge (private rooms only): a dab walk that carries NO pigment. Each dab
