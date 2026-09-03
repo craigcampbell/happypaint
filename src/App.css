@@ -347,11 +347,19 @@ button:disabled {
   font-size: 0.95rem;
 }
 
-.brush-grid,
 .texture-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+/* Brushes go 3-up with a smaller stroke sample, so the whole brush box AND the
+   colour palette fit one screen on an ordinary laptop (13 brushes = 5 short
+   rows instead of 7 tall ones). */
+.brush-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
 }
 
 /* Fun icon-cards: a big emoji on top, the name underneath, centred — reads like
@@ -376,6 +384,23 @@ button:disabled {
   font-size: 1.7rem;
   line-height: 1;
   filter: drop-shadow(0 1px 1px rgba(23, 45, 53, 0.18));
+}
+
+.brush-grid .brush-chip {
+  min-height: 50px;
+  gap: 3px;
+  padding: 5px 4px;
+  border-radius: 12px;
+}
+.brush-grid .brush-preview {
+  width: 38px;
+  height: 25px;
+}
+.brush-grid .chip-name {
+  font-size: 0.7rem;
+}
+.brush-grid .chip-ico {
+  font-size: 1.35rem;
 }
 
 /* Live brush-mark preview on a brush chip (replaces the emoji): the actual
@@ -3194,17 +3219,19 @@ button:disabled {
 }
 .brush-cursor.is-visible { opacity: 0.95; }
 
-/* Per-brush SHAPE hints (data-brush) so the cursor implies which tool you hold,
-   not just how big it is. */
-.brush-cursor[data-brush="marker"] { border-radius: 22%; } /* chisel marker nib */
-.brush-cursor[data-brush="spray"] { border-style: dotted; border-width: 2px; } /* airbrush spread */
-.brush-cursor[data-brush="pencil"] {
-  border-width: 1px; /* thin, light pencil */
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7);
+/* The tip preview: one translucent dab of the current brush (its real shape —
+   bristles, paint ellipse, airbrush cloud…) drawn by drawBrushTip, centred on
+   the ring and free to overflow it (paint dabs are wider than they are tall). */
+.brush-cursor-tip {
+  position: absolute;
+  pointer-events: none;
 }
-.brush-cursor[data-brush="glow"] {
-  box-shadow: 0 0 10px 1px var(--bc-color), 0 0 0 1.5px rgba(255, 255, 255, 0.85);
-} /* soft neon glow */
+/* With the dab showing the shape, the size ring drops to a hairline so it reads
+   as a bound, not the tip itself. Shape tools + the eraser keep the full ring. */
+.brush-cursor:not([data-brush="shape"]):not([data-brush="eraser"]) {
+  border-width: 1px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
+}
 .brush-cursor[data-brush="eraser"] {
   border-style: dashed;
   border-color: #51606e;
@@ -5225,10 +5252,10 @@ button:disabled {
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
   }
-  .brush-grid,
   .texture-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
-  .brush-chip,
+  .brush-grid { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 5px; }
   .texture-chip { min-height: 66px; }
+  .brush-grid .brush-chip { min-height: 50px; }
   .chip-ico { font-size: 1.55rem; }
 
   /* The quick bar STAYS while the drawer is open — hiding it left kids with no

@@ -907,9 +907,12 @@ select:focus {
   font-weight: 580;
 }
 
-.brush-grid,
 .texture-grid {
   gap: 8px;
+}
+
+.brush-grid {
+  gap: 5px;
 }
 
 .brush-chip,
@@ -943,6 +946,15 @@ select:focus {
   color: var(--snap-black);
   font-size: 0.82rem;
   font-weight: 550;
+}
+
+/* Compact 3-up brush chips (see App.css .brush-grid). */
+.brush-grid .brush-chip {
+  min-height: 50px;
+  border-radius: 8px;
+}
+.brush-grid .chip-name {
+  font-size: 0.7rem;
 }
 
 .color-swatch {

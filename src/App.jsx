@@ -14,6 +14,7 @@ import {
   isBrushStampReady,
   prepareStrokeCommit,
 } from "./utils/brushes";
+import { brushTipExtent, drawBrushTip } from "./utils/brushTip";
 import { createStrokeBuffer } from "./utils/strokeBuffer";
 import { createMixMap } from "./utils/mixMap";
 import {
@@ -713,7 +714,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const focusedUserIdRef = useRef(null); // a friend we just jumped the canvas to (pulses)
   const focusTimerRef = useRef(null);
   const brushCursorRef = useRef(null); // the brush-size preview ring (DOM-positioned)
+  const brushTipCanvasRef = useRef(null); // the ring's inner canvas: one dab of the brush
+  const brushTipSigRef = useRef(""); // brush|colour|size the tip was last drawn for
   const brushCursorHideRef = useRef(null);
+  // Last known hover point of a mouse/pen over the canvas (client coords), or
+  // null when nothing is hovering. Lets a size change ([ / ] or the slider)
+  // resize the ring IN PLACE instead of yanking it to the canvas centre.
+  const brushHoverPointRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
   const [reactions, setReactions] = useState([]); // transient floating emoji
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
@@ -3622,6 +3629,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     brushCursorRef.current?.classList.remove("is-visible");
   };
 
+  // Stamp one dab of the current brush into the ring's canvas at the ring's
+  // on-screen size. Called ONLY when brush / colour / size / zoom change (see
+  // the signature check in updateBrushCursor) — never per pointer move.
+  const renderBrushTip = (d) => {
+    const tip = brushTipCanvasRef.current;
+    if (!tip) {
+      return;
+    }
+    const extent = brushTipExtent(selectedBrush, selectedTool);
+    const box = Math.ceil(d * extent) + 8; // slack for glow halos + flecks
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const px = Math.ceil(box * dpr);
+    if (tip.width !== px || tip.height !== px) {
+      tip.width = px;
+      tip.height = px;
+    }
+    tip.style.width = `${box}px`;
+    tip.style.height = `${box}px`;
+    // Centred on the ring (50% = the ring's padding box, inside its border).
+    tip.style.left = `calc(50% - ${box / 2}px)`;
+    tip.style.top = `calc(50% - ${box / 2}px)`;
+    const ctx = tip.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, box, box);
+    drawBrushTip(ctx, { brush: selectedBrush, tool: selectedTool, size: d, color: selectedColor, box });
+  };
+
   const updateBrushCursor = (clientX, clientY) => {
     const ring = brushCursorRef.current;
     const canvas = overlayCanvasRef.current;
@@ -3638,10 +3672,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     ring.style.width = `${d}px`;
     ring.style.height = `${d}px`;
     ring.style.setProperty("--bc-color", selectedColor);
-    // data-brush drives the cursor SHAPE per brush (marker = chisel, spray =
-    // dotted, glow = glowing, pencil = thin, eraser = dashed, …); shape tools
-    // (rect/ellipse/line) just show a plain ring.
-    ring.dataset.brush = selectedTool === "brush" ? selectedBrush : "shape";
+    // data-brush picks the ring style (eraser = dashed; shape tools = plain
+    // ring); the tip canvas inside shows the brush's actual dab shape.
+    const brushKey = selectedTool === "brush" ? selectedBrush : "shape";
+    ring.dataset.brush = brushKey;
+    // Re-stamp the tip only when what it shows has changed; a plain pointer
+    // move just translates the ring (the draw hot path stays clean).
+    const sig = `${brushKey}|${selectedColor}|${Math.round(d * 4)}`;
+    if (sig !== brushTipSigRef.current) {
+      brushTipSigRef.current = sig;
+      renderBrushTip(d);
+    }
     ring.style.transform = `translate(${clientX - rect.left - d / 2}px, ${clientY - rect.top - d / 2}px)`;
     ring.classList.add("is-visible");
     if (brushCursorHideRef.current) {
@@ -3652,9 +3693,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   // Flash the ring at the canvas centre for a moment — the "before you paint"
   // size preview that works even on touch (no hover). Re-armed on size changes.
+  // If a mouse/pen is hovering the canvas, the ring is resized under the
+  // pointer instead (and stays put) — the cursor must never jump away from
+  // where the user is holding it.
   const flashBrushCursor = () => {
     const canvas = overlayCanvasRef.current;
     if (!canvas) {
+      return;
+    }
+    const hover = brushHoverPointRef.current;
+    if (hover) {
+      updateBrushCursor(hover.x, hover.y);
       return;
     }
     const rect = canvas.getBoundingClientRect();
@@ -3673,6 +3722,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const handleCanvasPointerLeave = (event) => {
     // Mouse left the canvas → drop the hover ring. (Touch has no hover-leave.)
     if (event.pointerType !== "touch") {
+      brushHoverPointRef.current = null;
       hideBrushCursor();
     }
   };
@@ -3838,6 +3888,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
+    if (event.pointerType !== "touch") {
+      brushHoverPointRef.current = { x: event.clientX, y: event.clientY };
+    }
     updateBrushCursor(event.clientX, event.clientY);
     continueStroke(event);
   };
@@ -8237,7 +8290,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             />
             {/* Brush-size preview ring — sized to brushSize x zoom, tinted with the
                 colour, following the pointer (and flashed when size/brush changes). */}
-            <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true" />
+            <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true">
+              <canvas ref={brushTipCanvasRef} className="brush-cursor-tip" width={1} height={1} />
+            </div>
             <div className="remote-cursor-layer" aria-hidden="true">
               {remoteCursors.map((cursor) => (
                 <div
