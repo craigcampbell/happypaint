@@ -197,8 +197,8 @@
     // Hooks: `beforeCommit(buf, settings, fx)` runs after the last point and
     // before prepareStrokeCommit (the pen-up-pop probe); `composite`
     // overrides the commit's blend mode (default: the stroke's own, from
-    // getStrokeComposite via the shared entry core — source-over for every
-    // brush today; later stages test multiply here).
+    // getStrokeComposite via the shared entry core — multiply for the v3
+    // marker / pencil / watercolor, source-over for everything else).
     const paintStroke = (targetCtx, brushId, points, opts) => {
       const { settings } = makeSettings(brushId, opts);
       const batch = opts.batch || 1;

@@ -257,7 +257,7 @@ function fillProfile(kind, rows = SPRITE_PX) {
       let p = 1;
       switch (kind) {
         case KIND_GRAPHITE:
-          p = 1 - smooth(0.45, 1, rho);
+          p = 1 - smooth(0.66, 1, rho);
           break;
         case KIND_WAX:
           p = 1 - smooth(0.94, 1.0, rho);
@@ -288,10 +288,14 @@ function runKernel(kind, rows = SPRITE_PX) {
       let a = 0;
       switch (kind) {
         case KIND_WASH: {
-          const r = rho / (1 + 0.28 * (fieldA[i] - pMean) + 0.1 * (fieldB[i] - 0.5));
-          const ring = 0.45 + 0.55 * smooth(0.45, 0.74, r);
+          const r = rho / (1 + 0.22 * (fieldA[i] - pMean) + 0.1 * (fieldB[i] - 0.5));
+          // lat = sin^2 of the pixel's angle from the x axis (the stroke
+          // tangent after rotation): 0 fore/aft, 1 across the stroke.
+          const ey = dy / SPRITE_UNIT;
+          const lat = (ey * ey) / (rho * rho + 1e-6);
+          const ring = 0.62 + (0.1 + 0.22 * lat) * smooth(0.45, 0.74, r);
           const mask = 0.3 + 0.7 * smooth(0.25, 0.7, fieldD[i]);
-          a = (0.45 + (ring - 0.45) * mask) * (1 - smooth(0.86, 1.0, r)) * (1 + 0.22 * (fieldC[i] - 0.5));
+          a = (0.62 + (ring - 0.62) * mask) * (1 - smooth(0.62 + 0.22 * lat, 1.0, r)) * (1 + 0.4 * (fieldC[i] - 0.5));
           if (pTooth) {
             const t = 0.45 + 0.55 * smooth(0.35, 0.75, fieldE[i]);
             a *= t + (1 - t) * smooth(0.6, 0.85, r);
@@ -300,7 +304,7 @@ function runKernel(kind, rows = SPRITE_PX) {
         }
         case KIND_GRAPHITE: {
           const tooth = smooth(0.3, 0.8, 0.55 * fieldA[i] + 0.45 * fieldB[i] + 0.3 * white(x, y, pSalt));
-          a = PROFILE[i] * (0.4 + 0.6 * tooth);
+          a = PROFILE[i] * (0.3 + 0.7 * tooth);
           break;
         }
         case KIND_WAX: {
@@ -408,16 +412,30 @@ function blitVariant(data, rowWidth, variant) {
 // variant's parameters and octaves in the documented order.
 
 // wash (seed 0x57a7e12c, 8 variants): an irregular watercolor blotch — a
-// pale core, a pigment ring that is present only in ARCS around the rim (a
-// continuous ring made every dab read as a circle inside a stroke), a long
-// feather, and a two-octave wobbling outline.
+// pale core, a pigment ring present only in ARCS around the rim, a feather,
+// a two-octave wobbling outline — and ANISOTROPIC: soft along the x axis
+// (the stroke tangent once Stage 2 rotates the dab), firm with a pooled rim
+// across it. Tuned against the brush lab's stroke tiles, not the lone sprite:
+// a stroke stacks ~7 dabs per pixel, and every dab's fore/aft outline lands
+// INSIDE the stroke, where anything that survives the stacking — a ring
+// (0.45 -> 1.0 tiled the interior with cells, 0.6 -> 0.85 still drew thin
+// arcs), a hard-ish feather (20% left every outline visible as "bubble
+// wrap"), an outline swelling past the cell guard's circular clip (1.13
+// radii) — reads as circles; while every dab's LATERAL rim lands ON the
+// stroke boundary, where consecutive rims reinforce into one dense,
+// irregular edge (the mask arcs + scatter + size jitter keep it ragged). So
+// the fore/aft profile is a 38% feather with an almost-flat ring and the
+// lateral profile a 16% feather with a 0.94 rim; the interior mottle (n9) is
+// what breaks the film up, the multiply commit does the glazing.
 //   phase (ox, oy) = roll k0 (2 rolls); m3 = mean of n3 over the cell
-//   r     = rho / (1 + 0.28 * (n3 - m3) + 0.10 * (n7 - 0.5))  outline: ~0.81..1.19 radii,
+//   r     = rho / (1 + 0.22 * (n3 - m3) + 0.10 * (n7 - 0.5))  outline: ~0.86..1.16 radii,
 //                                                             average radius exactly 1 unit
-//   ring  = 0.45 + 0.55 * S(0.45, 0.74, r)                  core 0.45 rising to a broad ring of 1
+//   lat   = y^2 / (x^2 + y^2)                                0 along the tangent, 1 across it
+//   ring  = 0.62 + (0.10 + 0.22 * lat) * S(0.45, 0.74, r)   core 0.62 -> ring 0.72 fore/aft, 0.94 lateral
 //   mask  = 0.3 + 0.7 * S(0.25, 0.7, n6)                     where the ring shows
-//   a     = (0.45 + (ring - 0.45) * mask) * (1 - S(0.86, 1.0, r))   14% feather
-//         * (1 + 0.22 * (n9 - 0.5))                           interior mottle
+//   a     = (0.62 + (ring - 0.62) * mask)
+//         * (1 - S(0.62 + 0.22 * lat, 1.0, r))               38% feather fore/aft, 16% lateral
+//         * (1 + 0.40 * (n9 - 0.5))                           interior mottle
 //   variants 4-7 (drybrush): t = 0.45 + 0.55 * S(0.35, 0.75, n4);
 //         a *= t + (1 - t) * S(0.6, 0.85, r)                   tooth in the body, rim keeps pooling
 // Octaves: n3 = 1, n7 = 2, n9 = 3, n6 = 4, n4 = 5.
@@ -444,14 +462,16 @@ function buildWash(data, rowWidth, family) {
   }
 }
 
-// graphite (seed 0x1d2b8e01, 6 variants): pencil tooth — a soft disc whose
-// coverage is broken by paper grain at two scales plus per-pixel speckle.
+// graphite (seed 0x1d2b8e01, 6 variants): pencil tooth — a disc with a
+// firm-ish edge whose coverage is broken by paper grain at two scales plus
+// per-pixel speckle.
 //   phase = roll k0 (2 rolls); salt = latticeSeed(seed, v, 3)
 //   tooth = S(0.3, 0.8, 0.55 * n3 + 0.45 * n12 + 0.3 * white)
-//   a     = (1 - S(0.45, 1, rho)) * (0.4 + 0.6 * tooth)
+//   a     = (1 - S(0.66, 1, rho)) * (0.3 + 0.7 * tooth)
 // The spec's n3 alone reads as three soft blobs; the n12 octave is what makes
-// it read as paper tooth at stamp scale, and the 0.4 floor (spec 0.55) keeps
-// the stroke's edges grainy after the flow accumulates.
+// it read as paper tooth at stamp scale. The 0.3 floor (spec 0.55) and the
+// 34% edge (spec 45%) keep the stroke grainy after ~6 dabs accumulate per
+// pixel — a 55% feather read as airbrush, not graphite, in a stroke.
 function buildGraphite(data, rowWidth, family) {
   fillProfile(KIND_GRAPHITE);
   for (let v = 0; v < family.variants; v += 1) {
@@ -778,30 +798,38 @@ export function getCarryScratch() {
 
 // --- Tint ring ---------------------------------------------------------------
 // 32 pre-allocated 128^2 canvases (2 MB, allocated together on first use or
-// by prebuild). A lookup is keyed by ONE Number:
-//   ((familyIdx << 4) | variant) << 15 | rgb5key
-// with the colour quantized to 5 bits per channel (rounded), so a rainbow of
-// wet-pickup colours maps onto <= 32K keys and stays in the ring instead of
-// re-tinting per dab. On a miss the round-robin next slot is re-tinted IN
-// PLACE: 'copy' drawImage of the white variant, then 'source-in' fillRect —
-// no canvas allocation ever happens on the dab path.
+// by prebuild). A lookup is keyed by ONE Number in one of two namespaces:
+//   bucket (default):  ((familyIdx << 4) | variant) << 15 | rgb5key   (< 2^22)
+//   exact:             2^32 + ((familyIdx << 4) | variant) * 2^24 + rgb24
+// The bucket key quantizes the colour to 5 bits per channel (rounded), so a
+// rainbow of wet-pickup colours maps onto <= 32K keys and stays in the ring
+// instead of re-tinting per dab. The exact key is for a DRY stroke, whose
+// colour never changes: it must land the raw settings colour on the paper
+// (spec P4 — a 5-bit bucket would shift a picked palette colour by up to
+// 4/255), and one key per stroke costs the ring nothing. Both namespaces
+// share the same slots; keys stay exact in a double, so the ring's key
+// table is a Float64Array. On a miss the round-robin next slot is re-tinted
+// IN PLACE: 'copy' drawImage of the white variant, then 'source-in' fillRect
+// — no canvas allocation ever happens on the dab path.
 //
-// PARITY: the tint colour is the key's canonical colour (expand5(q5(c))),
-// NEVER the caller's raw rgb — two callers whose colours share a bucket must
-// get byte-identical pixels regardless of who tinted the slot first, or cache
-// order would leak into strokes. Cost: up to 4/255 per channel of colour
-// error on sprite brushes, invisible next to flow accumulation.
+// PARITY: the tint colour is the key's canonical colour (expand5(q5(c)) for a
+// bucket key, the clamped integer rgb for an exact key), NEVER the caller's
+// unrounded rgb — two callers whose colours share a key must get
+// byte-identical pixels regardless of who tinted the slot first, or cache
+// order would leak into strokes.
 
 let slots = null; // canvas[TINT_SLOTS]
 let slotCtxs = null;
-let slotKeys = null; // Int32Array(TINT_SLOTS), -1 = empty
+let slotKeys = null; // Float64Array(TINT_SLOTS), -1 = empty
 const slotByKey = new Map(); // key -> slot index
 let ringNext = 0;
+const EXACT_KEY_BASE = 4294967296; // 2^32: above every bucket key
+const EXACT_CELL_STRIDE = 16777216; // 2^24: one rgb24 range per (family, variant)
 
 function allocateSlots() {
   slots = new Array(TINT_SLOTS);
   slotCtxs = new Array(TINT_SLOTS);
-  slotKeys = new Int32Array(TINT_SLOTS).fill(-1);
+  slotKeys = new Float64Array(TINT_SLOTS).fill(-1);
   for (let i = 0; i < TINT_SLOTS; i += 1) {
     slots[i] = makeCanvas(SPRITE_PX, SPRITE_PX);
     slotCtxs[i] = slots[i].getContext("2d");
@@ -819,6 +847,11 @@ function expand5(q) {
   return ((q * 255 + 15) / 31) | 0;
 }
 
+// Integer 0..255 channel for an exact key (rounded, clamped).
+function q8(c) {
+  return c <= 0 ? 0 : c >= 255 ? 255 : (c + 0.5) | 0;
+}
+
 // The 15-bit colour part of a tint key. Exported so a wet/mix renderer can
 // detect "colour bucket changed" with one integer compare per dab.
 export function packRgb5(r, g, b) {
@@ -827,16 +860,33 @@ export function packRgb5(r, g, b) {
 
 // A 128^2 canvas holding `variant` of `family` tinted (r, g, b) — draw it
 // IMMEDIATELY: the returned canvas is a ring slot that a later call may
-// re-tint for another colour. Returns null for an unknown family / no DOM.
-export function getTintedSprite(family, variant, r, g, b) {
+// re-tint for another colour. `exact` keys the slot on the full 24-bit colour
+// (dry strokes); otherwise on the 5-bit bucket (per-dab varying colours).
+// Returns null for an unknown family / no DOM.
+export function getTintedSprite(family, variant, r, g, b, exact = false) {
   const index = FAMILY_INDEX[family];
   if (index === undefined || !HAS_DOM) {
     return null;
   }
   const count = FAMILIES[index].variants;
   const v = variant >= 0 && variant < count ? variant | 0 : 0;
-  const rgb5 = packRgb5(r, g, b);
-  const key = (((index << 4) | v) << 15) | rgb5;
+  const cell = (index << 4) | v;
+  let key;
+  let r8 = 0;
+  let g8 = 0;
+  let b8 = 0;
+  if (exact) {
+    r8 = q8(r);
+    g8 = q8(g);
+    b8 = q8(b);
+    key = EXACT_KEY_BASE + cell * EXACT_CELL_STRIDE + ((r8 << 16) | (g8 << 8) | b8);
+  } else {
+    const rgb5 = packRgb5(r, g, b);
+    key = (cell << 15) | rgb5;
+    r8 = expand5(rgb5 >> 10);
+    g8 = expand5((rgb5 >> 5) & 31);
+    b8 = expand5(rgb5 & 31);
+  }
   const hit = slotByKey.get(key);
   if (hit !== undefined) {
     return slots[hit];
@@ -857,7 +907,7 @@ export function getTintedSprite(family, variant, r, g, b) {
   ctx.globalCompositeOperation = "copy";
   ctx.drawImage(atlas, v * SPRITE_PX, 0, SPRITE_PX, SPRITE_PX, 0, 0, SPRITE_PX, SPRITE_PX);
   ctx.globalCompositeOperation = "source-in";
-  ctx.fillStyle = `rgb(${expand5(rgb5 >> 10)},${expand5((rgb5 >> 5) & 31)},${expand5(rgb5 & 31)})`;
+  ctx.fillStyle = `rgb(${r8},${g8},${b8})`;
   ctx.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
   return slots[slot];
 }
@@ -875,15 +925,17 @@ export function getTintedSprite(family, variant, r, g, b) {
 // builds what it needs on the spot.
 const IDLE_STEP_MS = 12; // the biggest single piece (wash, 8 variants) cold
 const IDLE_TIMEOUT_MS = 2000;
+let idleHandle = 0; // a self-rescheduled prebuild in flight (cancelled by release)
 export function prebuildBrushSprites(deadline) {
   if (!HAS_DOM) {
     return;
   }
+  idleHandle = 0;
   const incremental = deadline && typeof deadline.timeRemaining === "function" && typeof requestIdleCallback === "function";
   const pieces = FAMILIES.length + 2; // atlases, paper tile, tint ring
   for (let i = 0; i < pieces; i += 1) {
     if (incremental && deadline.timeRemaining() < IDLE_STEP_MS && !deadline.didTimeout) {
-      requestIdleCallback(prebuildBrushSprites, { timeout: IDLE_TIMEOUT_MS });
+      idleHandle = requestIdleCallback(prebuildBrushSprites, { timeout: IDLE_TIMEOUT_MS });
       return;
     }
     if (i < FAMILIES.length) {
@@ -898,8 +950,14 @@ export function prebuildBrushSprites(deadline) {
 
 // Free every backing store NOW (width = 0 is what makes iOS WebKit release
 // canvas memory immediately, not at GC time). Everything rebuilds lazily on
-// next use, so this is safe on studio unmount and visibilitychange hidden.
+// next use, so this is safe on studio unmount and visibilitychange hidden. A
+// prebuild still pacing itself through idle slices is cancelled too, or it
+// would rebuild everything we just freed on the next idle slot.
 export function releaseBrushSprites() {
+  if (idleHandle && typeof cancelIdleCallback === "function") {
+    cancelIdleCallback(idleHandle);
+  }
+  idleHandle = 0;
   for (let i = 0; i < atlases.length; i += 1) {
     if (atlases[i]) {
       atlases[i].width = 0;

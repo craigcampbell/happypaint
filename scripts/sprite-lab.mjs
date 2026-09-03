@@ -6,8 +6,9 @@
 //   - asserts the module's BUILD code uses only the allowed math (static scan:
 //     no atan2/cos/sin/pow/exp/tan/log, no canvas arcs/ellipses/gradients);
 //   - page A: cold prebuild time, tint-ring allocation count over 5000 rotating
-//     lookups (must be 0), wash rim/core ratios (> 1.3 per variant), the
-//     sprite sheet + close-ups, the strokes preview, release/rebuild;
+//     bucket + 5000 exact lookups (must be 0), wash LATERAL rim/core ratios
+//     (> RIM_RATIO_MIN per variant), the sprite sheet + close-ups, the strokes
+//     preview, release/rebuild;
 //   - page B (a FRESH page): rebuilds every atlas and hashes the pixels —
 //     the SHA-256 must equal page A's (determinism across builds);
 //   - writes the PNGs + sprite-lab-report.json to --out and exits non-zero on
@@ -34,7 +35,12 @@ const DEFAULT_PORT = 5203; // 5175 = vite.config strictPort, 5199 = brush-lab
 const DEFAULT_OUT = "C:/Users/CRAIGC~1/AppData/Local/Temp/claude/C--Users-Craig-Campbell-Projects-happypaint/66293c84-59a3-4ed7-ad44-97f3771b84dc/scratchpad/sprites";
 const BUILD_MS_TARGET = 30; // desktop headless target from the spec
 const BUILD_MS_FAIL = 80; // headless timing is noisy; only a big miss fails
-const RIM_RATIO_MIN = 1.3;
+// Stage 2 made the wash anisotropic (a strong all-round ring tiled a stroke's
+// interior with cells / arcs): the rim pools only ACROSS the stroke, so the
+// ratio is measured on the lateral band (sprites.html runRim). The check
+// guards that the lateral rim pools denser than the core at all, not the
+// spec's original all-round 1.3 contrast.
+const RIM_RATIO_MIN = 1.05;
 
 // ---- CLI --------------------------------------------------------------------
 const args = process.argv.slice(2);
@@ -288,6 +294,15 @@ if (a.alloc) {
   if (Math.abs(pr - 33) > 1 || Math.abs(pg - 140) > 1 || Math.abs(pb - 230) > 1 || pa < 240) {
     failures.push({ scenario: "alloc", error: `tinted slot centre is rgba(${pr},${pg},${pb},${pa}), expected ~rgba(33,140,230,>=240)` });
   }
+  // The exact path (dry strokes) lands the raw colour, hits its own key, and
+  // never collides with the bucket namespace.
+  const [er, eg, eb, ea] = a.alloc.exactProbeCentreRgba;
+  if (Math.abs(er - 30) > 1 || Math.abs(eg - 136) > 1 || Math.abs(eb - 229) > 1 || ea < 240) {
+    failures.push({ scenario: "alloc", error: `exact tinted slot centre is rgba(${er},${eg},${eb},${ea}), expected ~rgba(30,136,229,>=240)` });
+  }
+  if (!a.alloc.exactHitReturnsSameCanvas || !a.alloc.namespacesDistinct) {
+    failures.push({ scenario: "alloc", error: `exact-key ring: hit=${a.alloc.exactHitReturnsSameCanvas} namespacesDistinct=${a.alloc.namespacesDistinct}` });
+  }
 }
 if (a.build) {
   if (a.build.ms > BUILD_MS_FAIL) {
@@ -327,9 +342,11 @@ if (hashA) {
 }
 if (a.alloc) {
   console.log(`ALLOC  ${a.alloc.canvasesAllocated} canvases over ${a.alloc.lookups} rotating lookups (${a.alloc.distinctKeys} distinct keys, ${a.alloc.usPerRotatingLookup} us each incl. re-tints); hit path ${a.alloc.usPerHit} us, same canvas = ${a.alloc.hitReturnsSameCanvas}; probe centre rgba(${a.alloc.probeCentreRgba})`);
+  console.log(`       exact path: ${a.alloc.exactLookups} rotating lookups ${a.alloc.usPerExactLookup} us each; hit same canvas = ${a.alloc.exactHitReturnsSameCanvas}; namespaces distinct = ${a.alloc.namespacesDistinct}; probe centre rgba(${a.alloc.exactProbeCentreRgba})`);
 }
 if (a.rim) {
-  console.log(`RIM    wash rim(0.75-0.92)/core(0-0.5) mean alpha: ${Object.entries(a.rim.report).map(([k, r]) => `${k}=${r.ratio} (${r.core}->${r.rim})`).join("  ")}`);
+  console.log(`RIM    wash LATERAL rim(0.7-0.9, within 30deg of y)/core(0-0.5) mean alpha: ${Object.entries(a.rim.report).map(([k, r]) => `${k}=${r.ratio} (${r.core}->${r.rim})`).join("  ")}`);
+  console.log(`       along the tangent (info): ${Object.entries(a.rim.report).map(([k, r]) => `${k}=${r.along}`).join("  ")}`);
 }
 if (a.strokes) {
   console.log("STROKE preview timings (blue + red strokes per cell):");

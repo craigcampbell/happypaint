@@ -204,10 +204,26 @@
         }
       }
       const hitMs = performance.now() - t1;
+      // Exact-key path (dry strokes, Stage 2): 5000 rotating 24-bit colours
+      // through the same ring — still no allocation, and the two namespaces
+      // must not collide (a bucket hit right after must still be a hit).
+      const t2 = performance.now();
+      for (let i = 0; i < 5000; i += 1) {
+        const family = stampable[i % stampable.length];
+        last = getTintedSprite(family.id, (i * 7) % family.variants, (i * 37) & 255, (i * 91) & 255, (i * 53) & 255, true);
+      }
+      const exactMs = performance.now() - t2;
+      const exactFirst = getTintedSprite("matte", 3, 30, 136, 229, true);
+      const exactHit = getTintedSprite("matte", 3, 30, 136, 229, true) === exactFirst;
+      const bucketFirst = getTintedSprite("matte", 3, 30, 136, 229);
+      const namespacesDistinct = bucketFirst !== exactFirst && getTintedSprite("matte", 3, 30, 136, 229) === bucketFirst && getTintedSprite("matte", 3, 30, 136, 229, true) === exactFirst;
       // Correctness: a tinted slot's centre pixel carries the canonical
-      // (5-bit) colour and the sprite's alpha, i.e. copy + source-in worked.
+      // (5-bit) colour and the sprite's alpha, i.e. copy + source-in worked;
+      // the exact slot carries the exact colour.
       const probe = getTintedSprite("matte", 0, 30, 136, 229);
       const px = probe.getContext("2d").getImageData(HALF, HALF, 1, 1).data;
+      const exactProbe = getTintedSprite("matte", 0, 30, 136, 229, true);
+      const epx = exactProbe.getContext("2d").getImageData(HALF, HALF, 1, 1).data;
       return {
         canvasesAllocated: alloc.canvas - before,
         lookups: 5000,
@@ -218,12 +234,24 @@
         usPerHit: +((hitMs * 1000) / 5000).toFixed(3),
         hitReturnsSameCanvas: sameObject,
         probeCentreRgba: [...px],
+        exactLookups: 5000,
+        exactMs: +exactMs.toFixed(2),
+        usPerExactLookup: +((exactMs * 1000) / 5000).toFixed(2),
+        exactHitReturnsSameCanvas: exactHit,
+        namespacesDistinct,
+        exactProbeCentreRgba: [...epx],
         slotIsLive: last != null && last.width === SPRITE_PX,
       };
     };
 
-    // (d) RIM: per wash variant, mean alpha in the rim band (0.75-0.92 rho)
-    // over the core (0-0.5 rho). rho in SPRITE_UNIT radii, like the module.
+    // (d) RIM: per wash variant, mean alpha in the rim band (0.7-0.9 rho —
+    // where the ring rises, 0.45 -> 0.74, before the lateral feather starts
+    // at 0.84) over the core (0-0.5 rho), rho in SPRITE_UNIT radii like the
+    // module. The wash is anisotropic (Stage 2): a pooled rim ACROSS the
+    // stroke (the sprite's y axis, |sin| >= 0.87 = within 30 degrees of it)
+    // and a soft feather along it, so `ratio` is the lateral band — the
+    // formula's actual claim — and `along` (within 30 degrees of the x axis)
+    // is informational.
     const runRim = () => {
       const atlas = getAtlas("wash");
       const data = atlas.getContext("2d").getImageData(0, 0, atlas.width, atlas.height).data;
@@ -235,22 +263,33 @@
         let coreN = 0;
         let rim = 0;
         let rimN = 0;
+        let along = 0;
+        let alongN = 0;
         for (let y = 0; y < SPRITE_PX; y += 1) {
           for (let x = 0; x < SPRITE_PX; x += 1) {
-            const rho = Math.hypot(x - centre, y - centre) / SPRITE_UNIT;
+            const dx = x - centre;
+            const dy = y - centre;
+            const rho = Math.hypot(dx, dy) / SPRITE_UNIT;
+            const lat = (dy * dy) / (dx * dx + dy * dy + 1e-6); // sin^2 of the angle from the x axis
             const a = data[(y * atlas.width + v * SPRITE_PX + x) * 4 + 3] / 255;
             if (rho <= 0.5) {
               core += a;
               coreN += 1;
-            } else if (rho >= 0.75 && rho <= 0.92) {
-              rim += a;
-              rimN += 1;
+            } else if (rho >= 0.7 && rho <= 0.9) {
+              if (lat >= 0.75) {
+                rim += a;
+                rimN += 1;
+              } else if (lat <= 0.25) {
+                along += a;
+                alongN += 1;
+              }
             }
           }
         }
         const coreMean = core / coreN;
         const rimMean = rim / rimN;
-        report[`v${v}`] = { core: +coreMean.toFixed(3), rim: +rimMean.toFixed(3), ratio: +(rimMean / coreMean).toFixed(2) };
+        const alongMean = along / alongN;
+        report[`v${v}`] = { core: +coreMean.toFixed(3), rim: +rimMean.toFixed(3), ratio: +(rimMean / coreMean).toFixed(2), along: +(alongMean / coreMean).toFixed(2) };
       }
       return { report };
     };
@@ -346,8 +385,10 @@
     // crosses each blue one so overlap / glazing shows. wash commits with
     // 'multiply' (its Stage-2 composite); the rest source-over.
     const STROKE_PARAMS = {
-      wash: { flow: 0.12, spacing: 0.14, aspect: 1, rotJitter: Math.PI * 2, scatter: 0.04, composite: "multiply" },
-      "wash+bloom": { family: "wash", flow: 0.12, spacing: 0.14, aspect: 1, rotJitter: Math.PI * 2, scatter: 0.04, composite: "multiply", bloom: 0.33 },
+      // wash is anisotropic (firm rim across the stroke, soft along it), so
+      // it follows the tangent with only a small wobble — like the engine.
+      wash: { flow: 0.17, spacing: 0.13, aspect: 1, rotJitter: 0.3, scatter: 0.04, composite: "multiply" },
+      "wash+bloom": { family: "wash", flow: 0.17, spacing: 0.13, aspect: 1, rotJitter: 0.3, scatter: 0.04, composite: "multiply", bloom: 0.33 },
       graphite: { flow: 0.72, spacing: 0.14, aspect: 1.15, rotJitter: 0, scatter: 0.05, composite: "multiply" },
       wax: { flow: 0.85, spacing: 0.14, aspect: [1.05, 1.3], rotJitter: 0.25, scatter: 0.08, composite: "source-over" },
       softOval: { flow: 0.9, spacing: 0.14, aspect: 1.6, rotJitter: 0.3, scatter: 0, composite: "source-over" },

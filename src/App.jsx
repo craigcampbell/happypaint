@@ -1299,10 +1299,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   }, []);
   // Studio mount: build the wet-mix mirror (born fully dirty) and the brush
   // sprite atlases (Stage 2) in idle time, so neither is paid for on a first
-  // stroke. Released again on unmount / tab hidden (see the effects below).
+  // stroke. The IdleDeadline goes through to the prebuild so it builds one
+  // atlas per idle slice and re-schedules itself for the rest (undefined on
+  // the setTimeout fallback: one synchronous build). Released again on
+  // unmount / tab hidden (see the effects below).
   useEffect(() => {
-    const handle = scheduleIdle(() => {
-      prebuildBrushSprites();
+    const handle = scheduleIdle((deadline) => {
+      prebuildBrushSprites(deadline);
       scheduleMixPrefetch();
     });
     return () => {

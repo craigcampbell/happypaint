@@ -86,7 +86,7 @@ export default function BrushPreview({ brush, color }) {
       ctx.arc(cx, cy, CHIP_DAB / 2, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.shadowBlur = 0; // glow leaves the ctx clean for the next render
+    ctx.shadowBlur = 0; // a legacy (v2) glow dab would leave a shadow set; the v3 halo doesn't
   }, [brush, color]);
 
   return <canvas ref={ref} width={CHIP_W} height={CHIP_H} className="brush-preview" aria-hidden="true" />;

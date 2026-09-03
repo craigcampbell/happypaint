@@ -12,7 +12,17 @@
 //   node scripts/brush-lab.mjs --golden            # guard + mixPrefetch equivalence + golden replay vs golden.json
 //   node scripts/brush-lab.mjs --golden-record     # guard + golden replay, REWRITE golden.json
 //   node scripts/brush-lab.mjs --guard             # static dab-path guard only (no browser)
+//   node scripts/brush-lab.mjs --only strokes,timing   # a subset of the full run's scenarios
+//   node scripts/brush-lab.mjs --gpu --only timing     # real-GPU canvas (see GPU_ARGS) — timing only
 //   BASE=http://127.0.0.1:5175 node scripts/brush-lab.mjs   # reuse a running dev server
+//
+// Renderer caveat: headless Chromium rasterises canvas 2D in SOFTWARE
+// (SwiftShader), where a rotated bilinear drawImage costs 5-10x a flat arc
+// fill per pixel — so the default timing table penalises the sprite dabs
+// relative to what every real device (GPU-accelerated 2D canvas) pays.
+// `--gpu` launches with the machine's GPU for a representative timing run;
+// keep golden / determinism on the default (software) renderer, whose AA is
+// what golden.json was recorded with.
 //
 // Golden (Stage 0 baseline): scripts/lab/golden-ops.json is a frozen op
 // fixture (see scripts/lab/make-golden-ops.mjs); every group replays through
@@ -59,8 +69,12 @@ const argValue = (flag) => {
 const outDir = path.resolve(argValue("--out") || DEFAULT_OUT);
 const brushFilter = (argValue("--brushes") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const groupFilter = (argValue("--groups") || "").split(",").map((s) => s.trim()).filter(Boolean);
+const onlyFilter = (argValue("--only") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const port = Number(argValue("--port") || DEFAULT_PORT);
 const externalBase = process.env.BASE ? process.env.BASE.replace(/\/$/, "") : null;
+const useGpu = args.includes("--gpu");
+// A GPU-accelerated 2D canvas in headless Chromium (Windows: ANGLE on D3D11).
+const GPU_ARGS = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-gpu-blocklist", "--enable-accelerated-2d-canvas"];
 const mode = args.includes("--guard")
   ? "guard"
   : args.includes("--golden-record")
@@ -252,6 +266,7 @@ const sha1 = (file) => createHash("sha1").update(fs.readFileSync(file)).digest("
 // Everything a golden replay passes through — recorded for provenance.
 const engineFiles = [
   "src/utils/brushes.js",
+  "src/utils/brushSprites.js",
   "src/utils/strokeBuffer.js",
   "src/utils/mixMap.js",
   "src/utils/layers.js",
@@ -400,6 +415,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const report = {
   generatedAt: new Date().toISOString(),
   mode,
+  renderer: useGpu ? "gpu" : "software",
   engine: Object.fromEntries(engineFiles.map((f) => [f, sha1(path.join(ROOT, f))])),
   brushFilter,
   guard: { ok: guard.ok, regions: guard.regions, hits: guard.hits, warnings: guard.warnings },
@@ -413,7 +429,7 @@ console.log(`brush-lab: lab page at ${base}${LAB_PATH}`);
 console.log(`brush-lab: output → ${outDir}`);
 
 let goldenResult = null;
-const browser = await chromium.launch();
+const browser = await chromium.launch(useGpu ? { args: GPU_ARGS } : {});
 try {
   const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
   const page = await context.newPage();
@@ -442,7 +458,7 @@ try {
   console.log(`brush-lab: brushes = ${brushes.join(", ")}`);
 
   const goldenSpec = { kind: "golden", groups: groupFilter };
-  const scenarios = mode === "full"
+  const scenarios = (mode === "full"
     ? [
       { kind: "strokes" },
       { kind: "mixing" },
@@ -453,7 +469,17 @@ try {
       { kind: "mixPrefetch" },
       goldenSpec,
     ]
-    : [{ kind: "mixPrefetch" }, goldenSpec];
+    : [{ kind: "mixPrefetch" }, goldenSpec]
+  ).filter((spec) => mode !== "full" || !onlyFilter.length || onlyFilter.includes(spec.kind));
+  if (useGpu) {
+    const renderer = await page.evaluate(() => {
+      const gl = document.createElement("canvas").getContext("webgl");
+      const info = gl && gl.getExtension("WEBGL_debug_renderer_info");
+      return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : "unknown";
+    });
+    report.gpuRenderer = renderer;
+    console.log(`brush-lab: --gpu renderer = ${renderer}`);
+  }
   for (const spec of scenarios) {
     const started = Date.now();
     let result;

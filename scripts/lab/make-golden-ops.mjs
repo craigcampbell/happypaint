@@ -26,10 +26,15 @@
 //   node scripts/lab/make-golden-ops.mjs            # (re)write golden-ops.json
 //   node scripts/lab/make-golden-ops.mjs --check    # exit 1 if the file differs
 import fs from "node:fs";
+import { register } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brushCatalog, getAuthoringDab } from "../../src/utils/brushes.js";
-import { normalizeSymmetry } from "../../src/utils/symmetry.js";
+
+// The engine's relative imports are extensionless (vite resolves them; Node
+// doesn't) — register the resolve hook BEFORE importing it.
+register("./node-esm-hooks.mjs", import.meta.url);
+const { brushCatalog, getAuthoringDab } = await import("../../src/utils/brushes.js");
+const { normalizeSymmetry } = await import("../../src/utils/symmetry.js");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_FILE = path.join(HERE, "golden-ops.json");
@@ -209,12 +214,33 @@ const v2Settings = (brush, { color, size, opacity = 1, symmetry = null }) => {
   return settings;
 };
 
-const v3Settings = (brush, { color, size, opacity = 1, wet = false }) => {
+const v3Settings = (brush, { color, size, opacity = 1, wet = false, symmetry = null }) => {
   const authoring = getAuthoringDab(brush);
   if (!authoring || authoring.version !== 3) throw new Error(`${brush} is not a v3 (NATURAL_DABS) brush`);
   const settings = { brush, color, size, opacity, variation: 0, seed: nextSeed() };
+  if (symmetry && symmetry.copies > 1) settings.symmetry = symmetry;
   settings.v = 3;
   settings.dab = authoring.dab; // the normalized inline dab, as persisted
+  if (wet) settings.wet = true;
+  return settings;
+};
+
+// The inline dabs the studio embedded for v3 oil / acrylic when this fixture
+// was first recorded (Stage 0) — frozen LITERALS, byte-for-byte what those
+// ops carry in golden-ops.json, NOT getAuthoringDab: Stage 2 replaced the
+// oil / acrylic NATURAL_DABS entries (shape "loaded"), and the Stage-0 groups
+// are exactly the persisted history that must keep replaying unchanged. Key
+// order matters (the JSON is the contract).
+const STAGE0_V3_DABS = {
+  oil: { spacing: 0.065, minSize: 0.28, flow: 0.9, shape: "bristle", scatter: 0, rotJitter: 0, grain: 0, bristles: 12, stretch: 2.6, wetEdge: 0.12, impasto: 0.18, loaded: 1, load: 1.18, depletion: 0.018, reload: 0.004, tooth: 0.34, bristleMemory: 0.72, laneWobble: 0.14 },
+  acrylic: { spacing: 0.075, minSize: 0.24, flow: 0.96, shape: "bristle", scatter: 0, rotJitter: 0, grain: 0, bristles: 9, stretch: 2, wetEdge: 0.04, impasto: 0.12, loaded: 1, load: 0.95, depletion: 0.03, reload: 0.002, tooth: 0.24, bristleMemory: 0.58, laneWobble: 0.09 },
+};
+const v3Stage0Settings = (brush, { color, size, opacity = 1, wet = false }) => {
+  const dab = STAGE0_V3_DABS[brush];
+  if (!dab) throw new Error(`${brush} has no frozen Stage-0 v3 dab`);
+  const settings = { brush, color, size, opacity, variation: 0, seed: nextSeed() };
+  settings.v = 3;
+  settings.dab = dab;
   if (wet) settings.wet = true;
   return settings;
 };
@@ -275,8 +301,8 @@ const v2Group = () => {
   return ops;
 };
 
-// (c) v3 oil / acrylic with the inline dab embedded — dry, then wet over a v2
-// gouache under-layer (so pickup has paint to sample and drag).
+// (c) Stage-0 v3 oil / acrylic with the inline dab embedded — dry, then wet
+// over a v2 gouache under-layer (so pickup has paint to sample and drag).
 const V3_BRUSHES = ["oil", "acrylic"];
 const v3DryGroup = () => {
   const ops = [];
@@ -284,8 +310,8 @@ const v3DryGroup = () => {
   V3_BRUSHES.forEach((brush, row) => {
     SIZES.forEach((size, col) => {
       const box = cell(row * SIZES.length + col);
-      ops.push(...strokeOps(`${brush}${size}a`, v3Settings(brush, { color: COLORS.blue, size }), sCurve(box)));
-      ops.push(...strokeOps(`${brush}${size}b`, v3Settings(brush, { color: COLORS.red, size, opacity: 0.7 }), sCurve(box, { flip: true })));
+      ops.push(...strokeOps(`${brush}${size}a`, v3Stage0Settings(brush, { color: COLORS.blue, size }), sCurve(box)));
+      ops.push(...strokeOps(`${brush}${size}b`, v3Stage0Settings(brush, { color: COLORS.red, size, opacity: 0.7 }), sCurve(box, { flip: true })));
     });
   });
   return ops;
@@ -298,7 +324,7 @@ const v3WetGroup = () => {
       const box = cell(row * SIZES.length + col);
       const under = v2Settings("gouache", { color: COLORS.yellow, size: Math.max(48, size) });
       ops.push(...strokeOps(`under${size}`, under, wavePath(box, true)));
-      ops.push(...strokeOps(`${brush}${size}wet`, v3Settings(brush, { color: COLORS.mixBlue, size, wet: true }), wavePath(box, false)));
+      ops.push(...strokeOps(`${brush}${size}wet`, v3Stage0Settings(brush, { color: COLORS.mixBlue, size, wet: true }), wavePath(box, false)));
     });
   });
   return ops;
@@ -358,7 +384,7 @@ const symmetryRadialGroup = () => {
 // with the renderer's walk state intact.
 const overflowGroup = () => [
   ...strokeOps("overflowWater", v2Settings("watercolor", { color: COLORS.mixBlue, size: 40, opacity: 0.85 }), longWave({ x: 300, y: 400 }, { x: 3700, y: 1900 })),
-  ...strokeOps("overflowOil", v3Settings("oil", { color: COLORS.red, size: 60 }), longWave({ x: 300, y: 2250 }, { x: 3700, y: 2250 }, { amp: 60, lobes: 5 })),
+  ...strokeOps("overflowOil", v3Stage0Settings("oil", { color: COLORS.red, size: 60 }), longWave({ x: 300, y: 2250 }, { x: 3700, y: 2250 }, { amp: 60, lobes: 5 })),
 ];
 
 // (g) Shape ops (drawShape) and a text op (drawText) — App.jsx shapeOpts /
@@ -374,6 +400,66 @@ const shapesGroup = () => [
 const textGroup = () => [
   { kind: "text", point: { x: 400, y: 900 }, text: "Golden 0\nhistory is forever", opts: { color: "#111827", opacity: 0.9, fontSize: 220 } },
 ];
+
+// ---- Stage 2 groups (appended AFTER the Stage-0 groups so their seeds and
+// stroke ids are untouched) ----------------------------------------------------------
+// (h) One v3 stroke pair per Stage-2 shape — the marker's multiply disc and
+// every sprite family — with the dab embedded via getAuthoringDab at
+// generation time, exactly what the studio persists now.
+const V3_STAGE2_BRUSHES = ["marker", "pencil", "crayon", "paint", "gouache", "watercolor", "oil", "acrylic", "glow"];
+const v3SpritesGroup = () => {
+  const ops = [];
+  const cell = grid(SIZES.length, V3_STAGE2_BRUSHES.length);
+  V3_STAGE2_BRUSHES.forEach((brush, row) => {
+    SIZES.forEach((size, col) => {
+      const box = cell(row * SIZES.length + col);
+      ops.push(...strokeOps(`${brush}${size}a`, v3Settings(brush, { color: COLORS.blue, size }), sCurve(box)));
+      ops.push(...strokeOps(`${brush}${size}b`, v3Settings(brush, { color: COLORS.red, size, opacity: 0.7 }), sCurve(box, { flip: true })));
+    });
+  });
+  return ops;
+};
+
+// (i) Marker multiply: blue / yellow crossing (yellow over blue glazes dark
+// green), a red one at 0.8 opacity through both, and a WHITE marker — the
+// luma guard commits that one source-over (white multiplied would vanish).
+const v3MarkerMultiplyGroup = () => {
+  const box = { x0: 400, y0: 400, w: 3200, h: 1700 };
+  return [
+    ...strokeOps("mkBlue", v3Settings("marker", { color: COLORS.mixBlue, size: 70 }), sCurve(box)),
+    ...strokeOps("mkYellow", v3Settings("marker", { color: COLORS.yellow, size: 70 }), sCurve(box, { flip: true })),
+    ...strokeOps("mkRed", v3Settings("marker", { color: COLORS.red, size: 50, opacity: 0.8 }), flatLine(box, box.y0 + box.h / 2)),
+    ...strokeOps("mkWhite", v3Settings("marker", { color: "#ffffff", size: 50 }), flatLine(box, box.y0 + box.h / 2 + 300)),
+  ];
+};
+
+// (j) Watercolor glaze: dry yellow over blue (the multiply commit is the
+// mixing), then wet blue over a v3 gouache under-layer (the legacy pickup
+// lerp with the dab's own pickup 0.35).
+const v3WaterGlazeGroup = () => {
+  const cell = grid(2, 1, 80);
+  const dry = cell(0);
+  const wet = cell(1);
+  return [
+    ...strokeOps("glazeBlue", v3Settings("watercolor", { color: COLORS.mixBlue, size: 70 }), wavePath(dry, true)),
+    ...strokeOps("glazeYellow", v3Settings("watercolor", { color: COLORS.yellow, size: 70 }), wavePath(dry, false)),
+    ...strokeOps("glazeUnder", v3Settings("gouache", { color: COLORS.yellow, size: 70 }), wavePath(wet, true)),
+    ...strokeOps("glazeWet", v3Settings("watercolor", { color: COLORS.mixBlue, size: 70, wet: true }), wavePath(wet, false)),
+  ];
+};
+
+// (k) Symmetry quad copy of a wash stroke: four buffers, each with its own
+// bleed / wet-edge / granulation passes and multiply commit.
+const v3SymmetryWashGroup = () => {
+  const quad = normalizeSymmetry("quad");
+  return strokeOps("quadWash", v3Settings("watercolor", { color: COLORS.red, size: 60, symmetry: quad }), sCurve({ x0: 500, y0: 900, w: 900, h: 260 }, { flip: true }));
+};
+
+// (l) Overflow-sized wash stroke (> 2048 px span): the buffer cap banks
+// mid-stroke chunks — the passes run per chunk and the renderer's walked
+// distance (startFlow) survives the restarts.
+const v3OverflowWashGroup = () =>
+  strokeOps("overflowWash", v3Settings("watercolor", { color: COLORS.mixBlue, size: 60, opacity: 0.9 }), longWave({ x: 300, y: 400 }, { x: 3700, y: 1900 }));
 
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
@@ -393,6 +479,12 @@ const groups = [
   { name: "overflow", deterministic: true, note: "strokes spanning > 2200 px so the 2048² buffer cap banks mid-stroke chunks", ops: overflowGroup() },
   { name: "shapes", deterministic: true, note: "drawShape line / rect / ellipse, stroked and filled", ops: shapesGroup() },
   { name: "text", deterministic: true, machineBound: true, note: "drawText with system-ui — stable per machine, differs across OS font stacks", ops: textGroup() },
+  // Stage 2 (appended; Stage-0 groups above are untouched).
+  { name: "v3-sprites", deterministic: true, note: "Stage 2: v:3 marker/pencil/crayon/paint/gouache/watercolor/oil/acrylic/glow with the inline dab embedded, sizes 12/40/90, blue @1 + red @0.7 crossing", ops: v3SpritesGroup() },
+  { name: "v3-marker-multiply", deterministic: true, note: "v:3 marker (blend multiply): blue x yellow crossing, red @0.8 through both, white (luma guard → source-over)", ops: v3MarkerMultiplyGroup() },
+  { name: "v3-water-glaze", deterministic: true, note: "v:3 watercolor: dry yellow over blue (multiply glaze) + wet blue over a v3 gouache under-layer (pickup 0.35)", ops: v3WaterGlazeGroup() },
+  { name: "v3-symmetry-wash", deterministic: true, note: "settings.symmetry quad (4 copies) of a v:3 watercolor stroke", ops: v3SymmetryWashGroup() },
+  { name: "v3-overflow-wash", deterministic: true, note: "v:3 watercolor spanning > 2200 px so the 2048² buffer cap banks mid-stroke chunks", ops: v3OverflowWashGroup() },
 ];
 
 const fixture = {
