@@ -103,8 +103,9 @@ function recordDeletionRequest() {
   return request;
 }
 
-// Best-effort server-side filing when auth is configured. Never throws; the
-// local wipe is the source of truth on this device.
+// Server-side deletion must first obtain a durable billing-cancellation result.
+// If the app server is unavailable we leave the cloud account intact so a paid
+// customer never loses their identity and portal access while still subscribed.
 async function fileServerDeletion(request) {
   if (!isCloudConfigured) {
     return { filed: false, reason: "local-only" };
@@ -121,24 +122,28 @@ async function fileServerDeletion(request) {
     // PocketBase: a user may delete their OWN record (collection delete rule
     // `@request.auth.id = id`), which immediately and permanently removes the
     // account and cascade-deletes their owned rows (gallery snapshots). This is
-    // a true hard delete, not a scheduled request. Best-effort — the local wipe
-    // is the source of truth on this device regardless of result.
+    // a true hard delete, not a scheduled request.
     const id = pb.authStore.record?.id;
     // Scrub this user's chat from the durable server audit logs FIRST, while the
     // token is still valid — otherwise a "deleted" child's name + messages would
     // persist in plaintext on the server (COPPA/GDPR erasure).
-    try {
-      await fetch("/api/account/scrub-chat", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${pb.authStore.token}` },
-      });
-    } catch {
-      // best-effort — never block the account deletion on the chat scrub
+    const scrubResponse = await fetch("/api/account/scrub-chat", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pb.authStore.token}` },
+    });
+    const scrub = await scrubResponse.json().catch(() => ({}));
+    if (!scrubResponse.ok || scrub.ok !== true) {
+      throw new Error("server_erasure_unavailable");
     }
     if (id) {
       await pb.collection("users").delete(id);
     }
-    return { filed: true, reason: "deleted", server_request: request ?? null };
+    return {
+      filed: true,
+      reason: "deleted",
+      billingCancellationPending: Boolean(scrub.billingScrubbed?.pending),
+      server_request: request ?? null,
+    };
   } catch (error) {
     return { filed: false, reason: error?.message || "error" };
   }

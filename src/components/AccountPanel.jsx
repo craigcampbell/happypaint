@@ -93,12 +93,15 @@ export default function AccountPanel({ onClose, onDeleted }) {
     setSession(null);
     setConfirmDelete(false);
     setDeletion(result.request);
-    setMessage(
-      `Your data was deleted from this device (${result.cleared.length} stores cleared). ` +
-        `A deletion request was filed; full purge scheduled by ${new Date(
-          result.request.scheduled_purge_at,
-        ).toLocaleDateString()}.`,
-    );
+    if (isCloudConfigured && !result.server.filed) {
+      setMessage(
+        `Data was cleared from this device (${result.cleared.length} stores), but the cloud account was not deleted because the server could not safely confirm billing cleanup. Sign in and try deletion again.`,
+      );
+    } else if (result.server.billingCancellationPending) {
+      setMessage("Your account and local data were deleted. Subscription cancellation was saved securely and will retry automatically.");
+    } else {
+      setMessage(`Your account and data were deleted (${result.cleared.length} local stores cleared).`);
+    }
     setBusy(false);
     onDeleted?.(result);
   };

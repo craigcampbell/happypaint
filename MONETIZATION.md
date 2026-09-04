@@ -8,22 +8,55 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
 1. In Stripe, create one recurring product named **Drawesome Family** with:
    - monthly price: **$4.99 USD**
    - yearly price: **$39 USD**
-2. Copy the two `price_...` ids into `.env` as
-   `STRIPE_PRICE_FAMILY_MONTHLY` and `STRIPE_PRICE_FAMILY_YEARLY`.
-3. Put the restricted production secret in `STRIPE_SECRET_KEY`.
+2. Copy the `prod_...` id to `STRIPE_PRODUCT_FAMILY` and the two `price_...`
+   ids to `STRIPE_PRICE_FAMILY_MONTHLY` and
+   `STRIPE_PRICE_FAMILY_YEARLY`. The server verifies that both prices are
+   active, USD, exactly 499/3900 cents, monthly/yearly, and belong to that
+   product before checkout is enabled.
+3. Put a restricted production secret in `STRIPE_SECRET_KEY`. It needs only the
+   permissions used here: read Prices; read/write Customers, Checkout Sessions,
+   Subscriptions, and Billing Portal Sessions. Keep sandbox and live keys,
+   product/price ids, portal configuration ids, and webhook secrets strictly
+   paired by mode.
 4. Create a Stripe webhook for
    `https://drawesome.art/api/billing/webhook`, listening for:
    - `checkout.session.completed`
    - `customer.subscription.created`
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
+   - `customer.subscription.paused`
+   - `customer.subscription.resumed`
+   - `invoice.paid`
+   - `invoice.payment_failed`
+   - `checkout.session.async_payment_succeeded`
+   - `checkout.session.async_payment_failed`
+   Pin the endpoint to API version `2026-08-26.dahlia`, matching the server's
+   Stripe client, and update both deliberately when upgrading Stripe.
 5. Copy the webhook signing secret to `STRIPE_WEBHOOK_SECRET`.
-6. Enable/configure Stripe's Customer Portal so parents can cancel and update
-   payment details, then rebuild/restart the app.
+6. Create a dedicated Customer Portal configuration that exposes only the two
+   Drawesome Family prices, payment-method updates, and cancellation at period
+   end, with quantity adjustment disabled. Put its `bpc_...` id in
+   `STRIPE_PORTAL_CONFIGURATION_ID`; the server validates these safety settings
+   before enabling checkout.
+7. In Billing revenue recovery, enable Smart Retries, failed-payment emails,
+   and automatic card updates. The app grants a three-day past-due grace period
+   by default (`STRIPE_PAST_DUE_GRACE_DAYS`) but never beyond the last paid
+   period plus that grace.
+8. Assign the correct digital-services tax category and enable Stripe Tax
+   threshold monitoring. Leave `STRIPE_AUTOMATIC_TAX=false` until registrations
+   are confirmed; then enable it to collect tax in Checkout.
+9. Leave `STRIPE_ALLOW_PROMOTION_CODES=false` unless a campaign is planned. If
+   enabled, constrain every promotion code by duration, redemption count,
+   expiration, and first-time-customer rules in Stripe.
+10. Set `FAMILY_TERMS_VERSION` to the version shown with the adult purchase
+    attestation, then rebuild/restart the app.
 
 Checkout is adult-confirmed and hosted by Stripe. The application stores only
-opaque Stripe ids, subscription state, and the PocketBase profile id in
-`DATA_DIR/.billing.json`; it does not store card data or billing email.
+opaque Stripe ids, subscription state, adult-attestation timestamp/version,
+processed webhook ids, and the PocketBase profile id in
+`DATA_DIR/.billing.json`; it does not store card data or billing email. Writes
+are atomic, and failed account-deletion cancellations stay in a durable retry
+queue so an erased account cannot remain silently billed.
 
 An active Family entitlement belongs to the signed-in owner of a private room.
 Every anonymous or signed-in friend joining that room inherits its ad-free
@@ -54,5 +87,9 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
 - With Stripe test keys: subscribe from `/family`, replay the webhook, reopen
   the owner's private room, and confirm both owner and guest receive
   `adFree: true` in the WebSocket `connected` payload.
+- Create a signed-in public room and confirm it remains ad-supported even when
+  its owner has Family.
+- Use a Stripe test clock to exercise renewal success, payment failure, the
+  past-due grace boundary, cancellation at period end, and webhook retries.
 - With Google test inventory: open chat and confirm the sponsor slot; shorten
   `VITE_AD_BREAK_MINUTES` only in a local build to exercise natural breaks.

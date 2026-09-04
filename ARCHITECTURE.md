@@ -191,10 +191,14 @@ token)`), returns `send*` emitters + `disconnect()`.
   bound to `mutedProfileIds` (survives reconnect), and a locked room **auto-unlocks
   when the last host leaves** (no bricked canvases). Only the opaque profile id is
   persisted — never a display name (PII).
-- **Family entitlement**: Stripe webhooks maintain a minimal profile-to-
-  subscription mapping in `.billing.json`. A private room derives `adFree` from
-  its owner at join time, so every invited guest inherits the owner's active
-  plan without an account or subscription of their own.
+- **Family entitlement**: Stripe webhooks maintain an atomic, event-deduplicated
+  profile-to-subscription mapping in `.billing.json`. Access is bounded by the
+  last paid-through time (plus a short configured past-due grace), reconciled
+  against Stripe, and restricted to `friends` rooms. Every invited guest in a
+  qualifying private room inherits the owner's plan without an account or
+  subscription of their own. Account deletion durably queues failed Stripe
+  cancellations and retains only a short-lived one-way profile hash after
+  cleanup so late webhook retries cannot recreate erased mappings.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)
   and per-room host (profileId). Admins outrank hosts.
 
@@ -229,8 +233,10 @@ in Docker) so one volume persists everything:
 - `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
-- `.billing.json` — opaque Stripe ids + Family subscription state, keyed by the
-  PocketBase profile id. Card data and billing email never enter this store.
+- `.billing.json` — opaque Stripe ids, Family paid-through state, processed
+  webhook ids, pending cancellation retries, and adult-attestation version,
+  keyed by the PocketBase profile id. Card data and billing email never enter
+  this store.
 
 Separate, large, read-only: **`coloring-library/`** (its own volume). PocketBase
 data: **`pb_data/`** (its own volume). All three folders are git-ignored.

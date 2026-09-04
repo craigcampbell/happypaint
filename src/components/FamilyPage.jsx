@@ -63,10 +63,29 @@ export default function FamilyPage({ onNavigate }) {
         body: JSON.stringify(body || {}),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || data.error || "Couldn't open billing");
+      if (!res.ok) {
+        const error = new Error(data.error || "Couldn't open billing");
+        error.code = data.error;
+        throw error;
+      }
       if (data.url) window.location.href = data.url;
     } catch (error) {
-      setMessage(error.message === "billing_not_configured" ? "Subscriptions are not connected yet." : error.message);
+      if (error.code === "subscription_exists") {
+        const current = await fetch("/api/billing/me", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }).then((res) => (res.ok ? res.json() : null)).catch(() => null);
+        if (current) setBilling(current);
+      }
+      const friendly = {
+        billing_not_configured: "Subscriptions are not connected yet.",
+        subscription_exists: "This account already has a subscription. Manage it below.",
+        checkout_in_progress: "A checkout is already open for this account. Finish or cancel it before changing plans.",
+        slow_down: "Please wait a moment before trying again.",
+        portal_failed: "Billing management is temporarily unavailable. Please try again.",
+        checkout_failed: "Secure checkout is temporarily unavailable. Please try again.",
+      };
+      setMessage(friendly[error.code] || "Billing is temporarily unavailable. Please try again.");
       setBusy(false);
     }
   };
@@ -97,11 +116,13 @@ export default function FamilyPage({ onNavigate }) {
           </div>
 
           <div className="family-card">
-            {billing?.active ? (
+            {billing?.active || billing?.manageable ? (
               <>
-                <span className="family-active-badge">Family active</span>
-                <h2>Your spaces are ad-free</h2>
-                <p>Invite as many friends as the room allows. They inherit your ad-free room automatically.</p>
+                <span className="family-active-badge">{billing.active ? "Family active" : "Billing needs attention"}</span>
+                <h2>{billing.active ? "Your spaces are ad-free" : "Keep your Family plan running"}</h2>
+                <p>{billing.active
+                  ? "Invite as many friends as the room allows. They inherit your ad-free room automatically."
+                  : "Update your payment method or review the subscription securely in Stripe."}</p>
                 {billing.renewsAt ? <p className="family-renewal">{billing.cancelAtPeriodEnd ? "Ends" : "Renews"} {new Date(billing.renewsAt).toLocaleDateString()}</p> : null}
                 <button type="button" className="primary-action" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
               </>
@@ -123,11 +144,15 @@ export default function FamilyPage({ onNavigate }) {
                   type="button"
                   className="primary-action family-buy"
                   disabled={busy || (session && (!adultConfirmed || !configuredForPlan))}
-                  onClick={() => session ? callBilling("/api/billing/checkout", { interval, adultConfirmed }) : onNavigate("/signup?return=/family")}
+                  onClick={() => session ? callBilling("/api/billing/checkout", {
+                    interval,
+                    adultConfirmed,
+                    termsVersion: config?.termsVersion,
+                  }) : onNavigate("/signup?return=/family")}
                 >
                   {!session ? "Sign in as a parent" : !configuredForPlan ? "Subscriptions opening soon" : busy ? "Opening secure checkout…" : "Start Drawesome Family"}
                 </button>
-                {!configuredForPlan ? <p className="family-setup-note">The product is ready; connect Stripe price IDs on the server to open checkout.</p> : null}
+                {!configuredForPlan ? <p className="family-setup-note">The product is ready; complete the secure Stripe server configuration to open checkout.</p> : null}
               </>
             )}
             {message ? <p className="account-status">{message}</p> : null}

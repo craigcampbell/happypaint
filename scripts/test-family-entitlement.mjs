@@ -40,8 +40,10 @@ const child = spawn(process.execPath, ['server.js'], {
     PB_URL: `http://127.0.0.1:${authPort}`,
     STRIPE_SECRET_KEY: '',
     STRIPE_WEBHOOK_SECRET: '',
+    STRIPE_PRODUCT_FAMILY: '',
     STRIPE_PRICE_FAMILY_MONTHLY: '',
     STRIPE_PRICE_FAMILY_YEARLY: '',
+    STRIPE_PORTAL_CONFIGURATION_ID: '',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -91,6 +93,14 @@ try {
   const freeGuest = await connected('FREE12');
   assert.equal(freeGuest.data.adFree, false, 'ordinary anonymous rooms remain ad-supported');
 
+  const publicRoom = await fetch(`http://127.0.0.1:${appPort}/api/rooms`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer parent-token', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audience: 'kid_safe', listed: false, title: 'Public family test' }),
+  }).then((res) => res.json());
+  const publicOwner = await connected(publicRoom.code, 'parent-token');
+  assert.equal(publicOwner.data.adFree, false, 'Family never suppresses ads in public rooms');
+
   const scrub = await fetch(`http://127.0.0.1:${appPort}/api/account/scrub-chat`, {
     method: 'POST',
     headers: { Authorization: 'Bearer parent-token' },
@@ -99,7 +109,7 @@ try {
   const stored = JSON.parse(await readFile(join(dataDir, '.billing.json'), 'utf8'));
   assert.deepEqual(stored.records, {});
 
-  owner.ws.close(); guest.ws.close(); freeGuest.ws.close();
+  owner.ws.close(); guest.ws.close(); freeGuest.ws.close(); publicOwner.ws.close();
   console.log('family entitlement integration: ok');
 } finally {
   child.kill();

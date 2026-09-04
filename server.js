@@ -2733,7 +2733,11 @@ wss.on('connection', async (ws, req) => {
     moderated: room.audience === 'kid_safe',
     // A Family plan belongs to the PRIVATE room owner. Every invited guest
     // inherits that room's ad-free experience without needing an account.
-    adFree: Boolean(room.ownerProfileId && billing.isProfileEntitled(room.ownerProfileId)),
+    adFree: Boolean(
+      room.audience === 'friends' &&
+      room.ownerProfileId &&
+      billing.isProfileEntitled(room.ownerProfileId)
+    ),
     watched: room.watchers.size > 0,
     // Capability key for cross-room @mention notifications: proves to the
     // notify channel that this client really held this name in this room, so
