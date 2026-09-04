@@ -35,8 +35,25 @@ export default function FamilyPage({ onNavigate }) {
         .catch(() => active && setBilling(null));
     load();
     // Stripe redirects before its webhook is guaranteed to finish. On a
-    // successful return, briefly poll so the page turns active on its own.
-    const successfulReturn = new URLSearchParams(window.location.search).get("checkout") === "success";
+    // successful return, reconcile the exact Checkout Session immediately and
+    // briefly poll as a fallback for asynchronous payment methods.
+    const params = new URLSearchParams(window.location.search);
+    const successfulReturn = params.get("checkout") === "success";
+    const checkoutSessionId = params.get("session_id");
+    if (successfulReturn && checkoutSessionId) {
+      fetch("/api/billing/checkout/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ sessionId: checkoutSessionId }),
+      })
+        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => null) }))
+        .then(({ ok, data }) => {
+          if (!active || !ok || !data) return;
+          setBilling(data);
+          if (data.active) setMessage("Family is active — welcome!");
+        })
+        .catch(() => {});
+    }
     let attempts = 0;
     const timer = successfulReturn ? window.setInterval(() => {
       attempts += 1;

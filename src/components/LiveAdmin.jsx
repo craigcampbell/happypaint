@@ -60,6 +60,7 @@ export default function LiveAdmin({ onNavigate }) {
   const [sheets, setSheets] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [analytics, setAnalytics] = useState(null);
+  const [billing, setBilling] = useState(null);
   const [page, setPage] = useState("overview");
   const [uploading, setUploading] = useState(false);
 
@@ -79,13 +80,14 @@ export default function LiveAdmin({ onNavigate }) {
   const refresh = useCallback(async () => {
     if (!adminKey) return;
     try {
-      const [r1, r2, r3, r4] = await Promise.all([
+      const [r1, r2, r3, r4, r5] = await Promise.all([
         fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/analytics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/billing"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
-      if (r1.status === 401 || r2.status === 401 || r3.status === 401 || r4.status === 401) {
+      if ([r1, r2, r3, r4, r5].some((response) => response.status === 401)) {
         setAuthed(false);
         return;
       }
@@ -93,10 +95,12 @@ export default function LiveAdmin({ onNavigate }) {
       const d2 = await r2.json();
       const d3 = r3.ok ? await r3.json() : null;
       const d4 = r4.ok ? await r4.json() : null;
+      const d5 = r5.ok ? await r5.json() : null;
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       if (d3) setAnalytics(d3);
       if (d4) setMetrics(d4);
+      if (d5) setBilling(d5);
       setAuthed(true);
       const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
@@ -357,6 +361,39 @@ export default function LiveAdmin({ onNavigate }) {
               <span className="metric-num">{metrics.sheets}</span>
               <span className="metric-label">Sheets</span>
               <span className="metric-sub">Node {metrics.node}</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {billing ? (
+        <section className="admin-section">
+          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : "check setup"}</span></h2>
+          <div className="metric-grid">
+            <div className="metric">
+              <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : "Off"}</span>
+              <span className="metric-label">Checkout</span>
+              <span className="metric-sub">{billing.mode === "misconfigured" ? billing.validationError || "configuration failed" : billing.mode === "disabled" ? "anonymous features unaffected" : "catalog verified"}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{formatCount(billing.activeFamilies)}</span>
+              <span className="metric-label">Active families</span>
+              <span className="metric-sub">{formatCount(billing.cancelAtPeriodEnd)} ending at period close</span>
+            </div>
+            <div className="metric">
+              <span className={`metric-num ${billing.needsAttention ? "is-warn" : "is-ok"}`}>{formatCount(billing.needsAttention)}</span>
+              <span className="metric-label">Need attention</span>
+              <span className="metric-sub">past due or otherwise inactive</span>
+            </div>
+            <div className="metric">
+              <span className={`metric-num ${billing.pendingCancellations ? "is-warn" : "is-ok"}`}>{formatCount(billing.pendingCancellations)}</span>
+              <span className="metric-label">Deletion retries</span>
+              <span className="metric-sub">{formatCount(billing.pendingCheckouts)} checkouts in progress</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{formatCount(billing.processedEvents)}</span>
+              <span className="metric-label">Webhook events</span>
+              <span className="metric-sub">last {timeAgo(billing.lastStripeEventAt)}</span>
             </div>
           </div>
         </section>

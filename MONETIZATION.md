@@ -58,6 +58,14 @@ processed webhook ids, and the PocketBase profile id in
 are atomic, and failed account-deletion cancellations stay in a durable retry
 queue so an erased account cannot remain silently billed.
 
+After Stripe returns to `/family`, the signed-in client confirms that exact
+Checkout Session with the server. The server verifies both the owning profile
+and Stripe customer before refreshing entitlement, so a delayed webhook does
+not leave a paid family waiting. Webhooks remain the durable source of truth.
+The admin overview shows catalog readiness, active/attention counts, the last
+processed Stripe event, and any deletion-cancellation retries without exposing
+keys or customer identifiers.
+
 An active Family entitlement belongs to the signed-in owner of a private room.
 Every anonymous or signed-in friend joining that room inherits its ad-free
 status. Public communal rooms remain free/ad-supported.

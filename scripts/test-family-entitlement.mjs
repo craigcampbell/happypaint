@@ -44,6 +44,7 @@ const child = spawn(process.execPath, ['server.js'], {
     STRIPE_PRICE_FAMILY_MONTHLY: '',
     STRIPE_PRICE_FAMILY_YEARLY: '',
     STRIPE_PORTAL_CONFIGURATION_ID: '',
+    ADMIN_KEY: 'test-admin-key',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -82,6 +83,12 @@ try {
   await waitForServer();
   const config = await fetch(`http://127.0.0.1:${appPort}/api/billing/config`).then((res) => res.json());
   assert.equal(config.configured, false, 'billing stays safely disabled without keys');
+  const billingAdminUnauthorized = await fetch(`http://127.0.0.1:${appPort}/api/admin/billing`);
+  assert.equal(billingAdminUnauthorized.status, 401, 'billing health is admin-only');
+  const billingAdmin = await fetch(`http://127.0.0.1:${appPort}/api/admin/billing`, {
+    headers: { 'x-admin-key': 'test-admin-key' },
+  }).then((res) => res.json());
+  assert.equal(billingAdmin.mode, 'disabled', 'empty billing configuration reports safe free mode');
 
   const owner = await connected('FAM123', 'parent-token');
   assert.equal(owner.data.isOwner, true);

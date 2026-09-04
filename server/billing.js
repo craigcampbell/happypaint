@@ -43,6 +43,11 @@ function cleanProfileId(value) {
   return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : null;
 }
 
+function cleanCheckoutSessionId(value) {
+  const id = String(value || '').slice(0, 128);
+  return /^cs_[A-Za-z0-9_]{3,125}$/.test(id) ? id : null;
+}
+
 function periodEnd(subscription) {
   const direct = Number(subscription?.current_period_end) || 0;
   if (direct) return direct;
@@ -351,6 +356,31 @@ export function createBilling({
     return catalogValidation.ok;
   }
 
+  async function getOperationalStatus() {
+    const configured = await ensureCatalogValidated();
+    const anyConfiguration = Boolean(
+      secretKey || webhookSecret || familyProductId || portalConfigurationId ||
+      prices.monthly || prices.yearly,
+    );
+    const profiles = Object.keys(state.records);
+    const statuses = profiles.map((profileId) => publicStatus(profileId));
+    const processedAt = Object.values(state.processedEvents)
+      .map((value) => Number(value) || 0)
+      .filter(Boolean);
+    return {
+      mode: configured ? 'ready' : anyConfiguration ? 'misconfigured' : 'disabled',
+      configured,
+      validationError: configured ? null : catalogValidation.error,
+      activeFamilies: statuses.filter((status) => status.active).length,
+      needsAttention: statuses.filter((status) => status.manageable && !status.active).length,
+      cancelAtPeriodEnd: statuses.filter((status) => status.cancelAtPeriodEnd).length,
+      pendingCheckouts: profiles.filter((profileId) => state.records[profileId]?.pendingCheckout).length,
+      pendingCancellations: Object.keys(state.pendingCancellations).length,
+      processedEvents: processedAt.length,
+      lastStripeEventAt: processedAt.length ? Math.max(...processedAt) * 1000 : null,
+    };
+  }
+
   async function retrieveSubscription(subscriptionId) {
     return stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['items.data.price.product', 'latest_invoice'],
@@ -644,6 +674,61 @@ export function createBilling({
       }
     });
 
+    app.post('/api/billing/checkout/confirm', async (req, res) => {
+      res.set('Cache-Control', 'no-store');
+      if (!(await ensureCatalogValidated())) return res.status(503).json({ error: 'billing_not_configured' });
+      const identity = await identityFrom(req);
+      const profileId = cleanProfileId(identity?.profileId);
+      if (!profileId) return res.status(401).json({ error: 'sign_in_required' });
+      if (!rateOk(`confirm:${profileId}`, 12, 60000)) return res.status(429).json({ error: 'slow_down' });
+      const sessionId = cleanCheckoutSessionId(req.body?.sessionId);
+      if (!sessionId) return res.status(400).json({ error: 'invalid_checkout_session' });
+
+      try {
+        const status = await withProfileLock(profileId, async () => {
+          if (state.deletedProfileHashes[profileHash(profileId)]) {
+            throw new BillingHttpError(410, 'account_deleted');
+          }
+          if (state.pendingCancellations[profileId]) {
+            throw new BillingHttpError(409, 'account_deletion_pending');
+          }
+
+          const session = await stripe.checkout.sessions.retrieve(sessionId);
+          if (!session?.id) throw new BillingHttpError(404, 'checkout_session_not_found');
+          const sessionProfileId = cleanProfileId(session.client_reference_id) || cleanProfileId(session.metadata?.profile_id);
+          if (sessionProfileId !== profileId) throw new BillingHttpError(403, 'checkout_session_not_owned');
+
+          const record = state.records[profileId] || {};
+          const sessionCustomerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+          if (record.customerId && (!sessionCustomerId || sessionCustomerId !== record.customerId)) {
+            throw new BillingHttpError(403, 'checkout_session_not_owned');
+          }
+          if (session.status !== 'complete') throw new BillingHttpError(409, 'checkout_not_complete');
+
+          const subscriptionId = typeof session.subscription === 'string'
+            ? session.subscription
+            : session.subscription?.id;
+          if (!subscriptionId) throw new BillingHttpError(409, 'subscription_pending');
+          const subscription = await retrieveSubscription(subscriptionId);
+          const subscriptionCustomerId = typeof subscription.customer === 'string'
+            ? subscription.customer
+            : subscription.customer?.id;
+          if (!sessionCustomerId || subscriptionCustomerId !== sessionCustomerId) {
+            throw new BillingHttpError(403, 'checkout_session_not_owned');
+          }
+
+          commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, { freshFromStripe: true }));
+          return publicStatus(profileId);
+        });
+        return res.json(status);
+      } catch (error) {
+        if (error instanceof BillingHttpError) return res.status(error.status).json({ error: error.code });
+        if (error?.code === 'resource_missing') return res.status(404).json({ error: 'checkout_session_not_found' });
+        console.error('[billing] Checkout confirmation failed:', errorCode(error));
+        return res.status(502).json({ error: 'checkout_confirmation_failed' });
+      }
+    });
+
     app.post('/api/billing/portal', async (req, res) => {
       res.set('Cache-Control', 'no-store');
       if (!(await ensureCatalogValidated())) return res.status(503).json({ error: 'billing_not_configured' });
@@ -828,6 +913,7 @@ export function createBilling({
     registerWebhook,
     registerRoutes,
     isProfileEntitled: (profileId) => Boolean(profileId && publicStatus(profileId).active),
+    getOperationalStatus,
     cancelAndDeleteProfile,
     runMaintenance,
     storageFileExists: () => existsSync(file),

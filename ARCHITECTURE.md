@@ -245,7 +245,9 @@ data: **`pb_data/`** (its own volume). All three folders are git-ignored.
 `/healthz`; `/api/artworks` (CRUD, anon device key); `/api/report` (public);
 `/api/admin/*` (key-gated: rooms, reports, sheets, metrics, sheet-theme);
 `/api/sheets` (custom uploads); `/api/coloring-sheets` + `/today` (library);
-`/api/billing/config|me|checkout|portal|webhook` (env-gated Stripe Family plan);
+`/api/billing/config|me|checkout|checkout/confirm|portal|webhook` (env-gated
+Stripe Family plan); `/api/admin/billing` (non-secret billing health and retry
+counts behind the admin key);
 `/coloring-sheets/full|thumbs/*` (static). SPA fallback 404s on `/api/` +
 `/coloring-sheets/` misses.
 

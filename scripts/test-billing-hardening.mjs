@@ -135,6 +135,9 @@ function makeStripe({ badCatalog = false, badPortal = false } = {}) {
             status: 'open',
             url: `https://checkout.stripe.test/${params.client_reference_id}`,
             expires_at: Math.floor(currentTime / 1000) + 86400,
+            client_reference_id: params.client_reference_id,
+            customer: params.customer,
+            metadata: params.metadata,
           };
           sessions.set(session.id, session);
           return structuredClone(session);
@@ -259,6 +262,25 @@ try {
 
   const parentSub = familySubscription('sub_parent', 'parent_profile', 'cus_parent');
   subscriptions.set(parentSub.id, parentSub);
+  Object.assign(sessions.get('cs_parent_profile'), {
+    status: 'complete',
+    payment_status: 'paid',
+    subscription: parentSub.id,
+  });
+  const wrongOwner = await postJson(appOrigin, '/api/billing/checkout/confirm', 'other_profile', {
+    sessionId: 'cs_parent_profile',
+  });
+  assert.equal(wrongOwner.status, 403, 'a Checkout Session cannot be claimed by another profile');
+  const confirmed = await postJson(appOrigin, '/api/billing/checkout/confirm', 'parent_profile', {
+    sessionId: 'cs_parent_profile',
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal((await confirmed.json()).active, true, 'return-page confirmation repairs a delayed webhook');
+  const operational = await billing.getOperationalStatus();
+  assert.equal(operational.mode, 'ready');
+  assert.equal(operational.activeFamilies, 1);
+  assert.equal(operational.pendingCheckouts, 0);
+
   const paidEvent = event('evt_paid', 'invoice.paid', {
     customer: 'cus_parent',
     parent: { subscription_details: { subscription: 'sub_parent' } },
@@ -362,6 +384,7 @@ try {
   badServer = bad.httpServer;
   const badConfig = await fetch(`${bad.origin}/api/billing/config`).then((res) => res.json());
   assert.equal(badConfig.configured, false, 'catalog mismatch fails checkout closed');
+  assert.equal((await badCatalogBilling.getOperationalStatus()).mode, 'misconfigured');
 
   const badPortalBilling = createBilling({
     dataDir: badPortalDataDir,

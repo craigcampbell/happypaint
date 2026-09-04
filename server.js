@@ -4654,8 +4654,9 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   for (const post of [...wallPosts.values()]) {
     if (post.ownerKey === accountKey) { deleteWallPost(post.id); wallScrubbed += 1; }
   }
-  // A user who deletes their account must not keep getting billed. Cancellation
-  // is best-effort, while the local profile mapping is always removed.
+  // A user who deletes their account must not keep getting billed. Successful
+  // cleanup removes the mapping; a Stripe outage leaves a durable retry record
+  // that revokes entitlement and retains only the ids needed to cancel later.
   const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
   res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed });
 });
@@ -4663,6 +4664,15 @@ app.post('/api/account/scrub-chat', async (req, res) => {
 app.get('/api/admin/check', (req, res) => {
   if (!adminGuard(req, res)) return;
   res.json({ ok: true });
+});
+
+app.get('/api/admin/billing', async (req, res) => {
+  if (!adminGuard(req, res)) return;
+  try {
+    res.json(await billing.getOperationalStatus());
+  } catch {
+    res.status(503).json({ error: 'billing_status_unavailable' });
+  }
 });
 
 app.get('/api/admin/analytics', (req, res) => {
