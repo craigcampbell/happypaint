@@ -16,15 +16,45 @@ await writeFile(join(dataDir, '.billing.json'), JSON.stringify({
       profileId: 'parent_profile',
       status: 'active',
       priceId: 'price_test_monthly',
+      quantity: 1,
       currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
+    },
+    unknown_profile: {
+      profileId: 'unknown_profile',
+      status: 'active',
+      priceId: 'price_not_family',
+      quantity: 1,
+      currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
+    },
+    grace_profile: {
+      profileId: 'grace_profile',
+      status: 'past_due',
+      priceId: 'price_test_monthly',
+      quantity: 1,
+      pastDueSince: Date.now() - 60 * 60 * 1000,
+      currentPeriodEnd: Math.floor(Date.now() / 1000) - 3600,
+    },
+    expired_profile: {
+      profileId: 'expired_profile',
+      status: 'past_due',
+      priceId: 'price_test_monthly',
+      quantity: 1,
+      pastDueSince: Date.now() - 5 * 24 * 60 * 60 * 1000,
+      currentPeriodEnd: Math.floor(Date.now() / 1000) - 86400,
     },
   },
 }));
 
 const authServer = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url.includes('/auth-refresh') && req.headers.authorization === 'parent-token') {
+  const profiles = {
+    'parent-token': 'parent_profile',
+    'unknown-token': 'unknown_profile',
+    'grace-token': 'grace_profile',
+    'expired-token': 'expired_profile',
+  };
+  if (req.method === 'POST' && req.url.includes('/auth-refresh') && profiles[req.headers.authorization]) {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ record: { id: 'parent_profile', name: 'Parent' } }));
+    res.end(JSON.stringify({ record: { id: profiles[req.headers.authorization], name: 'Parent' } }));
     return;
   }
   res.writeHead(401).end();
@@ -40,8 +70,8 @@ const child = spawn(process.execPath, ['server.js'], {
     PB_URL: `http://127.0.0.1:${authPort}`,
     STRIPE_SECRET_KEY: '',
     STRIPE_WEBHOOK_SECRET: '',
-    STRIPE_PRICE_FAMILY_MONTHLY: '',
-    STRIPE_PRICE_FAMILY_YEARLY: '',
+    STRIPE_PRICE_FAMILY_MONTHLY: 'price_test_monthly',
+    STRIPE_PRICE_FAMILY_YEARLY: 'price_test_yearly',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -91,15 +121,33 @@ try {
   const freeGuest = await connected('FREE12');
   assert.equal(freeGuest.data.adFree, false, 'ordinary anonymous rooms remain ad-supported');
 
+  const unknownPlan = await connected('OTHER1', 'unknown-token');
+  assert.equal(unknownPlan.data.adFree, false, 'an unrelated active Stripe price never grants Family');
+
+  const grace = await connected('GRACE1', 'grace-token');
+  assert.equal(grace.data.adFree, true, 'past-due Family gets the configured short grace period');
+
+  const expired = await connected('LATE01', 'expired-token');
+  assert.equal(expired.data.adFree, false, 'past-due Family loses access after the grace period');
+
+  const publicRoom = await fetch(`http://127.0.0.1:${appPort}/api/rooms`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer parent-token', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audience: 'kid_safe', title: 'Public test room' }),
+  }).then((res) => res.json());
+  const publicOwner = await connected(publicRoom.code, 'parent-token');
+  assert.equal(publicOwner.data.adFree, false, 'Family applies only to private friends rooms');
+
   const scrub = await fetch(`http://127.0.0.1:${appPort}/api/account/scrub-chat`, {
     method: 'POST',
     headers: { Authorization: 'Bearer parent-token' },
   }).then((res) => res.json());
   assert.equal(scrub.billingScrubbed.removed, true, 'account erasure removes billing mapping');
   const stored = JSON.parse(await readFile(join(dataDir, '.billing.json'), 'utf8'));
-  assert.deepEqual(stored.records, {});
+  assert.equal(stored.records.parent_profile, undefined);
 
-  owner.ws.close(); guest.ws.close(); freeGuest.ws.close();
+  owner.ws.close(); guest.ws.close(); freeGuest.ws.close(); unknownPlan.ws.close();
+  grace.ws.close(); expired.ws.close(); publicOwner.ws.close();
   console.log('family entitlement integration: ok');
 } finally {
   child.kill();

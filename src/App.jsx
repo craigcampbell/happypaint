@@ -6290,6 +6290,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           }
           break;
         }
+        case "billing_entitlement":
+          setRoomAdFree(!!data.adFree);
+          break;
         case "room_state":
           setRoomLocked(!!data.locked);
           setStatus(data.locked ? "🔒 A host locked the canvas" : "🔓 Canvas unlocked");

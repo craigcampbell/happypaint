@@ -191,10 +191,11 @@ token)`), returns `send*` emitters + `disconnect()`.
   bound to `mutedProfileIds` (survives reconnect), and a locked room **auto-unlocks
   when the last host leaves** (no bricked canvases). Only the opaque profile id is
   persisted — never a display name (PII).
-- **Family entitlement**: Stripe webhooks maintain a minimal profile-to-
-  subscription mapping in `.billing.json`. A private room derives `adFree` from
-  its owner at join time, so every invited guest inherits the owner's active
-  plan without an account or subscription of their own.
+- **Family entitlement**: signed Stripe webhooks maintain a minimal profile-to-
+  subscription mapping in `.billing.json`. Only an approved Family price at
+  quantity one can grant access, and only a private `friends` room derives
+  `adFree` from its owner. Every invited guest inherits it without an account;
+  webhook changes are also pushed to friends already connected to the room.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)
   and per-room host (profileId). Admins outrank hosts.
 
@@ -229,8 +230,10 @@ in Docker) so one volume persists everything:
 - `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
-- `.billing.json` — opaque Stripe ids + Family subscription state, keyed by the
-  PocketBase profile id. Card data and billing email never enter this store.
+- `.billing.json` — atomically written Stripe event ids, opaque customer /
+  subscription ids, Family state, pending Checkout locks, and retryable
+  cancellation jobs (account-deletion jobs use a one-way profile hash). Card
+  data and billing email never enter this store.
 
 Separate, large, read-only: **`coloring-library/`** (its own volume). PocketBase
 data: **`pb_data/`** (its own volume). All three folders are git-ignored.

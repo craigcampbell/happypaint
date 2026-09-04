@@ -17,13 +17,32 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
    - `customer.subscription.created`
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
+   - `invoice.paid`
+   - `invoice.payment_failed`
 5. Copy the webhook signing secret to `STRIPE_WEBHOOK_SECRET`.
-6. Enable/configure Stripe's Customer Portal so parents can cancel and update
-   payment details, then rebuild/restart the app.
+6. Configure a dedicated Customer Portal for Drawesome Family: payment-method
+   updates, invoices, and cancellation at period end. Put its `bpc_...` id in
+   `STRIPE_PORTAL_CONFIGURATION_ID`.
+7. In Stripe Billing, turn on Smart Retries, failed-payment emails, automatic
+   card updates, receipts, and renewal reminders. The app grants a 72-hour
+   `past_due` grace period by default; change `STRIPE_PAST_DUE_GRACE_HOURS` only
+   alongside that recovery policy.
+8. Test the full flow in Stripe test mode. Only then set
+   `STRIPE_CHECKOUT_ENABLED=true` and rebuild/restart the app. Turning this flag
+   off later stops new purchases while webhooks, entitlements, cancellation,
+   and the Customer Portal keep working.
 
 Checkout is adult-confirmed and hosted by Stripe. The application stores only
 opaque Stripe ids, subscription state, and the PocketBase profile id in
 `DATA_DIR/.billing.json`; it does not store card data or billing email.
+Configured prices are retrieved from Stripe and must be active USD recurring
+prices on the same product with the expected monthly/yearly interval. An
+unrecognized price or quantity never grants Family.
+
+Promotion codes are off by default. Enable `STRIPE_ALLOW_PROMOTION_CODES=true`
+only for a defined, bounded campaign. Stripe Tax collection is also off by
+default; use Stripe Tax monitoring and professional tax advice before enabling
+`STRIPE_AUTOMATIC_TAX=true`.
 
 An active Family entitlement belongs to the signed-in owner of a private room.
 Every anonymous or signed-in friend joining that room inherits its ad-free
