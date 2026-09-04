@@ -10,7 +10,11 @@ COPY . .
 # The public PocketBase URL is inlined into the SPA at build time (Vite). Passed
 # as a build arg from compose; written to .env so Vite reliably picks it up.
 ARG VITE_PB_URL=
-RUN echo "VITE_PB_URL=${VITE_PB_URL}" > .env
+ARG VITE_GAM_AD_UNIT_CHAT=
+ARG VITE_GAM_AD_UNIT_INTERSTITIAL=
+ARG VITE_AD_BREAK_MINUTES=10
+RUN printf "VITE_PB_URL=%s\nVITE_GAM_AD_UNIT_CHAT=%s\nVITE_GAM_AD_UNIT_INTERSTITIAL=%s\nVITE_AD_BREAK_MINUTES=%s\n" \
+  "$VITE_PB_URL" "$VITE_GAM_AD_UNIT_CHAT" "$VITE_GAM_AD_UNIT_INTERSTITIAL" "$VITE_AD_BREAK_MINUTES" > .env
 RUN npm run build
 
 # ---- runtime ----

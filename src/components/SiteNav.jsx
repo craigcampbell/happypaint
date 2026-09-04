@@ -25,6 +25,7 @@ export default function SiteNav({ onNavigate, current }) {
   const links = [
     { href: "/rooms", label: "Live rooms" },
     { href: "/wall", label: "Wall" },
+    { href: "/family", label: "Family" },
     { href: "/about", label: "About" },
     { href: "/faq", label: "Safety" },
     { href: "/privacy", label: "Privacy" },
@@ -36,6 +37,13 @@ export default function SiteNav({ onNavigate, current }) {
     event.preventDefault();
     setMenuOpen(false);
     onNavigate(href);
+  };
+
+  const startFresh = (event) => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    follow(event, `/join/${code}`);
   };
 
   return (
@@ -73,7 +81,7 @@ export default function SiteNav({ onNavigate, current }) {
       </nav>
 
       <div className="site-nav-actions">
-        <a href="/studio" className="site-nav-paint primary-action" onClick={(e) => follow(e, "/studio")}>
+        <a href="/studio" className="site-nav-paint primary-action" onClick={startFresh}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
           Draw now
         </a>

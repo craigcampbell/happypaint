@@ -31,6 +31,11 @@ same backend later.
   studio search modal (search/preview/add); one-sheet-per-room with wipe-on-change;
   "Today's theme" (admin → holiday → daily rotation). Plus admin custom uploads.
 - **Play-money "drops"**: earn by painting, spend on cosmetics; real-money OFF.
+- **Monetization foundation**: adult-owned Drawesome Family ($4.99/month or
+  $39/year) with Stripe-hosted checkout/portal, owner-level ad-free rooms that
+  include anonymous invitees, child-treated chat display inventory, and manual
+  interstitials triggered only at saves/exports/game-round breaks. All rails are
+  env-gated; paid coins, tips, payouts, and child-facing purchases remain OFF.
 - **Save & return**: anonymous "My Art" + a signed-in gallery synced to PocketBase
   `snapshots`.
 - **Moderation**: `/admin` portal (live metrics — peak users, CPU%, event-loop lag,

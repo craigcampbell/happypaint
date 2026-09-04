@@ -32,6 +32,7 @@ server.err.log
 .reports.json
 .sheets.json
 .metrics.json
+.billing.json
 
 # Local secrets / config — never commit
 .env

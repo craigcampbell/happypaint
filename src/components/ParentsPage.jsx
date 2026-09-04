@@ -29,8 +29,8 @@ const PILLARS = [
   },
   {
     icon: "🚫",
-    title: "No ads. No real-money purchases.",
-    body: "There is no advertising and nothing to buy with real money. The in-app currency is play-money earned by drawing.",
+    title: "No behavioral ads or child-facing purchases",
+    body: "Free spaces may carry contextual, non-personalized ads marked as child-directed. There are no paid coins, cash tips, or purchases inside the canvas. An adult can optionally own an ad-free Family space.",
   },
   {
     icon: "🧽",

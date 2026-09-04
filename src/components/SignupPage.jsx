@@ -26,6 +26,17 @@ export default function SignupPage({ onNavigate }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
+  const returnPath = (() => {
+    const requested = new URLSearchParams(window.location.search).get("return") || "";
+    return requested === "/family" ? requested : "";
+  })();
+  const nextDrawingPath = () => {
+    if (returnPath) return returnPath;
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return `/join/${code}`;
+  };
   // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
   // "" until answered; signup stays disabled until one option is picked.
   const [ageBand, setAgeBand] = useState("");
@@ -58,7 +69,7 @@ export default function SignupPage({ onNavigate }) {
           JSON.stringify({ band: ageBand || "login", ts: Date.now() }),
         );
       } catch { /* best-effort */ }
-      onNavigate("/studio");
+      onNavigate(nextDrawingPath());
     }
   };
 
@@ -73,7 +84,7 @@ export default function SignupPage({ onNavigate }) {
     const result = await signInWithProvider(provider, popup);
     setMessage(result.message);
     setBusy(false);
-    if (result.ok) onNavigate("/studio");
+    if (result.ok) onNavigate(nextDrawingPath());
   };
 
   const oauthProviders = OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id));
@@ -92,7 +103,7 @@ export default function SignupPage({ onNavigate }) {
           {session ? (
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
-              <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>
+              <button type="button" className="primary-action" onClick={() => onNavigate(nextDrawingPath())}>
                 🎨 Go paint
               </button>
             </>
@@ -200,7 +211,7 @@ export default function SignupPage({ onNavigate }) {
               ) : null}
 
               {!isCloudConfigured ? <p className="account-note compliance">{LOCAL_ONLY_MESSAGE}</p> : null}
-              <button type="button" className="signup-guest" onClick={() => onNavigate("/studio")}>
+              <button type="button" className="signup-guest" onClick={() => onNavigate(nextDrawingPath())}>
                 Keep drawing as a guest →
               </button>
             </>
@@ -211,7 +222,7 @@ export default function SignupPage({ onNavigate }) {
         <ul className="signup-perks">
           <li>🖼️ Your gallery saved to your account</li>
           <li>📱 Open your art on any device</li>
-          <li>🛡️ No ads, no real-money buys, delete anytime</li>
+          <li>🛡️ No behavioral ads or child-facing buys; delete anytime</li>
         </ul>
       </main>
     </div>

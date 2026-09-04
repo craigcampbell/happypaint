@@ -23,7 +23,7 @@ export default function AboutPage({ onNavigate }) {
           </article>
           <article>
             <h3>🛡️ Built carefully for kids</h3>
-            <p>Public rooms are auto-moderated. You browse <em>rooms</em>, not people. No ads, no real-money buys, and you can delete your data anytime.</p>
+            <p>Public rooms are auto-moderated. You browse <em>rooms</em>, not people. Ads are contextual and child-treated, purchases stay out of the canvas, and you can delete your data anytime.</p>
           </article>
           <article>
             <h3>💾 Yours to keep</h3>

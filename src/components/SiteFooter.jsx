@@ -31,6 +31,7 @@ export default function SiteFooter({ onNavigate }) {
     {
       title: "You",
       links: [
+        { href: "/family", label: "Drawesome Family" },
         { href: "/signup", label: "Save your art" },
         { href: "/signup?mode=login", label: "Log in" },
       ],
@@ -42,7 +43,7 @@ export default function SiteFooter({ onNavigate }) {
       <div className="site-footer-inner">
         <div className="site-footer-brand">
           <strong>Drawesome</strong>
-          <p>A live drawing hangout. Free, no ads, no account needed to draw.</p>
+          <p>A live drawing hangout. Free to draw; Family spaces are ad-free.</p>
         </div>
         {cols.map((col) => (
           <nav key={col.title} className="site-footer-col" aria-label={col.title}>

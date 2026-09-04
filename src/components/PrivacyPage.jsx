@@ -16,14 +16,16 @@ export default function PrivacyPage({ onNavigate }) {
         <ul>
           <li><strong>No account needed to draw.</strong> Anonymous painters are identified only by a random per-device id and a fun nickname — no email, no real name.</li>
           <li><strong>Your art.</strong> Drawings you save are kept on our server keyed to that device id (or your account if you sign in). Shared-room murals are stored so people who join later see the canvas.</li>
-          <li><strong>Optional sign-in.</strong> If you sign in with Google, we receive a basic profile (name + email) to tie your saved gallery to your account. That’s the only reason to sign in.</li>
+          <li><strong>Optional sign-in.</strong> If you sign in, we receive the account details needed to tie saved art, room ownership, and an optional Family subscription to that account.</li>
           <li><strong>Chat &amp; public rooms.</strong> Public rooms are auto-moderated for safety. Messages and drawings in public rooms may be reviewed by moderators.</li>
+          <li><strong>Optional Family billing.</strong> Stripe handles checkout and card details. Drawesome stores only opaque Stripe customer/subscription ids and subscription status.</li>
+          <li><strong>Advertising.</strong> Free spaces may show contextual, non-personalized ads. Requests are marked child-directed and under-age-of-consent, with restricted data processing.</li>
         </ul>
 
         <h2>What we don’t do</h2>
         <ul>
-          <li>No ads, no ad trackers, no selling data.</li>
-          <li>No real-money purchases.</li>
+          <li>No behavioral ad targeting and no selling personal data.</li>
+          <li>No paid coins, cash tips, or child-facing purchases. Family is an optional adult-owned subscription.</li>
           <li>No public people-search — you find <em>rooms</em>, not individual kids.</li>
         </ul>
 

@@ -196,6 +196,16 @@ export default function AccountPanel({ onClose, onDeleted }) {
           )}
         </div>
 
+        <div className="ps-group account-section">
+          <h3>Drawesome Family</h3>
+          <p className="account-note">
+            A parent can make every private room they own ad-free—including for friends who join as guests.
+          </p>
+          <button type="button" className="primary-action" onClick={() => { window.location.href = "/family"; }}>
+            View Family plan
+          </button>
+        </div>
+
         {message ? <p className="account-status">{message}</p> : null}
 
         <div className="ps-group account-section account-danger">
@@ -203,8 +213,8 @@ export default function AccountPanel({ onClose, onDeleted }) {
           <p className="account-note">
             Deleting is <strong>free</strong> and <strong>always available</strong> — it isn&apos;t gated by
             an account, a purchase, or anything else. This removes your drawings, gallery, Paint Space,
-            wallet, AI consent, replays, and brush packs from this device, files a deletion request, and
-            signs you out.
+            wallet, AI consent, replays, and brush packs from this device, cancels an attached Family
+            subscription, files a deletion request, and signs you out.
           </p>
           {deletion ? (
             <p className="account-note compliance">

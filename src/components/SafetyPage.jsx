@@ -31,8 +31,8 @@ const SAFETY = [
   },
   {
     icon: "🚫",
-    title: "No ads. No real-money buying.",
-    body: "Drawesome has no advertising and no real-money purchases. The in-app \"drops\" are play-money earned by drawing and spent only on cosmetic fun — there is nothing for a child to buy with real money.",
+    title: "No behavioral ads or child-facing buying.",
+    body: "Free spaces may show contextual, non-personalized ads marked child-directed. The in-app \"drops\" remain play-money earned by drawing; the optional Family subscription is bought and managed by an adult outside the canvas.",
   },
 ];
 

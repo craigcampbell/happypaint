@@ -104,6 +104,7 @@ import SignupPage from "./components/SignupPage";
 import RoomFinderPage from "./components/RoomFinderPage";
 import SafetyPage from "./components/SafetyPage";
 import ParentsPage from "./components/ParentsPage";
+import FamilyPage from "./components/FamilyPage";
 import FaqPage from "./components/FaqPage";
 import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
@@ -138,6 +139,8 @@ import {
 } from "./utils/symmetry";
 import { createPaintOrchestra } from "./utils/paintOrchestra";
 import QuestPanel from "./components/QuestPanel";
+import { ChatSponsorSlot, NaturalBreakAds } from "./utils/ads";
+import { signalNaturalAdBreak } from "./utils/adRuntime";
 import StorybookPanel from "./components/StorybookPanel";
 import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
 import "./App.css";
@@ -927,6 +930,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [roomTitle, setRoomTitle] = useState(null);
   // 'kid_safe' = public room (brush-only tools); anything else = private.
   const [roomAudience, setRoomAudience] = useState(null);
+  const [roomAdFree, setRoomAdFree] = useState(false);
   const [mutedSelf, setMutedSelf] = useState(false);
   // "Hide this painter" — MY mute button, no host needed: locally hides a
   // user's chat, cursor, reactions and hype for this session. Client-only
@@ -2458,6 +2462,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     galleryRef.current = next;
     setGallery(next);
     setStatus("Saved to gallery");
+    signalNaturalAdBreak("gallery_save");
     // Best-effort cloud push (debounced; no-op when signed out / local-only).
     schedulePush();
   }, [composeCanvas, persistGallery, selectedTexture]);
@@ -2469,6 +2474,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (blob) {
       downloadBlob(blob, `drawesome-${Date.now()}.png`);
       setStatus("PNG exported");
+      signalNaturalAdBreak("png_export");
     }
   }, [composeCanvas]);
 
@@ -2479,6 +2485,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     if (blob) {
       downloadBlob(blob, `drawesome-transparent-${Date.now()}.png`);
       setStatus("Transparent PNG exported");
+      signalNaturalAdBreak("transparent_export");
     }
   }, [composeCanvas]);
 
@@ -2638,6 +2645,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const data = await res.json();
       showToast(`Saved! 🎉 (${data.count}/${data.max}) — find it in 🖼️ Gallery`);
       await loadMyDrawings();
+      signalNaturalAdBreak("server_save");
     } catch {
       showToast("Couldn't save — please try again");
     } finally {
@@ -6209,6 +6217,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
+          setRoomAdFree(!!data.adFree);
           // Today's drawing prompt for this room (public prompt rooms / the
           // last theme-vote winner).
           setRoomPrompt(data.prompt || null);
@@ -6795,6 +6804,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           setGamePop({ kind: "reveal", word: data.word });
           window.clearTimeout(gamePopTimer.current);
           gamePopTimer.current = window.setTimeout(() => setGamePop(null), 4200);
+          signalNaturalAdBreak("game_round_end");
           break;
         }
         case "game_spoiler":
@@ -8094,6 +8104,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       data-layout={layoutTier}
       translate="no"
     >
+      <NaturalBreakAds enabled={!roomAdFree && Boolean(roomAudience) && !roomFingerPaint} />
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
         <button
           type="button"
@@ -9058,6 +9069,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             onReact={mp.sendChatReact}
             onHype={mp.sendHype}
             onNameTap={focusChatUser}
+            adSlot={<ChatSponsorSlot enabled={!roomAdFree && Boolean(roomAudience)} />}
             panelExtras={
               <>
                 <div className="mp-chat-room">
@@ -10011,6 +10023,10 @@ export default function App() {
 
   if (path.startsWith("/parents")) {
     return <ParentsPage onNavigate={navigate} />;
+  }
+
+  if (path.startsWith("/family")) {
+    return <FamilyPage onNavigate={navigate} />;
   }
 
   if (path.startsWith("/faq")) {

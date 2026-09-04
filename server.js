@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameS
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
+import { createBilling } from './server/billing.js';
 import { scan } from './server/moderation/textFilter.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
@@ -76,6 +77,8 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
+const billing = createBilling({ dataDir: DATA_DIR, verifyAccessToken });
+billing.registerWebhook(app);
 const server = createServer(app);
 const wss = new WebSocketServer({
   server,
@@ -2728,6 +2731,9 @@ wss.on('connection', async (ws, req) => {
     prompt: roomPrompt,
     wetCanvas: !!room.wetCanvas,
     moderated: room.audience === 'kid_safe',
+    // A Family plan belongs to the PRIVATE room owner. Every invited guest
+    // inherits that room's ad-free experience without needing an account.
+    adFree: Boolean(room.ownerProfileId && billing.isProfileEntitled(room.ownerProfileId)),
     watched: room.watchers.size > 0,
     // Capability key for cross-room @mention notifications: proves to the
     // notify channel that this client really held this name in this room, so
@@ -4337,6 +4343,7 @@ async function resolveArtOwner(req) {
 }
 
 app.use(express.json({ limit: '16mb' }));
+billing.registerRoutes(app);
 
 app.get('/api/artworks', async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -4643,7 +4650,10 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   for (const post of [...wallPosts.values()]) {
     if (post.ownerKey === accountKey) { deleteWallPost(post.id); wallScrubbed += 1; }
   }
-  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed });
+  // A user who deletes their account must not keep getting billed. Cancellation
+  // is best-effort, while the local profile mapping is always removed.
+  const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
+  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
@@ -5963,7 +5973,8 @@ const PAGE_META = {
     title: 'The Fridge Wall — Drawesome gallery',
     description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
   },
-  '/about': { title: 'About Drawesome', description: 'What Drawesome is, how rooms work, and why there are no ads and no real-money purchases.' },
+  '/about': { title: 'About Drawesome', description: 'What Drawesome is, how rooms work, and how child-treated ads and adult-owned Family spaces support it.' },
+  '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $4.99 monthly or $39 yearly.' },
   '/faq': {
     title: 'Safety & FAQ — Drawesome',
     description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',

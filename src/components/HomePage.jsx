@@ -251,7 +251,7 @@ export default function HomePage({ onNavigate }) {
               Open a blank canvas and start painting. No account, no setup—just draw.
             </p>
             <div className="home-hero-actions">
-              <button type="button" className="primary-action home-draw-now" onClick={() => onNavigate("/studio")}>
+              <button type="button" className="primary-action home-draw-now" onClick={startRoom}>
                 Start drawing <span aria-hidden="true">→</span>
               </button>
               <button type="button" className="home-together-link" onClick={startRoom}>
@@ -268,7 +268,7 @@ export default function HomePage({ onNavigate }) {
           <button
             type="button"
             className="home-paper"
-            onClick={() => onNavigate("/studio")}
+            onClick={startRoom}
             aria-label="Open a blank canvas and start drawing"
           >
             <span className="home-paper-sun" aria-hidden="true" />
@@ -291,7 +291,7 @@ export default function HomePage({ onNavigate }) {
           </div>
 
           <div className="home-choice-grid">
-            <button type="button" className="home-choice home-choice-blank" onClick={() => onNavigate("/studio")}>
+            <button type="button" className="home-choice home-choice-blank" onClick={startRoom}>
               <span className="home-choice-icon" aria-hidden="true">✎</span>
               <span><strong>Anything you want</strong><small>Start with a fresh canvas</small></span>
               <b aria-hidden="true">→</b>

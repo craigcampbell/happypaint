@@ -50,6 +50,7 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:notifications:v1",
   "happypaint:studio-rail:v1", // desktop tool-rail open/closed preference
   "happypaint:pen-pressure:v1", // learned stylus pressure ceiling (utils/penInput)
+  "drawesome:age-attestation:v1", // signup age/parent attestation
 ];
 
 // Drafts are keyed per room (draft:v4:<ROOM>) plus a legacy un-suffixed key, so

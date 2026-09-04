@@ -118,6 +118,7 @@ export default function CanvasChat({
   onReact,
   onHype,
   onNameTap,
+  adSlot,
   panelExtras,
 }) {
   const [draft, setDraft] = useState("");
@@ -272,6 +273,8 @@ export default function CanvasChat({
           </header>
 
           {panelExtras}
+
+          {adSlot}
 
           <div className="cc-log" ref={logRef} onClick={() => setPickerFor(null)}>
             {visible.length === 0 ? (

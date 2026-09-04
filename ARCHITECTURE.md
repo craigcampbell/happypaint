@@ -191,6 +191,10 @@ token)`), returns `send*` emitters + `disconnect()`.
   bound to `mutedProfileIds` (survives reconnect), and a locked room **auto-unlocks
   when the last host leaves** (no bricked canvases). Only the opaque profile id is
   persisted — never a display name (PII).
+- **Family entitlement**: Stripe webhooks maintain a minimal profile-to-
+  subscription mapping in `.billing.json`. A private room derives `adFree` from
+  its owner at join time, so every invited guest inherits the owner's active
+  plan without an account or subscription of their own.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)
   and per-room host (profileId). Admins outrank hosts.
 
@@ -225,6 +229,8 @@ in Docker) so one volume persists everything:
 - `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
+- `.billing.json` — opaque Stripe ids + Family subscription state, keyed by the
+  PocketBase profile id. Card data and billing email never enter this store.
 
 Separate, large, read-only: **`coloring-library/`** (its own volume). PocketBase
 data: **`pb_data/`** (its own volume). All three folders are git-ignored.
@@ -233,6 +239,7 @@ data: **`pb_data/`** (its own volume). All three folders are git-ignored.
 `/healthz`; `/api/artworks` (CRUD, anon device key); `/api/report` (public);
 `/api/admin/*` (key-gated: rooms, reports, sheets, metrics, sheet-theme);
 `/api/sheets` (custom uploads); `/api/coloring-sheets` + `/today` (library);
+`/api/billing/config|me|checkout|portal|webhook` (env-gated Stripe Family plan);
 `/coloring-sheets/full|thumbs/*` (static). SPA fallback 404s on `/api/` +
 `/coloring-sheets/` misses.
 
