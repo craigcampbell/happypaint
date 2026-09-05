@@ -21,10 +21,12 @@ process.env.STRIPE_PRODUCT_FAMILY = 'prod_family';
 process.env.STRIPE_PRICE_FAMILY_MONTHLY = 'price_monthly';
 process.env.STRIPE_PRICE_FAMILY_YEARLY = 'price_yearly';
 process.env.STRIPE_PORTAL_CONFIGURATION_ID = 'bpc_family';
+process.env.STRIPE_CHECKOUT_ENABLED = 'true';
 process.env.PUBLIC_ORIGIN = 'https://drawesome.art';
 process.env.STRIPE_ALLOW_PROMOTION_CODES = 'false';
 process.env.STRIPE_AUTOMATIC_TAX = 'false';
 process.env.STRIPE_PAST_DUE_GRACE_DAYS = '3';
+process.env.STRIPE_PAST_DUE_GRACE_HOURS = '72';
 process.env.FAMILY_TERMS_VERSION = 'test-terms-v1';
 
 let currentTime = Date.UTC(2026, 8, 4, 12, 0, 0);
@@ -219,12 +221,14 @@ function event(id, type, object, created) {
 
 try {
   const stripe = makeStripe();
+  const entitlementChanges = [];
   const billing = createBilling({
     dataDir,
     stripeClient: stripe,
     verifyAccessToken: async (token) => ({ profileId: token }),
     now: () => currentTime,
     startMaintenance: false,
+    onEntitlementChange: (profileId, active) => entitlementChanges.push({ profileId, active }),
   });
   ({ httpServer: server, origin: appOrigin } = await listen(billing));
 
@@ -276,6 +280,7 @@ try {
   });
   assert.equal(confirmed.status, 200);
   assert.equal((await confirmed.json()).active, true, 'return-page confirmation repairs a delayed webhook');
+  assert.deepEqual(entitlementChanges.at(-1), { profileId: 'parent_profile', active: true });
   const operational = await billing.getOperationalStatus();
   assert.equal(operational.mode, 'ready');
   assert.equal(operational.activeFamilies, 1);
@@ -313,6 +318,22 @@ try {
   const badStatus = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('bad_profile') }).then((res) => res.json());
   assert.equal(badStatus.active, false, 'wrong product/price never grants Family');
   assert.equal(badStatus.status, 'invalid_product');
+
+  const graceSub = familySubscription('sub_grace', 'grace_profile', 'cus_grace');
+  subscriptions.set(graceSub.id, graceSub);
+  await sendEvent(appOrigin, event('evt_grace_paid', 'invoice.paid', {
+    customer: 'cus_grace', parent: { subscription_details: { subscription: graceSub.id } },
+  }, 220));
+  currentTime += 2 * 3600000;
+  graceSub.status = 'past_due';
+  graceSub.latest_invoice = { status: 'open' };
+  await sendEvent(appOrigin, event('evt_grace_due', 'customer.subscription.updated', structuredClone(graceSub), 230));
+  const inGrace = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('grace_profile') }).then((res) => res.json());
+  assert.equal(inGrace.active, true, 'a previously paid family keeps the configured recovery grace');
+  currentTime += 73 * 3600000;
+  const beyondGrace = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('grace_profile') }).then((res) => res.json());
+  assert.equal(beyondGrace.active, false, 'past-due access ends after the grace window');
+  currentTime -= 75 * 3600000;
 
   parentSub.status = 'canceled';
   await sendEvent(appOrigin, event('evt_deleted', 'customer.subscription.deleted', structuredClone(parentSub), 300));

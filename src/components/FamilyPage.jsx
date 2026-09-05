@@ -108,6 +108,10 @@ export default function FamilyPage({ onNavigate }) {
   };
 
   const configuredForPlan = Boolean(config?.configured && config?.plans?.[interval]);
+  const [priceAmount, priceUnit] = String(
+    config?.display?.[interval] || (interval === "yearly" ? "$39/year" : "$4.99/month"),
+  ).split("/");
+  const yearlySavings = Number(config?.yearlySavingsPercent);
 
   return (
     <div className="family-page">
@@ -147,9 +151,11 @@ export default function FamilyPage({ onNavigate }) {
               <>
                 <div className="family-price-toggle" role="group" aria-label="Billing frequency">
                   <button type="button" className={interval === "monthly" ? "is-on" : ""} onClick={() => setInterval("monthly")}>Monthly</button>
-                  <button type="button" className={interval === "yearly" ? "is-on" : ""} onClick={() => setInterval("yearly")}>Yearly · save 35%</button>
+                  <button type="button" className={interval === "yearly" ? "is-on" : ""} onClick={() => setInterval("yearly")}>
+                    Yearly{yearlySavings > 0 ? ` · save ${yearlySavings}%` : ""}
+                  </button>
                 </div>
-                <p className="family-price"><strong>{interval === "yearly" ? "$39" : "$4.99"}</strong><span>/{interval === "yearly" ? "year" : "month"}</span></p>
+                <p className="family-price"><strong>{priceAmount}</strong><span>/{priceUnit || (interval === "yearly" ? "year" : "month")}</span></p>
                 <p className="family-price-note">Cancel anytime from the parent account.</p>
                 {session ? (
                   <label className="family-adult-check">

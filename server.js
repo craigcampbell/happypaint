@@ -77,7 +77,11 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
-const billing = createBilling({ dataDir: DATA_DIR, verifyAccessToken });
+const billing = createBilling({
+  dataDir: DATA_DIR,
+  verifyAccessToken,
+  onEntitlementChange: refreshFamilyRoomEntitlement,
+});
 billing.registerWebhook(app);
 const server = createServer(app);
 const wss = new WebSocketServer({
@@ -1829,6 +1833,24 @@ function broadcast(roomId, message, exceptId = null) {
   }
 }
 
+function roomHasFamilyEntitlement(room) {
+  return Boolean(
+    room?.audience === 'friends' &&
+    room.ownerProfileId &&
+    billing.isProfileEntitled(room.ownerProfileId)
+  );
+}
+
+// Stripe can activate, recover, or end Family while friends are already
+// painting. Push the new ad state immediately instead of waiting for reconnect.
+function refreshFamilyRoomEntitlement(profileId) {
+  for (const room of rooms.values()) {
+    if (room.ownerProfileId === profileId) {
+      broadcast(room.code, { type: 'billing_entitlement', adFree: roomHasFamilyEntitlement(room) });
+    }
+  }
+}
+
 // ---- Draw & Guess game engine ---------------------------------------------
 // One drawer per round gets a secret word; everyone else races to type it in
 // chat. The WORD is the only secret — draw ops relay as normal ops, so replay
@@ -2733,11 +2755,7 @@ wss.on('connection', async (ws, req) => {
     moderated: room.audience === 'kid_safe',
     // A Family plan belongs to the PRIVATE room owner. Every invited guest
     // inherits that room's ad-free experience without needing an account.
-    adFree: Boolean(
-      room.audience === 'friends' &&
-      room.ownerProfileId &&
-      billing.isProfileEntitled(room.ownerProfileId)
-    ),
+    adFree: roomHasFamilyEntitlement(room),
     watched: room.watchers.size > 0,
     // Capability key for cross-room @mention notifications: proves to the
     // notify channel that this client really held this name in this room, so

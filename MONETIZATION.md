@@ -40,8 +40,9 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
    before enabling checkout.
 7. In Billing revenue recovery, enable Smart Retries, failed-payment emails,
    and automatic card updates. The app grants a three-day past-due grace period
-   by default (`STRIPE_PAST_DUE_GRACE_DAYS`) but never beyond the last paid
-   period plus that grace.
+   by default (`STRIPE_PAST_DUE_GRACE_DAYS`); the optional
+   `STRIPE_PAST_DUE_GRACE_HOURS` value overrides it for finer control. Access
+   never extends beyond the last paid period plus that grace.
 8. Assign the correct digital-services tax category and enable Stripe Tax
    threshold monitoring. Leave `STRIPE_AUTOMATIC_TAX=false` until registrations
    are confirmed; then enable it to collect tax in Checkout.
@@ -50,6 +51,9 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
    expiration, and first-time-customer rules in Stripe.
 10. Set `FAMILY_TERMS_VERSION` to the version shown with the adult purchase
     attestation, then rebuild/restart the app.
+11. Complete the test-mode Checkout, webhook, and Portal smoke tests, then set
+    `STRIPE_CHECKOUT_ENABLED=true`. Turning the flag off later blocks only new
+    purchases; webhooks, existing entitlements, and Portal management continue.
 
 Checkout is adult-confirmed and hosted by Stripe. The application stores only
 opaque Stripe ids, subscription state, adult-attestation timestamp/version,

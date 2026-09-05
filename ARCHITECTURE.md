@@ -196,7 +196,8 @@ token)`), returns `send*` emitters + `disconnect()`.
   last paid-through time (plus a short configured past-due grace), reconciled
   against Stripe, and restricted to `friends` rooms. Every invited guest in a
   qualifying private room inherits the owner's plan without an account or
-  subscription of their own. Account deletion durably queues failed Stripe
+  subscription of their own; webhook changes update already-connected guests
+  immediately. Account deletion durably queues failed Stripe
   cancellations and retains only a short-lived one-way profile hash after
   cleanup so late webhook retries cannot recreate erased mappings.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)

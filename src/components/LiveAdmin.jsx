@@ -368,12 +368,12 @@ export default function LiveAdmin({ onNavigate }) {
 
       {billing ? (
         <section className="admin-section">
-          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : "check setup"}</span></h2>
+          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : billing.mode === "paused" ? "checkout paused" : "check setup"}</span></h2>
           <div className="metric-grid">
             <div className="metric">
-              <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : "Off"}</span>
+              <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : billing.mode === "paused" ? "Paused" : "Off"}</span>
               <span className="metric-label">Checkout</span>
-              <span className="metric-sub">{billing.mode === "misconfigured" ? billing.validationError || "configuration failed" : billing.mode === "disabled" ? "anonymous features unaffected" : "catalog verified"}</span>
+              <span className="metric-sub">{billing.mode === "misconfigured" ? billing.validationError || "configuration failed" : billing.mode === "disabled" ? "anonymous features unaffected" : billing.mode === "paused" ? "existing billing still works" : "catalog verified"}</span>
             </div>
             <div className="metric">
               <span className="metric-num">{formatCount(billing.activeFamilies)}</span>

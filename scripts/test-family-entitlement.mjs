@@ -10,21 +10,31 @@ const dataDir = await mkdtemp(join(tmpdir(), 'drawesome-family-'));
 const appPort = 18787 + Math.floor(Math.random() * 400);
 const authPort = appPort + 500;
 await writeFile(join(dataDir, '.billing.json'), JSON.stringify({
-  version: 1,
+  version: 2,
   records: {
     parent_profile: {
       profileId: 'parent_profile',
       status: 'active',
       priceId: 'price_test_monthly',
+      quantity: 1,
+      familyProductValid: true,
+      currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
+    },
+    unknown_profile: {
+      profileId: 'unknown_profile',
+      status: 'active',
+      priceId: 'price_not_family',
+      quantity: 1,
       currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
     },
   },
 }));
 
 const authServer = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url.includes('/auth-refresh') && req.headers.authorization === 'parent-token') {
+  const profiles = { 'parent-token': 'parent_profile', 'unknown-token': 'unknown_profile' };
+  if (req.method === 'POST' && req.url.includes('/auth-refresh') && profiles[req.headers.authorization]) {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ record: { id: 'parent_profile', name: 'Parent' } }));
+    res.end(JSON.stringify({ record: { id: profiles[req.headers.authorization], name: 'Parent' } }));
     return;
   }
   res.writeHead(401).end();
@@ -100,6 +110,9 @@ try {
   const freeGuest = await connected('FREE12');
   assert.equal(freeGuest.data.adFree, false, 'ordinary anonymous rooms remain ad-supported');
 
+  const unknownPlan = await connected('OTHER1', 'unknown-token');
+  assert.equal(unknownPlan.data.adFree, false, 'an unknown legacy price never grants Family');
+
   const publicRoom = await fetch(`http://127.0.0.1:${appPort}/api/rooms`, {
     method: 'POST',
     headers: { Authorization: 'Bearer parent-token', 'Content-Type': 'application/json' },
@@ -114,9 +127,9 @@ try {
   }).then((res) => res.json());
   assert.equal(scrub.billingScrubbed.removed, true, 'account erasure removes billing mapping');
   const stored = JSON.parse(await readFile(join(dataDir, '.billing.json'), 'utf8'));
-  assert.deepEqual(stored.records, {});
+  assert.equal(stored.records.parent_profile, undefined);
 
-  owner.ws.close(); guest.ws.close(); freeGuest.ws.close(); publicOwner.ws.close();
+  owner.ws.close(); guest.ws.close(); freeGuest.ws.close(); unknownPlan.ws.close(); publicOwner.ws.close();
   console.log('family entitlement integration: ok');
 } finally {
   child.kill();

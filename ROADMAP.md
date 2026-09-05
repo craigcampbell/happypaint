@@ -35,7 +35,10 @@ same backend later.
   $39/year) with Stripe-hosted checkout/portal, owner-level ad-free rooms that
   include anonymous invitees, child-treated chat display inventory, and manual
   interstitials triggered only at saves/exports/game-round breaks. All rails are
-  env-gated; paid coins, tips, payouts, and child-facing purchases remain OFF.
+  env-gated; Family prices are verified against Stripe, webhook state is
+  durable/order-safe, payment failure has a bounded grace window, and account
+  deletion queues cancellation until Stripe confirms it. Paid coins, tips,
+  payouts, and child-facing purchases remain OFF.
 - **Save & return**: anonymous "My Art" + a signed-in gallery synced to PocketBase
   `snapshots`.
 - **Moderation**: `/admin` portal (live metrics — peak users, CPU%, event-loop lag,

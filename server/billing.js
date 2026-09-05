@@ -102,6 +102,7 @@ export function createBilling({
   stripeClient = null,
   now = () => Date.now(),
   startMaintenance = true,
+  onEntitlementChange = null,
 }) {
   const secretKey = process.env.STRIPE_SECRET_KEY || '';
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
@@ -112,11 +113,16 @@ export function createBilling({
     yearly: process.env.STRIPE_PRICE_FAMILY_YEARLY || '',
   };
   const publicOrigin = cleanOrigin(process.env.PUBLIC_ORIGIN || process.env.APP_ORIGIN || '');
+  const checkoutEnabled = /^(1|true|yes)$/i.test(process.env.STRIPE_CHECKOUT_ENABLED || '');
   const allowPromotionCodes = /^(1|true|yes)$/i.test(process.env.STRIPE_ALLOW_PROMOTION_CODES || '');
   const automaticTax = /^(1|true|yes)$/i.test(process.env.STRIPE_AUTOMATIC_TAX || '');
   const graceDaysValue = Number(process.env.STRIPE_PAST_DUE_GRACE_DAYS);
   const graceDays = Number.isFinite(graceDaysValue) ? graceDaysValue : 3;
-  const pastDueGraceMs = Math.max(0, Math.min(14, graceDays)) * 86400000;
+  const graceHoursValue = Number(process.env.STRIPE_PAST_DUE_GRACE_HOURS);
+  const graceHours = process.env.STRIPE_PAST_DUE_GRACE_HOURS !== '' && Number.isFinite(graceHoursValue)
+    ? graceHoursValue
+    : graceDays * 24;
+  const pastDueGraceMs = Math.max(0, Math.min(14 * 24, graceHours)) * 3600000;
   const termsVersion = String(process.env.FAMILY_TERMS_VERSION || '2026-09-04').slice(0, 40);
   const stripe = stripeClient || (secretKey ? new Stripe(secretKey, { apiVersion: STRIPE_API_VERSION }) : null);
   const file = join(dataDir, '.billing.json');
@@ -128,12 +134,17 @@ export function createBilling({
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
     const records = parsed?.records && typeof parsed.records === 'object' ? parsed.records : {};
-    // v1 stored currentPeriodEnd but not paidThrough. Preserve existing paid
-    // families during migration; every subsequent Stripe sync validates product.
+    // v1 stored currentPeriodEnd but not paidThrough or product validation.
+    // Only a configured Family price at quantity one survives migration.
     for (const record of Object.values(records)) {
       if (!record || typeof record !== 'object') continue;
       if (!Number(record.paidThrough)) record.paidThrough = Number(record.currentPeriodEnd) || 0;
-      if (record.familyProductValid == null) record.familyProductValid = true;
+      if (!Number(record.quantity)) record.quantity = 1;
+      if (record.familyProductValid == null) {
+        record.familyProductValid = Boolean(
+          (record.priceId === prices.monthly || record.priceId === prices.yearly) && record.quantity === 1,
+        );
+      }
     }
     state = {
       version: BILLING_VERSION,
@@ -267,6 +278,7 @@ export function createBilling({
       status: familyProductValid ? (subscription.status || 'inactive') : 'invalid_product',
       productId: productIdFrom(subscription),
       priceId: priceIdFrom(subscription),
+      quantity: Number(firstItem(subscription)?.quantity || 1),
       familyProductValid,
       currentPeriodEnd: end,
       paidThrough,
@@ -297,6 +309,20 @@ export function createBilling({
       cancelAtPeriodEnd: !!record.cancelAtPeriodEnd,
       manageable: Boolean(record.customerId && record.subscriptionId && !['canceled', 'incomplete_expired'].includes(record.status)),
     };
+  }
+
+  function notifyEntitlementChange(profileId) {
+    if (!profileId || typeof onEntitlementChange !== 'function') return;
+    try {
+      onEntitlementChange(profileId, publicStatus(profileId).active);
+    } catch (error) {
+      console.error('[billing] Entitlement notification failed:', errorCode(error));
+    }
+  }
+
+  function commitSubscription(profileId, subscription, options = {}) {
+    commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, options));
+    notifyEntitlementChange(profileId);
   }
 
   function baseConfigured() {
@@ -368,8 +394,10 @@ export function createBilling({
       .map((value) => Number(value) || 0)
       .filter(Boolean);
     return {
-      mode: configured ? 'ready' : anyConfiguration ? 'misconfigured' : 'disabled',
-      configured,
+      mode: configured ? (checkoutEnabled ? 'ready' : 'paused') : anyConfiguration ? 'misconfigured' : 'disabled',
+      configured: configured && checkoutEnabled,
+      catalogValidated: configured,
+      checkoutEnabled,
       validationError: configured ? null : catalogValidation.error,
       activeFamilies: statuses.filter((status) => status.active).length,
       needsAttention: statuses.filter((status) => status.manageable && !status.active).length,
@@ -465,6 +493,7 @@ export function createBilling({
         }
         markProcessed(draft, event);
       });
+      if (resolved.profileId) notifyEntitlementChange(resolved.profileId);
       return res.json({ received: true });
     } catch (error) {
       console.error('[billing] Webhook processing failed:', event.id, errorCode(error));
@@ -548,11 +577,13 @@ export function createBilling({
   function registerRoutes(app) {
     app.get('/api/billing/config', async (_req, res) => {
       res.set('Cache-Control', 'no-store');
-      const configured = await ensureCatalogValidated();
+      const catalogValidated = await ensureCatalogValidated();
+      const configured = catalogValidated && checkoutEnabled;
       res.json({
         configured,
         plans: { monthly: configured, yearly: configured },
         display: { monthly: '$4.99/month', yearly: '$39/year' },
+        yearlySavingsPercent: 35,
         termsVersion,
       });
     });
@@ -566,7 +597,7 @@ export function createBilling({
 
     app.post('/api/billing/checkout', async (req, res) => {
       res.set('Cache-Control', 'no-store');
-      if (!(await ensureCatalogValidated())) return res.status(503).json({ error: 'billing_not_configured' });
+      if (!checkoutEnabled || !(await ensureCatalogValidated())) return res.status(503).json({ error: 'billing_not_configured' });
       const identity = await identityFrom(req);
       const profileId = cleanProfileId(identity?.profileId);
       if (!profileId) return res.status(401).json({ error: 'sign_in_required' });
@@ -586,7 +617,7 @@ export function createBilling({
           const customerId = await getOrCreateCustomer(profileId);
           const blocking = await findBlockingSubscription(customerId);
           if (blocking) {
-            commit((draft) => syncSubscriptionDraft(draft, profileId, blocking, { freshFromStripe: true }));
+            commitSubscription(profileId, blocking, { freshFromStripe: true });
             throw new BillingHttpError(409, 'subscription_exists');
           }
 
@@ -600,7 +631,7 @@ export function createBilling({
             if (existingSession.subscription) {
               const subscriptionId = typeof existingSession.subscription === 'string' ? existingSession.subscription : existingSession.subscription.id;
               const subscription = await retrieveSubscription(subscriptionId);
-              commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, { freshFromStripe: true }));
+              commitSubscription(profileId, subscription, { freshFromStripe: true });
               throw new BillingHttpError(409, 'subscription_exists');
             }
             if (existingSession.status === 'open' && pending.priceId !== price) {
@@ -717,7 +748,7 @@ export function createBilling({
             throw new BillingHttpError(403, 'checkout_session_not_owned');
           }
 
-          commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, { freshFromStripe: true }));
+          commitSubscription(profileId, subscription, { freshFromStripe: true });
           return publicStatus(profileId);
         });
         return res.json(status);
@@ -805,6 +836,7 @@ export function createBilling({
       commit((draft) => {
         markProfileDeleted(draft, profileId);
       });
+      notifyEntitlementChange(profileId);
       return true;
     } catch (error) {
       commit((draft) => {
@@ -853,6 +885,7 @@ export function createBilling({
         commit((draft) => {
           markProfileDeleted(draft, profileId);
         });
+        notifyEntitlementChange(profileId);
         return { removed: true, cancelled: record.status === 'canceled', pending: false };
       }
 
@@ -875,6 +908,7 @@ export function createBilling({
         };
         draft.pendingCancellations[profileId] = pending;
       });
+      notifyEntitlementChange(profileId);
       const cancelled = await retryCancellation(profileId, pending);
       return { removed: cancelled, cancelled, pending: !cancelled };
     });
@@ -897,7 +931,7 @@ export function createBilling({
       if (!record.subscriptionId || state.pendingCancellations[profileId]) continue;
       try {
         const subscription = await retrieveSubscription(record.subscriptionId);
-        commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, { freshFromStripe: true }));
+        commitSubscription(profileId, subscription, { freshFromStripe: true });
       } catch (error) {
         console.error('[billing] Subscription reconciliation failed:', profileId, errorCode(error));
       }
