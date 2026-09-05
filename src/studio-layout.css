@@ -89,6 +89,35 @@
   display: flex;
 }
 
+/* The Actions group (Undo / Redo / Save / Export …) is the same on every
+   tier: the compact sheets already show it, and the desktop rail shows it
+   too so a MacBook user doesn't have to discover the "Studio ⋮" popover to
+   find Undo. Home / Rooms are dropped here because the in-flow room bar
+   already carries them. */
+.studio-shell[data-layout="desktop"] .mobile-actions {
+  display: grid;
+}
+
+.studio-shell[data-layout="desktop"] .mobile-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.studio-shell[data-layout="desktop"] .mobile-actions-grid button {
+  width: auto;
+  min-height: 40px;
+  padding: 0 6px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.studio-shell[data-layout="desktop"] .mobile-actions-grid .compact-only-action {
+  display: none;
+}
+
 /* Slim, in-flow room bar (not floated over the art — you don't want to draw
    under it). The floating "Studio" menu button sits in its left gutter. */
 .studio-shell[data-layout="desktop"] .mp-bar {

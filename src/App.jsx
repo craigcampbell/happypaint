@@ -9243,10 +9243,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         <section className="tool-section mobile-actions">
           <h2>Actions</h2>
           <div className="mobile-actions-grid">
-            <button type="button" onClick={() => { window.location.href = "/"; }}>
+            {/* Home / Rooms already sit in the desktop room bar — compact tiers only. */}
+            <button type="button" className="compact-only-action" onClick={() => { window.location.href = "/"; }}>
               🏠 Home
             </button>
-            <button type="button" onClick={() => setShowLobby(true)}>
+            <button type="button" className="compact-only-action" onClick={() => setShowLobby(true)}>
               🚪 Rooms
             </button>
             <button type="button" onClick={undo} disabled={historyCount === 0}>
