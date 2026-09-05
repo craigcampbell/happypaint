@@ -1841,6 +1841,34 @@ function roomHasFamilyEntitlement(room) {
   );
 }
 
+function envEnabled(name) {
+  return /^(1|true|yes|on)$/i.test(String(process.env[name] || '').trim());
+}
+
+// Advertising has two independent launch gates: the browser build flag and
+// this runtime policy. The browser can only know its coarse edge-provided
+// country by asking here. An empty allowlist or a missing country fails closed,
+// so merely adding a Google unit path can never start global ad requests.
+const ADS_SERVING_ENABLED = envEnabled('ADS_SERVING_ENABLED');
+const ADS_ALLOW_UNKNOWN_COUNTRY = envEnabled('ADS_ALLOW_UNKNOWN_COUNTRY');
+const ADS_ALLOWED_COUNTRIES = new Set(
+  String(process.env.ADS_ALLOWED_COUNTRIES || '')
+    .split(',')
+    .map(cleanCountry)
+    .filter(Boolean),
+);
+
+function adEligibilityFor(req) {
+  const country = countryFromReq(req);
+  if (!ADS_SERVING_ENABLED) return { eligible: false, country, reason: 'paused' };
+  if (ADS_ALLOWED_COUNTRIES.size === 0) return { eligible: false, country, reason: 'no_countries' };
+  if (!country && !ADS_ALLOW_UNKNOWN_COUNTRY) return { eligible: false, country: null, reason: 'country_unknown' };
+  if (country && !ADS_ALLOWED_COUNTRIES.has(country)) {
+    return { eligible: false, country, reason: 'country_not_allowed' };
+  }
+  return { eligible: true, country, reason: 'allowed' };
+}
+
 // Stripe can activate, recover, or end Family while friends are already
 // painting. Push the new ad state immediately instead of waiting for reconnect.
 function refreshFamilyRoomEntitlement(profileId) {
@@ -3000,6 +3028,7 @@ wss.on('connection', async (ws, req) => {
         // handlers (each binds an id to this room). Rejecting trace_/pp_ ids here
         // stops re-broadcasting another room's — or another player's — private image.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
+        if (nextSheet && !validSharedSheetId(nextSheet)) break;
         dropRoomTracePhoto(room); // replacing/clearing frees the old photo
         room.sheetId = nextSheet;
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
@@ -4367,6 +4396,15 @@ async function resolveArtOwner(req) {
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
 
+app.get('/api/ads/eligibility', (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  res.set('Vary', 'CF-IPCountry, X-Vercel-IP-Country, X-Country-Code, CloudFront-Viewer-Country');
+  const result = adEligibilityFor(req);
+  // The public response intentionally exposes only the decision. Operational
+  // detail lives behind /api/admin/ads.
+  res.json({ eligible: result.eligible });
+});
+
 app.get('/api/artworks', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const key = await resolveArtOwner(req);
@@ -4691,6 +4729,17 @@ app.get('/api/admin/billing', async (req, res) => {
   } catch {
     res.status(503).json({ error: 'billing_status_unavailable' });
   }
+});
+
+app.get('/api/admin/ads', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    mode: ADS_SERVING_ENABLED && ADS_ALLOWED_COUNTRIES.size ? 'eligible-regions-on' : 'off',
+    servingEnabled: ADS_SERVING_ENABLED,
+    allowedCountries: [...ADS_ALLOWED_COUNTRIES].sort(),
+    allowUnknownCountry: ADS_ALLOW_UNKNOWN_COUNTRY,
+  });
 });
 
 app.get('/api/admin/analytics', (req, res) => {
@@ -5370,6 +5419,11 @@ app.post('/api/rooms', async (req, res) => {
   if (mode === 'storybook' && audience !== 'friends') {
     return res.status(400).json({ error: 'storybook_private_only' });
   }
+  const requestedSheet = body.sheetId ? String(body.sheetId).slice(0, 200) : null;
+  const initialSheet = requestedSheet ? validSharedSheetId(requestedSheet) : null;
+  if (requestedSheet && !initialSheet) {
+    return res.status(400).json({ error: 'unknown_sheet' });
+  }
   const token = bearerToken(req);
   const identity = token ? await verifyAccessToken(token) : null;
   // A public room needs a grown-up owner who can moderate it.
@@ -5385,13 +5439,14 @@ app.post('/api/rooms', async (req, res) => {
   room.audience = audience;
   room.listed = audience === 'kid_safe' ? body.listed !== false : false;
   room.title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 40) : null;
+  room.sheetId = initialSheet;
   if (identity) room.ownerProfileId = identity.profileId;
   if (mode === 'storybook') {
     room.title = room.title || 'Our Story';
     enableStorybookRoom(room);
   }
   persistRoom(code);
-  res.json({ code, audience: room.audience, listed: room.listed, title: room.title, mode });
+  res.json({ code, audience: room.audience, listed: room.listed, title: room.title, mode, sheetId: room.sheetId });
 });
 
 // One segment's complete film data for the client-side production exporter:
@@ -5858,6 +5913,16 @@ function loadColoringIndex() {
   }
 }
 
+function validSharedSheetId(raw) {
+  const id = String(raw || '').slice(0, 200);
+  if (!id) return null;
+  if (id.startsWith('lib:')) {
+    loadColoringIndex();
+    return coloringSheets.some((sheet) => sheet.id === id.slice(4)) ? id : null;
+  }
+  return sheets.some((sheet) => sheet.id === id) ? id : null;
+}
+
 // The full search index (id + title + searchable text); the client fetches it
 // once and searches in-browser. Hundreds of KB, gzipped + cached.
 app.get('/api/coloring-sheets', (_req, res) => {
@@ -5883,7 +5948,9 @@ const daysSinceEpoch = (d) => Math.floor(d.getTime() / 86400000);
 
 app.get('/api/coloring-sheets/today', (_req, res) => {
   loadColoringIndex();
-  res.set('Cache-Control', 'public, max-age=600');
+  // An admin can change today's prompt while families are already browsing;
+  // keep this tiny response fresh so the new theme appears immediately.
+  res.set('Cache-Control', 'no-store');
   if (!coloringSheets.length) return res.json({ sheet: null });
   const now = new Date();
   const seed = daysSinceEpoch(now);
@@ -5921,11 +5988,15 @@ app.post('/api/admin/sheet-theme', (req, res) => {
   if (!adminGuard(req, res)) return;
   const { sheetId } = req.body || {};
   try {
-    const payload = sheetId
-      ? { sheetId: String(sheetId).slice(0, 200), date: new Date().toISOString().slice(0, 10) }
+    loadColoringIndex();
+    const cleanId = sheetId ? String(sheetId).slice(0, 200) : '';
+    const selected = cleanId ? coloringSheets.find((sheet) => sheet.id === cleanId) : null;
+    if (cleanId && !selected) return res.status(400).json({ error: 'unknown_sheet' });
+    const payload = selected
+      ? { sheetId: selected.id, date: new Date().toISOString().slice(0, 10) }
       : {};
     writeFileSync(SHEET_THEME_FILE, JSON.stringify(payload));
-    res.json({ ok: true });
+    res.json({ ok: true, sheet: selected ? { id: selected.id, title: selected.title } : null });
   } catch {
     res.status(500).json({ error: 'failed' });
   }
@@ -6037,7 +6108,7 @@ const FAQ_JSON_LD = {
     {
       '@type': 'Question',
       name: 'Does Drawesome have ads or in-app purchases?',
-      acceptedAnswer: { '@type': 'Answer', text: 'No ads and no real-money purchases. The in-app currency is play money earned by drawing.' },
+      acceptedAnswer: { '@type': 'Answer', text: 'Free spaces may show contextual, non-personalized ads marked child-directed. Private Family rooms are ad-free. There are no real-money purchases inside the canvas; Drops are play money earned by drawing.' },
     },
     {
       '@type': 'Question',

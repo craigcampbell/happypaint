@@ -4883,6 +4883,65 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.admin-theme-current {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 14px;
+  background: #eef2ff;
+}
+.admin-theme-current img {
+  width: 76px;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  border-radius: 9px;
+  background: #fff;
+}
+.admin-theme-current div { display: grid; gap: 2px; }
+.admin-theme-current span { color: #64748b; font-size: 0.78rem; }
+.admin-theme-search { display: grid; gap: 5px; font-weight: 800; }
+.admin-theme-search input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+}
+.admin-theme-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.admin-theme-results button {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  text-align: left;
+}
+.admin-theme-results img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  border-radius: 7px;
+  background: #fff;
+}
+.admin-theme-results span {
+  overflow: hidden;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-theme-notice { margin: 10px 0 0; color: #334155; font-weight: 700; }
+
+@media (max-width: 560px) {
+  .admin-theme-current { grid-template-columns: 64px minmax(0, 1fr); }
+  .admin-theme-current button { grid-column: 1 / -1; }
+}
 
 /* ---- Admin metrics cards ------------------------------------------------- */
 .metric-grid {
@@ -5728,6 +5787,55 @@ textarea:focus-visible,
 .home-join-auth { display: flex; gap: 8px; justify-content: center; }
 .home-join-auth button { flex: 1; }
 .home-join-note { margin: 12px 0 0; font-size: 0.78rem; color: #8a98a6; }
+
+/* ---- New private room flow ---- */
+.new-room-modal { width: min(620px, 100%); }
+.new-room-intro { margin: 0 0 14px; color: #64748b; }
+.new-room-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.new-room-choices button {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 150px;
+  padding: 16px 12px;
+  text-align: left;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #fff, #f5f3ff);
+}
+.new-room-choices button > span { font-size: 2rem; line-height: 1; }
+.new-room-choices button > strong { font-size: 1rem; color: #312e81; }
+.new-room-choices button > small { color: #64748b; line-height: 1.35; }
+.new-room-status { text-align: center; color: #6d28d9; font-weight: 800; }
+.new-room-ready { display: grid; gap: 14px; }
+.new-room-ready > p { margin: 0; color: #526170; }
+.new-room-code {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  padding: 18px;
+  border: 2px dashed #8b5cf6;
+  border-radius: 16px;
+  background: #f5f3ff;
+}
+.new-room-code span { color: #6d28d9; font-size: 0.78rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.08em; }
+.new-room-code strong { font-size: clamp(2rem, 9vw, 3.4rem); line-height: 1; letter-spacing: 0.12em; color: #4c1d95; }
+.new-room-code small { max-width: 100%; overflow-wrap: anywhere; color: #64748b; }
+.new-room-gentle { text-align: center; font-size: 0.84rem; }
+.new-room-ready-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.new-room-ready-actions button { flex: 1 1 130px; min-height: 46px; }
+
+@media (max-width: 600px) {
+  .new-room-choices { grid-template-columns: 1fr; }
+  .new-room-choices button {
+    grid-template-columns: 44px minmax(0, 1fr);
+    min-height: 0;
+  }
+  .new-room-choices button > span { grid-row: 1 / 3; }
+}
 
 /* ---- Content pages (About / Privacy / Sign up / Room finder) ---- */
 .site-page { min-height: 100vh; min-height: 100dvh; background: #f7faff; }

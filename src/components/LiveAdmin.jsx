@@ -58,9 +58,15 @@ export default function LiveAdmin({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [reports, setReports] = useState([]);
   const [sheets, setSheets] = useState([]);
+  const [librarySheets, setLibrarySheets] = useState([]);
+  const [todayTheme, setTodayTheme] = useState(null);
+  const [themeQuery, setThemeQuery] = useState("");
+  const [themeBusy, setThemeBusy] = useState(false);
+  const [themeNotice, setThemeNotice] = useState("");
   const [metrics, setMetrics] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [billing, setBilling] = useState(null);
+  const [ads, setAds] = useState(null);
   const [page, setPage] = useState("overview");
   const [uploading, setUploading] = useState(false);
 
@@ -80,14 +86,15 @@ export default function LiveAdmin({ onNavigate }) {
   const refresh = useCallback(async () => {
     if (!adminKey) return;
     try {
-      const [r1, r2, r3, r4, r5] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6] = await Promise.all([
         fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/analytics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/billing"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust("/api/admin/ads"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
-      if ([r1, r2, r3, r4, r5].some((response) => response.status === 401)) {
+      if ([r1, r2, r3, r4, r5, r6].some((response) => response.status === 401)) {
         setAuthed(false);
         return;
       }
@@ -96,11 +103,13 @@ export default function LiveAdmin({ onNavigate }) {
       const d3 = r3.ok ? await r3.json() : null;
       const d4 = r4.ok ? await r4.json() : null;
       const d5 = r5.ok ? await r5.json() : null;
+      const d6 = r6.ok ? await r6.json() : null;
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       if (d3) setAnalytics(d3);
       if (d4) setMetrics(d4);
       if (d5) setBilling(d5);
+      if (d6) setAds(d6);
       setAuthed(true);
       const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
@@ -147,6 +156,28 @@ export default function LiveAdmin({ onNavigate }) {
     refresh();
   };
 
+  const chooseTodayTheme = async (sheet) => {
+    setThemeBusy(true);
+    setThemeNotice("");
+    try {
+      const response = await fetch("/api/admin/sheet-theme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-key": adminKey },
+        body: JSON.stringify({ sheetId: sheet?.id || null }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "failed");
+      const today = await fetch(bust("/api/coloring-sheets/today"), { cache: "no-store" }).then((res) => res.json());
+      setTodayTheme(today);
+      setThemeNotice(sheet ? `Today's theme is now “${sheet.title}.”` : "Manual pick cleared; automatic daily themes are back on.");
+      if (sheet) setThemeQuery("");
+    } catch {
+      setThemeNotice("Could not update today's theme. Please try again.");
+    } finally {
+      setThemeBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (adminKey) {
       checkKey(adminKey).then((ok) => setAuthed(ok));
@@ -159,6 +190,22 @@ export default function LiveAdmin({ onNavigate }) {
     const timer = window.setInterval(refresh, 4000);
     return () => window.clearInterval(timer);
   }, [authed, refresh]);
+
+  useEffect(() => {
+    if (!authed || page !== "content") return undefined;
+    let active = true;
+    Promise.all([
+      fetch(bust("/api/coloring-sheets"), { cache: "no-store" }).then((response) => response.json()),
+      fetch(bust("/api/coloring-sheets/today"), { cache: "no-store" }).then((response) => response.json()),
+    ]).then(([library, today]) => {
+      if (!active) return;
+      setLibrarySheets(Array.isArray(library?.sheets) ? library.sheets : []);
+      setTodayTheme(today || null);
+    }).catch(() => {
+      if (active) setThemeNotice("Could not load the coloring library.");
+    });
+    return () => { active = false; };
+  }, [authed, page]);
 
   const login = async () => {
     const key = keyInput.trim();
@@ -262,6 +309,13 @@ export default function LiveAdmin({ onNavigate }) {
   const countryStats = analytics?.countries || [];
   const timezoneStats = analytics?.timezones || [];
   const gallerySaves = analytics?.gallerySaves || [];
+  const themeTokens = themeQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const themeResults = themeTokens.length
+    ? librarySheets.filter((sheet) => {
+      const haystack = `${sheet.title || ""} ${sheet.q || ""}`.toLowerCase();
+      return themeTokens.every((token) => haystack.includes(token));
+    }).slice(0, 12)
+    : [];
 
   return (
     <main className="admin-portal">
@@ -394,6 +448,29 @@ export default function LiveAdmin({ onNavigate }) {
               <span className="metric-num">{formatCount(billing.processedEvents)}</span>
               <span className="metric-label">Webhook events</span>
               <span className="metric-sub">last {timeAgo(billing.lastStripeEventAt)}</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {ads ? (
+        <section className="admin-section">
+          <h2>Advertising <span className="admin-badge">{ads.mode === "eligible-regions-on" ? "region gated" : "off"}</span></h2>
+          <div className="metric-grid">
+            <div className="metric">
+              <span className={`metric-num ${ads.servingEnabled ? "is-warn" : "is-ok"}`}>{ads.servingEnabled ? "On" : "Off"}</span>
+              <span className="metric-label">Runtime gate</span>
+              <span className="metric-sub">{ads.servingEnabled ? "only eligible countries can request ads" : "all visits stay ad-free"}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{ads.allowedCountries?.length || 0}</span>
+              <span className="metric-label">Allowed countries</span>
+              <span className="metric-sub">{ads.allowedCountries?.join(", ") || "none configured"}</span>
+            </div>
+            <div className="metric">
+              <span className={`metric-num ${ads.allowUnknownCountry ? "is-bad" : "is-ok"}`}>{ads.allowUnknownCountry ? "Yes" : "No"}</span>
+              <span className="metric-label">Unknown location</span>
+              <span className="metric-sub">{ads.allowUnknownCountry ? "disable before production" : "fails ad-free"}</span>
             </div>
           </div>
         </section>
@@ -678,6 +755,53 @@ export default function LiveAdmin({ onNavigate }) {
               </div>
             )}
           </section>
+
+      <section className="admin-section">
+        <h2>
+          Today&apos;s coloring theme {todayTheme?.source ? <span className="admin-badge">{todayTheme.source}</span> : null}
+        </h2>
+        {todayTheme?.sheet ? (
+          <div className="admin-theme-current">
+            <img
+              src={`/coloring-sheets/thumbs/${encodeURIComponent(todayTheme.sheet.id)}.webp`}
+              alt=""
+            />
+            <div>
+              <strong>{todayTheme.sheet.title}</strong>
+              <span>{todayTheme.source === "admin" ? "Your pick for today" : "Chosen automatically"}</span>
+            </div>
+            {todayTheme.source === "admin" ? (
+              <button type="button" disabled={themeBusy} onClick={() => chooseTodayTheme(null)}>
+                Use automatic pick
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="admin-empty">The coloring library is empty on this server.</p>
+        )}
+        <label className="admin-theme-search">
+          <span>Find a sheet to feature today</span>
+          <input
+            type="search"
+            value={themeQuery}
+            onChange={(event) => setThemeQuery(event.target.value)}
+            placeholder="Try dinosaur, butterfly, birthday…"
+            disabled={themeBusy || librarySheets.length === 0}
+          />
+        </label>
+        {themeTokens.length ? (
+          <div className="admin-theme-results">
+            {themeResults.map((sheet) => (
+              <button type="button" key={sheet.id} disabled={themeBusy} onClick={() => chooseTodayTheme(sheet)}>
+                <img src={`/coloring-sheets/thumbs/${encodeURIComponent(sheet.id)}.webp`} alt="" loading="lazy" />
+                <span>{sheet.title}</span>
+              </button>
+            ))}
+            {themeResults.length === 0 ? <p className="admin-empty">No matching sheets.</p> : null}
+          </div>
+        ) : null}
+        {themeNotice ? <p className="admin-theme-notice" aria-live="polite">{themeNotice}</p> : null}
+      </section>
 
       <section className="admin-section">
         <h2>

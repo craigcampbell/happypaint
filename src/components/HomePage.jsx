@@ -7,6 +7,7 @@ import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import LiveRoomCanvas from "./LiveRoomCanvas";
 import BrandMark from "./BrandMark";
+import NewRoomModal from "./NewRoomModal";
 import { getSession, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
 
@@ -97,6 +98,7 @@ export default function HomePage({ onNavigate }) {
   const [activeCode, setActiveCode] = useState(null);
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
+  const [showNewRoom, setShowNewRoom] = useState(false);
   const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
   const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art
   const [wallLoaded, setWallLoaded] = useState(false);
@@ -222,14 +224,7 @@ export default function HomePage({ onNavigate }) {
 
   const join = (c) => onNavigate(`/join/${c}`);
 
-  // Fresh 6-char code from an unambiguous alphabet (no I/O/0/1) — joining a
-  // code that doesn't exist yet is how private rooms get created.
-  const startRoom = () => {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let c = "";
-    for (let i = 0; i < 6; i += 1) c += alphabet[Math.floor(Math.random() * alphabet.length)];
-    join(c);
-  };
+  const startRoom = () => setShowNewRoom(true);
 
   const goByCode = (event) => {
     event.preventDefault();
@@ -420,6 +415,14 @@ export default function HomePage({ onNavigate }) {
       </main>
 
       <SiteFooter onNavigate={onNavigate} />
+
+      {showNewRoom ? (
+        <NewRoomModal
+          session={session}
+          onClose={() => setShowNewRoom(false)}
+          onEnter={(roomCode) => join(roomCode)}
+        />
+      ) : null}
 
       {showJoin && joinRoom ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setShowJoin(false)}>

@@ -9,7 +9,9 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "audit:ui": "node scripts/ui-audit.mjs",
-    "test:family": "node scripts/test-family-entitlement.mjs && node scripts/test-billing-hardening.mjs"
+    "test:family": "node scripts/test-family-entitlement.mjs && node scripts/test-billing-hardening.mjs",
+    "test:ads": "node scripts/test-ad-safety.mjs",
+    "test:theme": "node scripts/test-today-theme.mjs"
   },
   "dependencies": {
     "@fontsource-variable/fredoka": "^5.2.10",

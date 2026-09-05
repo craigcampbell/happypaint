@@ -38,7 +38,10 @@ same backend later.
   env-gated; Family prices are verified against Stripe, webhook state is
   durable/order-safe, payment failure has a bounded grace window, and account
   deletion queues cancellation until Stripe confirms it. Paid coins, tips,
-  payouts, and child-facing purchases remain OFF.
+  payouts, and child-facing purchases remain OFF. Ad serving additionally needs
+  an explicit browser build switch, a runtime switch, and an edge-derived country
+  allowlist; unknown locations fail ad-free. Interstitials default to no earlier
+  than 20 minutes and no more than twice per hour.
 - **Save & return**: anonymous "My Art" + a signed-in gallery synced to PocketBase
   `snapshots`.
 - **Moderation**: `/admin` portal (live metrics — peak users, CPU%, event-loop lag,
@@ -52,10 +55,6 @@ same backend later.
 - **Gallery autosave + live cross-device verify** — the signed-in `snapshots`
   sync is wired but needs verification against a live PocketBase + a "My Gallery"
   view and autosave-on-save polish. (#36)
-- **New-room modal** — Blank canvas / Today's theme / Pick a coloring sheet, plus
-  a **copyable short join link** to text a friend. (requested, not yet built)
-- **Admin: set Today's theme** — endpoint exists (`POST /api/admin/sheet-theme`);
-  needs a button in `LiveAdmin`.
 - **Harden WS auth transport** — move the token out of the `/ws` URL (first-message
   auth or subprotocol), register the message listener synchronously, keep the token
   in a ref so hourly refresh doesn't force a reconnect, and add a full owner-reclaim

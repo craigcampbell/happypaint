@@ -45,6 +45,14 @@ export default function FaqPage({ onNavigate }) {
           </p>
         </QA>
 
+        <QA q="Are there ads or purchases?">
+          <p>
+            Free spaces may show small contextual, non-personalized ads marked as child-directed. Private
+            rooms owned by a Drawesome Family account are ad-free for every invited guest. There are no
+            paid coins, cash tips, or purchases inside the canvas — Drops are play money earned by drawing.
+          </p>
+        </QA>
+
         <QA q="How old should you be?">
           <p>
             Drawesome is made for kids and teens. If you’re a younger kid, please make sure a parent or

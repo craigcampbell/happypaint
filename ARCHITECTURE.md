@@ -248,7 +248,8 @@ data: **`pb_data/`** (its own volume). All three folders are git-ignored.
 `/api/sheets` (custom uploads); `/api/coloring-sheets` + `/today` (library);
 `/api/billing/config|me|checkout|checkout/confirm|portal|webhook` (env-gated
 Stripe Family plan); `/api/admin/billing` (non-secret billing health and retry
-counts behind the admin key);
+counts behind the admin key); `/api/ads/eligibility` (fail-closed country gate)
+and `/api/admin/ads` (non-secret ad launch status behind the admin key);
 `/coloring-sheets/full|thumbs/*` (static). SPA fallback 404s on `/api/` +
 `/coloring-sheets/` misses.
 
