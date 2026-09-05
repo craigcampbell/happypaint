@@ -33,8 +33,13 @@ await writeFile(join(dataDir, '.billing.json'), JSON.stringify({
 const authServer = http.createServer((req, res) => {
   const profiles = { 'parent-token': 'parent_profile', 'unknown-token': 'unknown_profile' };
   if (req.method === 'POST' && req.url.includes('/auth-refresh') && profiles[req.headers.authorization]) {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ record: { id: profiles[req.headers.authorization], name: 'Parent' } }));
+    // Leave a window for client_info to arrive while auth is in flight. The
+    // server must queue it rather than silently losing the browser's second
+    // frame.
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ record: { id: profiles[req.headers.authorization], name: 'Parent' } }));
+    }, 75);
     return;
   }
   res.writeHead(401).end();
@@ -75,9 +80,15 @@ async function waitForServer() {
 
 function connected(room, token = '') {
   return new Promise((resolve, reject) => {
-    const suffix = token ? `&token=${encodeURIComponent(token)}` : '';
-    const ws = new WebSocket(`ws://127.0.0.1:${appPort}/ws?room=${room}${suffix}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${appPort}/ws?room=${room}`);
     const timer = setTimeout(() => reject(new Error('websocket timeout')), 5000);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'auth', token: token || null }));
+      ws.send(JSON.stringify({
+        type: 'client_info', timezone: 'America/Chicago', locale: 'en-Test',
+        viewportW: 375, viewportH: 812, pointer: 'coarse', deviceKey: `dk_${room.toLowerCase()}`,
+      }));
+    });
     ws.on('message', (raw) => {
       const data = JSON.parse(raw.toString());
       if (data.type === 'connected') {
@@ -103,6 +114,14 @@ try {
   const owner = await connected('FAM123', 'parent-token');
   assert.equal(owner.data.isOwner, true);
   assert.equal(owner.data.adFree, true, 'paid owner gets an ad-free private room');
+  const analytics = await fetch(`http://127.0.0.1:${appPort}/api/admin/analytics`, {
+    headers: { 'x-admin-key': 'test-admin-key' },
+  }).then((res) => res.json());
+  assert.equal(
+    analytics.sessions.some((item) => item.locale === 'en-Test' && item.viewportBucket === '400x800'),
+    true,
+    'client_info sent during async first-frame auth is not lost',
+  );
 
   const guest = await connected('FAM123');
   assert.equal(guest.data.adFree, true, 'anonymous invitee inherits owner entitlement');

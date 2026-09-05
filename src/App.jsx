@@ -7002,7 +7002,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
-  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
+  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token, session?.user?.id);
 
   // Chat with locally-hidden painters filtered out (see toggleHiddenPainter).
   const visibleChat = useMemo(

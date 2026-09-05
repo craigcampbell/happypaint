@@ -55,10 +55,10 @@ same backend later.
 - **Gallery autosave + live cross-device verify** — the signed-in `snapshots`
   sync is wired but needs verification against a live PocketBase + a "My Gallery"
   view and autosave-on-save polish. (#36)
-- **Harden WS auth transport** — move the token out of the `/ws` URL (first-message
-  auth or subprotocol), register the message listener synchronously, keep the token
-  in a ref so hourly refresh doesn't force a reconnect, and add a full owner-reclaim
-  path beyond auto-unlock. (#40)
+- **Owner recovery** — the WS token now travels in a bounded first-message auth
+  queue (never the browser URL), follow-up frames cannot race validation, and
+  hourly token refresh no longer reconnects the canvas. A deliberate owner-reclaim
+  flow beyond normal signed-in re-entry and auto-unlock still needs product design. (#40)
 - **Watermark swap** — the 6,294 sheets carry the owner's old "DirectColoring.com"
   watermark; once logo/domain are final, a batch job replaces it + regenerates
   thumbnails. (#41)

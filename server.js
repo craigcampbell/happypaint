@@ -2615,6 +2615,28 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
+  // Attach before the async auth validation starts. Browsers send auth and
+  // client_info back-to-back; without this small bounded queue the second frame
+  // can arrive while verifyAccessToken is awaiting PocketBase and disappear
+  // before the room's normal message listener exists.
+  const pendingFrames = [];
+  let pendingBytes = 0;
+  let wakeFirstFrame = null;
+  const capturePendingFrame = (raw) => {
+    const bytes = Buffer.byteLength(raw);
+    if (pendingFrames.length >= 16 || pendingBytes + bytes > 64 * 1024) {
+      ws.close(1008, 'too much data before auth');
+      return;
+    }
+    pendingFrames.push(raw);
+    pendingBytes += bytes;
+    if (wakeFirstFrame) {
+      wakeFirstFrame();
+      wakeFirstFrame = null;
+    }
+  };
+  ws.on('message', capturePendingFrame);
+
   const room = getRoom(roomId);
 
   // DAILY: flip the day on first contact, not the next 60s tick — otherwise a
@@ -2665,30 +2687,24 @@ wss.on('connection', async (ws, req) => {
   // stays as a fallback for the mobile app and stale cached bundles. A non-auth
   // first frame (legacy client) is replayed into the normal handler after join.
   let token = url.searchParams.get('token');
-  let replayFirstFrame = null;
   if (!token) {
-    const first = await new Promise((resolve) => {
-      const finish = (value) => {
-        clearTimeout(timer);
-        ws.off('message', onFrame);
-        ws.off('close', onGone);
-        ws.off('error', onGone);
-        resolve(value);
-      };
-      const timer = setTimeout(() => finish(null), 1500);
-      const onFrame = (raw) => finish(raw);
-      const onGone = () => finish(null);
-      ws.on('message', onFrame);
-      ws.on('close', onGone);
-      ws.on('error', onGone);
-    });
+    if (!pendingFrames.length) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1500);
+        wakeFirstFrame = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+    }
+    const first = pendingFrames.shift() ?? null;
     if (first != null) {
       let hello = null;
       try { hello = JSON.parse(first); } catch { hello = null; }
       if (hello && hello.type === 'auth') {
         token = typeof hello.token === 'string' && hello.token ? hello.token : null;
       } else {
-        replayFirstFrame = first; // legacy client_info etc. — process after join
+        pendingFrames.unshift(first); // legacy client_info etc. — process after join
       }
     }
   }
@@ -2894,7 +2910,7 @@ wss.on('connection', async (ws, req) => {
     if (!room.phone || room.phone.phase === 'waiting') maybePhoneStart(roomId);
   }
 
-  ws.on('message', (raw) => {
+  const handleRoomMessage = (raw) => {
     let data;
     try {
       data = JSON.parse(raw.toString());
@@ -4261,11 +4277,14 @@ wss.on('connection', async (ws, req) => {
       default:
         break;
     }
-  });
+  };
 
-  // A legacy client's first frame (consumed by the auth wait above) wasn't an
-  // auth message — replay it through the real handler now that it's attached.
-  if (replayFirstFrame != null) ws.emit('message', replayFirstFrame);
+  // Install the real handler before removing the capture listener, then drain
+  // every frame that arrived during auth in order. JavaScript's run-to-
+  // completion semantics make this handoff gap-free.
+  ws.on('message', handleRoomMessage);
+  ws.off('message', capturePendingFrame);
+  for (const raw of pendingFrames.splice(0)) handleRoomMessage(raw);
 
   ws.on('close', () => {
     // Accrue this user's time in the room — engagement extends the auto-close TTL.

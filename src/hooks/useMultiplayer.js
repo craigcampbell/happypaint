@@ -67,10 +67,13 @@ function clientInfoPayload() {
   }
 }
 
-export function useMultiplayer(roomId, onMessage, token) {
+export function useMultiplayer(roomId, onMessage, token, profileId = null) {
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
+  const tokenRef = useRef(token || null);
+  tokenRef.current = token || null;
+  const profileIdRef = useRef(profileId || null);
 
   const shouldReconnectRef = useRef(true);
   const retryRef = useRef(0);
@@ -178,7 +181,7 @@ export function useMultiplayer(roomId, onMessage, token) {
       retryRef.current = 0;
       // FIRST frame is always auth (token or null) — the server holds the join
       // until it arrives, so identity lands without ever touching the URL.
-      ws.send(JSON.stringify({ type: "auth", token: token || null }));
+      ws.send(JSON.stringify({ type: "auth", token: tokenRef.current }));
       ws.send(JSON.stringify(clientInfoPayload()));
       pingTimerRef.current = window.setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
@@ -195,7 +198,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     };
 
     ws.onerror = () => { /* onclose drives the retry */ };
-  }, [roomId, token]);
+  }, [roomId]);
 
   useEffect(() => {
     connect();
@@ -208,6 +211,21 @@ export function useMultiplayer(roomId, onMessage, token) {
       closing?.close();
     };
   }, [connect]);
+
+  useEffect(() => {
+    const nextProfileId = profileId || null;
+    if (profileIdRef.current === nextProfileId) return;
+    profileIdRef.current = nextProfileId;
+    // Sign-in, sign-out, or an account switch changes room authority and must
+    // reconnect. Routine token refresh for the same profile only updates the
+    // ref used by the next connection, avoiding an hourly canvas interruption.
+    const current = wsRef.current;
+    if (!current) return;
+    wsRef.current = null;
+    current.close();
+    setConnected(false);
+    connect();
+  }, [connect, profileId]);
 
   const send = useCallback((payload) => {
     const ws = wsRef.current;
