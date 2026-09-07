@@ -9464,7 +9464,7 @@ img.cc-doodle { background: #fff; }
 
 .load-card {
   --p: 0;
-  --ink: #ff4d8d; /* the wet paint: bristles, leading blob */
+  --ink: #ff4d8d; /* the paint on the brush: stroke, bristles, leading blob */
   --ink-text: #d43a75; /* the same paint, dimmed enough to read on the card */
   position: relative;
   width: min(460px, 100%);
@@ -9484,19 +9484,25 @@ img.cc-doodle { background: #fff; }
   font-size: 1.32rem;
 }
 
-/* A squeeze of each colour the stroke is about to use. */
+/* The palette the curtain dipped into, with the paint on the brush ringed. */
 .load-dots {
   display: flex;
-  gap: 7px;
+  gap: 6px;
 }
 
 .load-dots i {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--c);
+  opacity: 0.4;
   animation: load-dot 1.5s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 110ms);
+  animation-delay: calc(var(--i) * 80ms);
+}
+
+.load-dots i.is-picked {
+  opacity: 1;
+  box-shadow: 0 0 0 3px #ffffff, 0 0 0 4.5px var(--c);
 }
 
 /* ---- the stroke --------------------------------------------------------- */

@@ -14,7 +14,7 @@
 // rather than yanking the modal out from under them. A join that never lands
 // gets that OK too (STUCK_MS) — the curtain must never trap anyone.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // Milestones, in the order the studio reports them. Each one sweeps quickly to
 // `arrive` — that jump is what makes a milestone feel like progress — and then
@@ -37,15 +37,29 @@ const SLOW_JOIN_MS = 5000; // past this, the painter taps OK instead of a snap-a
 const STUCK_MS = 15000; // a join that never finishes still gets a way in
 const CLOSE_BEAT_MS = 520; // let the last brush stroke land before closing
 
-// The paint the stroke lays down, left to right. The % readout, the wet leading
-// edge and the brush bristles are tinted from this same ramp, so the number
-// always wears the colour the brush is holding.
-const PAINT = ["#ff4d8d", "#ff8f1f", "#ffc21f", "#38d996", "#0878d1", "#8b5cf6"];
+// The palette the curtain dips into. One is picked at random per join and paints
+// the whole stroke; the wet leading edge, the brush bristles and the % readout
+// all wear it, so the card is one colour from end to end. Every entry has to
+// hold its own alone, which is why they are all vivid — no pastels, nothing
+// that would read as a grey bar on a white card.
+const PAINT = [
+  "#ff4d8d", // hot pink
+  "#f4364c", // poster red
+  "#ff8f1f", // orange
+  "#f0a500", // gold
+  "#8bc53f", // apple green
+  "#22c98a", // mint
+  "#00b3b8", // teal
+  "#0878d1", // brand blue
+  "#6c5ce7", // indigo
+  "#8b5cf6", // violet
+  "#e858c8", // magenta
+];
 
 // Brightest a colour may be before the % readout wears it. Paint that looks
-// great on the stroke (the ambers especially) is unreadable as text on white,
-// so the readout gets the same hue taken down until it is. Tuned so the whole
-// ramp clears 4.5:1 on the card.
+// great on the stroke (the gold especially) is unreadable as text on white, so
+// the readout gets the same hue taken down until it is. Tuned so every paint in
+// the palette clears 4.5:1 on the card.
 const INK_MAX_LUMA = 0.16;
 
 // One wobbly brush stroke, drawn once and shared by the paint layer and the
@@ -65,26 +79,20 @@ const DRIPS = [
   "M988 78C984 88 986 95 994 100C1002 95 1004 88 1000 78Z",
 ];
 
-function mixHex(from, to, t) {
-  const a = parseInt(from.slice(1), 16);
-  const b = parseInt(to.slice(1), 16);
-  const channel = (shift) => {
-    const start = (a >> shift) & 255;
-    const end = (b >> shift) & 255;
-    return Math.round(start + (end - start) * t);
-  };
-  return [channel(16), channel(8), channel(0)];
-}
-
-// The colour the brush is holding at `percent` — the same ramp the SVG gradient
-// paints, sampled in JS so the bristles and the readout match the wet stroke.
-function paintAt(percent) {
-  const spot = (Math.max(0, Math.min(100, percent)) / 100) * (PAINT.length - 1);
-  const index = Math.min(PAINT.length - 2, Math.floor(spot));
-  return mixHex(PAINT[index], PAINT[index + 1], spot - index);
+function toRgb(hex) {
+  const value = parseInt(hex.slice(1), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
 const css = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+
+// Lighter (amount > 0) or deeper (amount < 0) without leaving the hue. Used for
+// the thin light-to-deep run along the stroke — the same paint thinning out as
+// the brush unloads, not a second colour.
+function shade(rgb, amount) {
+  const edge = amount > 0 ? 255 : 0;
+  return rgb.map((channel) => Math.round(channel + (edge - channel) * Math.abs(amount)));
+}
 
 function relativeLuma(rgb) {
   const linear = (value) => {
@@ -95,7 +103,7 @@ function relativeLuma(rgb) {
 }
 
 // Same hue, dimmed until it can be read on the card. Scaling all three channels
-// keeps the paint recognisable — the amber stretch reads as dark gold rather
+// keeps the paint recognisable — gold reads as a deep bronze rather
 // than washing out to grey. Luminance goes roughly as the 2.4th power of the
 // channels, so that is the exponent the scale has to undo.
 function readable(rgb) {
@@ -123,6 +131,15 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
   const [stalled, setStalled] = useState(false);
   const [done, setDone] = useState(false);
 
+  // One paint, picked when the curtain goes up and held for its whole life, so
+  // the stroke never changes colour underneath the painter. Every room you join
+  // gets a different one.
+  const [paint] = useState(() => PAINT[Math.floor(Math.random() * PAINT.length)]);
+  const tints = useMemo(() => {
+    const rgb = toRgb(paint);
+    return { wet: css(rgb), light: css(shade(rgb, 0.2)), deep: css(shade(rgb, -0.16)), ink: readable(rgb) };
+  }, [paint]);
+
   useEffect(() => {
     const startedAt = performance.now();
     let raf = 0;
@@ -138,10 +155,7 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
     const write = () => {
       const card = cardRef.current;
       if (!card) return;
-      const wet = paintAt(progress);
       card.style.setProperty("--p", progress.toFixed(2));
-      card.style.setProperty("--ink", css(wet));
-      card.style.setProperty("--ink-text", readable(wet));
       const rounded = Math.round(progress);
       if (rounded === shown) return;
       shown = rounded;
@@ -218,10 +232,19 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
 
   return (
     <div className="load-curtain" role="dialog" aria-modal="true" aria-labelledby="load-curtain-title">
-      <section className="load-card" ref={cardRef}>
+      <section
+        className="load-card"
+        ref={cardRef}
+        style={{ "--ink": tints.wet, "--ink-text": tints.ink }}
+      >
+        {/* The palette it dipped into, with today's colour ringed. */}
         <div className="load-dots" aria-hidden="true">
           {PAINT.map((color, index) => (
-            <i key={color} style={{ "--c": color, "--i": index }} />
+            <i
+              key={color}
+              className={color === paint ? "is-picked" : undefined}
+              style={{ "--c": color, "--i": index }}
+            />
           ))}
         </div>
 
@@ -248,10 +271,12 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
           <div className="load-paint">
             <svg viewBox="0 0 1200 120" preserveAspectRatio="none" aria-hidden="true">
               <defs>
+                {/* One paint along the whole stroke. The light-to-deep run is
+                    the brush unloading, not a second colour. */}
                 <linearGradient id="load-paint-ramp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1200" y2="0">
-                  {PAINT.map((color, index) => (
-                    <stop key={color} offset={index / (PAINT.length - 1)} stopColor={color} />
-                  ))}
+                  <stop offset="0" stopColor={tints.light} />
+                  <stop offset="0.42" stopColor={tints.wet} />
+                  <stop offset="1" stopColor={tints.deep} />
                 </linearGradient>
               </defs>
               {DRIPS.map((drip) => (
