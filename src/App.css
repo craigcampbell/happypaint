@@ -9430,3 +9430,231 @@ img.cc-doodle { background: #fff; }
   .room-prompt-chip:has(~ .wipe-chip) { max-width: none; }
   .wipe-panel { top: 136px; right: 8px; }
 }
+
+/* ============================== Join curtain ==============================
+   The paint-stroke loading modal (src/components/RoomLoadingCurtain.jsx) that
+   sits over the canvas area while a room hooks up. It lives INSIDE
+   .canvas-paper, so it covers exactly the white rectangle it is apologising
+   for and leaves the room bar / tool rail visible around it.
+
+   Everything that moves is derived from one custom property, --p (0-100),
+   written to .load-card by the component's rAF loop: the stroke reveal, the
+   brush, the wet tip and the readout colour all read it. No JS touches layout,
+   and the loop is gone the moment the curtain unmounts.
+   ========================================================================== */
+.load-curtain {
+  position: absolute;
+  inset: 0;
+  /* Above everything that lives in the canvas area (reaction picker 30, zoom
+     controls 40) AND the fixed chrome that overlaps it (rooms FAB 45, mobile
+     quickbar 70) — but under a real modal backdrop (200). */
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  /* Fresh paper rather than a dimming scrim: there is nothing worth seeing
+     behind this yet, and a backdrop-filter over a full-bleed canvas is the one
+     effect that could actually cost a frame on an old iPad. */
+  background:
+    radial-gradient(120% 90% at 22% 0%, #ffffff 0%, rgba(255, 255, 255, 0) 62%),
+    linear-gradient(180deg, #f7fafc 0%, #eaf1f8 100%);
+  touch-action: none;
+  animation: load-curtain-in 200ms ease-out both;
+}
+
+.load-card {
+  --p: 0;
+  --ink: #ff4d8d; /* the wet paint: bristles, leading blob */
+  --ink-text: #d43a75; /* the same paint, dimmed enough to read on the card */
+  position: relative;
+  width: min(460px, 100%);
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 20px 22px 22px;
+  border-radius: 26px;
+  background: #ffffff;
+  box-shadow: 0 26px 60px rgba(16, 24, 32, 0.18);
+  text-align: center;
+  animation: load-card-in 300ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+
+.load-card h2 {
+  margin: 0;
+  font-size: 1.32rem;
+}
+
+/* A squeeze of each colour the stroke is about to use. */
+.load-dots {
+  display: flex;
+  gap: 7px;
+}
+
+.load-dots i {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--c);
+  animation: load-dot 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 110ms);
+}
+
+/* ---- the stroke --------------------------------------------------------- */
+.load-track {
+  position: relative;
+  width: 100%;
+  height: 58px;
+  /* Head-room for the brush, which reaches well above the stroke it is laying. */
+  margin-top: 34px;
+}
+
+.load-guide,
+.load-paint {
+  position: absolute;
+  inset: 0;
+}
+
+.load-guide,
+.load-paint > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* The reveal. inset() is the cheap one — no layout, no repaint of the SVG. */
+.load-paint {
+  -webkit-clip-path: inset(0 calc(100% - var(--p) * 1%) 0 0);
+  clip-path: inset(0 calc(100% - var(--p) * 1%) 0 0);
+}
+
+/* Wet paint pooled where the bristles are, covering the reveal's hard edge. */
+.load-wet {
+  position: absolute;
+  top: 44%;
+  left: calc(var(--p) * 1%);
+  width: 24px;
+  height: 30px;
+  transform: translate(-54%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, rgba(255, 255, 255, 0.7), var(--ink) 46%);
+  animation: load-wet 1.05s ease-in-out infinite;
+}
+
+.load-brush {
+  position: absolute;
+  left: calc(var(--p) * 1%);
+  bottom: 58%;
+  width: 34px;
+  height: 62px;
+  transform-origin: 50% 100%;
+  animation: load-brush 1.4s ease-in-out infinite alternate;
+  filter: drop-shadow(0 6px 8px rgba(16, 24, 32, 0.18));
+}
+
+.load-brush > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ---- readout ------------------------------------------------------------ */
+.load-meta {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+}
+
+.load-pct {
+  font-family: "Fredoka Variable", "Arial Rounded MT Bold", ui-rounded, sans-serif;
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--ink-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.load-stage {
+  min-height: 1.3em;
+  color: #55636f;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.load-room {
+  color: #8b97a3;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.load-hint {
+  margin: 0;
+  max-width: 32ch;
+  color: #7a8794;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.load-ok {
+  min-width: 200px;
+  min-height: 48px;
+  font-size: 1rem;
+  animation: load-ok-in 240ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+
+/* ---- motion ------------------------------------------------------------- */
+@keyframes load-curtain-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes load-card-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes load-ok-in {
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes load-dot {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-5px) scale(1.14); }
+}
+
+@keyframes load-wet {
+  0%, 100% { transform: translate(-54%, -50%) scale(1); }
+  50% { transform: translate(-54%, -50%) scale(1.16); }
+}
+
+/* The hand behind the brush: a small tilt back and forth as it drags. */
+@keyframes load-brush {
+  from { transform: translate(-50%, 0) rotate(-15deg); }
+  to { transform: translate(-50%, -2px) rotate(-6deg); }
+}
+
+@media (max-width: 620px), (max-height: 560px) {
+  .load-card {
+    gap: 10px;
+    padding: 16px 16px 18px;
+    border-radius: 22px;
+  }
+  .load-card h2 { font-size: 1.12rem; }
+  .load-track { height: 46px; margin-top: 28px; }
+  .load-brush { width: 28px; height: 52px; }
+  .load-pct { font-size: 1.6rem; }
+  .load-stage { font-size: 0.86rem; }
+  .load-ok { min-width: 0; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-curtain,
+  .load-card,
+  .load-ok { animation: none; }
+  .load-dots i,
+  .load-wet { animation: none; }
+  .load-brush {
+    animation: none;
+    transform: translate(-50%, 0) rotate(-11deg);
+  }
+}

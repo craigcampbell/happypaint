@@ -110,6 +110,7 @@ import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
+import RoomLoadingCurtain from "./components/RoomLoadingCurtain";
 import StepBackPreview from "./components/StepBackPreview";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import { classifyImageNsfw } from "./utils/nsfwCheck";
@@ -956,6 +957,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const [kicked, setKicked] = useState(false);
   const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
   const [roomBlocked, setRoomBlocked] = useState(false); // server refused this room
+  // Join curtain: how far this room has got hooking up, as milestones rather
+  // than a timer — 0 opening the socket, 1 socket open, 2 handshake in,
+  // 3 the shared history is on the canvas. RoomLoadingCurtain paints the bar.
+  const [joinStep, setJoinStep] = useState(0);
+  // Only ever true for the FIRST join of this room instance. A later reconnect
+  // (or a scene switch) re-runs the handshake, and throwing a curtain over
+  // someone mid-drawing would be worse than the blank canvas this fixes.
+  const [joinCurtain, setJoinCurtain] = useState(true);
   // Today's drawing prompt for this room (sent in the 'connected' payload),
   // shown as a dismissible chip over the canvas top.
   const [roomPrompt, setRoomPrompt] = useState(null);
@@ -6199,6 +6208,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       switch (data.type) {
         case "connected": {
           myUserIdRef.current = data.userId;
+          // Join curtain: the room answered. Only the history frame that
+          // follows actually puts art on the canvas, so this is not "done" yet.
+          setJoinStep((step) => Math.max(step, 2));
           // Re-apply a saved name/colour so the artist keeps their identity
           // across reconnects (and eventually, sign-in).
           const saved = profileRef.current;
@@ -6364,6 +6376,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           // on its next sample, and repaint the visible composite.
           mixMapRef.current?.markAllDirty();
           renderDisplay();
+          // Join curtain: everyone's art is now ON the canvas. This is the real
+          // "the experience has loaded" moment, so the bar finishes here.
+          setJoinStep((step) => Math.max(step, 3));
           if (data.restored) {
             setClearBanner(null);
             setStatus("Canvas brought back 🎉");
@@ -7003,6 +7018,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   );
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
+
+  // Join curtain: the socket is up. The handshake and the history frame that
+  // hydrate the canvas still have to land (steps 2 and 3, in handleMpMessage).
+  useEffect(() => {
+    if (mp.connected) setJoinStep((step) => Math.max(step, 1));
+  }, [mp.connected]);
+
+  // A room that refused us has its own full-screen explanation — never leave a
+  // loading bar painting hopefully on top of it.
+  useEffect(() => {
+    if (kicked || roomFull || roomBlocked) setJoinCurtain(false);
+  }, [kicked, roomFull, roomBlocked]);
 
   // Chat with locally-hidden painters filtered out (see toggleHiddenPainter).
   const visibleChat = useMemo(
@@ -8764,6 +8791,18 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
                 onSkip={() => mpRef.current?.sendPhoneSkip?.()}
               />
             ) : null}
+
+            {/* Joining a room used to be a white rectangle for as long as the
+                socket, the handshake and everyone's art took to arrive. Last
+                child of the paper so it covers the canvas and everything
+                floating over it. */}
+            {joinCurtain ? (
+              <RoomLoadingCurtain
+                step={joinStep}
+                roomLabel={roomTitle || `Room ${roomId}`}
+                onClose={() => setJoinCurtain(false)}
+              />
+            ) : null}
           </div>
 
           {storybook ? (
@@ -8985,7 +9024,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           </div>
         ) : null}
 
-        {showWelcome ? (
+        {/* The tour waits for the join curtain: a "welcome, pick a color" card
+            over a room that is still loading is one modal too many. */}
+        {showWelcome && !joinCurtain ? (
           <div className="modal-backdrop welcome-backdrop" role="presentation" onClick={dismissWelcome}>
             <section
               className="studio-modal welcome-modal"
