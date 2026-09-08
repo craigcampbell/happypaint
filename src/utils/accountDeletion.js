@@ -50,6 +50,7 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:notifications:v1",
   "happypaint:studio-rail:v1", // desktop tool-rail open/closed preference
   "happypaint:pen-pressure:v1", // learned stylus pressure ceiling (utils/penInput)
+  "happypaint:input-prefs:v1", // handedness + pen-only touch mode (utils/inputPrefs)
   "drawesome:age-attestation:v1", // signup age/parent attestation
 ];
 

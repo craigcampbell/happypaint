@@ -1,0 +1,493 @@
+/* ==========================================================================
+   Quick stroke controls — the Size pill + Colour dot on the bottom bar (and
+   on the desktop zoom cluster), their popovers (the brush quick menu and the
+   studio's own HSB colour picker), and the Hand & pen preferences section.
+
+   Loaded LAST (after studio-layout.css), so plain rules here win ties.
+   ========================================================================== */
+
+/* ---- The pills ------------------------------------------------------------ */
+.qs-size,
+.qs-color {
+  touch-action: none; /* the pill IS a drag surface — never scroll / zoom the page */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.qs-well {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: inset 0 0 0 1.5px rgba(16, 16, 16, 0.16);
+}
+
+.qs-size-dot {
+  display: block;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #111827;
+  transition: width 60ms linear, height 60ms linear;
+}
+
+/* Eraser / smudge carry no colour: a dashed ring instead of a filled dot. */
+.qs-size-dot.is-nocolor {
+  border: 2px dashed #7a8794;
+  background: transparent;
+}
+
+.qs-color-well {
+  overflow: hidden;
+  background: repeating-conic-gradient(#d3d7dd 0 25%, #ffffff 0 50%) 0 0 / 10px 10px;
+}
+
+.qs-color-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.qs-color-well.is-dark {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.5), 0 0 0 1.5px rgba(16, 16, 16, 0.2);
+}
+
+.qs-color.is-nocolor .qs-well {
+  opacity: 0.5;
+}
+
+.qs-size-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Desktop zoom cluster variant: sits beside ✏️ 🧽 ✋ as a slim pill. */
+.zoom-controls .qs-size,
+.zoom-controls .qs-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+}
+
+.zoom-controls .qs-size .qs-size-num {
+  min-width: 20px;
+  font-size: 12px;
+  text-align: left;
+  color: #5a6b7b;
+}
+
+.zoom-controls .qs-color .qb-label {
+  display: none;
+}
+
+.zoom-controls .qs-size.is-active,
+.zoom-controls .qs-color.is-active,
+.zoom-controls .qs-size.is-active:hover:not(:disabled),
+.zoom-controls .qs-color.is-active:hover:not(:disabled) {
+  background: var(--brand-blue-soft, #e7f4ff);
+}
+
+/* ---- Popover (brush menu / colour picker) --------------------------------- */
+/* Rendered INSIDE the bar (which is fixed + centred), so the popover follows
+   the bar wherever a tier or the open side sheet puts it. The dismiss
+   backdrop is rendered OUTSIDE the bar: the bar's transform / backdrop-filter
+   would otherwise become the containing block of a fixed child. */
+.qs-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 69; /* under the quick bar (70), over the sheet (60) + backdrop (55) */
+  background: transparent;
+}
+
+.studio-shell[data-layout="desktop"] .qs-backdrop {
+  z-index: 19; /* under the zoom cluster (20) */
+}
+
+/* While a popover is up, the cluster rises above the top-centre chrome
+   (prompt / private-room chips at 28) so a tall picker is never painted
+   under them; the desktop popover also has less height to play with because
+   the canvas paper clips it. */
+.zoom-controls.has-pop {
+  z-index: 30;
+}
+
+.studio-shell[data-layout="desktop"] .qs-pop {
+  max-height: calc(100vh - 150px);
+  max-height: calc(100dvh - 150px);
+}
+
+.qs-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 5;
+  width: min(392px, calc(100vw - 16px));
+  max-height: calc(100vh - 120px);
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px 14px;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(16, 16, 16, 0.24), 0 0 0 1px rgba(16, 16, 16, 0.06);
+  color: var(--snap-black, #101010);
+  font-weight: 600;
+  text-align: left;
+  cursor: auto;
+  transform: translateX(-50%);
+  touch-action: pan-y;
+  animation: qs-pop-in 160ms ease;
+}
+
+@keyframes qs-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.cw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.cw-title {
+  font-family: var(--display-font);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.cw-close {
+  width: 36px;
+  height: 36px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--snap-gray-100, #f3f3f3);
+  font-size: 0.95rem;
+}
+
+/* One labelled bar: label · range · readout. */
+.cw-row {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.cw-row-label {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #44535e;
+}
+
+.cw-row-out {
+  font-size: 0.78rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #44535e;
+}
+
+/* The bars are native ranges (accessible, cheap) painted with an inline
+   gradient that reflects the other two channels. A 44px hit box with the
+   18px track drawn in its content box. */
+input.cw-range {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  margin: 0;
+  padding: 11px 0;
+  border: 0;
+  border-radius: 999px;
+  background-clip: content-box;
+  outline-offset: 2px;
+}
+
+input.cw-range::-webkit-slider-runnable-track {
+  height: 18px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+input.cw-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -4px;
+  border: 2px solid rgba(16, 16, 16, 0.55);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+input.cw-range::-moz-range-track {
+  height: 18px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+input.cw-range::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(16, 16, 16, 0.55);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+input.cw-range-plain {
+  background-image: linear-gradient(to right, #dfe3e8, #7c8794);
+}
+
+/* ---- Colour wheel --------------------------------------------------------- */
+.cw-wheel-wrap {
+  position: relative;
+  width: 196px;
+  height: 196px;
+  width: clamp(140px, 22dvh, 196px);
+  height: clamp(140px, 22dvh, 196px);
+  margin: 2px auto 8px;
+}
+
+.cw-wheel {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+  outline-offset: 4px;
+}
+
+.cw-hue-thumb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(16, 16, 16, 0.4), 0 2px 6px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+/* The live colour (at the brush opacity, over a checkerboard) fills the hole. */
+.cw-preview {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: calc(100% - 76px);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 50%;
+  background: repeating-conic-gradient(#d3d7dd 0 25%, #ffffff 0 50%) 0 0 / 14px 14px;
+  box-shadow: inset 0 0 0 1px rgba(16, 16, 16, 0.12);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.cw-preview-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.cw-preview-hex {
+  position: relative;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #101010;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.cw-hex-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.cw-hex {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #44535e;
+}
+
+.cw-hex input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #cdd7e0;
+  border-radius: 12px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px; /* ≥16px: iOS must not zoom the page on focus */
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
+.cw-done {
+  flex: none;
+  min-height: 40px;
+  padding: 0 18px;
+}
+
+.cw-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cw-swatches-label {
+  width: 100%;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b6b6b;
+}
+
+.cw-swatch {
+  width: 34px;
+  height: 34px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(16, 16, 16, 0.18);
+}
+
+.cw-swatch:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.cw-swatch.is-active,
+.cw-swatch.is-active:hover:not(:disabled) {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--brand-blue, #0878d1);
+}
+
+/* ---- Brush quick menu ----------------------------------------------------- */
+.bqm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bqm-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 64px;
+  padding: 6px 4px;
+  border-radius: 12px;
+  background: var(--snap-gray-100, #f3f3f3);
+}
+
+.bqm-chip .brush-preview {
+  width: 46px;
+  height: 30px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.bqm-chip.is-active,
+.bqm-chip.is-active:hover:not(:disabled) {
+  background: var(--brand-blue-soft, #e7f4ff);
+  box-shadow: inset 0 0 0 2px var(--brand-blue, #0878d1);
+}
+
+.bqm-chip.is-gated {
+  opacity: 0.45;
+}
+
+.bqm-name {
+  font-family: var(--display-font);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.bqm-chip small {
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: #6b6b6b;
+}
+
+/* ---- Hand & pen preferences (tool rail) ----------------------------------- */
+.input-prefs .pref-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.input-prefs .pref-row > span {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #44535e;
+}
+
+.input-prefs .tool-hint {
+  margin: 6px 0 0;
+}
+
+/* The phone tier's tools are a bottom sheet — there is no side to flip. */
+.studio-shell[data-layout="phone"] .input-prefs .pref-hand {
+  display: none;
+}
+
+/* ---- Narrow phones: seven items must fit the bar ---------------------------- */
+@media (max-width: 430px) {
+  .mobile-quickbar {
+    gap: 2px;
+    padding: 4px;
+  }
+
+  .qb-btn {
+    min-width: 44px;
+    padding: 4px 2px;
+  }
+
+  .qb-label {
+    font-size: 10.5px;
+  }
+}
+
+@media (max-width: 360px) {
+  .qb-btn {
+    min-width: 41px;
+  }
+}

@@ -289,3 +289,92 @@
   max-height: 70dvh;
   padding-bottom: 14px;
 }
+
+/* ---- Left-hand mode: the tools open on the LEFT --------------------------- */
+/* The Hand & pen preference (utils/inputPrefs) stamps data-hand="left" on the
+   shell. It mirrors the tool rail — the docked desktop column and the tablet
+   side sheet — plus the floating chrome that would otherwise sit under the
+   open sheet. Phones use a bottom sheet, so there is nothing to flip there. */
+.studio-shell[data-layout="desktop"][data-hand="left"] {
+  grid-template-columns: 328px minmax(0, 1fr);
+}
+
+.studio-shell[data-layout="desktop"][data-hand="left"].rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.studio-shell[data-layout="desktop"][data-hand="left"] .tool-rail {
+  order: -1;
+  border-left: 0;
+  border-right: 1px solid var(--snap-gray-200, #e3e6ea);
+  box-shadow: 12px 0 34px rgba(31, 45, 53, 0.08);
+}
+
+/* "‹ Hide" points at the edge the rail leaves through. */
+.studio-shell[data-hand="left"] .rail-collapse span {
+  display: inline-block;
+  transform: scaleX(-1);
+}
+
+.studio-shell[data-layout="desktop"][data-hand="left"] .rail-reopen {
+  right: auto;
+  left: 0;
+  padding: 10px 11px 10px 9px;
+  border-right: 1px solid var(--snap-gray-200, #dfe2e5);
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+  box-shadow: 6px 6px 22px rgba(16, 16, 16, 0.14);
+}
+
+.studio-shell[data-layout="desktop"][data-hand="left"] .rail-reopen:hover:not(:disabled) {
+  box-shadow: 6px 6px 22px rgba(16, 16, 16, 0.14);
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"] .tool-rail {
+  right: auto;
+  left: 0;
+  border-left: 0;
+  border-right: 1px solid var(--snap-gray-200, #e3e6ea);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.16);
+  transform: translateX(-104%);
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"] .tool-rail.is-open {
+  transform: translateX(0);
+}
+
+/* Floating chrome: the quick bar centres in the space RIGHT of the sheet; the
+   right-edge chrome stays put; the left-edge chrome (rooms FAB, reaction
+   picker, symmetry) shifts right of the sheet instead. */
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .mobile-quickbar {
+  left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .zoom-controls {
+  right: 10px;
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .mp-chat {
+  right: 12px;
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .cc-pill {
+  right: 16px;
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .cc-panel {
+  right: 12px;
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .reaction-picker {
+  right: auto;
+  left: calc(var(--rail-w) + 12px);
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .symmetry-panel {
+  left: calc(var(--rail-w) + 12px);
+}
+
+.studio-shell[data-layout="tablet"][data-hand="left"].rail-open .studio-rooms-fab {
+  left: calc(var(--rail-w) + 8px);
+}

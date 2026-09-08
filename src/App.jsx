@@ -123,6 +123,10 @@ import { evictPageImage } from "./utils/pageImageCache";
 import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
+import BrushQuickMenu from "./components/BrushQuickMenu";
+import ColorWheelPicker from "./components/ColorWheelPicker";
+import { ColorDot, SizePill } from "./components/QuickStrokeControls";
+import { loadInputPrefs, saveInputPrefs } from "./utils/inputPrefs";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import { useLayoutTier, resolveLayoutTier } from "./hooks/useLayoutTier";
 import {
@@ -148,6 +152,7 @@ import "./App.css";
 import "./drawesome-theme.css";
 import "./homepage-redesign.css";
 import "./studio-layout.css";
+import "./quick-stroke.css";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
 // 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
@@ -286,6 +291,17 @@ const MAX_PALETTE_COLORS = 10;
 const PEN_PRIORITY_MS = 1500;
 // A touch contact wider/taller than this is a palm or forearm, never a fingertip.
 const PALM_CONTACT_PX = 45;
+// "Pen session": a pen was used this recently, so a lone finger landing on
+// the canvas is most likely the drawing hand settling ahead of the pen tip
+// (the classic palm mark: hand down, then pen). Its stroke is HELD for
+// TOUCH_HOLD_MS and only starts — replaying the held points, so the line is
+// complete — if no pen shows up meanwhile. Fingers on a phone with no pen in
+// play never pay this latency.
+const PEN_SESSION_MS = 60000;
+const TOUCH_HOLD_MS = 160;
+// A held touch that lifts inside the hold window is dropped as a stray palm
+// tap unless it travelled this far — a real quick flick still draws.
+const TOUCH_HOLD_FLICK_PX = 12;
 // Desktop tool-rail open/closed preference (desktop tier only; the compact
 // tiers always start with the rail closed so the canvas gets the screen).
 const RAIL_OPEN_STORAGE_KEY = "happypaint:studio-rail:v1";
@@ -674,6 +690,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // Stylus eraser-end override: the tool the UI had before the eraser end of
   // the pen touched down, restored at pen-up. Null while no override is live.
   const penEraserOverrideRef = useRef(null);
+  // A touch stroke on hold (pen-session palm rejection): the snapshot of its
+  // pointerdown, the moves that arrived while it waited, and the timer that
+  // releases it. Null when nothing is held.
+  const heldTouchRef = useRef(null);
   const dirtyRef = useRef(false);
   const autosaveTimerRef = useRef(null);
   const saveInFlightRef = useRef(false);
@@ -790,6 +810,22 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // the canvas gets the whole screen.
   const [toolsOpen, setToolsOpen] = useState(() => (resolveLayoutTier() === "desktop" ? readRailPreference() : false));
   const [desktopHeaderOpen, setDesktopHeaderOpen] = useState(false);
+  // Per-device input preferences (utils/inputPrefs): which side the tools
+  // open on (left-/right-hand mode) and whether fingers may paint at all
+  // (Pen only). The ref mirrors state for the pointer handlers so the draw
+  // path never reads a stale closure.
+  const [inputPrefs, setInputPrefs] = useState(() => loadInputPrefs());
+  const inputPrefsRef = useRef(inputPrefs);
+  inputPrefsRef.current = inputPrefs;
+  const updateInputPrefs = useCallback((patch) => {
+    setInputPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      saveInputPrefs(next);
+      return next;
+    });
+  }, []);
+  // Which quick popover is open from the bottom bar: "brush" | "color" | null.
+  const [quickMenu, setQuickMenu] = useState(null);
   // Crossing a tier (window resize, iPad rotation, plugging a Cintiq in):
   // re-apply that tier's default — desktop remembers the rail, the compact
   // tiers drop the sheet so the canvas isn't suddenly half-covered.
@@ -3882,6 +3918,141 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   };
 
+  // ---- Palm rejection: the held touch --------------------------------------
+  // React's synthetic event is only valid during dispatch, and a native
+  // pointer event's getCoalescedEvents() empties once it has been dispatched,
+  // so a touch that is put on hold is snapshotted into a plain object carrying
+  // everything startStroke / continueStroke / finishStroke read.
+  const copyPointer = (e) => ({
+    pointerId: e.pointerId,
+    pointerType: e.pointerType,
+    clientX: e.clientX,
+    clientY: e.clientY,
+    pressure: e.pressure,
+    tiltX: e.tiltX,
+    tiltY: e.tiltY,
+    timeStamp: e.timeStamp,
+  });
+  const snapshotPointerEvent = (event) => {
+    const native = event.nativeEvent;
+    const coalesced =
+      typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents().map(copyPointer) : [];
+    return {
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: event.button,
+      buttons: event.buttons,
+      pressure: event.pressure,
+      width: event.width,
+      height: event.height,
+      timeStamp: event.timeStamp,
+      currentTarget: event.currentTarget,
+      nativeEvent: { ...copyPointer(native), getCoalescedEvents: () => coalesced },
+      preventDefault() {},
+    };
+  };
+
+  const cancelHeldTouch = () => {
+    const held = heldTouchRef.current;
+    if (!held) {
+      return false;
+    }
+    heldTouchRef.current = null;
+    window.clearTimeout(held.timer);
+    return true;
+  };
+
+  // The hold expired (or a quick flick lifted): start the stroke from the
+  // snapshot and replay every move that arrived meanwhile, so the line the
+  // finger drew is complete — just late by the hold. `up` closes it too.
+  const releaseHeldTouch = (up = null) => {
+    const held = heldTouchRef.current;
+    if (!held) {
+      return;
+    }
+    heldTouchRef.current = null;
+    window.clearTimeout(held.timer);
+    updateBrushCursor(held.down.clientX, held.down.clientY);
+    startStroke(held.down);
+    for (const move of held.moves) {
+      updateBrushCursor(move.clientX, move.clientY);
+      continueStroke(move);
+    }
+    if (up) {
+      hideBrushCursor();
+      finishStroke(up);
+    }
+  };
+
+  const holdTouch = (event) => {
+    cancelHeldTouch();
+    heldTouchRef.current = {
+      pointerId: event.pointerId,
+      down: snapshotPointerEvent(event),
+      moves: [],
+      timer: window.setTimeout(() => releaseHeldTouch(), TOUCH_HOLD_MS),
+    };
+  };
+
+  // A pen landed while a FINGER stroke was live: that finger is the hand.
+  // Drop the stroke instead of committing it — the buffer is thrown away and
+  // the undo entry it pushed is popped, so nothing of the palm is left
+  // behind. Whatever already streamed to the room gets its end marker (peers
+  // keep the fragment — there is no retraction op), so this is local hygiene.
+  const discardTouchStroke = () => {
+    if (activePointerRef.current == null || activePointerTypeRef.current !== "touch") {
+      return false;
+    }
+    try {
+      overlayCanvasRef.current?.releasePointerCapture?.(activePointerRef.current);
+    } catch {
+      /* already released */
+    }
+    flushStrokeFrame();
+    if (strokeNetRef.current?.sentSettings) {
+      flushStrokeNet(true);
+    }
+    strokeNetRef.current = null;
+    const stroke = localStrokeRef.current;
+    localStrokeRef.current = null;
+    if (stroke?.copies) {
+      for (const copy of stroke.copies) {
+        copy.buf.dispose();
+      }
+    } else if (stroke) {
+      stroke.buf.dispose();
+    }
+    activePointerRef.current = null;
+    activePointerTypeRef.current = null;
+    activeCanvasRectRef.current = null;
+    lastPointRef.current = null;
+    activeStrokeLayerIdRef.current = null;
+    restorePenEraserOverride();
+    // Restoring the stroke's own undo snapshot covers the eraser too (it
+    // inks the layer directly, with no buffer to throw away).
+    const previous = historyRef.current.pop();
+    if (previous) {
+      applySnapshot(previous);
+    } else {
+      invalidateCompositeCache();
+      renderDisplay();
+    }
+    updateHistoryCounts();
+    return true;
+  };
+
+  // Say once, the first time a palm is actually caught, where the stronger
+  // setting lives.
+  const notePalmCaught = () => {
+    if (inputPrefsRef.current.palmTipShown) {
+      return;
+    }
+    updateInputPrefs({ palmTipShown: true });
+    showToast("✋ Ignored a palm touch. Tools ▸ Hand & pen ▸ Pen only keeps fingers from painting.");
+  };
+
   const handleCanvasPointerDown = (event) => {
     if (isExportingVideoRef.current) {
       return; // film export is paging scenes — don't stroke into them
@@ -3914,18 +4085,25 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
     if (event.pointerType === "pen") {
       lastPenAtRef.current = event.timeStamp || performance.now();
+      // Pen down: a finger stroke that was on hold, or has just started, was
+      // the drawing hand landing first. Drop it (see discardTouchStroke).
+      if (cancelHeldTouch() || discardTouchStroke()) {
+        notePalmCaught();
+      }
     }
     // Defensive prune: a fresh first contact with no live stroke/gesture/pan means
     // any lingering pointersRef entries are stale (a prior touch's up/cancel was
     // dropped by iOS). Clear them so this touch isn't misread as a 2nd pinch finger.
     // EXCEPT inside the pen-priority window: there, a tracked finger with no
     // stroke is a live GESTURE CANDIDATE (it deliberately doesn't paint) — the
-    // second finger landing next to it is exactly how a pinch starts.
+    // second finger landing next to it is exactly how a pinch starts. Pen only
+    // mode makes EVERY finger such a candidate, so it never prunes either.
     if (
       activePointerRef.current == null &&
       gestureRef.current == null &&
       panPointerRef.current == null &&
       pointersRef.current.size > 0 &&
+      inputPrefsRef.current.touch !== "pen" &&
       (event.timeStamp || performance.now()) - lastPenAtRef.current >= PEN_PRIORITY_MS
     ) {
       pointersRef.current.clear();
@@ -3937,6 +4115,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // must still draw, not be hijacked into pan/zoom/rotate. Two fingers pinch +
     // twist + pan; three or more pan. Baselined here and on every finger change.
     if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
+      cancelHeldTouch(); // a held first finger becomes a pinch finger, cleanly
       abortActiveStroke();
       hideBrushCursor();
       const m = gestureMetrics([...pointersRef.current.values()]);
@@ -3961,14 +4140,23 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
-    // A lone finger inside the pen-priority window stays a silent gesture
-    // candidate — no ring, no stroke (startStroke would reject it anyway, but
-    // the ring hopping to a resting finger looks broken).
-    if (
-      event.pointerType === "touch" &&
-      (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS
-    ) {
-      return;
+    if (event.pointerType === "touch") {
+      const now = event.timeStamp || performance.now();
+      const penAt = lastPenAtRef.current;
+      // Pen only mode: fingers never paint (two still pinch / pan / twist).
+      // Otherwise a lone finger inside the pen-priority window stays a silent
+      // gesture candidate — no ring, no stroke (startStroke would reject it
+      // anyway, but the ring hopping to a resting finger looks broken).
+      if (inputPrefsRef.current.touch === "pen" || now - penAt < PEN_PRIORITY_MS) {
+        return;
+      }
+      // Pen session: hold the stroke briefly in case this is the hand landing
+      // ahead of the pen tip. (penAt 0 = no pen yet this page load.)
+      if (penAt > 0 && now - penAt < PEN_SESSION_MS) {
+        event.preventDefault();
+        holdTouch(event);
+        return;
+      }
     }
 
     updateBrushCursor(event.clientX, event.clientY);
@@ -3977,13 +4165,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
   const handleCanvasPointerMove = (event) => {
     if (event.pointerType === "pen") {
-      // Hover counts: a Cintiq / M2 Pencil in proximity keeps palm touches out.
+      // Hover counts: a Cintiq / M2 Pencil in proximity keeps palm touches out
+      // — and drops a finger stroke still on hold (the hand rests, the pen
+      // approaches).
       lastPenAtRef.current = event.timeStamp || performance.now();
+      if (cancelHeldTouch()) {
+        notePalmCaught();
+      }
     } else if (event.pointerType === "touch" && !pointersRef.current.has(event.pointerId)) {
       return; // a rejected palm (or a contact that began off-canvas): no ring, no cursor relay
     }
     if (pointersRef.current.has(event.pointerId)) {
       pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    const held = heldTouchRef.current;
+    if (held && held.pointerId === event.pointerId) {
+      // The contact patch grew while it waited: a palm settling. Drop it.
+      if ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX) {
+        cancelHeldTouch();
+        pointersRef.current.delete(event.pointerId);
+        notePalmCaught();
+        return;
+      }
+      if (held.moves.length < 240) {
+        held.moves.push(snapshotPointerEvent(event));
+      }
+      return;
     }
 
     if (gestureRef.current) {
@@ -4033,12 +4241,13 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
 
-    // A lone gesture-candidate finger inside the pen-priority window: tracked
-    // above (it may become a pinch), but it owns neither the ring nor the
-    // cursor relay — those follow the pen.
+    // A lone gesture-candidate finger (Pen only mode, or inside the
+    // pen-priority window): tracked above (it may become a pinch), but it
+    // owns neither the ring nor the cursor relay — those follow the pen.
     if (
       event.pointerType === "touch" &&
-      (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS
+      (inputPrefsRef.current.touch === "pen" ||
+        (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS)
     ) {
       return;
     }
@@ -4051,6 +4260,17 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   };
 
   const handleCanvasPointerUp = (event) => {
+    const held = heldTouchRef.current;
+    if (held && held.pointerId === event.pointerId) {
+      pointersRef.current.delete(event.pointerId);
+      const travelled = Math.hypot(event.clientX - held.down.clientX, event.clientY - held.down.clientY);
+      if (travelled >= TOUCH_HOLD_FLICK_PX) {
+        releaseHeldTouch(snapshotPointerEvent(event)); // a real quick flick: draw it
+      } else {
+        cancelHeldTouch(); // a stray tap while the pen is in play
+      }
+      return;
+    }
     pointersRef.current.delete(event.pointerId);
 
     if (gestureRef.current) {
@@ -4082,6 +4302,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // by the browser during an interrupting gesture) make sure the pointer can never
   // linger as a stale gesture finger.
   const handleCanvasLostPointerCapture = (event) => {
+    if (heldTouchRef.current?.pointerId === event.pointerId) {
+      cancelHeldTouch();
+    }
     pointersRef.current.delete(event.pointerId);
     if (gestureRef.current && pointersRef.current.size < 2) {
       gestureRef.current = null;
@@ -4111,11 +4334,16 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brushSize, selectedBrush]);
 
-  // Clear any pending brush-ring hide timer on unmount.
+  // Clear any pending brush-ring hide timer — and a finger stroke still on
+  // hold (it must never start against an unmounted canvas) — on unmount.
   useEffect(
     () => () => {
       if (brushCursorHideRef.current) {
         window.clearTimeout(brushCursorHideRef.current);
+      }
+      if (heldTouchRef.current) {
+        window.clearTimeout(heldTouchRef.current.timer);
+        heldTouchRef.current = null;
       }
     },
     [],
@@ -4127,6 +4355,11 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // next touch. Reset all pointer + gesture state on those signals.
   useEffect(() => {
     const reset = () => {
+      if (heldTouchRef.current) {
+        // A finger stroke on hold never started — just forget it.
+        window.clearTimeout(heldTouchRef.current.timer);
+        heldTouchRef.current = null;
+      }
       pointersRef.current.clear();
       gestureRef.current = null;
       panPointerRef.current = null;
@@ -7637,6 +7870,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           event.preventDefault();
           setToolsOpen((open) => !open);
           break;
+        case "Escape":
+          setQuickMenu(null); // the brush / colour popover off the bottom bar
+          break;
         default:
           break;
       }
@@ -8084,6 +8320,67 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     }
   };
 
+  // ---- Quick stroke controls (bottom bar / desktop zoom cluster) -----------
+  // The Size pill and Colour dot open their popovers here. The brush list is
+  // gated exactly like the tool rail's (finger-paint rooms, private-only
+  // smudge, Studio-tier brushes), so the two pickers never disagree.
+  const closeQuickMenu = () => setQuickMenu(null);
+  const toggleBrushMenu = () => setQuickMenu((open) => (open === "brush" ? null : "brush"));
+  const toggleColorMenu = () => setQuickMenu((open) => (open === "color" ? null : "color"));
+  const brushMenuItems = useMemo(() => {
+    const list = roomFingerPaint ? brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id)) : brushCatalog;
+    return list.map((brush) => ({
+      id: brush.id,
+      name: brush.name,
+      locked: brush.tier === "studio" && !studioUnlocked,
+      gated: Boolean(brush.privateOnly) && roomAudience === "kid_safe" && !roomFingerPaint,
+    }));
+  }, [roomAudience, roomFingerPaint, studioUnlocked]);
+  const quickPopover =
+    quickMenu === "brush" ? (
+      <div className="qs-pop">
+        <BrushQuickMenu
+          items={brushMenuItems}
+          selectedBrush={selectedBrush}
+          selectedTool={selectedTool}
+          color={selectedColor}
+          size={brushSize}
+          onSize={setBrushSize}
+          onChoose={(item) => {
+            if (item.gated) {
+              showToast("Smudge works in private rooms — start one from Rooms!");
+              return;
+            }
+            chooseBrush(item.id);
+            closeQuickMenu();
+          }}
+          onClose={closeQuickMenu}
+        />
+      </div>
+    ) : quickMenu === "color" ? (
+      <div className="qs-pop">
+        <ColorWheelPicker
+          color={selectedColor}
+          opacity={brushOpacity}
+          palette={activePalette.colors}
+          recent={recentColors}
+          onChange={setSelectedColor}
+          onOpacityChange={setBrushOpacity}
+          onCommit={(hex) => {
+            // A picked colour means you want to paint with it: remember it and
+            // leave the pan / eraser / smudge behind.
+            rememberColor(hex);
+            handToolRef.current = false;
+            setHandTool(false);
+            if (noColorBrush) {
+              activatePaint();
+            }
+          }}
+          onClose={closeQuickMenu}
+        />
+      </div>
+    ) : null;
+
   // Create a fresh private (invite-only) room with a random code and go there.
   const createPrivateRoom = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -8132,6 +8429,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
     <main
       className={`studio-shell${toolsOpen ? " rail-open" : ""}${layoutTier === "desktop" && !toolsOpen ? " rail-collapsed" : ""}`}
       data-layout={layoutTier}
+      data-hand={inputPrefs.hand}
       translate="no"
     >
       <NaturalBreakAds enabled={!roomAdFree && Boolean(roomAudience) && !roomFingerPaint} />
@@ -8581,7 +8879,14 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               ) : null}
             </div>
 
-            <div className="zoom-controls" role="group" aria-label="Zoom, pan and quick tools">
+            {layoutTier === "desktop" && quickMenu ? (
+              <div className="qs-backdrop" onPointerDown={closeQuickMenu} aria-hidden="true" />
+            ) : null}
+            <div
+              className={`zoom-controls${layoutTier === "desktop" && quickMenu ? " has-pop" : ""}`}
+              role="group"
+              aria-label="Zoom, pan and quick tools"
+            >
               <button type="button" onClick={() => zoomByButton(1 / 1.25)} aria-label="Zoom out">
                 −
               </button>
@@ -8626,6 +8931,33 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
               >
                 ✋
               </button>
+              {/* Quick stroke: drag the size pill to resize, tap it for the
+                  brush menu; the colour dot opens the studio's own picker.
+                  (Desktop only — the compact tiers carry these on the quick
+                  bar.) */}
+              {layoutTier === "desktop" ? (
+                <>
+                  <span className="zoom-sep" aria-hidden="true" />
+                  <SizePill
+                    className="zoom-tool"
+                    size={brushSize}
+                    color={selectedColor}
+                    noColor={noColorBrush}
+                    active={quickMenu === "brush"}
+                    onSizeChange={setBrushSize}
+                    onTap={toggleBrushMenu}
+                  />
+                  <ColorDot
+                    className="zoom-tool"
+                    color={selectedColor}
+                    opacity={brushOpacity}
+                    noColor={noColorBrush}
+                    active={quickMenu === "color"}
+                    onTap={toggleColorMenu}
+                  />
+                  {quickPopover}
+                </>
+              ) : null}
             </div>
 
             {roomPrompt && !promptDismissed && !(roomGame && game) && !(roomPhone && phone) ? (
@@ -9727,6 +10059,62 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           ) : null}
         </section>
 
+        <section className="tool-section input-prefs">
+          <h2>Hand &amp; pen</h2>
+          <div className="pref-row pref-hand" role="group" aria-label="Left- or right-hand mode">
+            <span>Left- or right-hand mode</span>
+            <div className="seg-toggle">
+              <button
+                type="button"
+                className={inputPrefs.hand === "left" ? "is-on" : ""}
+                aria-pressed={inputPrefs.hand === "left"}
+                onClick={() => updateInputPrefs({ hand: "left" })}
+              >
+                ◀ Left
+              </button>
+              <button
+                type="button"
+                className={inputPrefs.hand === "right" ? "is-on" : ""}
+                aria-pressed={inputPrefs.hand === "right"}
+                onClick={() => updateInputPrefs({ hand: "right" })}
+              >
+                Right ▶
+              </button>
+            </div>
+            <p className="tool-hint">
+              {inputPrefs.hand === "left"
+                ? "Left-hand mode: the tools open on the left of the canvas."
+                : "Right-hand mode: the tools open on the right of the canvas."}
+            </p>
+          </div>
+          <div className="pref-row" role="group" aria-label="Finger touch">
+            <span>Fingers</span>
+            <div className="seg-toggle">
+              <button
+                type="button"
+                className={inputPrefs.touch === "auto" ? "is-on" : ""}
+                aria-pressed={inputPrefs.touch === "auto"}
+                onClick={() => updateInputPrefs({ touch: "auto" })}
+              >
+                Draw too
+              </button>
+              <button
+                type="button"
+                className={inputPrefs.touch === "pen" ? "is-on" : ""}
+                aria-pressed={inputPrefs.touch === "pen"}
+                onClick={() => updateInputPrefs({ touch: "pen" })}
+              >
+                Pen only
+              </button>
+            </div>
+            <p className="tool-hint">
+              {inputPrefs.touch === "pen"
+                ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
+                : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
+            </p>
+          </div>
+        </section>
+
         <section className="tool-section economy-rail">
           <div className="section-title-row">
             <h2>Economy</h2>
@@ -9772,6 +10160,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
 
       {/* Mobile: an always-on bottom bar to flip paint/eraser/pan and open the
           tools/chat, so the canvas itself can fill the whole screen. */}
+      {layoutTier !== "desktop" && quickMenu ? (
+        <div className="qs-backdrop" onPointerDown={closeQuickMenu} aria-hidden="true" />
+      ) : null}
       <div className="mobile-quickbar" role="toolbar" aria-label="Quick tools">
         <button
           type="button"
@@ -9793,6 +10184,26 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <span className="qb-label">Eraser</span>
           </button>
         )}
+        {/* Quick stroke: drag the size pill to resize (right/up = bigger), tap
+            it for the brush menu; the colour dot opens the studio's own
+            HSB picker. Both pop up from this bar. */}
+        <SizePill
+          className="qb-btn"
+          size={brushSize}
+          color={selectedColor}
+          noColor={noColorBrush}
+          active={quickMenu === "brush"}
+          onSizeChange={setBrushSize}
+          onTap={toggleBrushMenu}
+        />
+        <ColorDot
+          className="qb-btn"
+          color={selectedColor}
+          opacity={brushOpacity}
+          noColor={noColorBrush}
+          active={quickMenu === "color"}
+          onTap={toggleColorMenu}
+        />
         <button
           type="button"
           className={handTool ? "qb-btn is-active" : "qb-btn"}
@@ -9822,6 +10233,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
             <span className="qb-label">Chat</span>
           </button>
         )}
+        {layoutTier !== "desktop" ? quickPopover : null}
       </div>
       {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}
 
