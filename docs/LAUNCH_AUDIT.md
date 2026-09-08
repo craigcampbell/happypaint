@@ -3,7 +3,11 @@
 The app is ready for a small adult-led product test, not a claim of profitability
 or a broad classroom rollout. This pass spent **$0**, changed local code, and
 prepared a [cited launch plan](LAUNCH_PLAN.md). No external promotion, deployment,
-account changes, or real payments were made.
+account changes, or real payments were made during the original audit.
+
+**Deployment update:** the owner subsequently authorized deployment. The reviewed
+build is now live at https://drawesome.art, with billing and experimental snapshots
+still disabled. See [the deployment record](DEPLOYMENT_2026-09-08.md).
 
 ## Improvements implemented
 
@@ -75,9 +79,9 @@ not modified by this review.
    transport and leaves it disabled unless `ENABLE_CLIENT_SNAPSHOTS=1`. Keep that
    variable unset. Deterministic snapshots from an authoritative frozen operation
    list are needed before enabling it; ordinary history replay stays available.
-5. **Not deployed:** pushing the reviewed feature branch does not confirm a
-   production release. Verify the production build and configuration before
-   announcing it broadly.
+5. **Released, demand unverified:** the reviewed build was deployed and verified
+   on September 8; production uptime, return sessions, and paid demand still
+   require observation before a broad launch or profitability claim.
 
 The independent launch commit passed build, lint and 22 browser checks before
 integration. The subsequent uncommitted-work review corrected unsafe animation

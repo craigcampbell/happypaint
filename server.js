@@ -92,6 +92,14 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
+let shuttingDown = false;
+let shutdownPersistenceFailed = false;
+// Existing requests finish normally; keep-alive clients must retry new work on
+// the replacement server, including billing webhooks (which remain unacked).
+app.use((_req, res, next) => {
+  if (!shuttingDown) return next();
+  res.set('Connection', 'close').status(503).json({ error: 'server_restarting' });
+});
 const billing = createBilling({
   dataDir: DATA_DIR,
   verifyAccessToken,
@@ -1039,6 +1047,7 @@ async function saveRoomNow(roomId) {
     await fsp.rename(tmp, file);
   } catch {
     // Non-fatal — persistence is best-effort.
+    if (shuttingDown) shutdownPersistenceFailed = true;
   } finally {
     persistInFlight.delete(roomId);
     if (persistDirty.delete(roomId)) saveRoomNow(roomId);
@@ -6411,10 +6420,63 @@ server.listen(PORT, () => {
   console.log(`Admin key: set via ADMIN_KEY env or read ${ADMIN_KEY_FILE} on the server host.`);
 });
 
-function shutdown() {
-  wss.close();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1000);
+async function flushRoomPersistence() {
+  // A close handler can schedule another save, and an in-flight write can queue
+  // a newer version. Drain both queues until the final atomic rename settles.
+  while (persistTimers.size || persistInFlight.size || persistDirty.size) {
+    for (const [roomId, timer] of persistTimers) {
+      clearTimeout(timer);
+      persistTimers.delete(roomId);
+      saveRoomNow(roomId);
+    }
+    if (persistInFlight.size) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Stay within Docker's default ten-second stop grace. A forced exit is a
+  // failure, never a false claim that the latest drawing was saved.
+  const deadline = setTimeout(() => {
+    console.error('Shutdown timed out before all requests and room saves completed.');
+    process.exit(1);
+  }, 8000);
+  const stopRoomTimers = () => {
+    for (const room of rooms.values()) {
+      clearTimeout(room.voteTimer);
+      clearGameTimers(room);
+      clearPhoneTimers(room);
+    }
+  };
+  clearInterval(dailyRolloverTimer);
+  clearInterval(roomWipeTimer);
+  stopRoomTimers();
+  try {
+    const httpClosed = new Promise((resolve) => server.close(resolve));
+    const socketsClosed = new Promise((resolve) => wss.close(resolve));
+    for (const ws of wss.clients) ws.close(1012, 'Server restarting');
+    // Broken clients must not hold shutdown open for ws's 30-second timeout.
+    const closeDeadline = setTimeout(() => {
+      for (const ws of wss.clients) ws.terminate();
+    }, 2000);
+    await Promise.all([httpClosed, socketsClosed]);
+    clearTimeout(closeDeadline);
+    // Disconnect cleanup can start new ephemeral game timers and schedule the
+    // final engagement/unlock save. Stop those timers before draining writes.
+    stopRoomTimers();
+    await flushRoomPersistence();
+    clearTimeout(analyticsPersistTimer);
+    analyticsPersistTimer = null;
+    persistAnalyticsNow();
+    persistPeak();
+    if (shutdownPersistenceFailed) throw new Error('A room save failed during shutdown.');
+    clearTimeout(deadline);
+    process.exit(0);
+  } catch (error) {
+    console.error('Shutdown did not complete safely:', error.message);
+    process.exit(1);
+  }
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

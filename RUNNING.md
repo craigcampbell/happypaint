@@ -1,158 +1,95 @@
-# Drawesome 🎨 — running & hosting guide
+# Running and deploying Drawesome
 
-This is the live setup behind **https://drawesome.art** — a real-time, paint-together
-studio. Everyone who opens the site draws on the same shared canvas, with live
-cursors and chat.
+The live stack at **https://drawesome.art** runs in Docker Desktop on this PC.
+Keep the PC awake and Docker running. The app, PocketBase, and the existing
+Cloudflare tunnel are separate services in `docker-compose.yml`.
 
-## TL;DR — how the kids play
+- App: `http://127.0.0.1:8787`, serving the built frontend and `/ws`.
+- PocketBase: `http://127.0.0.1:8090`, optional accounts and cloud galleries.
+- Cloudflared routes the public domains to the existing services.
+- Persistent app state is in `app_data/`; account data is in `pb_data/`.
+  Coloring sheets are mounted read-only from `coloring-library/`.
 
-1. Make sure **the server is running** on this PC (see below) and the PC is awake.
-2. Friends go to **https://drawesome.art** and tap **“Paint in Browser”**
-   (or open **https://drawesome.art/studio** directly).
-3. Everyone lands in the same room (`MAIN`) and draws together.
-4. Want a private group? Use a room code: **https://drawesome.art/join/ELSA**
-   (any word/code) — everyone who opens the same `/join/<CODE>` link shares that
-   canvas. The **“Invite a friend”** button in the studio copies a join link.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system map and
+[MOVING.md](MOVING.md) for moving the stack. This guide supersedes the older
+standalone-Node operating instructions.
 
-## Architecture (no Docker, no database)
+## Deploy an app update
 
-The backend is a **single Node.js process** — `server.js`. There is **no Docker
-and no Supabase**; the optional auth/sync layer in this branch is switched off
-(its env vars are unset), so the app runs fully local.
-
-```
-Browser ──HTTPS/WSS──▶ Cloudflare ──▶ cloudflared tunnel ──▶ localhost:8787 (server.js)
-                                                              ├─ serves the built app (dist/)
-                                                              └─ WebSocket relay at /ws
-```
-
-- `server.js` serves the built front-end **and** the WebSocket that relays drawing
-  strokes / cursors / chat between everyone in a room.
-- The shared canvas for each room lives **in memory** in that process. If the
-  server restarts, in-progress shared canvases reset (each kid’s *own* art also
-  autosaves locally in their browser).
-- Port: **8787** (`PORT` env var to change it).
-
-## Start / restart the server
-
-The server is **not** set to auto-start. After a reboot (or if it stops), start it
-manually:
+Run from the repository root. Build before replacing the running app, keep a
+rollback image, and back up `app_data/` before the update. A live copy of app data
+is a precautionary backup, not a transactionally consistent database snapshot;
+prefer a quiet period. PocketBase has its own backup process.
 
 ```powershell
-cd "C:\Users\Craig Campbell\Projects\happypaint"
+docker compose ps
+$previousAppImage = docker inspect happypaint-app-1 --format '{{.Image}}'
+docker image tag $previousAppImage happypaint-app:rollback
+# Keep a dated local app_data backup under the git-ignored backups/ folder.
+docker compose build app
+docker compose up -d --no-deps --no-build --wait --wait-timeout 60 app
+```
+
+Only the app service needs replacement for frontend/server changes. The build
+uses the public `VITE_*` arguments from Compose; rebuilding `dist/` on the host
+does not update the files inside the running container. Local environment files
+and mutable app data are excluded from the Docker build context.
+
+Clients briefly reconnect during replacement. The server closes sockets with
+restart code 1012 and drains pending room writes before exiting; graceful shutdown
+is bounded at 8 seconds and reports failure if the drain cannot complete.
+A forced process kill or machine power loss cannot provide that guarantee.
+
+Do not use `docker compose down -v`, prune volumes, replace PocketBase, or alter
+the tunnel for a routine app update. Keep `ENABLE_CLIENT_SNAPSHOTS` unset;
+client-rendered catch-up snapshots remain experimental. Preserve the existing
+billing configuration; this deployment does not enable payments.
+
+## Verify the release
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/healthz
+Invoke-RestMethod https://drawesome.art/healthz
+docker inspect happypaint-app-1 --format '{{.State.Health.Status}}'
+```
+
+Also verify that the public HTML references the newly built asset filenames,
+those assets return JavaScript/CSS, and the homepage and mobile studio load in a
+real browser. Test anonymous drawing and a second client's replay in a fresh
+private room. Do not test paint, clear, or chat in a community room. Confirm
+coloring sheets and the existing account-service health still work.
+
+## Roll back the app
+
+```powershell
+docker image tag happypaint-app:rollback happypaint-app:latest
+docker compose up -d --no-deps --no-build --wait --wait-timeout 60 app
+```
+
+Use the exact dated rollback tag recorded for a release when available. Keep the
+existing data mounts; never overwrite newer user artwork with an old backup as
+part of an ordinary code rollback. Restore data only as a separately reviewed
+recovery operation.
+
+## Start locally for development
+
+```powershell
+npm run dev
+# In another terminal, with isolated DATA_DIR and PORT as needed:
 node server.js
 ```
 
-That window must stay open while the kids play. To run it in the background
-(survives closing the terminal), use:
-
-```powershell
-cd "C:\Users\Craig Campbell\Projects\happypaint"
-Start-Process node -ArgumentList "server.js" -WorkingDirectory (Get-Location) -WindowStyle Hidden `
-  -RedirectStandardOutput "server.out.log" -RedirectStandardError "server.err.log"
-```
-
-Check it’s up:
-
-```powershell
-curl http://localhost:8787/healthz      # -> {"ok":true,...}
-```
-
-Stop a background instance:
-
-```powershell
-Get-NetTCPConnection -LocalPort 8787 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
-```
-
-## After changing code
-
-The server serves files from `dist/`, so rebuild after any front-end change:
-
-```powershell
-npm run build      # rebuilds dist/ (served immediately, no server restart needed)
-```
-
-If you change `server.js` itself, restart the server (stop + start above).
-
-## Hosting (Cloudflare tunnel)
-
-- The domain `drawesome.art` is on **Cloudflare DNS** (nameservers `chelsea` /
-  `woz`.ns.cloudflare.com).
-- A **Cloudflare Tunnel** named `drawesome.art` (runs as the `cloudflared` Windows
-  **service** on this PC) carries traffic to `localhost:8787`.
-- The route is configured in the Cloudflare **Zero Trust** dashboard →
-  **Networks → Connectors → drawesome.art → Published application routes**:
-  `drawesome.art` (path `*`) → `http://localhost:8787`.
-- Cloudflare provides HTTPS automatically and proxies WebSockets — no extra config.
-
-So the only moving part you manage is **keeping `node server.js` running** on this PC.
+Vite uses port 5173 and proxies `/ws` to port 8787. Avoid starting another server
+on the production port or pointing tests at production `app_data/`. Empty
+PocketBase and billing variables leave drawing and rooms available anonymously.
 
 ## Troubleshooting
 
-- **Site won’t load for the kids:** confirm the server is up
-  (`curl http://localhost:8787/healthz`) and this PC is awake & online.
-- **Works elsewhere but not on this PC:** this PC was pointed at Cloudflare DNS
-  (`1.1.1.1`) because the router cached the old record. Revert anytime (admin
-  PowerShell): `Set-DnsClientServerAddress -InterfaceIndex 8 -ResetServerAddresses`.
-- **“Connecting…” in the studio:** the WebSocket didn’t connect — almost always the
-  server isn’t running. Start it.
-
-## iOS app (later)
-
-To make a native iOS app join the same canvases, connect to:
-
-```
-wss://drawesome.art/ws?room=MAIN
-```
-
-and speak the same small JSON protocol the web client uses:
-
-- Send a stroke (incrementally, as points are drawn):
-  `{"type":"op","op":{"kind":"draw","strokeId":"<unique>","settings":{"brush":"marker","color":"#ff0000","size":12,"opacity":1,"variation":0},"points":[{"x":10,"y":10},{"x":40,"y":40}]}}`
-  Coordinates are in the shared 3840×2400 canvas space (see `CANVAS_WIDTH`/`CANVAS_HEIGHT` in `src/utils/layers.js`).
-- Other ops: `{"kind":"shape",...}`, `{"kind":"text",...}`; plus top-level
-  `{"type":"cursor","x":0..1,"y":0..1,"drawing":true}`, `{"type":"clear"}`,
-  `{"type":"chat","message":"hi"}`, `{"type":"ping"}`.
-- On connect the server sends `connected`, `userList`, then `history` (replay of the
-  room so far). It relays others’ `op` / `cursor` / `chat` to you.
-
-See `server.js` for the full message set and `src/hooks/useMultiplayer.js` +
-`src/App.jsx` for the reference client.
-
-## Rooms (public + private)
-
-- **`MAIN`** is the **public** canvas — anyone who taps "Join the public canvas"
-  (or just opens `/studio`) draws there together. Treat it as public.
-- **Private rooms** are invite-only by obscurity: "Create a private room" makes a
-  random code and opens `/join/<CODE>`. Only people with that link/code can join.
-
-## Admin & moderation
-
-A parent/moderator dashboard lives at **`drawesome.art/admin`**.
-
-- **Login key:** printed in the server log on boot and saved to **`.admin-key`**
-  in the project folder (git-ignored). Set your own with the `ADMIN_KEY` env var.
-  Enter it once at `/admin`; it's stored in your browser and never ships in the app.
-- **What it shows:** open **reports**, **active rooms** (with how many are painting
-  and stroke counts), and resolved history. Auto-refreshes every few seconds.
-- **Actions:** **View** a room (opens it in a new tab), **Clear** a room's canvas
-  for everyone, and **Resolve** a report.
-- **Reports:** any artist can tap **⚠️** in a room's chat to report it; reports are
-  stored in **`.reports.json`** (git-ignored) and appear in the dashboard.
-
-> ⚠️ The public `MAIN` canvas has no automatic content filtering — moderation is
-> reactive (reports + clear). Keep `/admin` open during public sessions, or steer
-> kids to **private rooms** for a closed group.
-
-## Saved drawings ("My Art")
-
-Tapping **💾 Save** stores the artwork on the server so kids can come back and
-keep drawing (the **📁 My Art** button reopens them).
-
-- Files live in **`.artworks/`** (one JSON per device key). This folder is
-  git-ignored — **back it up** if you want to keep saved art across machines.
-- Each device gets an anonymous key (browser localStorage). Saves are capped at
-  **12 per device** (`MAX_SAVES` env var). This is the storage a future sign-in
-  will adopt — swap the device key for an authenticated user id.
-- The service worker (`public/sw.js`) is network-first for the app shell and
-  **never** caches `/api/*` — bump `CACHE_NAME` if you change it.
+- Check Docker is running and `docker compose ps` shows the app healthy.
+- If local health succeeds but the public URL fails, inspect the existing tunnel
+  status. DNS/tunnel account changes are owner-operated; do not recreate them.
+- If a deploy serves stale UI, inspect the public entry-script filename and try
+  an ordinary reload. The service worker refreshes the shell from the network;
+  API and billing responses are never cached by it.
+- Review app logs locally for errors. Do not paste credentials, private room
+  contents, or account records into public issues.
