@@ -160,9 +160,11 @@ const longWave = (from, to, { count = 400, amp = 120, lobes = 3 } = {}) => {
 // ---- Wire shaping ---------------------------------------------------------------
 // What the studio actually puts on the wire (App.jsx drawBrushFromEvent):
 // quarter-px coords, dedupe of a point that lands on the previous one with
-// |Δpressure| < 0.01, plus a stationary pressure-only update every 41 points
-// (Δp = 0.02 survives dedupe) — the renderer must skip those without moving
-// its walk state.
+// |Δpressure| < 0.01, a stationary pressure-only update every 41 points
+// (Δp = 0.02 survives dedupe) — and Stage 5 tilt: integer-degree tx/ty,
+// attached only when nonzero, with a >= 10° lean change surviving the dedupe.
+// (Tilt-less raw points produce byte-identical output to the pre-tilt rule,
+// which is what keeps every pre-Stage-5 group frozen.)
 const toWire = (raw) => {
   const out = [];
   let prev = null;
@@ -170,12 +172,24 @@ const toWire = (raw) => {
     const nx = q4(p.x);
     const ny = q4(p.y);
     const pr = Math.round(clamp(p.pressure, 0, 1) * 1000) / 1000;
-    if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - pr) >= 0.01) {
+    const tx = Math.round(p.tx || 0);
+    const ty = Math.round(p.ty || 0);
+    if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - pr) >= 0.01 || Math.abs((prev.tx || 0) - tx) >= 10 || Math.abs((prev.ty || 0) - ty) >= 10) {
       prev = { x: nx, y: ny, pressure: pr };
+      if (tx !== 0 || ty !== 0) {
+        prev.tx = tx;
+        prev.ty = ty;
+      }
       out.push(prev);
     }
     if (i > 0 && i % 41 === 0) {
-      prev = { x: prev.x, y: prev.y, pressure: Math.min(1, Math.round((prev.pressure + 0.02) * 1000) / 1000) };
+      const stationary = { x: prev.x, y: prev.y, pressure: Math.min(1, Math.round((prev.pressure + 0.02) * 1000) / 1000) };
+      if (prev.tx != null || prev.ty != null) {
+        // The app's stationary points carry whatever the pen reports.
+        stationary.tx = prev.tx || 0;
+        stationary.ty = prev.ty || 0;
+      }
+      prev = stationary;
       out.push(prev);
     }
   });
@@ -568,6 +582,56 @@ const v3SeptemberPaintGroup = () => {
   }));
 };
 
+// ---- Stage 5 group --------------------------------------------------------------
+// Brush physics (all dabs embed the CURRENT authoring presets, like the
+// september group):
+// - tilt: pen lean rides the wire as integer tx/ty — a lean ramp at a fixed
+//   azimuth (oil, dry then wet over gouache) and a full twist (acrylic);
+// - splay: the lab's pressure ramp works the bristle fan on the same strokes;
+// - charge: a long watercolor stroke drains the reservoir mid-way (and spans
+//   > 2048 px, so the buffer banks a chunk with the reservoir half-empty);
+// - diffuse: wet-into-wet — dry watercolor swells and blooms over a gouache
+//   under-layer, and a wet Wet Wash crosses a paint patch onto blank paper.
+const v3PhysicsGroup = () => {
+  const ops = [];
+  const boxL0 = { x0: 160, y0: 140, w: 1700, h: 480 };
+  const boxR0 = { x0: 2140, y0: 140, w: 1700, h: 480 };
+  const boxL1 = { x0: 160, y0: 760, w: 1700, h: 480 };
+  const boxR1 = { x0: 2140, y0: 760, w: 1700, h: 480 };
+  // A lean ramp 0 -> leanTo degrees along the stroke at a fixed azimuth...
+  const leanStroke = (points, leanTo = 50, azimuth = Math.PI / 3) =>
+    points.map((p, i) => {
+      const lean = (i / (points.length - 1)) * leanTo;
+      return { ...p, tx: Math.round(lean * Math.cos(azimuth)), ty: Math.round(lean * Math.sin(azimuth)) };
+    });
+  // ...and a twist: constant lean, the azimuth sweeping azFrom -> azTo.
+  const twistStroke = (points, lean = 45, azFrom = -Math.PI / 3, azTo = Math.PI / 3) =>
+    points.map((p, i) => {
+      const az = azFrom + (azTo - azFrom) * (i / (points.length - 1));
+      return { ...p, tx: Math.round(lean * Math.cos(az)), ty: Math.round(lean * Math.sin(az)) };
+    });
+  // Oil: leaned flat brush, dry; then wet over a gouache wave (tilt + pickup).
+  ops.push(...strokeOps("oilLeanDry", v3Settings("oil", { color: COLORS.blue, size: 40, current: true }), leanStroke(sCurve(boxL0))));
+  ops.push(...strokeOps("oilLeanUnder", v3Settings("gouache", { color: COLORS.yellow, size: 56, current: true }), wavePath(boxR0, true)));
+  ops.push(...strokeOps("oilLeanWet", v3Settings("oil", { color: COLORS.mixBlue, size: 40, wet: true, current: true }), leanStroke(wavePath(boxR0, false))));
+  // Acrylic: the twist — constant lean, rotating azimuth (the splay follows
+  // the pressure ramp of the S-curve too).
+  ops.push(...strokeOps("acrylicTwist", v3Settings("acrylic", { color: COLORS.red, size: 48, current: true }), twistStroke(sCurve(boxL1))));
+  // Watercolor, dry over a gouache wave: diffuse swells and blooms the dabs
+  // that land on paint; off the wave the stroke stays tight. It is ALSO
+  // leaned (a tilt ramp), so the wash pools downhill (Stage 6 `pool`).
+  ops.push(...strokeOps("washDiffuseUnder", v3Settings("gouache", { color: COLORS.yellow, size: 56, current: true }), wavePath(boxR1, true)));
+  ops.push(...strokeOps("washDiffuse", v3Settings("watercolor", { color: COLORS.mixBlue, size: 44, current: true }), leanStroke(wavePath(boxR1, false))));
+  // A long watercolor stroke (past the 2048^2 buffer cap): the reservoir
+  // drains to dry mid-stroke, and the banked chunks bleed by what was left.
+  ops.push(...strokeOps("washCharge", v3Settings("watercolor", { color: COLORS.mixBlue, size: 44, opacity: 0.9, current: true }), longWave({ x: 240, y: 1500 }, { x: 3760, y: 1980 }, { count: 280, amp: 110, lobes: 3 })));
+  // Wet Wash through a paint patch onto blank paper: km pickup + diffuse +
+  // the bigger reservoir all at once.
+  ops.push({ kind: "shape", tool: "rect", start: { x: 1000, y: 2080 }, end: { x: 2000, y: 2400 }, opts: { color: COLORS.blue, size: 8, opacity: 1, fillShape: true } });
+  ops.push(...strokeOps("wetWashPatch", v3Settings("watercolor-wet", { color: COLORS.yellow, size: 56, wet: true, current: true }), flatLine({ x0: 300, y0: 2040, w: 3400, h: 420 }, 2240, { count: 200, pressure: 0.75 })));
+  return ops;
+};
+
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
   {
@@ -597,6 +661,8 @@ const groups = [
   // Stage 4 (appended).
   { name: "v3-smudge", deterministic: true, note: "Stage 4: v:3 smudge drag / blend (pressure ramp, hard, soft size 90, blend circling, an unknown mode → drag) over a fill-rect red|blue field, and a drag that leaves the field onto blank paper", ops: v3SmudgeGroup() },
   { name: "v3-september-paint", deterministic: true, note: "September 2026 authoring presets: updated watercolor/oil plus Wet Wash/Palette Knife, dry blue and wet yellow crossing at sizes 12/40/90; all earlier groups remain frozen", ops: v3SeptemberPaintGroup() },
+  // Stage 5 (appended).
+  { name: "v3-physics", deterministic: true, note: "Stage 5/6: pen tilt (lean ramp + twist) on oil/acrylic, splay under pressure, the wash reservoir draining over a long stroke (charge), wet-into-wet spread over under-paint (diffuse), and the leaned-mop pools-downhill shift (pool)", ops: v3PhysicsGroup() },
 ];
 
 const fixture = {

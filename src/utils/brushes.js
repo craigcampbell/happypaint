@@ -61,6 +61,32 @@ export { prebuildBrushSprites, releaseBrushSprites } from "./brushSprites";
 //   drag       — how fast the carried colour drifts toward what the stroke
 //                passes over (wet; x 0.35 for a dry km stroke)
 //
+// Stage 5 — brush physics. Four dab fields, all defaulting to 0/off so every
+// dab persisted before them renders byte-identical:
+//   tilt     — pen-lean steering (the wire has carried tiltX/tiltY as tx/ty
+//              since Stage 3): the dab's long axis blends from the stroke
+//              tangent toward the lean azimuth and the stamp widens with lean
+//              (a flat brush / mop laid on its side). Points without tilt —
+//              touch, mouse, every old op — read lean 0 and paint exactly the
+//              pre-tilt stroke. Sprite shapes only.
+//   splay    — pressure splays a `loaded` brush's bristle fan: lane spread
+//              scales with pressure around a mid-press neutral (light = the
+//              tip, hard = the full fan).
+//   charge   — wash only: the brush's water reservoir, in dab diameters of
+//              travel. As it drains, flow fades toward half, dry-brush tooth
+//              appears even at full pressure, blooms get rarer, and the
+//              commit-time bleed scales with the stroke's average wetness
+//              (a long stroke ends dry and bleeds less).
+//   diffuse  — wash only: wet-into-wet spread. The dab samples the mix map
+//              even in DRY mode (one shared read with the colour paths), and
+//              over existing paint it swells and blooms more; over blank
+//              paper nothing changes. Cross-client the read can wobble by a
+//              map cell (the accepted km sampling class — bounded, cosmetic).
+//   pool     — wash only (Stage 6): a leaned round mop deposits asymmetrically
+//              — the dab's centre shifts toward the lean azimuth and the stamp
+//              widens a touch along it (pigment pooling "downhill"). Reads the
+//              same per-point tx/ty as tilt; a tilt-less point reads lean 0.
+//
 // minSize values are tuned for a ≥3x thin-to-thick pressure range (Stage 3):
 // with the 1.35 gamma, full press is 3-6x the lightest touch per brush.
 export const brushCatalog = [
@@ -101,7 +127,7 @@ export const brushCatalog = [
     name: "Oil",
     icon: "🛢️",
     tier: "free",
-    description: "Thick, solid oil paint with bristle streaks, wet edges, and a buttery emboss.",
+    description: "Thick, buttery oil with bristle streaks and ridges — lean your pen to steer the brush, press to splay it.",
     dab: { spacing: 0.08, minSize: 0.3, flow: 0.85, shape: "bristle", bristles: 8, stretch: 2.2, wetEdge: 0.18, impasto: 0.14 },
   },
   {
@@ -111,14 +137,14 @@ export const brushCatalog = [
     name: "Palette Knife",
     icon: "🔪",
     tier: "free",
-    description: "Thick, flat slabs of paint laid with a palette knife — bold ridges and visible relief.",
+    description: "Thick, flat slabs of paint laid with a palette knife — lean your pen to steer the blade; bold ridges and relief.",
   },
   {
     id: "acrylic",
     name: "Acrylic",
     icon: "🎨",
     tier: "free",
-    description: "Bold, fast-drying paint with solid coverage and visible brush streaks.",
+    description: "Bold, fast-drying paint with visible brush streaks — leans with your pen and splays as you press.",
     dab: { spacing: 0.1, minSize: 0.25, flow: 0.95, shape: "bristle", bristles: 5, stretch: 1.7, impasto: 0.1 },
   },
   {
@@ -126,7 +152,7 @@ export const brushCatalog = [
     name: "Watercolor",
     icon: "💧",
     tier: "free",
-    description: "Soft translucent washes with uneven edges and paper texture — layers glaze darker.",
+    description: "Soft translucent washes with uneven edges and paper texture — the brush runs dry as you paint and blooms into wet paint.",
     dab: { spacing: 0.14, minSize: 0.32, flow: 0.3, shape: "water", wetEdge: 0.25, grain: 0.18 },
   },
   {
@@ -136,7 +162,7 @@ export const brushCatalog = [
     name: "Wet Wash",
     icon: "🌊",
     tier: "free",
-    description: "A very wet watercolor — pigment bleeds and pools, and strokes pick up the colour beneath them.",
+    description: "A very wet watercolor — a long, juicy stroke that bleeds and pools, and dives into damp paint.",
   },
   {
     id: "gouache",
@@ -296,6 +322,13 @@ const NATURAL_DABS = {
     mix: 0,
     pickup: 0.48,
     drag: 0.15,
+    // Stage 5: a real reservoir — the wash runs drier over ~34 dab-widths of
+    // travel (flow fades, tooth appears, the commit bleed follows the stroke's
+    // wetness), and dabs landing on existing paint spread wet-into-wet.
+    charge: 34,
+    diffuse: 0.3,
+    // Stage 6: a leaned mop pools paint toward the lean.
+    pool: 0.5,
   },
   // Wet-on-wet wash: a very wet watercolor. More pigment bleed into the paper,
   // stronger granulation, and the highest pickup of the family — a wet stroke
@@ -321,6 +354,12 @@ const NATURAL_DABS = {
     mix: 0,
     pickup: 0.55,
     drag: 0.2,
+    // Stage 5: the mop holds much more water (a long juicy stroke) and dives
+    // harder into damp paint.
+    charge: 60,
+    diffuse: 0.45,
+    // Stage 6: pools even more when leaned (it's the wetter mop).
+    pool: 0.65,
   },
   oil: {
     spacing: 0.065,
@@ -350,6 +389,10 @@ const NATURAL_DABS = {
     mix: 0.34,
     pickup: 0.35,
     drag: 0.18,
+    // Stage 5: a leaned pen steers the flat of the brush off the stroke
+    // tangent and widens it; pressing splays the bristle fan.
+    tilt: 0.6,
+    splay: 0.5,
   },
   // Palette-knife oil: flat, chunky slabs with strong relief. Shape "matte"
   // (the gouache body) is the coverage; the heavy impasto pass carves the
@@ -369,6 +412,8 @@ const NATURAL_DABS = {
     mix: 0.22,
     pickup: 0.18,
     drag: 0.12,
+    // Stage 5: a knife is ALL tilt — the blade follows the pen's lean.
+    tilt: 0.8,
   },
   acrylic: {
     spacing: 0.075,
@@ -391,6 +436,9 @@ const NATURAL_DABS = {
     mix: 0.15,
     pickup: 0.25,
     drag: 0.15,
+    // Stage 5: like the oil, a touch less of both (a stiffer synthetic brush).
+    tilt: 0.55,
+    splay: 0.4,
   },
   glow: { spacing: 0.12, minSize: 0.3, flow: 0.85, shape: "halo" },
 };
@@ -478,6 +526,17 @@ export function normalizeInlineDab(dab) {
     mixModel: dab.mixModel === "km" ? "km" : "",
     mix: clampNumber(dab.mix, 0, 0, 0.9),
     drag: clampNumber(dab.drag, 0.15, 0, 0.5),
+    // Stage 5 physics: absent on every pre-Stage-5 op -> 0 -> off, byte-
+    // identical replay. tilt steers the dab with the pen's lean (points
+    // carry tx/ty ints), splay widens the bristle fan with pressure, charge
+    // is the wash's water reservoir in dab diameters (0 = never runs dry),
+    // diffuse is the wet-into-wet spread over sampled paint, pool is the
+    // leaned-mop "pools downhill" asymmetry.
+    tilt: clampNumber(dab.tilt, 0, 0, 1),
+    splay: clampNumber(dab.splay, 0, 0, 1),
+    charge: clampNumber(dab.charge, 0, 0, 120),
+    diffuse: clampNumber(dab.diffuse, 0, 0, 1),
+    pool: clampNumber(dab.pool, 0, 0, 1),
   };
   // `pickup` is only present when the op carries one: absent means "the
   // legacy WET_PICKUP[brush] table", which is what every pre-Stage-2 op
@@ -616,6 +675,20 @@ export function dabExtent(dab) {
       break;
     default:
       extent = 1; // round, water
+  }
+  // Stage 5: a leaned pen widens the stamp (tilt) and a wash dab spreads
+  // over damp paint (diffuse) — the pad must cover the widest case. Both
+  // default 0 on every pre-Stage-5 dab, which then multiplies by exactly 1.
+  if (d.tilt > 0) {
+    extent *= 1 + TILT_WIDEN * d.tilt;
+  }
+  if (d.diffuse > 0) {
+    extent *= 1 + DIFFUSE_SWELL * d.diffuse;
+  }
+  // Stage 6 pool widens a leaned mop a touch; its small centre shift rides
+  // inside the pad's fixed +40 px margin.
+  if (d.pool > 0) {
+    extent *= 1 + POOL_WIDEN * d.pool;
   }
   // Scatter throws the dab centre sideways by up to scatter x size.
   return extent + 2 * (d.scatter || 0);
@@ -1151,6 +1224,34 @@ const BLOOM_ALPHA = 0.3;
 // solid a single dab / tap is and how fast the film closes at a stroke edge.
 const LOADED_BODY_ALPHA = 0.8;
 
+// --- Stage 5 physics constants (frozen once shipped: they are the look of
+// every op whose dab carries the Stage-5 fields) ---
+// Pen tilt: lean = hypot(tx, ty) normalised at this many degrees (a working
+// lean rarely passes ~60°); the dab's long axis blends from the stroke
+// tangent toward the lean azimuth by tilt x lean, and the stamp widens
+// across it by tilt x lean x TILT_WIDEN.
+const TILT_LEAN_DEG = 60;
+const TILT_WIDEN = 0.4;
+// A dab reads no lean below this (a near-vertical pen is the neutral stroke).
+const TILT_LEAN_FLOOR = 0.04;
+// Splay: the loaded fan's lane spread is 1 at this neutral pressure, wider
+// above it, narrower below (a light touch paints with the tip).
+const SPLAY_NEUTRAL = 0.45;
+// Charge: at an empty reservoir the wash's flow bottoms out at this fraction
+// (the dry-brush tooth takes over — see the dry roll), and the commit bleed
+// scales between BLEED_DRY and 1 with the stroke's average wetness.
+const CHARGE_FLOW_FLOOR = 0.5;
+const BLEED_DRY = 0.4;
+// Diffuse: over sampled paint the dab swells by diffuse x DIFFUSE_SWELL and
+// its bloom chance gains diffuse x DIFFUSE_BLOOM.
+const DIFFUSE_SWELL = 0.55;
+const DIFFUSE_BLOOM = 0.45;
+// Pool (Stage 6): a leaned mop widens by pool x lean x POOL_WIDEN, and its
+// centre shifts toward the lean by pool x lean x POOL_SHIFT (a fraction of the
+// dab size — the buffer pad's +40 px absorbs it).
+const POOL_WIDEN = 0.12;
+const POOL_SHIFT = 0.15;
+
 // `getMix` (optional): a sampler (x, y) -> [r, g, b] | null over the 1/8-scale
 // LAYER-0 mix map. Only consulted when the op's settings carry wet: true AND
 // the brush picks up (dab.pickup, else the legacy WET_PICKUP entry) — so dry
@@ -1219,6 +1320,17 @@ export function makeStrokeRenderer(settings, getMix) {
   const dryK = isWash ? dab.dry || 0 : 0;
   const startFlowK = dab.startFlow || 1;
   const laneCull = isLoaded && dab.laneCull > 0;
+  // --- Stage 5 physics (all 0 / off for every dab persisted before it) ---
+  // tilt: pen-lean steering of the dab (sprite shapes; halo excluded — a
+  // glow has no flat to steer). splay: the loaded fan's pressure spread.
+  // charge: the wash reservoir in world px (dab diameters x size); 0 = the
+  // bottomless pre-Stage-5 reservoir. diffuse: the wash's wet-into-wet
+  // spread — needs a sampler, so a mapless consumer (previews) skips it.
+  const tiltK = spriteShape && !isHalo ? dab.tilt || 0 : 0;
+  const splayK = isLoaded ? dab.splay || 0 : 0;
+  const chargeRange = isWash && dab.charge > 0 ? dab.charge * size : 0;
+  const diffuseK = isWash && sampler ? dab.diffuse || 0 : 0;
+  const poolK = isWash ? dab.pool || 0 : 0;
   // The dry (un-sampled) colour lands EXACTLY (spec P4): the exact tint slot
   // is keyed on the full 24-bit colour, so a picked palette colour is what
   // reaches the paper. Only a wet stroke, whose colour varies per dab, goes
@@ -1334,7 +1446,10 @@ export function makeStrokeRenderer(settings, getMix) {
   let inkX1 = -Infinity;
   let inkY1 = -Infinity;
   const inkRect = { x0: 0, y0: 0, w: 0, h: 0 }; // stable: inkBounds() mutates it in place
-  const ribbonReach = bristleTable ? 0.85 + laneWobble + stretchK + 2.04 / bristleTable.length : 0;
+  // Splay's widest lane throw is (1 - SPLAY_NEUTRAL) x splayK past the 0.85
+  // offset ceiling at full pressure; 0 for a pre-Stage-5 dab (splayK = 0),
+  // whose reach is then byte-identical arithmetic.
+  const ribbonReach = bristleTable ? 0.85 * (1 + (1 - SPLAY_NEUTRAL) * splayK) + laneWobble + stretchK + 2.04 / bristleTable.length : 0;
   const loadedReachK = isLoaded ? Math.max(ribbonReach, Math.max(stretchK, 1) * SPRITE_EXTENT) : 0;
   let legacyReachK = LEGACY_REACH[shape] || 1;
   if (shape === "bristle") {
@@ -1438,22 +1553,25 @@ export function makeStrokeRenderer(settings, getMix) {
     ? getTintedSprite(shape, variant, dryR, dryG, dryB, true)
     : getTintedSprite(shape, variant, wetR, wetG, wetB));
 
-  // The km dab colour at (x, y) — Stage 3. Leaves wetR/G/B, the cached
-  // strings (rebuilt only on a 5-bit bucket change) and dabExact set for the
-  // stamp. With a non-null sample: the bristles take on the under-paint
-  // (drag), the reservoir re-supplies its own pigment (KM_RELOAD), and what
-  // lands is the carry mixed with the under-paint once more (pickup). Over
-  // blank paper the reservoir keeps re-supplying, so a picked-up colour
-  // fades back to the brush colour instead of persisting; once the carry
-  // lands back in the raw colour's 5-bit bucket it snaps there and every
-  // further blank-paper dab is the RAW colour at zero cost (spec P4). Every
-  // step is a pure function of the op stream + the samples (no dice), so
-  // local / remote / replay agree. Three mixLatent + one latentToRgb per
-  // sampled dab (~1 µs), one + one while relaxing, nothing once relaxed; no
-  // allocation (the latents are the renderer's, the sample array is the mix
-  // map's reused one — read before the next sample, never kept).
-  const kmSample = (x, y) => {
-    const sampled = getMix(x, y);
+  // The km dab colour — Stage 3. `sampled` is the dab's ONE shared under-
+  // paint read (Stage 5 hoisted it out of here so the colour paths and the
+  // wash's diffuse physics share a single mix-map read per dab — the same
+  // count, at the same coordinates, as the pre-Stage-5 code). Leaves
+  // wetR/G/B, the cached strings (rebuilt only on a 5-bit bucket change) and
+  // dabExact set for the stamp. With a non-null sample: the bristles take on
+  // the under-paint (drag), the reservoir re-supplies its own pigment
+  // (KM_RELOAD), and what lands is the carry mixed with the under-paint once
+  // more (pickup). Over blank paper the reservoir keeps re-supplying, so a
+  // picked-up colour fades back to the brush colour instead of persisting;
+  // once the carry lands back in the raw colour's 5-bit bucket it snaps
+  // there and every further blank-paper dab is the RAW colour at zero cost
+  // (spec P4). Every step is a pure function of the op stream + the samples
+  // (no dice), so local / remote / replay agree. Three mixLatent + one
+  // latentToRgb per sampled dab (~1 µs), one + one while relaxing, nothing
+  // once relaxed; no allocation (the latents are the renderer's, the sample
+  // array is the mix map's reused one — read before the next sample, never
+  // kept).
+  const kmSample = (sampled) => {
     if (sampled) {
       if (!kmCarry) {
         ensureKmState();
@@ -1501,7 +1619,7 @@ export function makeStrokeRenderer(settings, getMix) {
   };
 
   // The v3 sprite dab (rand order: see the table above).
-  const emitSpriteDab = (ctx, rand, x, y, pressure, angle, sizePx, flowAlpha) => {
+  const emitSpriteDab = (ctx, rand, x, y, pressure, angle, sizePx, flowAlpha, dabTx, dabTy) => {
     let variant = 0;
     if (strokeVariant >= 0) {
       variant = strokeVariant;
@@ -1515,7 +1633,7 @@ export function makeStrokeRenderer(settings, getMix) {
       dx += -Math.sin(angle) * off; // perpendicular to the tangent
       dy += Math.cos(angle) * off;
     }
-    const rot = rotJitter > 0 ? angle + (rand() - 0.5) * rotJitter : angle;
+    let rot = rotJitter > 0 ? angle + (rand() - 0.5) * rotJitter : angle;
     let aspect = aspectK;
     let radius = sizePx / 2;
     let alpha = flowAlpha;
@@ -1530,15 +1648,89 @@ export function makeStrokeRenderer(settings, getMix) {
         alpha *= 1 - rand() * flowJitterK;
       }
     }
+    // Stage 5 tilt: a leaned pen steers the dab's long axis off the stroke
+    // tangent toward the lean azimuth and widens the stamp across it — the
+    // flat-brush / mop-on-its-side read. No dice: a pure function of the
+    // point's tx/ty, so a tilt-less point (touch, mouse, every pre-Stage-5
+    // op) renders exactly the pre-tilt dab.
+    if (tiltK > 0 && (dabTx !== 0 || dabTy !== 0)) {
+      const leanRaw = Math.hypot(dabTx, dabTy) / TILT_LEAN_DEG;
+      if (leanRaw > TILT_LEAN_FLOOR) {
+        const lean = leanRaw > 1 ? 1 : leanRaw;
+        let dAz = Math.atan2(dabTy, dabTx) - angle;
+        if (dAz > Math.PI) {
+          dAz -= TWO_PI;
+        } else if (dAz < -Math.PI) {
+          dAz += TWO_PI;
+        }
+        rot += tiltK * lean * dAz;
+        radius *= 1 + tiltK * lean * TILT_WIDEN;
+      }
+    }
+    // Stage 6 pool: a leaned round mop deposits pigment downhill of the lean —
+    // the dab's centre shifts toward the lean azimuth and it widens a touch.
+    // Same per-point tx/ty as tilt; tilt-less points read lean 0 (no shift).
+    if (poolK > 0 && (dabTx !== 0 || dabTy !== 0)) {
+      const leanRaw = Math.hypot(dabTx, dabTy) / TILT_LEAN_DEG;
+      if (leanRaw > TILT_LEAN_FLOOR) {
+        const lean = leanRaw > 1 ? 1 : leanRaw;
+        const az = Math.atan2(dabTy, dabTx);
+        const shift = poolK * lean * POOL_SHIFT * sizePx;
+        dx += Math.cos(az) * shift;
+        dy += Math.sin(az) * shift;
+        radius *= 1 + poolK * lean * POOL_WIDEN;
+      }
+    }
+    // Stage 5: ONE shared under-paint read per dab, and only when a feature
+    // consumes it — the legacy wet lerp, the km pigment mix, or the wash's
+    // diffuse. Pre-Stage-5 dabs take the identical read at the identical
+    // coordinates (wetPickup > 0 and kmActive already imply a sampler), and
+    // the read can't feed back into the stroke: dabs land in the buffer,
+    // never on the sampled layer 0 mid-stroke.
+    let sampled = null;
+    if (wetPickup > 0 || kmActive || diffuseK > 0) {
+      sampled = getMix(dx, dy);
+    }
+    // Stage 5 charge: the wash's water reservoir drains with the distance
+    // walked (renderer state — it survives overflow restarts, like startFlow).
+    let chargeLeft = 1;
+    if (chargeRange > 0) {
+      chargeLeft = 1 - walked / chargeRange;
+      if (chargeLeft < 0) {
+        chargeLeft = 0;
+      }
+    }
+    // Stage 5 diffuse: pigment diffuses into damp paper — a dab that lands
+    // on existing paint swells, and (below) blooms more readily.
+    const damp = diffuseK > 0 && sampled != null;
+    if (damp) {
+      radius *= 1 + diffuseK * DIFFUSE_SWELL;
+    }
     // Wash: a second, larger, fainter stamp of ANOTHER variant sometimes
     // blooms out of a dab (breaks the tiling), and a light touch rolls a
     // drybrush tooth variant + fades toward nothing below pressure 0.35.
     let bloomVariant = -1;
-    if (bloomK > 0 && rand() < bloomK) {
+    let bloomChance = bloomK;
+    if (chargeRange > 0) {
+      // Blooms need water: a drying wash stops blooming.
+      bloomChance *= 0.35 + 0.65 * chargeLeft;
+    }
+    if (damp) {
+      bloomChance += diffuseK * DIFFUSE_BLOOM;
+    }
+    if (bloomChance > 0 && rand() < bloomChance) {
       bloomVariant = (variant + 1 + ((rand() * (variantCount - 1)) | 0)) % variantCount;
     }
     if (dryK > 0) {
-      if (rand() < dryK * (1 - pressure)) {
+      let dryChance = dryK * (1 - pressure);
+      if (chargeRange > 0) {
+        // As the reservoir drains the tooth shows even at full pressure.
+        dryChance += dryK * (1 - chargeLeft) * 0.9;
+        if (dryChance > 1) {
+          dryChance = 1;
+        }
+      }
+      if (rand() < dryChance) {
         variant |= 4; // the family's tooth variants are 4-7
       }
       if (pressure < 0.35) {
@@ -1555,6 +1747,10 @@ export function makeStrokeRenderer(settings, getMix) {
     if (spacingJitterK > 0) {
       stepScale = 1 + (rand() * 2 - 1) * spacingJitterK;
     }
+    // Charge: a drying wash lays less water per dab (the tooth takes over).
+    if (chargeRange > 0) {
+      alpha *= CHARGE_FLOW_FLOOR + (1 - CHARGE_FLOW_FLOOR) * chargeLeft;
+    }
     // Fresh load: extra pigment over the first 6 sizes of travel (`walked`
     // lives on the renderer, so it survives overflow restarts).
     if (startFlowK > 1) {
@@ -1568,10 +1764,10 @@ export function makeStrokeRenderer(settings, getMix) {
     }
     // Colour. Legacy wet (no mixModel): the frozen RGB lerp toward the paint
     // under the dab; km: the pigment mix (kmSample). The tint strings follow
-    // the 5-bit bucket either way.
+    // the 5-bit bucket either way. `sampled` is the dab's one shared read
+    // (Stage 5) — null here only when no feature asked for it.
     let fallback = color;
     if (wetPickup > 0) {
-      const sampled = getMix(dx, dy);
       if (sampled) {
         mixR += (sampled[0] - mixR) * dragK;
         mixG += (sampled[1] - mixG) * dragK;
@@ -1599,7 +1795,7 @@ export function makeStrokeRenderer(settings, getMix) {
       }
       fallback = wetColor;
     } else if (kmActive) {
-      kmSample(dx, dy);
+      kmSample(sampled);
       if (!dabExact) {
         fallback = wetColor;
       }
@@ -1654,10 +1850,15 @@ export function makeStrokeRenderer(settings, getMix) {
       const ny = c;
       const lanes = laneCull ? Math.min(bristleTable.length, Math.max(3, (sizePx / 2.5) | 0)) : bristleTable.length;
       const ribbonHalf = (radius * 1.7) / bristleTable.length;
+      // Stage 5 splay: pressure spreads the bristle fan — 1 at the neutral
+      // press, wider pressed hard, narrower on the tip. Exactly 1 for a
+      // pre-Stage-5 dab (splayK 0), and x * 1 === x, so old strokes are
+      // bit-identical.
+      const splaySpread = 1 + splayK * (pressure - SPLAY_NEUTRAL);
       for (let i = 0; i < lanes; i += 1) {
         const bristle = bristleTable[i];
         const wobble = Math.sin((x + y) * 0.006 * bristle.wobbleRate + bristle.wobblePhase) * laneWobble * radius;
-        const lane = bristle.offset * radius + wobble;
+        const lane = bristle.offset * radius * splaySpread + wobble;
         const bx = dx + nx * lane;
         const by = dy + ny * lane;
         const load = clamp(bristle.paintLoad, 0, 1.5);
@@ -1699,12 +1900,12 @@ export function makeStrokeRenderer(settings, getMix) {
     }
   };
 
-  const emitDab = (ctx, x, y, pressure, angle) => {
+  const emitDab = (ctx, x, y, pressure, angle, dabTx, dabTy) => {
     const rand = seed != null ? pointRand(seed, x, y) : Math.random;
     const sizePx = dabSizeAt(pressure);
     const flowAlpha = flowBase * (0.5 + 0.5 * pressure);
     if (spriteShape) {
-      emitSpriteDab(ctx, rand, x, y, pressure, angle, sizePx, flowAlpha);
+      emitSpriteDab(ctx, rand, x, y, pressure, angle, sizePx, flowAlpha, dabTx, dabTy);
       return;
     }
     let dx = x;
@@ -1742,8 +1943,9 @@ export function makeStrokeRenderer(settings, getMix) {
       dabColor = `rgb(${Math.round(wetR)},${Math.round(wetG)},${Math.round(wetB)})`;
     } else if (kmActive) {
       // A km dab on a legacy shape (nothing authored ships this, but an
-      // inline dab may say so): the pigment mix as the fill colour.
-      kmSample(dx, dy);
+      // inline dab may say so): the pigment mix as the fill colour. Its own
+      // read — the shared-sample hoist lives in the sprite branch.
+      kmSample(getMix(dx, dy));
       if (!dabExact) {
         dabColor = wetColor;
       }
@@ -1969,13 +2171,17 @@ export function makeStrokeRenderer(settings, getMix) {
     }
     for (const raw of points) {
       const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
+      // Stage 5 tilt rides the point (pen tx/ty ints on the wire; absent on
+      // touch / mouse / pre-Stage-5 ops reads as a vertical pen — lean 0).
+      const rtx = raw.tx || 0;
+      const rty = raw.ty || 0;
       if (!started) {
         // First point of a stroke stamps immediately (taps leave a mark).
         started = true;
-        emitDab(ctx, raw.x, raw.y, pressure, 0);
+        emitDab(ctx, raw.x, raw.y, pressure, 0, rtx, rty);
         emitted += 1;
         residual = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(pressure) * stepScale);
-        lastPoint = { x: raw.x, y: raw.y, pressure };
+        lastPoint = { x: raw.x, y: raw.y, pressure, tx: rtx, ty: rty };
         continue;
       }
       const sdx = raw.x - lastPoint.x;
@@ -1992,7 +2198,8 @@ export function makeStrokeRenderer(settings, getMix) {
       while (pos <= d) {
         const t = pos / d;
         const p = lastPoint.pressure + (pressure - lastPoint.pressure) * t;
-        emitDab(ctx, lastPoint.x + sdx * t, lastPoint.y + sdy * t, p, angle);
+        // Tilt lerps along the segment exactly like pressure.
+        emitDab(ctx, lastPoint.x + sdx * t, lastPoint.y + sdy * t, p, angle, lastPoint.tx + (rtx - lastPoint.tx) * t, lastPoint.ty + (rty - lastPoint.ty) * t);
         emitted += 1;
         let step = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(p) * stepScale);
         if (emitted > DAB_CAP) {
@@ -2006,7 +2213,7 @@ export function makeStrokeRenderer(settings, getMix) {
       }
       residual = pos - d;
       walked += d;
-      lastPoint = { x: raw.x, y: raw.y, pressure };
+      lastPoint = { x: raw.x, y: raw.y, pressure, tx: rtx, ty: rty };
     }
     ctx.globalAlpha = 1;
     if (base) {
@@ -2028,7 +2235,7 @@ export function makeStrokeRenderer(settings, getMix) {
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
     }
-    emitDab(ctx, x, y, clamp(pressure == null ? 1 : pressure, 0.06, 1), angle || 0);
+    emitDab(ctx, x, y, clamp(pressure == null ? 1 : pressure, 0.06, 1), angle || 0, 0, 0);
     ctx.globalAlpha = 1;
     if (spriteShape) {
       ctx.setTransform(strokeBase.s, 0, 0, strokeBase.s, strokeBase.tx, strokeBase.ty);
@@ -2041,7 +2248,18 @@ export function makeStrokeRenderer(settings, getMix) {
   // (prepareStrokeCommit final = false).
   const end = () => {};
 
-  return { addPoints, stamp, end, inkBounds, resetInk };
+  // Stage 5: the wash reservoir level at this point of the walk (1 = full, 0
+  // = dry) — the commit passes read it at banking time so a stroke bleeds in
+  // proportion to how wet it still was. null when the dab has no reservoir,
+  // so prepareStrokeCommit's fx.charge gate stays the op-side authority.
+  const chargeLeft = chargeRange > 0
+    ? () => {
+      const left = 1 - walked / chargeRange;
+      return left < 0 ? 0 : left;
+    }
+    : null;
+
+  return { addPoints, stamp, end, inkBounds, resetInk, chargeLeft };
 }
 
 // ---------------------------------------------------------------------------
@@ -2973,7 +3191,7 @@ export function prepareStrokeCommit(buf, renderer, fx, final = true) {
       renderer.end(buf.getCtx());
     }
     if (fx) {
-      runCommitPasses(buf, renderer ? renderer.inkBounds() : null, fx);
+      runCommitPasses(buf, renderer ? renderer.inkBounds() : null, fx, renderer);
     }
   }
   if (renderer && !final) {
@@ -2981,7 +3199,7 @@ export function prepareStrokeCommit(buf, renderer, fx, final = true) {
   }
 }
 
-function runCommitPasses(buf, ink, fx) {
+function runCommitPasses(buf, ink, fx, renderer) {
   if (ink && !(ink.w > 0 && ink.h > 0)) {
     return; // nothing stamped into this buffer: every pass is a no-op on transparent pixels
   }
@@ -2990,8 +3208,17 @@ function runCommitPasses(buf, ink, fx) {
   let grow = 0; // how far past the ink bbox the passes so far have put pixels
   if (fx.bleed > 0) {
     const b = bleedOffset(clamp(fx.size || 24, 1, 160));
+    // Stage 5 charge: a wash bleeds while it's wet, so the fringe scales with
+    // the stroke's average reservoir — the linear drain's mean is (1 + end) /
+    // 2, floored at BLEED_DRY (even a stroke that ran dry started wet). An
+    // fx without charge (every pre-Stage-5 op) keeps strength === fx.bleed,
+    // and an overflow chunk bleeds by the wetness it reached.
+    let strength = fx.bleed;
+    if (fx.charge > 0 && renderer && renderer.chargeLeft) {
+      strength *= BLEED_DRY + ((1 - BLEED_DRY) * (1 + renderer.chargeLeft())) / 2;
+    }
     if (passRect(bounds, ink, Math.ceil(b) + 2)) {
-      applyBleed(ctx, buf.canvas, bounds, PASS_RECT, fx.bleed, b);
+      applyBleed(ctx, buf.canvas, bounds, PASS_RECT, strength, b);
     }
     grow = Math.ceil(b) + 1; // the fringe: a fractional offset resamples one pixel further
   }

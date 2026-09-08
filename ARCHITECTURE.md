@@ -123,6 +123,16 @@ repaints every mural on the server. The rules that follow from that:
   it (sampled from the 1/8-scale layer-0 mix map, `mixMap.js`). Sample-free
   brushes (marker, ink, pencil, crayon, dry watercolor, glow) never touch the
   map; watercolor mixes by its multiply glaze instead.
+- **Brush physics** (Stage 5 — dab fields that default 0/off so pre-Stage-5
+  ops render byte-identical): `tilt` steers a sprite dab with the pen's lean
+  (the wire has carried integer tilt as `tx`/`ty` since Stage 3; touch / mouse
+  / old ops read lean 0 and paint the pre-tilt stroke), `splay` spreads the
+  `loaded` bristle fan with pressure, `charge` drains the wash's water
+  reservoir with distance walked (flow fades, dry tooth appears, the commit
+  bleed scales with the stroke's average wetness), `diffuse` swells + blooms
+  a wash dab that lands on sampled paint (wet-into-wet). All are pure
+  functions of the op's points + dab params + the mix-map sample — the same
+  determinism class as the Stage-3 pigment mixing.
 - **Commit passes** (`prepareStrokeCommit`, order frozen: end → bleed → wet
   edge → impasto → granulation → grain) run inside the buffer before its single
   opacity-stamped commit, on the renderer's **ink bbox** (a tracked superset of

@@ -1,16 +1,16 @@
 {
-  "recordedAt": "2026-09-03T11:13:28.809Z",
+  "recordedAt": "2026-09-08T17:47:04.222Z",
   "engine": {
-    "src/utils/brushes.js": "7546f74bce81",
+    "src/utils/brushes.js": "a3b9a22d4eb3",
     "src/utils/brushSprites.js": "68eddb5f6d26",
     "src/utils/strokeBuffer.js": "b3e8a858e965",
     "src/utils/mixMap.js": "cdd825f94bfa",
-    "src/utils/layers.js": "a421b122f17c",
-    "src/utils/opReplay.js": "5b29a891edeb",
+    "src/utils/layers.js": "76185bfefed3",
+    "src/utils/opReplay.js": "745bd47a3e71",
     "src/utils/symmetry.js": "880d686d96e0",
     "src/utils/shapes.js": "4d2839771715"
   },
-  "fixture": "dac1f6859794",
+  "fixture": "e424366f1b1f",
   "fixtureSeed": "0x5eed0001",
   "canvas": {
     "width": 4000,
@@ -18,10 +18,10 @@
   },
   "groups": {
     "legacy-unseeded": {
-      "hash": "c0f5a29227693e566e78500c68c57b281b75a79ef0037775d4ed889740611d18",
+      "hash": "1ebeff60f1cfaba09fdb818f71e66c75445f2749af8b988c9b8f0a4be785fafd",
       "deterministic": false,
       "machineBound": false,
-      "painted": 3285543,
+      "painted": 3298012,
       "ops": 720
     },
     "legacy-seeded": {
@@ -144,11 +144,18 @@
       "ops": 262
     },
     "v3-september-paint": {
-      "hash": "56be2075d24169ebabc1587bd0d0099bc4c2290cb3dc386464cb02175277a557",
+      "hash": "97f558c0aabd12e705ed22bb5bce20b103403970af6c6ae2e174bae004d0ba89",
       "deterministic": true,
       "machineBound": false,
-      "painted": 1187179,
+      "painted": 1188520,
       "ops": 390
+    },
+    "v3-physics": {
+      "hash": "70de8389f6aad20c47b3d3e68cbb46ec73b4187a2aac9b285ca8ca1c48d6f131",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 996699,
+      "ops": 182
     }
   }
 }

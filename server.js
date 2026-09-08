@@ -963,6 +963,8 @@ function loadRoom(roomId) {
       wipeAt: Number(data.wipeAt) || 0,
       // Wet-canvas toggle + the last theme-vote winner both survive restarts.
       wetCanvas: !!data.wetCanvas,
+      // Brush mode (realistic | fun) survives restarts too; see set_brush_mode.
+      brushMode: data.brushMode === 'fun' ? 'fun' : 'realistic',
       customPrompt: typeof data.customPrompt === 'string' ? data.customPrompt : null,
       // Shared-animation state: the frame list, its scenes, and whether the
       // room has the film strip enabled (private rooms opt in; FLIPBOOK is on).
@@ -981,7 +983,7 @@ function loadRoom(roomId) {
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
+    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -1019,6 +1021,7 @@ async function saveRoomNow(roomId) {
       chatSeq: room.chatSeq || 0,
       wipeAt: room.wipeAt || 0,
       wetCanvas: !!room.wetCanvas,
+      brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
       customPrompt: room.customPrompt || null,
       frames: room.frames,
       scenes: room.scenes,
@@ -1484,6 +1487,7 @@ function getRoom(roomId) {
       mentionKeys: new Map(Array.isArray(saved.mentionKeys) ? saved.mentionKeys : []),
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
+      brushMode: saved.brushMode === 'fun' ? 'fun' : 'realistic', // realistic | fun (persisted)
       customPrompt: saved.customPrompt, // theme-vote winner; beats the daily prompt
       symmetry: roomId === 'KALEIDO' ? SYMMETRY_MODES.quad : normalizeRoomSymmetry(saved.symmetry),
       orchestraEnabled: roomId === 'ORCHSTRA',
@@ -1580,6 +1584,7 @@ function seedFeaturedRooms() {
     room.quests = f.quests ? (room.quests || normalizeQuestState(null, f.code)) : null;
     if (room.fingerPaint) {
       room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
+      room.brushMode = 'fun'; // ...and the toddler palette is always fun mode
     }
   }
 }
@@ -2919,6 +2924,7 @@ wss.on('connection', async (ws, req) => {
     audience: room.audience,
     prompt: roomPrompt,
     wetCanvas: !!room.wetCanvas,
+    brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
     moderated: room.audience === 'kid_safe',
     // A Family plan belongs to the PRIVATE room owner. Every invited guest
     // inherits that room's ad-free experience without needing an account.
@@ -3633,6 +3639,18 @@ wss.on('connection', async (ws, req) => {
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
         room.wetCanvas = !!data.wet;
         broadcast(roomId, { type: 'wet_state', wet: room.wetCanvas });
+        persistRoom(roomId);
+        break;
+      }
+
+      // ---- Brush mode (realistic | fun) toggle ------------------------------
+      case 'set_brush_mode': {
+        // Same power model as set_wet: host-only in public rooms, any member
+        // in private. A pure palette + wetness affordance — the mode is NOT in
+        // any op, so toggling it never repaints history.
+        if (room.audience === 'kid_safe' && !isHost(room, user)) break;
+        room.brushMode = data.brushMode === 'fun' ? 'fun' : 'realistic';
+        broadcast(roomId, { type: 'brush_mode_state', brushMode: room.brushMode });
         persistRoom(roomId);
         break;
       }

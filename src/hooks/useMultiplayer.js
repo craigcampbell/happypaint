@@ -277,6 +277,8 @@ export function useMultiplayer(roomId, onMessage, token) {
   // Wet-canvas toggle + theme voting (permissions enforced server-side:
   // host-only in public rooms, any member in private rooms).
   const sendSetWet = useCallback((wet) => send({ type: "set_wet", wet }), [send]);
+  // Brush mode (realistic | fun): the same host/member power model as set_wet.
+  const sendSetBrushMode = useCallback((brushMode) => send({ type: "set_brush_mode", brushMode }), [send]);
   // Shared animation: private-room hosts flip the film strip on/off; frame
   // structure mutations are relayed and the server echoes them to EVERYONE
   // (including the sender) so all clients apply them in server order.
@@ -354,7 +356,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     connected, users, self, chat, disconnect,
     sendOp, sendSnapshot, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
-    sendSetWet, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
+    sendSetWet, sendSetBrushMode, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,
     sendGameSkip, sendSetGame,
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,

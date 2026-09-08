@@ -271,6 +271,16 @@ const FRAME_THUMB_HEIGHT = 60;
 // The toddler finger-paint room shows only chunky, wet, smeary brushes — no
 // pencils, no tech. Everything else about the studio hides there too.
 const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge"]);
+// "Fun" brush mode (per-room toggle): a bold, wet, smeary subset for loose
+// painting. Realistic mode shows the full catalog. (The toddler room keeps its
+// own tighter set above.)
+const FUN_BRUSHES = new Set(["marker", "crayon", "paint", "watercolor", "watercolor-wet", "gouache", "glow", "spray", "smudge", "eraser"]);
+// The brush list a room shows, given its finger-paint kind and brush mode.
+const visibleBrushList = (fingerPaint, brushMode) => {
+  if (fingerPaint) return brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id));
+  if (brushMode === "fun") return brushCatalog.filter((b) => FUN_BRUSHES.has(b.id));
+  return brushCatalog;
+};
 
 // Defer non-urgent work (thumbnail PNG encodes) off the stroke-commit path.
 // Safari has no requestIdleCallback; a short timeout is close enough there.
@@ -1031,6 +1041,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // stroke's wetness is frozen at pen-down and replays deterministically.
   const [roomWet, setRoomWet] = useState(false);
   const roomWetRef = useRef(false);
+  // Brush mode (realistic | fun): which palette the room shows + whether the
+  // room forces wet. Palette-only — the mode never rides an op, so flipping it
+  // never repaints history (see the wet toggle comment).
+  const [roomBrushMode, setRoomBrushMode] = useState("realistic");
+  const roomBrushModeRef = useRef("realistic");
   const [roomSymmetry, setRoomSymmetry] = useState(() => normalizeSymmetry("none"));
   const roomSymmetryRef = useRef(normalizeSymmetry("none"));
   const [roomOrchestra, setRoomOrchestra] = useState(false);
@@ -3208,17 +3223,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const nx = Math.round(point.x * 4) / 4;
         const ny = Math.round(point.y * 4) / 4;
         const prev = net ? net.last : null;
-        if (!prev || prev.x !== nx || prev.y !== ny || Math.abs(prev.pressure - point.pressure) >= 0.01) {
+        // Pen tilt (Stage 5 reads it): quantized ints, and a lean change of
+        // >= 10° survives the dedupe so a twist mid-stroke isn't lost.
+        const tiltTx = nativeEvent.pointerType === "pen" ? Math.round(pointerEvent.tiltX || 0) : 0;
+        const tiltTy = nativeEvent.pointerType === "pen" ? Math.round(pointerEvent.tiltY || 0) : 0;
+        if (
+          !prev ||
+          prev.x !== nx ||
+          prev.y !== ny ||
+          Math.abs(prev.pressure - point.pressure) >= 0.01 ||
+          Math.abs((prev.tx || 0) - tiltTx) >= 10 ||
+          Math.abs((prev.ty || 0) - tiltTy) >= 10
+        ) {
           wirePoint = { x: nx, y: ny, pressure: point.pressure };
-          // Pen tilt rides the wire as small ints (Stage 3 dynamics will
-          // read them; harmless for Stage-2 rendering).
-          if (nativeEvent.pointerType === "pen") {
-            const tx = Math.round(pointerEvent.tiltX || 0);
-            const ty = Math.round(pointerEvent.tiltY || 0);
-            if (tx !== 0 || ty !== 0) {
-              wirePoint.tx = tx;
-              wirePoint.ty = ty;
-            }
+          // Pen tilt rides the wire as small ints (the Stage-5 tilt dabs
+          // read them; dab-less rendering ignores them entirely).
+          if (tiltTx !== 0 || tiltTy !== 0) {
+            wirePoint.tx = tiltTx;
+            wirePoint.ty = tiltTy;
           }
           if (net) {
             net.pending.push(wirePoint);
@@ -3586,8 +3608,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           netSettings.dab = authoringDab.dab;
         }
         // The room's wet state is captured INTO the op at pen-down: replay
-        // stays deterministic no matter how the toggle flips later.
-        if (roomWetRef.current) {
+        // stays deterministic no matter how the toggle flips later. Fun brush
+        // mode is always wet — captured the same way (the mode itself is NOT
+        // in the op, only its consequence: wetness).
+        if (roomWetRef.current || roomBrushModeRef.current === "fun") {
           netSettings.wet = true;
         }
       }
@@ -6559,6 +6583,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // handshake, so late joiners (and reconnects) sync both.
           roomWetRef.current = !!data.wetCanvas;
           setRoomWet(!!data.wetCanvas);
+          roomBrushModeRef.current = data.brushMode === "fun" ? "fun" : "realistic";
+          setRoomBrushMode(roomBrushModeRef.current);
           roomSymmetryRef.current = normalizeSymmetry(data.symmetry || "none");
           setRoomSymmetry(roomSymmetryRef.current);
           setRoomOrchestra(!!data.orchestra);
@@ -7319,6 +7345,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setRoomWet(!!data.wet);
           showToast(data.wet ? "💧 Wet canvas ON — paints mix and smear!" : "☀️ Canvas dried — paints stay put.");
           break;
+        case "brush_mode_state":
+          // The room's palette flipped. Palette-only — no op carries the mode,
+          // so nothing repaints; snap the selected brush into the new set if it
+          // fell out, and force wet at pen-down while in fun mode.
+          roomBrushModeRef.current = data.brushMode === "fun" ? "fun" : "realistic";
+          setRoomBrushMode(roomBrushModeRef.current);
+          if (roomBrushModeRef.current === "fun") {
+            setSelectedBrush((prev) => (FUN_BRUSHES.has(prev) ? prev : "paint"));
+          }
+          showToast(roomBrushModeRef.current === "fun" ? "🖐️ Fun paint mode — bold, wet brushes!" : "🎨 Realistic brushes — the full set.");
+          break;
         case "vote_open":
           setRoomVote({ options: data.options || [], endsAt: data.endsAt || 0, counts: [0, 0, 0], myChoice: null });
           // The vote card lives in the chat panel — announce it so people with
@@ -7557,6 +7594,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendModRestore: mp.sendModRestore,
       sendModRemove: mp.sendModRemove,
       sendSetWet: mp.sendSetWet,
+      sendSetBrushMode: mp.sendSetBrushMode,
       sendVoteStart: mp.sendVoteStart,
       sendVote: mp.sendVote,
       sendReaction: mp.sendReaction,
@@ -7589,7 +7627,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -8508,14 +8546,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const toggleBrushMenu = () => setQuickMenu((open) => (open === "brush" ? null : "brush"));
   const toggleColorMenu = () => setQuickMenu((open) => (open === "color" ? null : "color"));
   const brushMenuItems = useMemo(() => {
-    const list = roomFingerPaint ? brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id)) : brushCatalog;
+    const list = visibleBrushList(roomFingerPaint, roomBrushMode);
     return list.map((brush) => ({
       id: brush.id,
       name: brush.name,
       locked: brush.tier === "studio" && !studioUnlocked,
       gated: Boolean(brush.privateOnly) && roomAudience === "kid_safe" && !roomFingerPaint,
     }));
-  }, [roomAudience, roomFingerPaint, studioUnlocked]);
+  }, [roomAudience, roomFingerPaint, roomBrushMode, studioUnlocked]);
   const quickPopover =
     quickMenu === "brush" ? (
       <div className="qs-pop">
@@ -8831,16 +8869,35 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
           <button
             type="button"
-            className={`mp-wet-toggle${roomWet ? " is-on" : ""}`}
-            onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+            className={`mp-wet-toggle${roomBrushMode === "fun" ? " is-on" : ""}`}
+            onClick={() => mpRef.current?.sendSetBrushMode?.(roomBrushMode === "fun" ? "realistic" : "fun")}
             disabled={roomAudience === "kid_safe" && !isRoomHost}
-            aria-pressed={roomWet}
+            aria-pressed={roomBrushMode === "fun"}
             title={
               roomAudience === "kid_safe" && !isRoomHost
-                ? "Wet canvas — only a host can switch this in public rooms"
-                : roomWet
-                  ? "Wet canvas is ON — paints mix and smear. Tap to dry."
-                  : "Wet canvas — make paints mix and smear into each other"
+                ? "Brush mode — only a host can switch this in public rooms"
+                : roomBrushMode === "fun"
+                  ? "Fun paint mode is ON — bold, wet brushes. Tap for the realistic set."
+                  : "Realistic brushes — tap for fun, wet paint mode"
+            }
+          >
+            🖐️
+          </button>
+
+          <button
+            type="button"
+            className={`mp-wet-toggle${roomWet ? " is-on" : ""}`}
+            onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+            disabled={roomAudience === "kid_safe" && !isRoomHost || roomBrushMode === "fun"}
+            aria-pressed={roomWet}
+            title={
+              roomBrushMode === "fun"
+                ? "Fun paint mode is always wet"
+                : roomAudience === "kid_safe" && !isRoomHost
+                  ? "Wet canvas — only a host can switch this in public rooms"
+                  : roomWet
+                    ? "Wet canvas is ON — paints mix and smear. Tap to dry."
+                    : "Wet canvas — make paints mix and smear into each other"
             }
           >
             💧
@@ -9649,16 +9706,34 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   </button>
                   <button
                     type="button"
-                    className={`mp-chat-iconbtn mp-wet-toggle${roomWet ? " is-on" : ""}`}
-                    onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+                    className={`mp-chat-iconbtn mp-wet-toggle${roomBrushMode === "fun" ? " is-on" : ""}`}
+                    onClick={() => mpRef.current?.sendSetBrushMode?.(roomBrushMode === "fun" ? "realistic" : "fun")}
                     disabled={roomAudience === "kid_safe" && !isRoomHost}
-                    aria-pressed={roomWet}
+                    aria-pressed={roomBrushMode === "fun"}
                     title={
                       roomAudience === "kid_safe" && !isRoomHost
-                        ? "Wet canvas — only a host can switch this in public rooms"
-                        : roomWet
-                          ? "Wet canvas is ON — paints mix and smear. Tap to dry."
-                          : "Wet canvas — make paints mix and smear into each other"
+                        ? "Brush mode — only a host can switch this in public rooms"
+                        : roomBrushMode === "fun"
+                          ? "Fun paint mode is ON — bold, wet brushes. Tap for the realistic set."
+                          : "Realistic brushes — tap for fun, wet paint mode"
+                    }
+                  >
+                    🖐️
+                  </button>
+                  <button
+                    type="button"
+                    className={`mp-chat-iconbtn mp-wet-toggle${roomWet ? " is-on" : ""}`}
+                    onClick={() => mpRef.current?.sendSetWet?.(!roomWet)}
+                    disabled={roomAudience === "kid_safe" && !isRoomHost || roomBrushMode === "fun"}
+                    aria-pressed={roomWet}
+                    title={
+                      roomBrushMode === "fun"
+                        ? "Fun paint mode is always wet"
+                        : roomAudience === "kid_safe" && !isRoomHost
+                          ? "Wet canvas — only a host can switch this in public rooms"
+                          : roomWet
+                            ? "Wet canvas is ON — paints mix and smear. Tap to dry."
+                            : "Wet canvas — make paints mix and smear into each other"
                     }
                   >
                     💧
@@ -10030,7 +10105,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <section className="tool-section rail-top rail-top-1" ref={brushSectionRef}>
           <h2>Brushes</h2>
           <div className="brush-grid">
-            {(roomFingerPaint ? brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id)) : brushCatalog).map((brush) => {
+            {visibleBrushList(roomFingerPaint, roomBrushMode).map((brush) => {
               const locked = brush.tier === "studio" && !studioUnlocked;
               // Private-room-only brushes (smudge) render ghosted in public
               // rooms: not selectable, tap explains where they DO work — except
