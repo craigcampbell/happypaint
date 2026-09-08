@@ -1,0 +1,21 @@
+.route-status {
+  min-height: 60vh;
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.route-status h1,
+.route-status p { margin: 0; }
+
+.route-status a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  text-decoration: underline;
+}

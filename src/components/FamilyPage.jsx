@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
-import { getSession, onAuthStateChange } from "../utils/auth";
+import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
+import { createInviteCode } from "../utils/social";
 
 export default function FamilyPage({ onNavigate }) {
   const [session, setSession] = useState(null);
@@ -17,7 +18,7 @@ export default function FamilyPage({ onNavigate }) {
     getSession().then((value) => active && setSession(value));
     fetch("/api/billing/config", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((value) => active && setConfig(value))
+      .then((value) => active && setConfig(value || { configured: false, plans: {} }))
       .catch(() => active && setConfig({ configured: false, plans: {} }));
     const unsubscribe = onAuthStateChange((value) => active && setSession(value));
     return () => { active = false; unsubscribe(); };
@@ -107,7 +108,7 @@ export default function FamilyPage({ onNavigate }) {
     }
   };
 
-  const configuredForPlan = Boolean(config?.configured && config?.plans?.[interval]);
+  const configuredForPlan = Boolean(isCloudConfigured && config?.configured && config?.plans?.[interval]);
   const [priceAmount, priceUnit] = String(
     config?.display?.[interval] || (interval === "yearly" ? "$39/year" : "$4.99/month"),
   ).split("/");
@@ -121,13 +122,13 @@ export default function FamilyPage({ onNavigate }) {
           <p className="home-eyebrow">Drawesome Family</p>
           <h1>One creative space. All their friends.</h1>
           <p className="family-lead">
-            A parent-owned, ad-free home for a child&apos;s drawings and private rooms. Friends join free from the invite link—no subscription and no account required.
+            Support Drawesome and keep your family&apos;s private rooms ad-free. Drawing, creating rooms, and inviting friends are already free, with no account required.
           </p>
         </section>
 
         <section className="family-offer" aria-labelledby="family-plan-title">
           <div className="family-benefits">
-            <h2 id="family-plan-title">What Family unlocks</h2>
+            <h2 id="family-plan-title">A little support for shared art time</h2>
             <ul>
               <li><span>✓</span><strong>Ad-free private rooms</strong><small>Everyone invited by your family paints without ads.</small></li>
               <li><span>✓</span><strong>Parent-owned space</strong><small>The subscription stays with the grown-up&apos;s account.</small></li>
@@ -157,7 +158,7 @@ export default function FamilyPage({ onNavigate }) {
                 </div>
                 <p className="family-price"><strong>{priceAmount}</strong><span>/{priceUnit || (interval === "yearly" ? "year" : "month")}</span></p>
                 <p className="family-price-note">Cancel anytime from the parent account.</p>
-                {session ? (
+                {session && configuredForPlan ? (
                   <label className="family-adult-check">
                     <input type="checkbox" checked={adultConfirmed} onChange={(event) => setAdultConfirmed(event.target.checked)} />
                     <span>I am an adult and authorize this subscription.</span>
@@ -166,19 +167,24 @@ export default function FamilyPage({ onNavigate }) {
                 <button
                   type="button"
                   className="primary-action family-buy"
-                  disabled={busy || (session && (!adultConfirmed || !configuredForPlan))}
+                  disabled={busy || !configuredForPlan || (session && !adultConfirmed)}
                   onClick={() => session ? callBilling("/api/billing/checkout", {
                     interval,
                     adultConfirmed,
                     termsVersion: config?.termsVersion,
                   }) : onNavigate("/signup?return=/family")}
                 >
-                  {!session ? "Sign in as a parent" : !configuredForPlan ? "Subscriptions opening soon" : busy ? "Opening secure checkout…" : "Start Drawesome Family"}
+                  {busy ? "Opening secure checkout…" : !config ? "Checking availability…" : !configuredForPlan ? "Subscriptions opening soon" : !session ? "Sign in as a parent" : "Start Drawesome Family"}
                 </button>
-                {!configuredForPlan ? <p className="family-setup-note">The product is ready; complete the secure Stripe server configuration to open checkout.</p> : null}
+                {!configuredForPlan ? (
+                  <div className="family-setup-note" role="status">
+                    <p>{config ? "Family subscriptions aren’t available yet. You can still draw, save, and invite friends for free." : "You can start drawing while we check."}</p>
+                    <button type="button" onClick={() => onNavigate(`/join/${createInviteCode()}`)}>Draw with friends for free</button>
+                  </div>
+                ) : null}
               </>
             )}
-            {message ? <p className="account-status">{message}</p> : null}
+            {message ? <p className="account-status" role="status">{message}</p> : null}
           </div>
         </section>
 

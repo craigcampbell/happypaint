@@ -97,16 +97,6 @@ import PublishPackModal from "./components/PublishPackModal";
 import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
-import HomePage from "./components/HomePage";
-import AboutPage from "./components/AboutPage";
-import PrivacyPage from "./components/PrivacyPage";
-import SignupPage from "./components/SignupPage";
-import RoomFinderPage from "./components/RoomFinderPage";
-import SafetyPage from "./components/SafetyPage";
-import ParentsPage from "./components/ParentsPage";
-import FamilyPage from "./components/FamilyPage";
-import FaqPage from "./components/FaqPage";
-import LiveAdmin from "./components/LiveAdmin";
 import AccountPanel from "./components/AccountPanel";
 import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
@@ -120,7 +110,6 @@ import DrawPhonePanel from "./components/DrawPhonePanel";
 import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
-import WallPage from "./components/WallPage";
 import WallPostModal from "./components/WallPostModal";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
@@ -148,11 +137,6 @@ import { ChatSponsorSlot, NaturalBreakAds } from "./utils/ads";
 import { signalNaturalAdBreak } from "./utils/adRuntime";
 import StorybookPanel from "./components/StorybookPanel";
 import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
-import "./App.css";
-import "./drawesome-theme.css";
-import "./homepage-redesign.css";
-import "./studio-layout.css";
-import "./quick-stroke.css";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
 // 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
@@ -551,7 +535,7 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
   }
 }
 
-function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
+export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -8535,6 +8519,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
           <button type="button" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
             🚪 Rooms
           </button>
+          <button type="button" className="fab-invite" onClick={shareRoomLink} aria-label="Invite friends" title="Share a link to this room">
+            Invite
+          </button>
           <button
             type="button"
             className="fab-step-back"
@@ -10442,91 +10429,4 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       ) : null}
     </main>
   );
-}
-
-export default function App() {
-  const [path, setPath] = useState(() => window.location.pathname);
-
-  const navigate = useCallback((nextPath) => {
-    window.history.pushState({}, "", nextPath);
-    setPath(window.location.pathname);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  useEffect(() => {
-    const handlePopState = () => setPath(window.location.pathname);
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
-
-  if (path.startsWith("/studio")) {
-    // Key by room so switching rooms always remounts StudioApp with a fresh
-    // canvas/socket instead of reusing the previous room's instance.
-    return <StudioApp key="room-MAIN" initialPrompt={readPromptParam()} />;
-  }
-
-  if (path.startsWith("/join")) {
-    const code = normalizePathCode(path) || "MAIN";
-    return <StudioApp key={`room-${code}`} initialJoinCode={code} />;
-  }
-
-  if (path.startsWith("/admin")) {
-    return <LiveAdmin onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/safety")) {
-    return <SafetyPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/parents")) {
-    return <ParentsPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/family")) {
-    return <FamilyPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/faq")) {
-    return <FaqPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/about")) {
-    return <AboutPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/privacy")) {
-    return <PrivacyPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/signup")) {
-    return <SignupPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/rooms")) {
-    return <RoomFinderPage onNavigate={navigate} />;
-  }
-
-  if (path.startsWith("/wall")) {
-    // /wall/:id deep-links open the wall with that post spotlighted — the URL
-    // every wall share button hands out.
-    const [, , postId = ""] = path.split("/");
-    return <WallPage onNavigate={navigate} initialPostId={postId.slice(0, 64)} />;
-  }
-
-  return <HomePage onNavigate={navigate} />;
-}
-
-function normalizePathCode(path) {
-  const [, , code = ""] = path.split("/");
-  return code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-}
-
-// Read an event prompt passed via /studio?prompt=… (the Event Engine "live" CTA).
-function readPromptParam() {
-  try {
-    const value = new URLSearchParams(window.location.search).get("prompt") || "";
-    return value.slice(0, 180);
-  } catch {
-    return "";
-  }
 }

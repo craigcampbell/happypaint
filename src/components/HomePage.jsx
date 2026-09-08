@@ -2,15 +2,15 @@
 // Community, rooms, and the daily prompt still have a home here, but they sit
 // below the primary invitation instead of competing with it.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
-import LiveRoomCanvas from "./LiveRoomCanvas";
 import BrandMark from "./BrandMark";
-import { getSession, onAuthStateChange } from "../utils/auth";
+import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
 
 // The device-local drawing streak (written by the studio on the first stroke of
 // each day). Shown only while it's alive: last drew today, or yesterday (still
@@ -106,6 +106,59 @@ export default function HomePage({ onNavigate }) {
   // State (not a one-shot memo) so a tab left open across midnight can refresh
   // the chip when the challenge rolls over below.
   const [streak, setStreak] = useState(readStreak);
+  const previewRef = useRef(null);
+  const joinModalRef = useRef(null);
+  const [previewVisible, setPreviewVisible] = useState(false);
+
+  // The preview sits below the fold. Only load the painting engine and keep a
+  // spectator socket/canvas alive while a visitor is near it in a visible tab.
+  useEffect(() => {
+    const element = previewRef.current;
+    if (!element) return undefined;
+    let inView = !window.IntersectionObserver;
+    const update = () => setPreviewVisible(inView && !document.hidden);
+    const observer = window.IntersectionObserver ? new IntersectionObserver(([entry]) => {
+      inView = entry.isIntersecting;
+      update();
+    }, { rootMargin: "200px" }) : null;
+    observer?.observe(element);
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showJoin) return undefined;
+    const previousFocus = document.activeElement;
+    const dialog = joinModalRef.current;
+    dialog?.querySelector("button")?.focus();
+    const handleKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowJoin(false);
+      } else if (event.key === "Tab") {
+        const buttons = dialog?.querySelectorAll("button:not(:disabled), a[href]");
+        if (!buttons?.length) return;
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [showJoin]);
   // The viewed room's live banter rides through a ref-listener into the
   // <HomeBanter> child, so a busy room's chat re-renders THAT tiny overlay —
   // never this whole page. onSocial itself stays referentially stable so
@@ -221,6 +274,11 @@ export default function HomePage({ onNavigate }) {
   const active = useMemo(() => rooms.find((r) => r.code === activeCode) || null, [rooms, activeCode]);
 
   const join = (c) => onNavigate(`/join/${c}`);
+  const follow = (event, href) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    onNavigate(href);
+  };
 
   // Fresh 6-char code from an unambiguous alphabet (no I/O/0/1) — joining a
   // code that doesn't exist yet is how private rooms get created.
@@ -246,9 +304,9 @@ export default function HomePage({ onNavigate }) {
           <div className="home-hero-copy">
             <p className="home-eyebrow">Free online drawing studio</p>
             <h1 id="home-title">Draw something.</h1>
-            <p className="home-hero-line">Right here, right now.</p>
+            <p className="home-hero-line">Make it together.</p>
             <p className="home-sub">
-              Open a blank canvas and start painting. No account, no setup—just draw.
+              Open a fresh canvas, then invite friends to draw with you in real time. No account or install.
             </p>
             <div className="home-hero-actions">
               <button type="button" className="primary-action home-draw-now" onClick={startRoom}>
@@ -334,9 +392,12 @@ export default function HomePage({ onNavigate }) {
                 placeholder="Enter code"
                 maxLength={8}
                 autoCapitalize="characters"
+                autoComplete="off"
+                spellCheck={false}
+                required
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
               />
-              <button type="submit">Join room →</button>
+              <button type="submit" disabled={!normalizeCode(code)}>Join room →</button>
             </span>
           </form>
         </section>
@@ -348,15 +409,20 @@ export default function HomePage({ onNavigate }) {
             <p>
               Paint on the same canvas in real time, or play a drawing game. Send a room code and everyone can jump in.
             </p>
+            <ol className="home-invite-steps">
+              <li><strong>Open a room.</strong> A fresh canvas starts with just you.</li>
+              <li><strong>Choose Invite friends.</strong> Share the room link with people you know.</li>
+              <li><strong>Make something together.</strong> Everyone paints on the same canvas.</li>
+            </ol>
             <div className="home-live-actions">
               <button type="button" className="primary-action" onClick={startRoom}>Create a room</button>
               <button type="button" onClick={() => onNavigate("/rooms")}>See live rooms</button>
             </div>
           </div>
 
-          <div className="home-live-preview">
+          <div className="home-live-preview" ref={previewRef}>
             <div className="home-viewer-head">
-              <span className="home-viewing"><span className="live-dot" aria-hidden="true" /> Live canvas</span>
+              <span className="home-viewing"><span className="live-dot" aria-hidden="true" /> Public canvas</span>
               <strong className="home-room-name">
                 {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Open drawing room"}
               </strong>
@@ -375,10 +441,14 @@ export default function HomePage({ onNavigate }) {
               }}
               aria-label={active ? `Join ${active.title || active.code}` : "Create a drawing room"}
             >
-              {activeCode ? <LiveRoomCanvas roomCode={activeCode} onSocial={onSocial} /> : <span className="home-viewer-empty">Start the first drawing</span>}
+              {activeCode && previewVisible ? (
+                <Suspense fallback={<span className="home-viewer-empty">Loading the live canvas…</span>}>
+                  <LiveRoomCanvas roomCode={activeCode} onSocial={onSocial} />
+                </Suspense>
+              ) : <span className="home-viewer-empty">{activeCode ? "A shared canvas, made together" : "Start the first drawing"}</span>}
               {/* keyed by room: a carousel hop remounts the overlay clean, so a
                   late chat_history from the OLD room can never bleed across. */}
-              {activeCode ? <HomeBanter key={activeCode} listenerRef={socialListenerRef} /> : null}
+              {activeCode && previewVisible ? <HomeBanter key={activeCode} listenerRef={socialListenerRef} /> : null}
               <span className="home-viewer-cta">{active ? "Join this canvas →" : "Create a room →"}</span>
             </button>
             {/* One tap from reading the banter to being IN it. */}
@@ -388,7 +458,17 @@ export default function HomePage({ onNavigate }) {
                 <span className="home-join-chat-go">Chat →</span>
               </button>
             ) : null}
+            <p className="home-public-note">Public rooms are open to everyone. Their art and chat can appear here.</p>
           </div>
+        </section>
+
+        <section className="home-grownups" aria-labelledby="home-grownups-title">
+          <div>
+            <p className="home-eyebrow">For families, teachers &amp; clubs</p>
+            <h2 id="home-grownups-title">A little art time, together.</h2>
+            <p>Try a shared creature, a color scavenger hunt, or a story drawn one panel at a time. Start with people you know and an adult present for younger artists.</p>
+          </div>
+          <a href="/parents" onClick={(event) => follow(event, "/parents")}>Get three free activity ideas <span aria-hidden="true">→</span></a>
         </section>
 
         <section className="home-wall" aria-labelledby="home-wall-title">
@@ -413,7 +493,7 @@ export default function HomePage({ onNavigate }) {
             <div className="home-wall-empty">
               <span className="home-wall-empty-emoji" aria-hidden="true">🖼️</span>
               <p>The wall is waiting for its first drawing.</p>
-              <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>Make one</button>
+              <button type="button" className="primary-action" onClick={startRoom}>Make one</button>
             </div>
           ) : null}
         </section>
@@ -424,6 +504,7 @@ export default function HomePage({ onNavigate }) {
       {showJoin && joinRoom ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setShowJoin(false)}>
           <section
+            ref={joinModalRef}
             className="studio-modal home-join-modal"
             role="dialog"
             aria-modal="true"
@@ -438,6 +519,7 @@ export default function HomePage({ onNavigate }) {
               {joinRoom.users > 0 ? `${joinRoom.users} painting right now` : "Be the first one painting"} ·{" "}
               {joinRoom.ops} brushstrokes so far
             </p>
+            <p className="home-join-note">This is a public room. Anyone can join, and its artwork and chat may be shown on the homepage.</p>
             <div className="home-join-actions">
               {session ? (
                 <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
@@ -448,15 +530,15 @@ export default function HomePage({ onNavigate }) {
                   <button type="button" className="primary-action" onClick={() => join(joinRoom.code)}>
                     Continue as guest →
                   </button>
-                  <div className="home-join-auth">
+                  {isCloudConfigured ? <div className="home-join-auth">
                     <button type="button" onClick={() => onNavigate("/signup?mode=login")}>Log in</button>
                     <button type="button" onClick={() => onNavigate("/signup")}>Sign up free</button>
-                  </div>
+                  </div> : null}
                 </>
               )}
             </div>
             {session ? null : (
-              <p className="home-join-note">No account needed to draw — sign up only to save your gallery.</p>
+              <p className="home-join-note">No account needed to draw.{isCloudConfigured ? " An optional account adds gallery sync." : ""}</p>
             )}
           </section>
         </div>

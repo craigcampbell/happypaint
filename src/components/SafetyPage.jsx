@@ -7,27 +7,27 @@ const SAFETY = [
   {
     icon: "👧",
     title: "Draw without an account",
-    body: "Kids can start drawing, coloring, and painting together immediately — no sign-up, no email, no personal details required. Signing in (optional, with a grown-up's Google account) only adds room hosting and a saved gallery.",
+    body: "Start drawing, coloring, and painting together without signing up or entering an email address. Optional accounts, when available, add gallery sync and persistent room ownership. Younger artists should draw with an adult present.",
   },
   {
     icon: "🛡️",
-    title: "Public rooms are moderated",
-    body: "In public rooms, mean or inappropriate words are filtered automatically, and shared drawings are checked for unsafe imagery. Anything flagged is auto-reported, the room's grown-up host is alerted, and questionable art can be hidden (and brought back) — it's never deleted on a guess.",
+    title: "Understand the limits of moderation",
+    body: "Public chat is filtered. Image scanning depends on a capable participant's device being available, and filters can miss harmful content. Hosts can review and hide flagged art. Use a private room with people you know for an adult-led group session.",
   },
   {
     icon: "⭐",
-    title: "Grown-ups are in charge",
-    body: "A signed-in adult owns and hosts a room: they can lock the canvas, clear it, mute or remove a painter, and review anything the safety system flags. Co-hosts can help moderate.",
+    title: "Hosts have moderation tools",
+    body: "Room hosts can lock or clear the canvas, mute or remove a painter, and review flags. The first guest in an unowned private room becomes its temporary host; hosting can pass to another painter when that guest leaves. A host role does not verify someone's age or identity.",
   },
   {
     icon: "🔒",
-    title: "Private by default with friends",
-    body: "Beyond the public hall, rooms are invite-only. Share a short link or code with friends — there's no way for strangers to wander in, and no public directory of people.",
+    title: "Keep room invitations with people you know",
+    body: "Private rooms are unlisted, but anyone with a room link or code can join, including a forwarded invitation. Public-room art, chat, and display names can appear on the homepage. Use nicknames and keep personal details out of shared art and chat.",
   },
   {
     icon: "⚠️",
     title: "Anyone can report",
-    body: "Every room has a one-tap report button. Reports go straight to the moderation console for a human to review.",
+    body: "Use the report control in any room to send a concern to the moderation console for review. A report does not guarantee an immediate response. Leave the room and tell a trusted adult if something feels wrong.",
   },
   {
     icon: "🚫",
@@ -49,10 +49,10 @@ export default function SafetyPage({ onNavigate }) {
       </header>
 
       <section className="safety-hero">
-        <h1>Safe by design</h1>
+        <h1>Drawing together: safety &amp; privacy</h1>
         <p>
-          Drawesome is built for kids and families. Here&rsquo;s exactly how we keep it friendly,
-          private, and pressure-free — in plain language.
+          Know what is shared, how room controls work, and where filters have limits.
+          For younger artists, start with an adult and people you already know.
         </p>
       </section>
 
@@ -72,26 +72,24 @@ export default function SafetyPage({ onNavigate }) {
         <h2>Your data &amp; privacy</h2>
         <ul>
           <li>
-            <strong>Local-first.</strong> Your drawings and gallery are saved on your own device by
-            default. If you don&rsquo;t sign in, nothing about you leaves the device.
+            <strong>Device and server storage.</strong> Settings and drafts can stay on your device.
+            Shared drawings, chat, and server-saved artwork are sent to the server even when you draw as a guest.
           </li>
           <li>
-            <strong>If you sign in</strong> (optional), we store only what&rsquo;s needed to host
-            rooms and sync your gallery across devices — a Google account id and a display name you
-            choose. We don&rsquo;t sell data and there are no third-party ad trackers.
+            <strong>If you sign in</strong> (optional), account details connect your gallery and room
+            ownership across devices. Free spaces may load a third-party advertising service when ads are configured.
           </li>
           <li>
-            <strong>Delete anytime.</strong> You can erase everything stored on your device, and a
-            signed-in account can request full deletion — free and always available.
+            <strong>Deletion choices.</strong> The Account panel offers local-data and account deletion.
+            Read the <a href="/privacy">Privacy page</a> for what is stored and which deletion options apply.
           </li>
           <li>
-            <strong>AI stays on-device.</strong> The optional creative helpers run locally and never
-            send a child&rsquo;s art off the device by default.
+            <strong>Local creative helpers.</strong> The current AI Assist helpers run on your device.
+            Sharing artwork in a room or posting it to the Wall still sends that artwork to the server.
           </li>
         </ul>
         <p className="safety-note">
-          Questions or something to report? Use the ⚠️ button in any room, and a moderator will take
-          a look.
+          Questions or something to report? Use the report control in a room or email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.
         </p>
       </section>
 

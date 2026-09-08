@@ -4,13 +4,37 @@
 // users can middle-click/ctrl-click into new tabs; a plain left-click is
 // intercepted and routed through the SPA's pushState navigation instead.
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import BrandMark from "./BrandMark";
-import { getSession, onAuthStateChange, sessionLabel } from "../utils/auth";
+import { getSession, isCloudConfigured, onAuthStateChange, sessionLabel } from "../utils/auth";
+import { createInviteCode } from "../utils/social";
 
 export default function SiteNav({ onNavigate, current }) {
   const [session, setSession] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [freshRoom] = useState(createInviteCode);
+  const headerRef = useRef(null);
+  const toggleRef = useRef(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    headerRef.current?.querySelector("nav a")?.focus();
+    const onKey = (event) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      toggleRef.current?.focus();
+    };
+    const onOutside = (event) => {
+      if (!headerRef.current?.contains(event.target)) setMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onOutside);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onOutside);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     let active = true;
@@ -26,7 +50,7 @@ export default function SiteNav({ onNavigate, current }) {
     { href: "/rooms", label: "Live rooms" },
     { href: "/wall", label: "Wall" },
     { href: "/family", label: "Family" },
-    { href: "/about", label: "About" },
+    { href: "/parents", label: "Parents & teachers" },
     { href: "/faq", label: "Safety" },
     { href: "/privacy", label: "Privacy" },
   ];
@@ -39,20 +63,13 @@ export default function SiteNav({ onNavigate, current }) {
     onNavigate(href);
   };
 
-  const startFresh = (event) => {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let code = "";
-    for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
-    follow(event, `/join/${code}`);
-  };
-
   return (
-    <header className="site-nav">
+    <header className="site-nav" ref={headerRef}>
       <a href="/" className="site-brand" onClick={(e) => follow(e, "/")} aria-label="Drawesome home">
         <BrandMark />
       </a>
 
-      <nav className={`site-nav-links${menuOpen ? " is-open" : ""}`} aria-label="Site navigation">
+      <nav id={menuId} className={`site-nav-links${menuOpen ? " is-open" : ""}`} aria-label="Site navigation">
         {links.map((link) => (
           <a
             key={link.href}
@@ -73,24 +90,26 @@ export default function SiteNav({ onNavigate, current }) {
           >
             {sessionLabel(session)}
           </a>
-        ) : (
+        ) : isCloudConfigured ? (
           <a href="/signup" className="site-nav-signup" onClick={(e) => follow(e, "/signup")}>
             Save my art
           </a>
-        )}
+        ) : null}
       </nav>
 
       <div className="site-nav-actions">
-        <a href="/studio" className="site-nav-paint primary-action" onClick={startFresh}>
+        <a href={`/join/${freshRoom}`} className="site-nav-paint primary-action" onClick={(event) => follow(event, `/join/${freshRoom}`)}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
           Draw now
         </a>
         <button
+          ref={toggleRef}
           type="button"
           className="site-nav-toggle"
           onClick={() => setMenuOpen((open) => !open)}
           aria-label={menuOpen ? "Close navigation" : "Open navigation"}
           aria-expanded={menuOpen}
+          aria-controls={menuId}
         >
           <span aria-hidden="true">{menuOpen ? "×" : "☰"}</span>
         </button>

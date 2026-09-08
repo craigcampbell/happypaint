@@ -378,3 +378,9 @@
 .studio-shell[data-layout="tablet"][data-hand="left"].rail-open .studio-rooms-fab {
   left: calc(var(--rail-w) + 8px);
 }
+
+/* Make the shared-canvas invitation visible before opening chat or the tools.
+   Notifications remain in the tools' profile section on compact phones. */
+.studio-shell[data-layout="phone"] .studio-rooms-fab .fab-bell { display: none; }
+.studio-shell .studio-rooms-fab .fab-invite { background: #f3ff5c; }
+.studio-shell .studio-rooms-fab button { min-height: 44px; }

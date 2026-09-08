@@ -2873,6 +2873,9 @@ wss.on('connection', async (ws, req) => {
     } catch {
       return;
     }
+    // JSON primitives (especially null) are valid JSON but not protocol frames.
+    // Reject them before property access so one socket cannot crash the relay.
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     user.lastActivity = Date.now();
     room.lastActivity = Date.now();
 
@@ -6005,19 +6008,19 @@ const PAGE_META = {
     title: 'The Fridge Wall — Drawesome gallery',
     description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
   },
-  '/about': { title: 'About Drawesome', description: 'What Drawesome is, how rooms work, and how child-treated ads and adult-owned Family spaces support it.' },
+  '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
   '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $4.99 monthly or $39 yearly.' },
   '/faq': {
     title: 'Safety & FAQ — Drawesome',
     description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',
   },
-  '/safety': { title: 'Safety — Drawesome', description: 'How Drawesome keeps shared drawing spaces safe: auto-moderation in public rooms, reporting, host tools, and data care.' },
+  '/safety': { title: 'Safety — Drawesome', description: 'Understand room controls, public sharing, reporting, and the limits of automated moderation. Younger artists should draw with an adult and people they know.' },
   '/parents': {
-    title: 'Parents & teachers — Drawesome',
-    description: 'The honest tour for grown-ups: how moderation works, what data we keep (and delete), age guidance, and how to host a classroom drawing session in two minutes.',
+    title: 'Free Drawing Activities for Families & Classrooms — Drawesome',
+    description: 'Try three free drawing activities for families and classrooms. Create a private invite room, draw together without student accounts, and learn how adult supervision and sharing work.',
   },
-  '/privacy': { title: 'Privacy — Drawesome', description: 'What Drawesome stores, what it never does with your data, and the choices you have — including full account erasure.' },
-  '/signup': { title: 'Save your art — Drawesome', description: 'Make a free account to keep your gallery, wall posts, and streak across devices. Or keep drawing as a guest.' },
+  '/privacy': { title: 'Privacy — Drawesome', description: 'What stays in your browser, what reaches our servers even when drawing as a guest, what others can see, and the scope and limits of deletion options.' },
+  '/signup': { title: 'Save your art — Drawesome', description: 'An optional free account adds gallery sync across devices where accounts are available. You can keep drawing as a guest.' },
 };
 
 const FAQ_JSON_LD = {
@@ -6026,28 +6029,28 @@ const FAQ_JSON_LD = {
   mainEntity: [
     {
       '@type': 'Question',
-      name: 'Is Drawesome safe for kids and teens?',
-      acceptedAnswer: { '@type': 'Answer', text: 'Public rooms are auto-moderated: chat is filtered, drawings are scanned, and every room has reporting plus host mute/kick tools. Private invite rooms are lighter-touch, and we say so up front.' },
+      name: 'Is Drawesome safe for my kid?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Public chat is filtered, and drawings are scanned when a capable device is present. These tools can miss harmful content. For younger artists, start in a private room with people you know and an adult present. Private rooms are unlisted, but anyone who receives their link or code can join.' },
     },
     {
       '@type': 'Question',
-      name: 'Do I need an account?',
-      acceptedAnswer: { '@type': 'Answer', text: 'No. You can draw, join rooms, and play games as a guest. An account only adds cross-device saving of your art and streak.' },
+      name: 'Do you need an account?',
+      acceptedAnswer: { '@type': 'Answer', text: 'No. Drawing and rooms work signed out. Where accounts are available, optional sign-in adds gallery sync and persistent room ownership.' },
     },
     {
       '@type': 'Question',
-      name: 'Does Drawesome have ads or in-app purchases?',
-      acceptedAnswer: { '@type': 'Answer', text: 'No ads and no real-money purchases. The in-app currency is play money earned by drawing.' },
+      name: 'Who can see a public room?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Anyone can join a public room. Its artwork, chat, and display names can also appear in homepage previews. Use a nickname and do not share personal details. Private rooms do not allow the public spectator connection.' },
     },
     {
       '@type': 'Question',
-      name: 'How do I report something?',
-      acceptedAnswer: { '@type': 'Answer', text: 'Every room and every wall post has a report button. Reports go straight to the moderators, and urgent ones are triaged first. You can also email safety@drawesome.art.' },
+      name: 'How do I report something bad?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Use the Report control in the room. A successful submission sends your concern for review and shows a confirmation. This does not guarantee an immediate response; leave the room and tell a trusted adult if something feels wrong.' },
     },
     {
       '@type': 'Question',
-      name: 'Can I delete my data?',
-      acceptedAnswer: { '@type': 'Answer', text: 'Yes — deleting your account wipes your saved art, wall posts, and chat history from our servers.' },
+      name: 'What information do you collect — and can I delete it?',
+      acceptedAnswer: { '@type': 'Answer', text: 'Settings and drafts can live on your device. Shared-room drawings and chat, server-saved art, and public Wall posts also use server storage, including when you are signed out. The Account panel offers deletion options. See the Privacy page for storage and deletion details.' },
     },
   ],
 };
@@ -6131,14 +6134,16 @@ if (existsSync(distPath)) {
   } catch {
     shellHtml = '';
   }
-  // Vite emits content-hashed asset names, so a year of immutable edge/browser
-  // caching is safe; only index.html (the pointer to the hashes) must revalidate.
+  // Only Vite's content-hashed assets are immutable. Public files such as the
+  // service worker, icons and manifest keep their names across releases.
   app.use(express.static(distPath, {
-    maxAge: '1y',
-    immutable: true,
+    maxAge: 0,
     index: false,
     setHeaders: (res, p) => {
-      if (p.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+      const assetPath = p.replace(/\\/g, '/');
+      res.setHeader('Cache-Control', /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[^/]+$/.test(assetPath)
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache');
     },
   }));
   // SPA fallback (Express 5: use middleware, not an app.get('*') route). Every
@@ -6152,7 +6157,7 @@ if (existsSync(distPath)) {
     }
     // Don't serve the SPA shell for missing API / asset requests — 404 instead,
     // so a broken image is a 404, not an HTML page with a 200.
-    if (req.path.startsWith('/api/') || req.path.startsWith('/coloring-sheets/')) {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/coloring-sheets/') || req.path.startsWith('/assets/') || /\.(?:m?js|css|map|json|webmanifest|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf|wasm|mp[34]|webm|wav)$/i.test(req.path)) {
       res.status(404).json({ error: 'not found' });
       return;
     }

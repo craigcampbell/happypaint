@@ -1,4 +1,4 @@
-// About Drawesome — what it is and how it stays kid-safe.
+// About Drawesome — drawing together and the available room controls.
 import SiteNav from "./SiteNav";
 
 export default function AboutPage({ onNavigate }) {
@@ -8,7 +8,7 @@ export default function AboutPage({ onNavigate }) {
       <main className="site-page-body">
         <h1>About Drawesome <span aria-hidden="true">🎨</span></h1>
         <p className="site-lead">
-          Drawesome is a fast, kid-conscious studio for drawing, coloring, and painting together in real time —
+          Drawesome is a free studio for drawing, coloring, and painting together in real time —
           in the browser, on a phone, or on a tablet. No account needed to start.
         </p>
 
@@ -22,12 +22,12 @@ export default function AboutPage({ onNavigate }) {
             <p>Markers, crayons, pencils, spray, glow, coloring sheets, layers, GIF import, pinch-zoom &amp; rotate — chunky and tappable on touch.</p>
           </article>
           <article>
-            <h3>🛡️ Built carefully for kids</h3>
-            <p>Public rooms are auto-moderated. You browse <em>rooms</em>, not people. Ads are contextual and child-treated, purchases stay out of the canvas, and you can delete your data anytime.</p>
+            <h3>🛡️ Know your room</h3>
+            <p>Choose a private room with people you know, or join a public canvas. Public art and chat can appear on the homepage. Filters and host controls help, but younger artists should have an adult present. Read the safety and privacy pages before joining.</p>
           </article>
           <article>
             <h3>💾 Yours to keep</h3>
-            <p>Save drawings to your gallery. Sign in with Google (optional) to keep them on every device.</p>
+            <p>Download art you want to keep, or save it to your gallery. When accounts are available, an optional sign-in adds gallery sync across devices.</p>
           </article>
         </div>
 

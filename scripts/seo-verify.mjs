@@ -68,6 +68,19 @@ const run = async () => {
   check("/faq gets its own title", titleOf(r.body).includes("Safety & FAQ"), titleOf(r.body));
   check("/faq carries FAQPage JSON-LD", r.body.includes('"FAQPage"'));
   check("/faq canonical points at /faq", r.body.includes('href="https://drawesome.art/faq"'));
+  const faqSchema = [...r.body.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
+    .map((match) => JSON.parse(match[1])).find((entry) => entry["@type"] === "FAQPage");
+  const faqAnswers = new Map((faqSchema?.mainEntity || []).map((entry) => [entry.name, entry.acceptedAnswer?.text || ""]));
+  check("FAQ structured data states image-scanning and supervision limits", /when a capable device is present/.test(faqAnswers.get("Is Drawesome safe for my kid?") || "") && /can miss harmful content/.test(faqAnswers.get("Is Drawesome safe for my kid?") || ""));
+  check("FAQ structured data discloses public chat and artwork previews", /artwork, chat, and display names/.test(faqAnswers.get("Who can see a public room?") || ""));
+  check("FAQ structured data discloses signed-out server storage", /server storage, including when you are signed out/.test(faqAnswers.get("What information do you collect — and can I delete it?") || ""));
+  check("FAQ reporting does not promise immediate response", /does not guarantee an immediate response/.test(faqAnswers.get("How do I report something bad?") || ""));
+  check("FAQ schema does not repeat obsolete ads, streak-sync or complete-erasure claims", !/No ads and no real-money purchases|art and streak|wipes your saved art/i.test(JSON.stringify(faqSchema)));
+
+  r = await html("/safety");
+  check("safety description explains moderation limits", /limits of automated moderation/.test(metaContent(r.body, "desc")));
+  r = await html("/privacy");
+  check("privacy description includes guest server storage and deletion limits", /servers even when drawing as a guest/.test(metaContent(r.body, "desc")) && /limits of deletion/.test(metaContent(r.body, "desc")));
 
   r = await html("/wall");
   check("/wall gets its own title + og:title", titleOf(r.body).includes("Fridge Wall") && metaContent(r.body, "og:title").includes("Fridge Wall"));

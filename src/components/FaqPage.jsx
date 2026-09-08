@@ -30,18 +30,22 @@ export default function FaqPage({ onNavigate }) {
             chat is filtered for bad words, drawings are scanned for inappropriate images when a capable
             device is present, hosts can mute / remove / hide, and anyone can report with one tap.
           </p>
+          <p>These tools can miss harmful content. For younger artists, start in a private room with people you know and an adult present.</p>
           <p>
             <strong>Private rooms</strong> — the ones you make by sharing a short code — are meant for people
-            you already know. Serious/explicit chat is still blocked everywhere, but private rooms are
-            <em> not</em> fully auto-moderated the way public rooms are. Only share a room code with friends
-            you trust. Every private room shows a “not auto-moderated” reminder at the top.
+            you already know. Serious/explicit chat is filtered everywhere. Private rooms are unlisted,
+            but anyone who receives their link or code can join. Keep invitations with people you trust.
           </p>
+        </QA>
+
+        <QA q="Who can see a public room?">
+          <p>Anyone can join a public room. Its artwork, chat, and display names can also appear in homepage previews. Use a nickname and do not share personal details in drawings or chat. Private rooms do not allow the public spectator connection.</p>
         </QA>
 
         <QA q="Do you need an account?">
           <p>
-            No. Drawing is guest-friendly — tap in and paint. A free account only saves your gallery and lets
-            you find it on another device. You can play the whole app signed out.
+            No. Drawing is guest-friendly — tap in and paint. Where accounts are available, an optional
+            sign-in adds gallery sync and persistent room ownership. Free drawing and rooms work signed out.
           </p>
         </QA>
 
@@ -56,18 +60,17 @@ export default function FaqPage({ onNavigate }) {
 
         <QA q="What information do you collect — and can I delete it?">
           <p>
-            We keep things minimal and local-first: your drawings and settings live on your device, and
-            signed-in accounts store a gallery. You can <strong>delete your account and data anytime</strong> from
-            the profile menu (the avatar) inside the studio — that also scrubs your chat messages from our
-            servers. See the <a href="/privacy" onClick={(e) => { e.preventDefault(); onNavigate("/privacy"); }}>Privacy page</a> for details.
+            Settings and drafts can live on your device. Shared-room drawings and chat, server-saved art,
+            and public Wall posts also use server storage, including when you are signed out. The Account
+            panel offers deletion options. See the <a href="/privacy" onClick={(e) => { e.preventDefault(); onNavigate("/privacy"); }}>Privacy page</a> for storage and deletion details.
           </p>
         </QA>
 
         <QA q="How do I report something bad?">
           <p>
-            Every room has a <strong>Report</strong> button (⚠️). Tell us what’s wrong and it goes straight to
-            our moderators — reports that mention anything urgent (like someone asking to meet up or share
-            contacts) are pushed to the top of the queue. You’ll get a “report sent” confirmation.
+            Use the <strong>Report</strong> control in the room. A successful submission sends your concern
+            for review and shows a confirmation. This does not guarantee an immediate response; leave the
+            room and tell a trusted adult if something feels wrong.
           </p>
         </QA>
 

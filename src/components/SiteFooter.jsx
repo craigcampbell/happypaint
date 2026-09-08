@@ -2,6 +2,8 @@
 // (crawlers + middle-click work), SPA-routed on plain left-click — same
 // pattern as SiteNav.
 
+import { isCloudConfigured } from "../utils/auth";
+
 export default function SiteFooter({ onNavigate }) {
   const follow = (event, href) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -13,7 +15,7 @@ export default function SiteFooter({ onNavigate }) {
     {
       title: "Draw",
       links: [
-        { href: "/studio", label: "Open the studio" },
+        { href: "/studio", label: "Public canvas" },
         { href: "/rooms", label: "Live rooms" },
         { href: "/join/DAILY", label: "Today's challenge" },
         { href: "/wall", label: "The Fridge Wall" },
@@ -32,8 +34,10 @@ export default function SiteFooter({ onNavigate }) {
       title: "You",
       links: [
         { href: "/family", label: "Drawesome Family" },
-        { href: "/signup", label: "Save your art" },
-        { href: "/signup?mode=login", label: "Log in" },
+        ...(isCloudConfigured ? [
+          { href: "/signup", label: "Sync your gallery" },
+          { href: "/signup?mode=login", label: "Log in" },
+        ] : []),
       ],
     },
   ];
@@ -43,7 +47,7 @@ export default function SiteFooter({ onNavigate }) {
       <div className="site-footer-inner">
         <div className="site-footer-brand">
           <strong>Drawesome</strong>
-          <p>A live drawing hangout. Free to draw; Family spaces are ad-free.</p>
+          <p>Draw together in your browser. Free canvases, coloring pages, and shared art time.</p>
         </div>
         {cols.map((col) => (
           <nav key={col.title} className="site-footer-col" aria-label={col.title}>
@@ -57,7 +61,7 @@ export default function SiteFooter({ onNavigate }) {
         ))}
       </div>
       <p className="site-footer-note">
-        Public rooms are auto-moderated · Report anything with ⚑ · <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>
+        See our <a href="/faq" onClick={(event) => follow(event, "/faq")}>safety information</a> · Report concerns in the studio · <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>
       </p>
     </footer>
   );

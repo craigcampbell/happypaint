@@ -45,10 +45,12 @@ nothing breaks when unconfigured. This is the single most important invariant.
 
 ## Frontend (React + Vite)
 
-- **One big component.** `src/App.jsx` (~4,900 lines) is `StudioApp` — canvas,
-  tools, layers, loop/animation, chat, multiplayer, economy, modals. The default
-  `App()` is a tiny `pathname` router (`/`, `/studio`, `/join/:code`, `/admin`,
-  else marketing site). SPA routing via `pushState` + `popstate`.
+- **Studio component.** `src/App.jsx` exports `StudioApp` — canvas, tools,
+  layers, loop/animation, chat, multiplayer, economy, modals.
+- **Route loading.** `src/Router.jsx` owns the `pathname` router and lazy-loads
+  the studio and supporting pages. `src/main.jsx` loads shared styles once.
+  SPA routing uses `pushState` + `popstate`; switching rooms remounts the studio.
+  The homepage's live preview loads only near the viewport in a visible tab.
 - **Canvas** lives in `src/utils/layers.js` (CANVAS_WIDTH 4000 × HEIGHT 2500,
   `MAX_LAYERS` 6). The viewport (`viewRef {scale,tx,ty}`) maps world→CSS px;
   pinch/wheel/hand-tool pan+zoom.

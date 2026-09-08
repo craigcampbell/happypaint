@@ -2,9 +2,9 @@
 // deletion. Login is optional (the app fully works signed out); auth only gates
 // future sync/social. When cloud sync isn't configured we say so plainly.
 //
-// Account deletion is free, always available, and never gated (App Review +
-// compliance). It records an account_deletion_requests row and wipes all local
-// stores via utils/accountDeletion.
+// Local cleanup is free and available to guests. Signed-in deletion also calls
+// the account cleanup endpoint. The local receipt is not a scheduled purge;
+// keep the UI honest about stores and shared content outside that cleanup.
 
 import { useEffect, useState } from "react";
 import {
@@ -93,14 +93,16 @@ export default function AccountPanel({ onClose, onDeleted }) {
     setSession(null);
     setConfirmDelete(false);
     setDeletion(result.request);
-    if (isCloudConfigured && !result.server.filed) {
+    if (!result.server.filed && ["local-only", "signed-out"].includes(result.server.reason)) {
+      setMessage("Local cleanup ran in this browser. No cloud account or shared-room content was deleted.");
+    } else if (!result.server.filed) {
       setMessage(
-        `Data was cleared from this device (${result.cleared.length} stores), but the cloud account was not deleted because the server could not safely confirm billing cleanup. Sign in and try deletion again.`,
+        "Local cleanup ran, but cloud account deletion could not be completed. Sign in and try deletion again.",
       );
     } else if (result.server.billingCancellationPending) {
-      setMessage("Your account and local data were deleted. Subscription cancellation was saved securely and will retry automatically.");
+      setMessage("Your cloud account was deleted and local cleanup ran. Subscription cancellation is queued and will retry automatically.");
     } else {
-      setMessage(`Your account and data were deleted (${result.cleared.length} local stores cleared).`);
+      setMessage("Your cloud account was deleted and local cleanup ran. Shared content may remain as described in Privacy.");
     }
     setBusy(false);
     onDeleted?.(result);
@@ -214,21 +216,24 @@ export default function AccountPanel({ onClose, onDeleted }) {
         <div className="ps-group account-section account-danger">
           <h3>Delete my data &amp; account</h3>
           <p className="account-note">
-            Deleting is <strong>free</strong> and <strong>always available</strong> — it isn&apos;t gated by
-            an account, a purchase, or anything else. This removes your drawings, gallery, Paint Space,
-            wallet, AI consent, replays, and brush packs from this device, cancels an attached Family
-            subscription, files a deletion request, and signs you out.
+            Local cleanup is <strong>free</strong> and available without an account. It clears drafts,
+            gallery items, Paint Space, wallet, replays and brush packs from this browser, then signs
+            you out. Some browser identifiers and preferences may remain. Sign in before deleting
+            to also request cloud account deletion and cancellation of an attached Family subscription.
+          </p>
+          <p className="account-note">
+            Guest server saves, shared canvas drawings and some chat or report copies can remain.
+            Read the <a href="/privacy">Privacy page</a> for the scope of deletion before continuing.
           </p>
           {deletion ? (
             <p className="account-note compliance">
-              Deletion requested {new Date(deletion.requested_at).toLocaleString()} · full purge scheduled
-              by {new Date(deletion.scheduled_purge_at).toLocaleDateString()}.
+              Last deletion attempt: {new Date(deletion.requested_at).toLocaleString()}.
             </p>
           ) : null}
           {confirmDelete ? (
             <div className="account-actions">
               <button type="button" className="account-delete-confirm" onClick={handleDelete} disabled={busy}>
-                Yes, delete everything
+                Yes, delete my data
               </button>
               <button type="button" onClick={() => setConfirmDelete(false)} disabled={busy}>
                 Cancel

@@ -2,16 +2,26 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import '@fontsource-variable/fredoka/wght.css'
 import '@fontsource-variable/nunito-sans/wght.css'
-import App from './App.jsx'
+import Router from './Router.jsx'
 import './index.css'
+// Load shared styles once; the studio layout overrides remain after base styles.
+import './App.css'
+import './drawesome-theme.css'
+import './homepage-redesign.css'
+import './studio-layout.css'
+import './quick-stroke.css'
+import './route-status.css'
 
-// iOS Safari: stop the browser from pinch- / double-tap-zooming the whole PAGE.
+// iOS Safari: the studio handles its own canvas gestures. Marketing and guide
+// pages retain native browser zoom and context menus for accessibility.
 // The canvas runs its own pinch-zoom off pointer events, so blocking Safari's
 // non-standard gesture events doesn't affect drawing — it only prevents the
 // "site zooms way in and taps miss" behaviour on iPad. Listeners are passive:false
 // so preventDefault() takes effect.
 for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
-  document.addEventListener(type, (event) => event.preventDefault(), { passive: false })
+  document.addEventListener(type, (event) => {
+    if (event.target?.closest?.('.studio-shell')) event.preventDefault()
+  }, { passive: false })
 }
 
 // Long-press while drawing: Android Chrome's "Save image / Copy image" sheet and
@@ -20,10 +30,11 @@ for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
 // the event still fires, so a finger landing on a chip, the quick bar, the tool
 // rail or any <img> pops the platform menu over the canvas mid-stroke. The
 // overlay canvas prevents it on itself (App.jsx); every other surface a finger
-// can hit needs the same. Cancel it document-wide in the CAPTURE phase, except
+// can hit needs the same. Cancel it inside the studio in the CAPTURE phase, except
 // where kids genuinely need the menu: text fields (paste) and links.
 const CONTEXT_MENU_ALLOWED = 'input, textarea, [contenteditable="true"], a[href]'
 document.addEventListener("contextmenu", (event) => {
+  if (!event.target?.closest?.('.studio-shell')) return
   if (event.target?.closest?.(CONTEXT_MENU_ALLOWED)) return
   event.preventDefault()
 }, { capture: true })
@@ -31,13 +42,14 @@ document.addEventListener("contextmenu", (event) => {
 // The same long press turning into a drag lifts a ghost copy of an image off the
 // page (every <img> is draggable by default). Text drag inside a field is fine.
 document.addEventListener("dragstart", (event) => {
+  if (!event.target?.closest?.('.studio-shell')) return
   const tag = event.target?.tagName
   if (tag === "IMG" || tag === "CANVAS") event.preventDefault()
 }, { capture: true })
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <Router />
   </React.StrictMode>,
 )
 
