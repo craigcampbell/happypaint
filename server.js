@@ -60,6 +60,21 @@ const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min 
 const WATCH_MAX_DIM = Number(process.env.WATCH_MAX_DIM || 256); // longest snapshot edge the watcher downscales to
 const FLAG_WINDOW_MS = Number(process.env.FLAG_WINDOW_MS || 30_000); // corroboration window for moderation flags
 
+// Rendered-snapshot catch-up: late joiners load a client-rendered PNG of the
+// mural plus only the ops drawn SINCE it, instead of replaying the whole
+// history. Snapshots only apply to single-frame rooms (animation rooms page by
+// scene). A room becomes snapshot-worthy past SNAPSHOT_MIN_OPS; it's refreshed
+// when the op counter has advanced SNAPSHOT_STALE_OPS past the stored snapshot.
+// Experimental until snapshots are built from an authoritative frozen op list:
+// a live client canvas can include unacknowledged local strokes or advance past
+// its watermark while encoding. Keep the normal history replay as the default.
+const CLIENT_SNAPSHOTS_ENABLED = process.env.ENABLE_CLIENT_SNAPSHOTS === '1';
+const SNAPSHOT_MIN_OPS = Number(process.env.SNAPSHOT_MIN_OPS || 1500);
+const SNAPSHOT_STALE_OPS = Number(process.env.SNAPSHOT_STALE_OPS || 800);
+const SNAPSHOT_MAX_CHARS = 14 * 1024 * 1024; // dataURL cap, under the 16MB ws maxPayload
+const SNAPSHOT_REQUEST_COOLDOWN_MS = Number(process.env.SNAPSHOT_REQUEST_COOLDOWN_MS || 60_000);
+const SNAPSHOT_REQUEST_TTL_MS = 30_000;
+
 // Auto-close idle rooms. The allowed idle time scales with the room's complexity
 // (op count) and engagement (cumulative user-seconds), so a rich, well-loved mural
 // lingers far longer than a quick scribble before it's cleaned up. MAIN never closes.
@@ -783,6 +798,76 @@ function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
 
+// ---- Rendered-snapshot catch-up -------------------------------------------
+// A client-rendered PNG of the mural, stored beside the room file (NOT in it —
+// a multi-MB dataURL inside the room JSON would bloat the 30MB histories even
+// further). The sidecar is {opId, dataUrl}; the opId is the last op baked into
+// the pixels, so a joiner only needs the ops after it.
+function snapshotFile(roomId) {
+  return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.snap`);
+}
+function loadRoomSnapshot(roomId) {
+  try {
+    if (statSync(snapshotFile(roomId)).size > SNAPSHOT_MAX_CHARS + 256) return null;
+    const parsed = JSON.parse(readFileSync(snapshotFile(roomId), 'utf8'));
+    if (parsed && Number.isSafeInteger(parsed.opId) && parsed.opId > 0 && validSnapshotImage(parsed.dataUrl)) {
+      return { opId: parsed.opId, dataUrl: parsed.dataUrl };
+    }
+  } catch {
+    // No snapshot / corrupt — fall back to full-history replay.
+  }
+  return null;
+}
+function validSnapshotImage(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > SNAPSHOT_MAX_CHARS) return false;
+  const comma = dataUrl.indexOf(',');
+  const header = dataUrl.slice(0, comma);
+  if (header !== 'data:image/png;base64' && header !== 'data:image/jpeg;base64') return false;
+  const encoded = dataUrl.slice(comma + 1);
+  if (!encoded || !/^[a-zA-Z0-9+/]+={0,2}$/.test(encoded)) return false;
+  const bytes = Buffer.from(encoded, 'base64');
+  if (sniffWallImage(bytes) !== (header.includes('png') ? 'image/png' : 'image/jpeg')) return false;
+  const dimensions = rasterDimensions(bytes);
+  return !!dimensions && dimensions.w > 0 && dimensions.h > 0 && dimensions.w <= 4000 && dimensions.h <= 2500;
+}
+function snapshotWatermarkInHistory(room, opId) {
+  const firstOpId = room.history[0]?.opId || 0;
+  const lastOpId = room.history[room.history.length - 1]?.opId || 0;
+  return Number.isSafeInteger(opId) && opId > 0 && firstOpId > 0 && opId >= firstOpId - 1 && opId <= lastOpId;
+}
+function saveRoomSnapshot(roomId, snapshot) {
+  try {
+    mkdirSync(ROOM_DIR, { recursive: true });
+    const file = snapshotFile(roomId);
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ opId: snapshot.opId, dataUrl: snapshot.dataUrl }));
+    renameSync(tmp, file);
+  } catch {
+    // Best-effort — a lost snapshot just means full-history replay next join.
+  }
+}
+function invalidateRoomSnapshot(room) {
+  room.snapshotRequest = null; // an in-flight encoding predates this canvas change
+  room.snapshotOpId = 0;
+  room.snapshot = null;
+  // Also discard dormant files while the experiment is disabled, so a later
+  // opt-in cannot resurrect art hidden or removed in the meantime.
+  try { unlinkSync(snapshotFile(room.code)); } catch { /* no file */ }
+}
+// A room is worth snapshotting once it's big enough, and its snapshot is due
+// for a refresh once enough ops have accumulated past the baked-in opId.
+function snapshotDue(room) {
+  if (room.animationEnabled || (room.frames && room.frames.length > 1)) return false;
+  if (!room.history || room.history.length <= SNAPSHOT_MIN_OPS) return false;
+  if (!room.snapshotOpId) return true;
+  const lastOpId = room.history.length ? (room.history[room.history.length - 1].opId || 0) : 0;
+  return lastOpId - room.snapshotOpId > SNAPSHOT_STALE_OPS;
+}
+// Snapshot-capable rooms only: a single-frame, non-animation room.
+function roomCanSnapshot(room) {
+  return CLIENT_SNAPSHOTS_ENABLED && !room.animationEnabled && (!room.frames || room.frames.length <= 1);
+}
+
 // ---- Chat persistence -----------------------------------------------------
 // Two stores, by purpose:
 //  1) room.chat — a capped in-memory buffer (persisted in the room file) used to
@@ -846,7 +931,10 @@ function loadRoom(roomId) {
   try {
     const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
     return {
-      history: Array.isArray(data.history) ? data.history : [],
+      // Recover files written by the experimental settings-once transport.
+      // Each op must stand alone when moderation, previews or paging select
+      // only part of a stroke. Never borrow settings from another author/cel.
+      history: hydrateHistorySettings(Array.isArray(data.history) ? data.history : []),
       sheetId: data.sheetId || null,
       // Only the opaque profile id is persisted — never a human-readable name —
       // so a deleted account leaves no identifying data on disk. Display names
@@ -1246,6 +1334,64 @@ function recountFrameOps(room) {
   room.frameOpCounts = counts;
 }
 
+function strokeHistoryKey(op) {
+  return JSON.stringify([op.userId || '', op.frameId || '', op.strokeId]);
+}
+
+function hydrateHistorySettings(history) {
+  const settingsByStroke = new Map();
+  for (const op of history) {
+    if (!op || op.kind !== 'draw' || !op.strokeId) continue;
+    const key = strokeHistoryKey(op);
+    if (op.settings && typeof op.settings === 'object' && !Array.isArray(op.settings)) {
+      settingsByStroke.set(key, op.settings);
+    } else if (settingsByStroke.has(key)) {
+      op.settings = settingsByStroke.get(key);
+    }
+    if (op.end) settingsByStroke.delete(key);
+  }
+  return history;
+}
+
+// Keep counters accurate in O(removed ops), without recounting the full mural
+// on every incoming point batch. Carry settings for older settings-once clients
+// onto only their first surviving op; the author and cel scope prevent collisions.
+function trimHistoryFront(room) {
+  const history = room.history;
+  const excess = history.length - MAX_HISTORY;
+  if (excess <= 0) return;
+  // splice in place (no throwaway slice allocations on the per-op hot path).
+  const removed = history.splice(0, excess);
+  const carried = new Map();
+  for (const op of removed) {
+    const frameId = opFrameId(room, op);
+    room.frameOpCounts.set(frameId, Math.max(0, (room.frameOpCounts.get(frameId) || 0) - 1));
+    if (op && op.kind === 'draw' && op.strokeId && op.settings) {
+      carried.set(strokeHistoryKey(op), op.settings);
+    }
+    // A completed stroke has no continuation to repair. Avoid scanning the
+    // entire history after every ordinary one-op shape/brush stroke at the cap.
+    if (op && op.kind === 'draw' && op.strokeId && op.end) carried.delete(strokeHistoryKey(op));
+  }
+  if (carried.size) {
+    for (const op of history) {
+      if (!op || op.kind !== 'draw' || !op.strokeId) continue;
+      const key = strokeHistoryKey(op);
+      if (!carried.has(key)) continue;
+      if (!op.settings) op.settings = carried.get(key);
+      carried.delete(key);
+      if (!carried.size) break;
+    }
+  }
+  // A baked snapshot stays valid only while every op past its opId still
+  // survives in history. If this trim cut into the tail (ops newer than the
+  // snapshot were dropped), the snapshot no longer represents "everything
+  // before the tail" — drop it so joins fall back to full-history replay.
+  if (room.snapshotOpId > 0 && history.length && (history[0].opId || 0) > room.snapshotOpId + 1) {
+    invalidateRoomSnapshot(room);
+  }
+}
+
 // The prompt shown today for a featured room (deterministic daily rotation, UTC).
 function dailyPromptFor(featured) {
   if (!featured || !featured.prompts || !featured.prompts.length) return null;
@@ -1289,6 +1435,12 @@ function getRoom(roomId) {
       users: new Map(),
       history: saved.history,
       lastCleared: null,
+      // Rendered-snapshot catch-up: {opId, dataUrl} loaded lazily from the
+      // sidecar; snapshotOpId doubles as the "no snapshot yet" flag when 0.
+      snapshot: null,
+      snapshotOpId: CLIENT_SNAPSHOTS_ENABLED ? loadRoomSnapshot(roomId)?.opId || 0 : 0,
+      snapshotRequestedAt: 0,
+      snapshotRequest: null,
       sheetId: saved.sheetId,
       // Featured anchor rooms (MAIN, DOODLE, …) are communal and must never be
       // owned. An older build let the first signed-in visitor claim them, which
@@ -1466,6 +1618,7 @@ function closeRoom(roomId, reason) {
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
+  try { unlinkSync(snapshotFile(roomId)); } catch { /* no snapshot */ }
 }
 
 // Periodic cleanup of idle rooms: in-memory empties + abandoned files on disk.
@@ -1494,6 +1647,7 @@ function autoCloseSweep() {
       const pseudo = { history: data.history || [], userSeconds: Number(data.userSeconds) || 0 };
       if (now - (data.savedAt || 0) > allowedIdleMs(pseudo)) {
         unlinkSync(join(ROOM_DIR, f));
+        try { unlinkSync(snapshotFile(id)); } catch { /* no snapshot */ }
       }
     } catch { /* ignore unreadable file */ }
   }
@@ -1519,6 +1673,7 @@ function ensureDailyFresh() {
   room.dailyDate = fresh.date;
   room.customPrompt = null; // a theme vote never outlives the day
   room.history = [];
+  invalidateRoomSnapshot(room);
   recountFrameOps(room);
   room.sheetId = null;
   room.lastCleared = null;
@@ -1620,6 +1775,7 @@ function ensureRoomFresh(roomId) {
   if (Date.now() < room.wipeAt) return;
 
   room.history = [];
+  invalidateRoomSnapshot(room);
   // An uploaded trace photo belongs to the mural being retired — free the image
   // instead of orphaning it in memory (same contract as clear/replace/close).
   dropRoomTracePhoto(room);
@@ -1949,6 +2105,7 @@ function startGameRound(roomId) {
   // the undo-clear backup too, or "Bring it back" would resurrect a previous
   // round's drawing onto the live canvas.
   room.history = [];
+  invalidateRoomSnapshot(room);
   recountFrameOps(room);
   room.sheetId = null;
   room.lastCleared = null;
@@ -2197,6 +2354,7 @@ function startPhoneGame(roomId) {
   // pre-game doodles don't resurrect for a late joiner (ops are dropped while
   // the game runs; see the `op` case).
   room.history = [];
+  invalidateRoomSnapshot(room);
   recountFrameOps(room);
   room.sheetId = null;
   room.lastCleared = null;
@@ -2803,6 +2961,43 @@ wss.on('connection', async (ws, req) => {
       });
       if (entries.length) ws.send(JSON.stringify({ type: 'presence_snapshot', entries }));
     }
+  } else if (roomCanSnapshot(room)) {
+    // Rendered-snapshot catch-up: send the baked PNG plus only the ops drawn
+    // since it (usually a tiny tail), instead of stringifying the whole
+    // history. The snapshot dataURL is loaded from its sidecar on first use.
+    if (room.snapshotOpId && !room.snapshot) {
+      room.snapshot = loadRoomSnapshot(room.code);
+    }
+    if (room.snapshot && !snapshotWatermarkInHistory(room, room.snapshot.opId)) invalidateRoomSnapshot(room);
+    if (room.snapshot && room.snapshot.opId === room.snapshotOpId && room.snapshot.dataUrl) {
+      ws.send(JSON.stringify({ type: 'snapshot', opId: room.snapshotOpId, dataUrl: room.snapshot.dataUrl }));
+      ws.send(JSON.stringify({
+        type: 'history',
+        ops: visibleHistory(room).filter((op) => (op.opId || 0) > room.snapshotOpId),
+        frames: room.frames,
+      }));
+    } else {
+      ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
+    }
+    // Elect one connected member to refresh the snapshot if it's due (the room
+    // crossed the min-op threshold, or enough new ops landed since the last one).
+    if (snapshotDue(room) && Date.now() - (room.snapshotRequestedAt || 0) > SNAPSHOT_REQUEST_COOLDOWN_MS) {
+      // Elect an ESTABLISHED member (never the just-joined socket — its mural
+      // is still replaying, so it would bake a half-empty snapshot).
+      let candidate = null;
+      room.users.forEach((u) => {
+        if (u.id !== id && !u.muted && (!room.locked || isHost(room, u)) && u.ws.readyState === 1 && (!candidate || u.id < candidate.id)) candidate = u;
+      });
+      if (candidate && candidate.ws.readyState === 1) {
+        room.snapshotRequestedAt = Date.now();
+        room.snapshotRequest = {
+          userId: candidate.id,
+          minOpId: room.history[room.history.length - 1]?.opId || 0,
+          expiresAt: Date.now() + SNAPSHOT_REQUEST_TTL_MS,
+        };
+        candidate.ws.send(JSON.stringify({ type: 'snapshot_request' }));
+      }
+    }
   } else {
     ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
   }
@@ -2890,7 +3085,7 @@ wss.on('connection', async (ws, req) => {
         analyticsUpdateClientInfo(user, data);
         break;
       case 'op': {
-        if (!data.op) break;
+        if (!data.op || typeof data.op !== 'object' || Array.isArray(data.op)) break;
         // When a host locks the room, only hosts may keep drawing. This is the
         // real boundary — clients also disable the canvas, but this enforces it.
         if (room.locked && !isHost(room, user)) break;
@@ -2922,6 +3117,9 @@ wss.on('connection', async (ws, req) => {
         if (data.op.kind === 'draw') {
           if (raw.length > MAX_DRAW_MESSAGE_CHARS) break;
           if (!Array.isArray(data.op.points) || data.op.points.length > MAX_DRAW_POINTS_PER_OP) break;
+          if (typeof data.op.strokeId !== 'string' || !data.op.strokeId || data.op.strokeId.length > 128) break;
+          if (data.op.points.some((point) => !point || typeof point !== 'object' || !Number.isFinite(point.x) || !Number.isFinite(point.y))) break;
+          if (data.op.settings != null && (typeof data.op.settings !== 'object' || Array.isArray(data.op.settings))) break;
           if (data.op.settings?.symmetry) {
             data.op = {
               ...data.op,
@@ -2976,11 +3174,29 @@ wss.on('connection', async (ws, req) => {
         room.history.push(op);
         room.frameOpCounts.set(countKey, frameCount + 1);
         if (!multiFrame && room.history.length > MAX_HISTORY) {
-          room.history.splice(0, room.history.length - MAX_HISTORY);
-          recountFrameOps(room);
+          // Trimming decrements just the removed counts; a full recount would
+          // scan the entire mural for each batch after the cap is reached.
+          trimHistoryFront(room);
         }
         broadcast(roomId, { type: 'op', op }, id);
         persistRoom(roomId);
+        break;
+      }
+      // Only the elected member may answer one live request. Never accept a
+      // future watermark: it would omit every subsequent real op for joiners.
+      case 'snapshot': {
+        if (!roomCanSnapshot(room) || user.muted || (room.locked && !isHost(room, user))) break;
+        const request = room.snapshotRequest;
+        if (!request || request.userId !== id || request.expiresAt < Date.now()) break;
+        const opId = data.opId;
+        const dataUrl = typeof data.dataUrl === 'string' ? data.dataUrl : '';
+        if (!snapshotWatermarkInHistory(room, opId) || opId < request.minOpId) break;
+        if (opId < (room.snapshotOpId || 0)) break;
+        if (!validSnapshotImage(dataUrl)) break;
+        room.snapshotRequest = null; // consume before the disk write; no repeats
+        room.snapshotOpId = opId;
+        room.snapshot = { opId, dataUrl };
+        saveRoomSnapshot(roomId, room.snapshot);
         break;
       }
       case 'cursor':
@@ -3005,6 +3221,7 @@ wss.on('connection', async (ws, req) => {
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
         dropRoomTracePhoto(room); // replacing/clearing frees the old photo
         room.sheetId = nextSheet;
+        invalidateRoomSnapshot(room);
         broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
         persistRoom(roomId);
         break;
@@ -3035,6 +3252,7 @@ wss.on('connection', async (ws, req) => {
         dropRoomTracePhoto(room); // free the photo this one replaces
         const traceId = storeTracePhoto(roomId, clean);
         room.sheetId = traceId;
+        invalidateRoomSnapshot(room);
         broadcast(roomId, { type: 'sheet', sheetId: traceId });
         persistRoom(roomId);
         break;
@@ -3175,6 +3393,7 @@ wss.on('connection', async (ws, req) => {
           room.lastClearedFrameId = clearFrameId;
           room.lastClearedSheet = null;
           room.history = room.history.filter((op) => !belongs(op));
+          invalidateRoomSnapshot(room);
           room.frameOpCounts.set(clearFrameId, 0);
           analyticsRecordClear(roomId, user, 'user');
           broadcast(roomId, { type: 'clear', userId: id, name: user.name, frameId: clearFrameId }, id);
@@ -3186,6 +3405,7 @@ wss.on('connection', async (ws, req) => {
         room.lastClearedFrameId = null;
         room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
         room.history = [];
+        invalidateRoomSnapshot(room);
         recountFrameOps(room);
         analyticsRecordClear(roomId, user, 'user');
         broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
@@ -3220,6 +3440,7 @@ wss.on('connection', async (ws, req) => {
               room.history = room.lastCleared.filter((op) => live.has(opFrameId(room, op)));
             }
             recountFrameOps(room);
+            invalidateRoomSnapshot(room); // restored content ≠ the baked snapshot
             if (room.animationEnabled) {
               // Scene-paged clients can't take a whole-movie history frame —
               // each refetches its own active scene instead.
@@ -3497,6 +3718,7 @@ wss.on('connection', async (ws, req) => {
         if (!isHost(room, user)) break;
         if (room.storybook?.enabled) break;
         room.animationEnabled = !!data.enabled;
+        invalidateRoomSnapshot(room);
         // Animation and Draw & Guess are mutually exclusive: the game blanks
         // the canvas frame-agnostically each round, which would desync a
         // multi-frame flipbook. Enabling one turns the other off.
@@ -3792,6 +4014,7 @@ wss.on('connection', async (ws, req) => {
         room.scenes.splice(sceneIndex, 1);
         room.frames = room.frames.filter((f) => !doomedFrames.has(f.id));
         room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
+        invalidateRoomSnapshot(room);
         doomedFrames.forEach((fid) => room.frameOpCounts.delete(fid));
         // Drop crew presence parked in the deleted scene so a stale cel-pip
         // never re-advertises (presence_snapshot would otherwise re-send it).
@@ -3861,6 +4084,7 @@ wss.on('connection', async (ws, req) => {
           }
         }
         room.frames.splice(insertAt, 0, frame);
+        invalidateRoomSnapshot(room);
         broadcast(roomId, { type: 'frame_add', frame, afterFrameId: afterId, duplicateOf: dupId, sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
@@ -3884,6 +4108,7 @@ wss.on('connection', async (ws, req) => {
         room.frames.splice(delIndex, 1);
         // The frame's ops leave history for good (this is not undo-clearable).
         room.history = room.history.filter((op) => !removeOpIds.has(op.opId));
+        invalidateRoomSnapshot(room);
         room.frameOpCounts.delete(delId);
         // Clear any crew presence parked on the deleted cel (else a stale pip
         // re-advertises to later joiners via presence_snapshot).
@@ -4120,6 +4345,7 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.add(opId));
+        invalidateRoomSnapshot(room); // the baked pixels may include now-hidden ops
         if (room.animationEnabled) {
           broadcast(roomId, { type: 'resync' });
         } else {
@@ -4133,6 +4359,7 @@ wss.on('connection', async (ws, req) => {
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+        invalidateRoomSnapshot(room); // restored ops change the baked pixels
         if (room.animationEnabled) {
           broadcast(roomId, { type: 'resync', restored: true });
         } else {
@@ -4148,6 +4375,7 @@ wss.on('connection', async (ws, req) => {
         room.history = room.history.filter((op) => !ids.has(op.opId));
         ids.forEach((opId) => room.hiddenOpIds.delete(opId));
         recountFrameOps(room);
+        invalidateRoomSnapshot(room); // removed ops are gone from the baked pixels
         if (room.animationEnabled) {
           broadcast(roomId, { type: 'resync' });
         } else {
@@ -4212,6 +4440,7 @@ wss.on('connection', async (ws, req) => {
           const toHide = implicated.filter((opId) => !room.hiddenOpIds.has(opId));
           if (toHide.length) {
             toHide.forEach((opId) => room.hiddenOpIds.add(opId));
+            invalidateRoomSnapshot(room); // baked pixels may include the hidden ops
             const authorIds = new Set(room.history.filter((op) => toHide.includes(op.opId)).map((op) => op.userId));
             authorIds.forEach((uid) => { const au = room.users.get(uid); if (au) au.muted = true; });
             if (room.animationEnabled) {
@@ -4246,6 +4475,7 @@ wss.on('connection', async (ws, req) => {
     room.userSeconds = (room.userSeconds || 0) + Math.max(0, (Date.now() - user.connectedAt) / 1000);
     analyticsEndSession(user);
     room.users.delete(id);
+    if (room.snapshotRequest?.userId === id) room.snapshotRequest = null;
     room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
     if (room.quests) {
       for (const voters of room.quests.nominations.values()) voters.delete(id);
@@ -4749,6 +4979,7 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
     room.lastCleared = room.history;
     room.lastClearedFrameId = null;
     room.history = [];
+    invalidateRoomSnapshot(room);
     recountFrameOps(room);
     analyticsRecordClear(id, null, 'admin');
     broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });

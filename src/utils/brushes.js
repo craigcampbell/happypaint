@@ -105,6 +105,15 @@ export const brushCatalog = [
     dab: { spacing: 0.08, minSize: 0.3, flow: 0.85, shape: "bristle", bristles: 8, stretch: 2.2, wetEdge: 0.18, impasto: 0.14 },
   },
   {
+    // No `dab`: knife is v3-only (no pre-v3 history) — its look lives entirely
+    // in NATURAL_DABS below, like every brush introduced after Stage 2.
+    id: "knife",
+    name: "Palette Knife",
+    icon: "🔪",
+    tier: "free",
+    description: "Thick, flat slabs of paint laid with a palette knife — bold ridges and visible relief.",
+  },
+  {
     id: "acrylic",
     name: "Acrylic",
     icon: "🎨",
@@ -119,6 +128,15 @@ export const brushCatalog = [
     tier: "free",
     description: "Soft translucent washes with uneven edges and paper texture — layers glaze darker.",
     dab: { spacing: 0.14, minSize: 0.32, flow: 0.3, shape: "water", wetEdge: 0.25, grain: 0.18 },
+  },
+  {
+    // No `dab`: v3-only (no pre-v3 history). A wetter, looser wash — more
+    // pigment bleed, stronger granulation, and heavier wet-on-wet pickup.
+    id: "watercolor-wet",
+    name: "Wet Wash",
+    icon: "🌊",
+    tier: "free",
+    description: "A very wet watercolor — pigment bleeds and pools, and strokes pick up the colour beneath them.",
   },
   {
     id: "gouache",
@@ -261,20 +279,48 @@ const NATURAL_DABS = {
     dry: 0.6,
     startFlow: 1.3,
     // The commit passes are what the live preview can't show (pen-up pop):
-    // these strengths sit just under the lab's 0.024 stroke-mean cap. No
+    // bleed + granulation are kept modest so that pop stays subtle (the old
+    // 0.2 / 0.27 sat just under the lab's 0.024 stroke-mean cap; the slight
+    // bump trades a touch more edge character for a touch more pop). No
     // wetEdge: the wash sprite's own lateral rim pools 1.14-1.89x its core
     // (sprite-lab, 7 of 8 variants >= 1.15 — the spec's condition for
     // dropping the filter pass), and that pass was the one commit-time
     // ctx.filter blit left on a v3 watercolor, ~half its pen-up cost on a
-    // CPU-raster canvas (iPad Safari).
-    bleed: 0.2,
-    granulation: 0.27,
+    // CPU-raster canvas (iPad Safari). Higher pickup = wet strokes drag more
+    // of the under-paint's colour with them (the wet-on-wet feel).
+    bleed: 0.24,
+    granulation: 0.3,
     wetEdge: 0,
     blend: "multiply",
     mixModel: "km",
     mix: 0,
-    pickup: 0.35,
+    pickup: 0.48,
     drag: 0.15,
+  },
+  // Wet-on-wet wash: a very wet watercolor. More pigment bleed into the paper,
+  // stronger granulation, and the highest pickup of the family — a wet stroke
+  // visibly drags and pools the colour already on the canvas.
+  "watercolor-wet": {
+    spacing: 0.12,
+    minSize: 0.36,
+    flow: 0.22,
+    shape: "wash",
+    scatter: 0.08,
+    rotJitter: 0.5,
+    sizeJitter: 0.22,
+    flowJitter: 0.3,
+    spacingJitter: 0.25,
+    bloom: 0.3,
+    dry: 0.4,
+    startFlow: 1.5,
+    bleed: 0.3,
+    granulation: 0.32,
+    wetEdge: 0,
+    blend: "multiply",
+    mixModel: "km",
+    mix: 0,
+    pickup: 0.55,
+    drag: 0.2,
   },
   oil: {
     spacing: 0.065,
@@ -283,8 +329,11 @@ const NATURAL_DABS = {
     shape: "loaded",
     bristles: 10,
     stretch: 2.4,
-    wetEdge: 0.12,
-    impasto: 0.16,
+    // Stronger impasto (the top-left emboss reads as raised paint ridges),
+    // a firmer wet edge, more under-paint mixing, and more canvas tooth than
+    // the first pass — closer to thick, buttery oil out of the tube.
+    wetEdge: 0.14,
+    impasto: 0.22,
     loaded: 1,
     load: 1.18,
     // The ribbons ARE the streaks now (the sprite body is the coverage), so
@@ -293,14 +342,33 @@ const NATURAL_DABS = {
     // net per dab = a long stroke dries out toward its end, not its start.
     depletion: 0.005,
     reload: 0.003,
-    tooth: 0.34,
+    tooth: 0.38,
     bristleMemory: 0.72,
     laneWobble: 0.14,
     laneCull: 1,
     mixModel: "km",
-    mix: 0.3,
+    mix: 0.34,
     pickup: 0.35,
     drag: 0.18,
+  },
+  // Palette-knife oil: flat, chunky slabs with strong relief. Shape "matte"
+  // (the gouache body) is the coverage; the heavy impasto pass carves the
+  // ridges, and the low pickup keeps each slab distinct rather than smearing
+  // into whatever it crosses.
+  knife: {
+    spacing: 0.05,
+    minSize: 0.3,
+    flow: 0.9,
+    shape: "matte",
+    aspect: 1.6,
+    rotJitter: 0.2,
+    wetEdge: 0.1,
+    impasto: 0.34,
+    grain: 0.12,
+    mixModel: "km",
+    mix: 0.22,
+    pickup: 0.18,
+    drag: 0.12,
   },
   acrylic: {
     spacing: 0.075,

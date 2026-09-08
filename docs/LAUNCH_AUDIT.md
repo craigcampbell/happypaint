@@ -70,20 +70,21 @@ not modified by this review.
 3. **Demand and costs are unproven:** adult repeat sessions, genuine paid uptake,
    real service costs and support time must establish viability. Existing
    anonymous connection counts cannot establish unique-user retention.
-4. **Experimental snapshot optimization:** pre-existing uncommitted work captures
+4. **Experimental snapshot optimization:** the snapshot experiment captures
    live pixels with an unreliable operation watermark. This review hardens its
    transport and leaves it disabled unless `ENABLE_CLIENT_SNAPSHOTS=1`. Keep that
    variable unset. Deterministic snapshots from an authoritative frozen operation
    list are needed before enabling it; ordinary history replay stays available.
-5. **Not deployed:** these are local changes on the existing feature branch.
-   The project already contained substantial uncommitted brush/replay/server
-   work, which has been preserved. Review that work together before releasing.
+5. **Not deployed:** pushing the reviewed feature branch does not confirm a
+   production release. Verify the production build and configuration before
+   announcing it broadly.
 
-The independent launch changes were isolated for a commit and also passed build,
-lint and all 22 browser checks without the pre-existing engine changes. Snapshot
-hardening depends on the existing uncommitted snapshot feature, so those server
-hunks and `scripts/launch-reliability-verify.mjs` remain in the working tree with
-that feature, rather than absorbing unrelated work into the launch commit.
+The independent launch commit passed build, lint and 22 browser checks before
+integration. The subsequent uncommitted-work review corrected unsafe animation
+resizing and settings omission, then integrated the brush, replay, export, and
+server changes. The combined build passes 24 browser checks, including pixel
+preservation through animation toggles. See [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md)
+for scope, validation, and the remaining snapshot limitation.
 
 The practical next experiment is five adult organizers trying a ten-minute
 shared art activity, followed by a second session within a week. The launch plan

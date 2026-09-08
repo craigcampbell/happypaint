@@ -5,10 +5,11 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import sharp from 'sharp';
 
 const out = resolve('output/playwright');
 mkdirSync(out, { recursive: true });
@@ -112,6 +113,32 @@ try {
   const download = await downloadPromise;
   check('A guest can export their painting as PNG', download.suggestedFilename().endsWith('.png'));
   await download.saveAs(join(out, 'launch-test-painting.png'));
+
+  // Toggling animation must preserve the full-size mural, including coordinates
+  // beyond the rejected experimental 1920px document width.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('.mp-anim-toggle').click();
+  await page.locator('.film-strip').waitFor();
+  await peer.locator('.film-strip').waitFor();
+  await page.locator('.desktop-studio-toggle').click();
+  const exportDesktop = async (filename) => {
+    const pending = page.waitForEvent('download');
+    await page.locator('.topbar-actions').getByRole('button', { name: 'Export', exact: true }).click();
+    const result = await pending;
+    await result.saveAs(join(out, filename));
+    return sharp(readFileSync(join(out, filename))).raw().toBuffer({ resolveWithObject: true });
+  };
+  const beforeAnimation = await sharp(readFileSync(join(out, 'launch-test-painting.png'))).raw().toBuffer({ resolveWithObject: true });
+  const animated = await exportDesktop('launch-animation-painting.png');
+  check('Animation toggle preserves 4000×2500 mural pixels', animated.info.width === 4000 && animated.info.height === 2500 && animated.data.equals(beforeAnimation.data));
+  await page.locator('.topbar-close').click();
+  await page.locator('.mp-anim-toggle').click();
+  await page.locator('.film-strip').waitFor({ state: 'hidden' });
+  await peer.locator('.film-strip').waitFor({ state: 'hidden' });
+  await page.locator('.desktop-studio-toggle').click();
+  const restored = await exportDesktop('launch-restored-painting.png');
+  check('Disabling animation also preserves every mural pixel', restored.data.equals(beforeAnimation.data));
+  await page.setViewportSize({ width: 375, height: 812 });
 
   await page.evaluate(() => { history.pushState({}, '', '/family'); dispatchEvent(new PopStateEvent('popstate')); });
   await page.getByRole('button', { name: 'Subscriptions opening soon' }).waitFor();

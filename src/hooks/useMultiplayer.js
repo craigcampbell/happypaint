@@ -106,6 +106,7 @@ export function useMultiplayer(roomId, onMessage, token) {
       } catch {
         return;
       }
+      if (!data || typeof data !== "object" || Array.isArray(data)) return;
       // UI-level bookkeeping handled here; everything else flows to the consumer.
       switch (data.type) {
         case "connected":
@@ -229,6 +230,9 @@ export function useMultiplayer(roomId, onMessage, token) {
   }, []);
 
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
+  // Upload a client-rendered mural snapshot for late-joiner catch-up (the
+  // server elects one member via snapshot_request; see the join handler).
+  const sendSnapshot = useCallback((opId, dataUrl) => send({ type: "snapshot", opId, dataUrl }), [send]);
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
   // In an animation room `frameId` scopes the clear to one shared frame;
   // omitted (legacy rooms) it wipes the whole mural.
@@ -348,7 +352,7 @@ export function useMultiplayer(roomId, onMessage, token) {
 
   return {
     connected, users, self, chat, disconnect,
-    sendOp, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
+    sendOp, sendSnapshot, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,

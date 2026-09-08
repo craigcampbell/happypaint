@@ -9,7 +9,6 @@
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
-  cloneLayerCanvas,
   compositeLayers,
   createDefaultLayers,
   createLayer,
@@ -27,9 +26,11 @@ function nextFrameId() {
 }
 
 // Build a frame from an explicit layer stack (used when capturing the live
-// stack into the frame model). Layers are referenced as-is, not cloned.
-export function createFrame({ layers, activeLayerId, durationMs = DEFAULT_FRAME_DURATION } = {}) {
-  const stack = layers && layers.length > 0 ? layers : createDefaultLayers();
+// stack into the frame model). Layers are referenced as-is, not cloned. `width`
+// / `height` can size a NEW frame's default layer stack. Existing documents
+// retain their own dimensions when they are duplicated or composited.
+export function createFrame({ layers, activeLayerId, durationMs = DEFAULT_FRAME_DURATION, width, height } = {}) {
+  const stack = layers && layers.length > 0 ? layers : createDefaultLayers(width, height);
   return {
     id: nextFrameId(),
     durationMs,
@@ -40,11 +41,13 @@ export function createFrame({ layers, activeLayerId, durationMs = DEFAULT_FRAME_
 
 // Deep-clone a frame's layer canvases so duplicate/copy never share pixels.
 export function cloneFrame(frame, { durationMs } = {}) {
-  const layers = frame.layers.map((layer) => ({
-    ...layer,
-    id: createLayer().id, // fresh ids so layer selection stays unambiguous
-    canvas: cloneLayerCanvas(layer.canvas),
-  }));
+  const layers = frame.layers.map((layer) => {
+    // Allocate only the clone: creating a throwaway mural canvas for its id
+    // would briefly consume another 40 MB for every animation layer.
+    const copy = createLayer({ width: layer.canvas.width, height: layer.canvas.height });
+    copy.canvas.getContext("2d").drawImage(layer.canvas, 0, 0);
+    return { ...layer, id: copy.id, canvas: copy.canvas };
+  });
   // Preserve relative active-layer selection by index.
   const activeIndex = frame.layers.findIndex((layer) => layer.id === frame.activeLayerId);
   return {
@@ -57,7 +60,10 @@ export function cloneFrame(frame, { durationMs } = {}) {
 
 // Composite a single frame (its visible layers) onto a fresh canvas of the
 // given size. Used for thumbnails, onion-skin, GIF export, loop assets.
-export function compositeFrameToCanvas(frame, { width = CANVAS_WIDTH, height = CANVAS_HEIGHT } = {}) {
+export function compositeFrameToCanvas(frame, {
+  width = frame.layers[0]?.canvas.width || CANVAS_WIDTH,
+  height = frame.layers[0]?.canvas.height || CANVAS_HEIGHT,
+} = {}) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;

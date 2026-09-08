@@ -17,10 +17,10 @@ function nextLayerId() {
   return `layer-${Date.now().toString(36)}-${layerIdSeed}`;
 }
 
-export function createLayerCanvas() {
+export function createLayerCanvas(width = CANVAS_WIDTH, height = CANVAS_HEIGHT) {
   const canvas = document.createElement("canvas");
-  canvas.width = CANVAS_WIDTH;
-  canvas.height = CANVAS_HEIGHT;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d", { alpha: true });
   context.lineCap = "round";
   context.lineJoin = "round";
@@ -28,25 +28,26 @@ export function createLayerCanvas() {
   return canvas;
 }
 
-export function createLayer({ name = "Layer", visible = true, opacity = 1, locked = false } = {}) {
+export function createLayer({ name = "Layer", visible = true, opacity = 1, locked = false, width, height } = {}) {
   return {
     id: nextLayerId(),
     name,
     visible,
     opacity,
     locked,
-    canvas: createLayerCanvas(),
+    canvas: createLayerCanvas(width, height),
   };
 }
 
 // A single drawing layer by default — leaner memory on the big shared mural and
 // far less clutter on phones. Artists can add more layers from the panel.
-export function createDefaultLayers() {
-  return [createLayer({ name: "Canvas" })];
+export function createDefaultLayers(width, height) {
+  return [createLayer({ name: "Canvas", width, height })];
 }
 
 export function cloneLayerCanvas(source) {
-  const canvas = createLayerCanvas();
+  // Clone at the SOURCE's own size (a frame canvas may be smaller than the mural).
+  const canvas = createLayerCanvas(source.width, source.height);
   canvas.getContext("2d").drawImage(source, 0, 0);
   return canvas;
 }
@@ -83,15 +84,15 @@ export function restoreLayersFromSnapshot(snapshot) {
 
 // Paint the visible layers (and optional paper background) onto a 2D context.
 export function compositeLayers(context, layers, { width, height } = {}) {
-  const targetWidth = width || CANVAS_WIDTH;
-  const targetHeight = height || CANVAS_HEIGHT;
+  const targetWidth = width || layers[0]?.canvas.width || CANVAS_WIDTH;
+  const targetHeight = height || layers[0]?.canvas.height || CANVAS_HEIGHT;
 
   for (const layer of layers) {
     if (!layer.visible || layer.opacity <= 0) {
       continue;
     }
     context.globalAlpha = layer.opacity;
-    context.drawImage(layer.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, targetWidth, targetHeight);
+    context.drawImage(layer.canvas, 0, 0, targetWidth, targetHeight);
   }
 
   context.globalAlpha = 1;

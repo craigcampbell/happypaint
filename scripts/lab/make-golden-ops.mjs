@@ -7,11 +7,10 @@
 // opReplay.replayFrameOnto (the film-export / spectator consumer) onto a
 // transparent 4000x2500 world canvas, and the per-group SHA-256 of the pixels
 // (scripts/lab/golden.json) must not move while the engine changes underneath
-// — "history is forever". The v3 groups embed dabs via getAuthoringDab at
-// GENERATION time on purpose: that is what the studio persists, so re-running
-// this script after NATURAL_DABS changes would (correctly) emit a different
-// fixture. Don't regenerate casually — the committed file is what old rooms
-// actually replay.
+// — "history is forever". The original v3 groups use the frozen authoring
+// dabs captured in golden-stage2-dabs.json, just as saved rooms retain their
+// inline dabs. New authoring presets belong in appended groups; they must
+// never replace the ops and hashes that protect previously saved artwork.
 //
 // Ops mirror the wire exactly (App.jsx startStroke + flushStrokeNet):
 //   - settings in startStroke's key order: brush, color, size, opacity,
@@ -38,6 +37,7 @@ const { normalizeSymmetry } = await import("../../src/utils/symmetry.js");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_FILE = path.join(HERE, "golden-ops.json");
+const STAGE2_DABS = JSON.parse(fs.readFileSync(path.join(HERE, "golden-stage2-dabs.json"), "utf8"));
 
 const FIXTURE_SEED = 0x5eed0001;
 // The shared world canvas (layers.js CANVAS_WIDTH/HEIGHT). Hard-coded rather
@@ -214,9 +214,9 @@ const v2Settings = (brush, { color, size, opacity = 1, symmetry = null }) => {
   return settings;
 };
 
-const v3Settings = (brush, { color, size, opacity = 1, wet = false, symmetry = null }) => {
-  const authoring = getAuthoringDab(brush);
-  if (!authoring || authoring.version !== 3) throw new Error(`${brush} is not a v3 (NATURAL_DABS) brush`);
+const v3Settings = (brush, { color, size, opacity = 1, wet = false, symmetry = null, current = false }) => {
+  const authoring = current ? getAuthoringDab(brush) : { version: 3, dab: STAGE2_DABS[brush] };
+  if (!authoring?.dab || authoring.version !== 3) throw new Error(`${brush} is not a v3 (NATURAL_DABS) brush`);
   const settings = { brush, color, size, opacity, variation: 0, seed: nextSeed() };
   if (symmetry && symmetry.copies > 1) settings.symmetry = symmetry;
   settings.v = 3;
@@ -404,8 +404,7 @@ const textGroup = () => [
 // ---- Stage 2 groups (appended AFTER the Stage-0 groups so their seeds and
 // stroke ids are untouched) ----------------------------------------------------------
 // (h) One v3 stroke pair per Stage-2 shape — the marker's multiply disc and
-// every sprite family — with the dab embedded via getAuthoringDab at
-// generation time, exactly what the studio persists now.
+// every sprite family — with the inline dabs originally persisted at Stage 2.
 const V3_STAGE2_BRUSHES = ["marker", "pencil", "crayon", "paint", "gouache", "watercolor", "oil", "acrylic", "glow"];
 const v3SpritesGroup = () => {
   const ops = [];
@@ -555,6 +554,20 @@ const v3SmudgeGroup = () => {
   return ops;
 };
 
+// New authoring presets are separate from persisted-history coverage. Append
+// after every old group so their deterministic seeds and stroke ids stay put.
+const v3SeptemberPaintGroup = () => {
+  const brushes = ["watercolor", "watercolor-wet", "oil", "knife"];
+  const cell = grid(SIZES.length, brushes.length);
+  return brushes.flatMap((brush, row) => SIZES.flatMap((size, col) => {
+    const box = cell(row * SIZES.length + col);
+    return [
+      ...strokeOps(`${brush}${size}newDry`, v3Settings(brush, { color: COLORS.blue, size, current: true }), sCurve(box)),
+      ...strokeOps(`${brush}${size}newWet`, v3Settings(brush, { color: COLORS.yellow, size, wet: true, current: true }), sCurve(box, { flip: true })),
+    ];
+  }));
+};
+
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
   {
@@ -583,6 +596,7 @@ const groups = [
   { name: "v3-pigment", deterministic: true, note: "Stage 3: v:3 oil/acrylic/paint/gouache (mixModel km) dry + wet across a v3 gouache under-layer, and a wet carry-recovery stroke through a fill-rect patch onto blank paper", ops: v3PigmentGroup() },
   // Stage 4 (appended).
   { name: "v3-smudge", deterministic: true, note: "Stage 4: v:3 smudge drag / blend (pressure ramp, hard, soft size 90, blend circling, an unknown mode → drag) over a fill-rect red|blue field, and a drag that leaves the field onto blank paper", ops: v3SmudgeGroup() },
+  { name: "v3-september-paint", deterministic: true, note: "September 2026 authoring presets: updated watercolor/oil plus Wet Wash/Palette Knife, dry blue and wet yellow crossing at sizes 12/40/90; all earlier groups remain frozen", ops: v3SeptemberPaintGroup() },
 ];
 
 const fixture = {

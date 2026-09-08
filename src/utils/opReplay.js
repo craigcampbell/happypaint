@@ -32,14 +32,16 @@ export const MAX_STROKE_BUFFERS = 4;
 // Apply one op to a full-res offscreen context. `lastMap` threads each
 // stroke's previous point across op batches; `strokes` holds the per-strokeId
 // in-progress buffers; `deferred` queues v3 stamp strokes until tips load.
-export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
+// `docW`/`docH` are the document's WORLD bounds (symmetry axes + mix map) —
+// callers replaying a smaller document can supply its own dimensions.
+export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW = CANVAS_WIDTH, docH = CANVAS_HEIGHT) {
   if (!op) return;
   if (op.kind === "draw") {
     let entry = strokes.get(op.strokeId);
     const settings = op.settings || entry?.settings || {};
     const symmetry = normalizeSymmetry(settings.symmetry || "none");
     if (!op.symmetryExpanded && symmetry.copies > 1) {
-      const paths = transformPointsBySymmetry(op.points || [], symmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
+      const paths = transformPointsBySymmetry(op.points || [], symmetry, docW, docH);
       paths.forEach((points, copyIndex) => applyOp(
         ctx,
         {
@@ -54,6 +56,8 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
         onImage,
         mix,
         deferred,
+        docW,
+        docH,
       ));
       return;
     }
@@ -76,7 +80,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred) {
           const readyQueue = deferred.get(op.strokeId);
           deferred.delete(op.strokeId);
           if (!ok || !readyQueue) return;
-          for (const queuedOp of readyQueue.ops) applyOp(ctx, queuedOp, lastMap, strokes, onImage, mix, deferred);
+          for (const queuedOp of readyQueue.ops) applyOp(ctx, queuedOp, lastMap, strokes, onImage, mix, deferred, docW, docH);
           onImage?.();
         });
       }
@@ -193,43 +197,51 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // canvas, replay ONE frame's complete op list onto it, and settle async
 // assets (embedded images, stamp-brush tips) before returning. The canvas is
 // caller-owned and reusable so a 500-frame film never stacks allocations.
-export async function replayFrameOnto(canvas, ops) {
+// `docW`/`docH` default to the canvas's own size; callers using a scaled target
+// can explicitly preserve the source world's symmetry axes and mix map.
+export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = canvas.height) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Pre-decode embedded images so applyOp's own Image() hits a warm cache and
-  // lands within the settle window below.
+  // Decode embedded images up front, then paint them synchronously in op
+  // order below. A warm cache still dispatches Image.onload asynchronously:
+  // letting applyOp schedule it would put a checkpoint ON TOP of later ink.
   const imageOps = ops.filter((op) => op.kind === "image" && op.dataUrl);
+  const decodedImages = new Map();
   await Promise.all(
-    imageOps.map(
-      (op) =>
+    [...new Set(imageOps.map((op) => op.dataUrl))].map(
+      (dataUrl) =>
         new Promise((resolve) => {
           const img = new Image();
-          img.onload = resolve;
-          img.onerror = resolve;
-          img.src = op.dataUrl;
+          img.onload = () => { decodedImages.set(dataUrl, img); resolve(); };
+          img.onerror = () => resolve();
+          img.src = dataUrl;
         }),
     ),
   );
 
-  const mix = createMixMap(() => canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
+  const mix = createMixMap(() => canvas, docW, docH);
   const lastMap = new Map();
   const strokes = new Map();
   const deferred = new Map();
   for (const op of ops) {
-    applyOp(ctx, op, lastMap, strokes, null, mix, deferred);
+    if (op.kind === "image") {
+      const img = decodedImages.get(op.dataUrl);
+      if (img) {
+        ctx.drawImage(img, op.x, op.y, op.w, op.h);
+        mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
+      }
+      continue;
+    }
+    applyOp(ctx, op, lastMap, strokes, null, mix, deferred, docW, docH);
   }
   // Stamp-brush strokes may be parked until their tips load; wait them out.
   const deadline = Date.now() + 10000;
   while (deferred.size > 0 && Date.now() < deadline) {
     await sleep(50);
-  }
-  // Give warm-cache image onloads a beat to land.
-  if (imageOps.length > 0) {
-    await sleep(100);
   }
   // Commit anything still open (legacy strokes with no end marker).
   for (const [id, entry] of strokes) {

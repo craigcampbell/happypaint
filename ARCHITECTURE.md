@@ -54,6 +54,8 @@ nothing breaks when unconfigured. This is the single most important invariant.
 - **Canvas** lives in `src/utils/layers.js` (CANVAS_WIDTH 4000 × HEIGHT 2500,
   `MAX_LAYERS` 6). The viewport (`viewRef {scale,tx,ty}`) maps world→CSS px;
   pinch/wheel/hand-tool pan+zoom.
+  Animation keeps the same world dimensions and an 8-frame scene cap; new
+  animation layer stacks are capped at 3 without discarding existing layers.
 - **Components** in `src/components/`: `AccountPanel` (sign-in + account delete),
   `HostControlPanel` (per-room moderation), `ColoringSheetModal` (search 6k+
   sheets), `LiveAdmin` (the `/admin` portal), `WalletPanel`/`StorePanel`/
@@ -71,6 +73,17 @@ op-agnostic relay + store:
 - Clients send `{type:'op', op:{kind, ...}}`; the server tags it with the author,
   appends to a capped per-room history (`MAX_HISTORY` 6000), and rebroadcasts.
 - **Late joiners replay the full history** → they see the whole mural.
+  The studio replays in elapsed-time slices (8ms target between operations),
+  awaits embedded images in order, and defers scene mutations until catch-up
+  finishes. A new connection or unmount cancels the previous replay.
+- Stroke points batch at 150ms or 256 queued points; pen-up flushes immediately.
+  Ordinary brush settings travel on every batch so erasers and partial-history
+  replays remain self-contained. Older settings-less batches are repaired using
+  the same author, frame, and stroke identity on the server.
+- **Client snapshots remain experimental and disabled by default.** Leave
+  `ENABLE_CLIENT_SNAPSHOTS` unset. Validation and invalidation checks do not
+  solve the live-pixel/watermark race; enabling requires an authoritative frozen
+  operation list and a separate fidelity review. Full history is the default.
 - Room history persists to `.rooms/<ROOM>.json` (debounced 2.5s) and reloads on
   boot, so restarts and empty-then-refill keep the art.
 
@@ -271,7 +284,8 @@ counts behind the admin key);
 |---|---|
 | `server.js` | Node: WS relay + static host + REST + room persistence + coloring lib |
 | `server/pocketbaseAuth.js` | Validate a PocketBase token (secret-free) |
-| `src/App.jsx` | The entire studio (`StudioApp`) + router |
+| `src/App.jsx` / `src/Router.jsx` | Studio (`StudioApp`) / lazy pathname router |
+| `src/utils/replayQueue.js` | Ordered, cancellable history slices |
 | `src/hooks/useMultiplayer.js` | WS client + host emitters |
 | `src/utils/auth.js` / `sync.js` / `economy.js` / `accountDeletion.js` | Account, gallery sync, play-money, delete |
 | `src/components/*` | AccountPanel, HostControlPanel, ColoringSheetModal, LiveAdmin, economy panels |

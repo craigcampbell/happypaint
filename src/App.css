@@ -4331,6 +4331,11 @@ button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Visible label so hosts actually discover the film-strip toggle. */
+.mp-anim-label {
+  font-weight: 600;
+  font-size: 13px;
+}
 
 /* ---- Theme vote ----------------------------------------------------------- */
 /* Vote starter in the chat header (desktop; the mobile chat-room row has its

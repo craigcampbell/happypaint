@@ -10,7 +10,7 @@
     "src/utils/symmetry.js": "880d686d96e0",
     "src/utils/shapes.js": "4d2839771715"
   },
-  "fixture": "751163d1afeb",
+  "fixture": "dac1f6859794",
   "fixtureSeed": "0x5eed0001",
   "canvas": {
     "width": 4000,
@@ -142,6 +142,13 @@
       "machineBound": false,
       "painted": 4770226,
       "ops": 262
+    },
+    "v3-september-paint": {
+      "hash": "56be2075d24169ebabc1587bd0d0099bc4c2290cb3dc386464cb02175277a557",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 1187179,
+      "ops": 390
     }
   }
 }

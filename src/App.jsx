@@ -44,6 +44,7 @@ import {
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
 import { replayFrameOnto } from "./utils/opReplay";
+import { replayInSlices } from "./utils/replayQueue";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
@@ -149,12 +150,33 @@ const MAX_GALLERY_ITEMS = 10;
 // Cap layers per artist — each is a full-size canvas, so this keeps memory and
 // compositing sane on phones/tablets.
 const MAX_LAYERS = 6;
+// Animation frames keep a SMALLER layer cap: each frame is a whole layer stack,
+// so N frames × M layers multiplies memory fast (6 layers × 8 frames would be
+// ~1.8 GiB of canvas at mural size). Three layers limits new allocations while
+// preserving the existing document coordinates and already-saved layer stacks.
+const ANIM_MAX_LAYERS = 3;
 // Max concurrent buffered remote strokes (each ≤2048x2048). Stroke #5 while
 // four are open falls back to the legacy direct per-segment path.
 const REMOTE_BUFFER_CAP = 4;
 // Remote strokes whose end-op never arrives (dropped socket, legacy client)
 // are committed by the idle sweep after this long without new points.
 const REMOTE_STROKE_IDLE_MS = 8000;
+// Wire batching: flush an in-progress stroke's queued points after this long OR
+// once this many have accumulated, whichever first. Keep settings on every op
+// so late joiners and direct eraser strokes have all they need. 150ms keeps
+// remote friends seeing strokes grow nearly-live; the point cap keeps any one
+// op well under the server's 2048-point / 128KB draw-op limits.
+const WIRE_FLUSH_MS = 150;
+const WIRE_POINTS_PER_OP = 256;
+// Canvas-mutating message types that defer while a catch-up history replay is
+// still applying (see historyReplayActiveRef) — everything else (chat, cursors,
+// presence) is ephemeral and passes through immediately. `history` + its paired
+// `snapshot` are deferred too so a moderation rebuild arriving mid-replay can't
+// start a second concurrent replay (it fully rebuilds after the first settles).
+const DEFERRED_MP_TYPES = new Set([
+  "op", "clear", "sheet", "resync", "history", "snapshot", "room_animation",
+  "frame_add", "frame_del", "frame_move", "frame_duration", "scene_add", "scene_del",
+]);
 
 // Avatar colour choices for the profile menu.
 const AVATAR_COLORS = [
@@ -241,11 +263,10 @@ const WALL_POST_WIDTH = 384;
 const WALL_POST_HEIGHT = 240;
 const FRAME_THUMB_WIDTH = 96;
 const FRAME_THUMB_HEIGHT = 60;
-// Onion-skin neighbour proxies render at half resolution: visually identical at
-// 20-28% alpha, but two warm neighbours cost a constant ~20MB instead of a fresh
-// full-res (40MB) composite allocation on every recomposite.
-const ONION_PROXY_WIDTH = CANVAS_WIDTH / 2;
-const ONION_PROXY_HEIGHT = CANVAS_HEIGHT / 2;
+// Onion-skin neighbour proxies render at half the document resolution
+// (4000x2500 → 2000x1250): visually
+// identical at 20-28% alpha, but two warm neighbours cost a constant fraction
+// of a full-res composite instead of a fresh full-res allocation per recomposite.
 
 // The toddler finger-paint room shows only chunky, wet, smeary brushes — no
 // pencils, no tech. Everything else about the studio hides there too.
@@ -705,6 +726,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const remoteStrokeLastRef = useRef(new Map()); // incoming strokeId -> last point
   const remoteStampQueueRef = useRef(new Map()); // strokeId -> { ops, loading }
   const applyRemoteOpRef = useRef(null);
+  // Chunked history replay: while a big catch-up history frame is still being
+  // applied in idle slices, canvas-mutating live messages (op / clear / sheet /
+  // resync) defer so they land AFTER the replayed history in stream order —
+  // otherwise they'd interleave into the middle of a half-rebuilt mural.
+  const historyReplayActiveRef = useRef(false);
+  const historyReplayEpochRef = useRef(0);
+  const deferredMpMessagesRef = useRef([]);
+  const handleMpMessageRef = useRef(null);
+  // A `snapshot` frame arrives right before a tail `history`; hold its dataURL
+  // so the history handler can bake it onto layer 0 before replaying the tail.
+  const pendingSnapshotRef = useRef(null);
   const sentStampIdsRef = useRef(new Set()); // imported brush tips already sent with full data this session
   // Stage-1 brush engine (#62): the local in-progress NON-eraser stroke paints
   // into a bbox-capped offscreen buffer and lands on its layer once, at the
@@ -1199,7 +1231,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           existing.durationMs = meta.durationMs;
           return existing;
         }
-        const frame = createFrame({ layers: createDefaultLayers(), durationMs: meta.durationMs });
+        const frame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: meta.durationMs });
         frame.id = meta.id; // server ids are canonical
         return frame;
       });
@@ -1654,7 +1686,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (cached && cached.stamp === stamp) {
       return cached.canvas;
     }
-    const canvas = compositeFrameToCanvas(frame, { width: ONION_PROXY_WIDTH, height: ONION_PROXY_HEIGHT });
+    const canvas = compositeFrameToCanvas(frame, { width: CANVAS_WIDTH / 2, height: CANVAS_HEIGHT / 2 });
     onionCacheRef.current.set(frame.id, { canvas, stamp });
     return canvas;
   }, []);
@@ -2006,6 +2038,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   const undo = useCallback(() => {
+    if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
     const previous = historyRef.current.pop();
     if (!previous) {
       return;
@@ -2016,6 +2049,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [applySnapshot, captureInverse, markChanged]);
 
   const redo = useCallback(() => {
+    if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
     const next = redoRef.current.pop();
     if (!next) {
       return;
@@ -2041,6 +2075,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
 
   const clearCanvas = useCallback(() => {
+    if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
     if (layersRef.current.length === 0) {
       return;
     }
@@ -2320,6 +2355,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           visible: item.visible,
           opacity: typeof item.opacity === "number" ? item.opacity : 1,
           locked: Boolean(item.locked),
+          width: CANVAS_WIDTH,
+          height: CANVAS_HEIGHT,
         });
         if (item.id) {
           layer.id = item.id;
@@ -2739,7 +2776,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           return;
         }
         pushHistory("full");
-        const layer = createLayer({ name: "Saved art" });
+        const layer = createLayer({ name: "Saved art", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         const frame = createFrame({ layers: [layer] });
         framesRef.current = [frame];
@@ -2867,7 +2904,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       pushHistory("full");
       setSelectedTexture(item.textureId || "linen");
 
-      const layer = createLayer({ name: "Artwork" });
+      const layer = createLayer({ name: "Artwork", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
       const image = await createImage(item.layer).catch(() => null);
       if (image) {
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -3006,7 +3043,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
 
   // Send the buffered points of the in-progress stroke to the room. Throttled
-  // to ~40ms mid-stroke so volume stays sane while feeling live. `end = true`
+  // to WIRE_FLUSH_MS mid-stroke so volume stays sane while feeling live. `end = true`
   // (pen-up) bypasses the throttle AND always sends — even with zero pending
   // points — because the end marker is what tells every peer to commit their
   // buffered copy of this stroke at its uniform opacity (#62).
@@ -3021,7 +3058,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       const now = Date.now();
-      if (now - net.lastSent < 40) {
+      // Larger flush window + point cap: fewer, denser ops for the same stroke.
+      if (net.pending.length < WIRE_POINTS_PER_OP && now - net.lastSent < WIRE_FLUSH_MS) {
         return;
       }
       net.lastSent = now;
@@ -3044,6 +3082,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // brush bakes a plain line into the cel.
     const stampScope = hasInlineStamp ? `${stampId}::${(animated && activeSceneIdRef.current) || "main"}` : null;
     const sendFullStamp = hasInlineStamp && !sentStampIdsRef.current.has(stampScope);
+    // Preserve the existing inline-stamp optimization. Ordinary settings must
+    // travel on every op: erasers and late joiners may have no open buffer.
     const settingsOnce = hasInlineStamp;
     const op = { kind: "draw", strokeId: net.id, points };
     if (!settingsOnce || !net.sentSettings) {
@@ -4038,8 +4078,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   const handleCanvasPointerDown = (event) => {
-    if (isExportingVideoRef.current) {
-      return; // film export is paging scenes — don't stroke into them
+    if (isExportingVideoRef.current || historyReplayActiveRef.current) {
+      return; // don't start a stroke on a scene that is still being rebuilt
     }
     // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
@@ -4407,12 +4447,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   const handleAddLayer = useCallback(() => {
-    if (layersRef.current.length >= MAX_LAYERS) {
-      setStatus(`Layer limit reached (${MAX_LAYERS} max)`);
+    const maxLayers = roomAnimationRef.current ? ANIM_MAX_LAYERS : MAX_LAYERS;
+    if (layersRef.current.length >= maxLayers) {
+      setStatus(
+        roomAnimationRef.current
+          ? `Animation frames keep ${ANIM_MAX_LAYERS} layers to protect memory`
+          : `Layer limit reached (${MAX_LAYERS} max)`,
+      );
       return;
     }
     pushHistory("full");
-    const layer = createLayer({ name: `Layer ${layersRef.current.length + 1}` });
+    const layer = createLayer({ name: `Layer ${layersRef.current.length + 1}`, width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
     layersRef.current = [...layersRef.current, layer];
     activeLayerIdRef.current = layer.id;
     renderDisplay();
@@ -4444,8 +4489,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleDuplicateLayer = useCallback(
     (id) => {
-      if (layersRef.current.length >= MAX_LAYERS) {
-        setStatus(`Layer limit reached (${MAX_LAYERS} max)`);
+      const maxLayers = roomAnimationRef.current ? ANIM_MAX_LAYERS : MAX_LAYERS;
+      if (layersRef.current.length >= maxLayers) {
+        setStatus(
+          roomAnimationRef.current
+            ? `Animation frames keep ${ANIM_MAX_LAYERS} layers to protect memory`
+            : `Layer limit reached (${MAX_LAYERS} max)`,
+        );
         return;
       }
       const index = layersRef.current.findIndex((layer) => layer.id === id);
@@ -4459,6 +4509,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         visible: source.visible,
         opacity: source.opacity,
         locked: source.locked,
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
       });
       copy.canvas = cloneLayerCanvas(source.canvas);
       const next = layersRef.current.slice();
@@ -4631,6 +4683,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // elapsed time, so authored per-frame durations are honoured even when the
   // tab was just unthrottled, and timers don't pile up in background tabs.
   const startPlayback = useCallback(() => {
+    if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
     if (framesRef.current.length <= 1) {
       return;
     }
@@ -4739,7 +4792,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleSelectFrame = useCallback(
     (index) => {
-      if (isExportingVideoRef.current) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current) {
         return; // navigation is frozen while the film renders
       }
       if (index === activeFrameIndexRef.current) {
@@ -4773,7 +4826,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       commitLayersToFrame();
       return new Promise((resolve) => {
         const waiters = sceneWaitersRef.current;
-        const done = () => resolve(true); // hydrated
+        const done = () => {
+          window.clearTimeout(timer);
+          resolve(true); // hydrated
+        };
         const list = waiters.get(sceneId) || [];
         list.push(done);
         waiters.set(sceneId, list);
@@ -4781,7 +4837,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // Never wedge an awaiting export if the socket drops mid-switch — but
         // report the timeout as FAILURE (and drop the stale waiter) so the
         // exporter aborts instead of silently encoding blank scenes.
-        window.setTimeout(() => {
+        const timer = window.setTimeout(() => {
           const current = waiters.get(sceneId);
           if (current) {
             const index = current.indexOf(done);
@@ -4789,7 +4845,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             if (current.length === 0) waiters.delete(sceneId);
           }
           resolve(false);
-        }, 8000);
+        }, 30000);
       });
     },
     [abortActiveStroke, commitLayersToFrame, stopPlayback],
@@ -4797,7 +4853,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleSelectScene = useCallback(
     (sceneId) => {
-      if (isExportingVideoRef.current) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current) {
         return; // navigation is frozen while the film renders
       }
       switchScene(sceneId);
@@ -4812,7 +4868,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Frame structure edits: in an animation room these are SHARED mutations.
   // The request goes to the server, which validates caps/locks and echoes it.
   const handleAddFrame = useCallback(() => {
-    if (isExportingVideoRef.current) {
+    if (isExportingVideoRef.current || historyReplayActiveRef.current) {
       return;
     }
     if (roomAnimationRef.current) {
@@ -4827,7 +4883,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
     commitLayersToFrame();
-    const blank = createFrame({ layers: createDefaultLayers() });
+    const blank = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT) });
     const insertAt = activeFrameIndexRef.current + 1;
     framesRef.current.splice(insertAt, 0, blank);
     activateFrame(insertAt);
@@ -4837,7 +4893,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleDuplicateFrame = useCallback(
     (index) => {
-      if (isExportingVideoRef.current) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current) {
         return;
       }
       const source = framesRef.current[index];
@@ -4865,7 +4921,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleDeleteFrame = useCallback(
     (index) => {
-      if (isExportingVideoRef.current || framesRef.current.length <= 1) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current || framesRef.current.length <= 1) {
         return;
       }
       if (roomAnimationRef.current) {
@@ -4883,7 +4939,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleMoveFrame = useCallback(
     (index, direction) => {
-      if (isExportingVideoRef.current) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current) {
         return;
       }
       const target = index + direction;
@@ -4965,7 +5021,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // playback already proved at 25fps). pointer-up lands on handleScrubEnd.
   const handleScrub = useCallback(
     (index) => {
-      if (isExportingVideoRef.current) {
+      if (isExportingVideoRef.current || historyReplayActiveRef.current) {
         return; // the film renderer owns the display while encoding
       }
       const scrub = scrubStateRef.current;
@@ -5175,6 +5231,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         width,
         height,
         count: plan.length,
+        allowMediaRecorder: !multiScene,
         durationMsAt: (i) => plan[i]?.durationMs || DEFAULT_FRAME_DURATION,
         draw: async (context, i) => {
           const item = plan[i];
@@ -5678,7 +5735,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       pushHistory("full");
-      const layer = createLayer({ name: "Remix" });
+      const layer = createLayer({ name: "Remix", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
       const image = await createImageFromBlob(snapshot.blob).catch(() => null);
       if (image) {
         // Snapshot is downscaled; draw it scaled up to the full art canvas.
@@ -5912,7 +5969,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         pushHistory();
         setSelectedTexture(asset.payload?.textureId || "linen");
-        const layer = createLayer({ name: "Template" });
+        const layer = createLayer({ name: "Template", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
         const image = await createImage(asset.payload?.image).catch(() => null);
         if (image) {
           layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -5977,7 +6034,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         pushHistory();
         const rebuilt = [];
         for (const item of savedFrames) {
-          const layer = createLayer({ name: "Frame" });
+          const layer = createLayer({ name: "Frame", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
           const image = await createImage(item.image).catch(() => null);
           if (image) {
             layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -6374,10 +6431,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
         const image = new Image();
+        const epoch = historyReplayEpochRef.current;
         // Track the decode: a scene hydration (and the film exporter waiting
         // on it) isn't complete until embedded images have actually landed.
         const settled = new Promise((resolve) => {
           image.onload = () => {
+            if (epoch !== historyReplayEpochRef.current || !framesRef.current.includes(frame)) {
+              resolve();
+              return;
+            }
             ctx.drawImage(image, op.x, op.y, op.w, op.h);
             touchFrame(frame.id);
             if (isActiveFrame(frame)) {
@@ -6390,6 +6452,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         });
         pendingAssetLoadsRef.current.push(settled);
         image.src = op.dataUrl;
+        return settled;
       }
     },
     [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, invalidateMixPrefetch, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
@@ -6399,10 +6462,40 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     applyRemoteOpRef.current = applyRemoteOp;
   }, [applyRemoteOp]);
 
+  // Apply a catch-up history frame in bounded slices, yielding to the event
+  // loop and repainting between slices so a huge mural no longer freezes the
+  // main thread for tens of seconds (the old synchronous forEach did exactly
+  // that — the canvas stayed blank until the last op landed). Returns a promise
+  // that settles once every op is applied; `liveLocalStrokeId` is skipped the
+  // same way the old loop did (our own in-flight stroke's echo is re-delivered
+  // from the local buffer, not replayed).
+  const replayHistoryChunked = useCallback(
+    (ops, liveLocalStrokeId, epoch) => {
+      const isCurrent = () => historyReplayEpochRef.current === epoch;
+      return replayInSlices(ops, async (op) => {
+        // Decode a stamp before applying later operations, just like images.
+        const dab = op?.kind === "draw" && op.settings?.v >= 3 ? getStrokeDab(op.settings) : null;
+        if (dab?.shape === "stamp" && !isBrushStampReady(dab)) await preloadBrushStamp(dab);
+        if (!isCurrent()) return;
+        if (!(op?.kind === "draw" && liveLocalStrokeId && op.strokeId === liveLocalStrokeId)) {
+          await applyRemoteOp(op);
+        }
+        if (isCurrent() && typeof op?.opId === "number" && op.opId > lastOpIdRef.current) {
+          lastOpIdRef.current = op.opId;
+        }
+      }, { isCurrent, onSlice: renderDisplay });
+    },
+    [applyRemoteOp, renderDisplay],
+  );
+
   // Buffers are transient: drop the idle sweep and every open stroke buffer
   // (local + remote) when the studio unmounts (room hop / route change).
   useEffect(
     () => () => {
+      historyReplayEpochRef.current += 1;
+      historyReplayActiveRef.current = false;
+      deferredMpMessagesRef.current = [];
+      pendingSnapshotRef.current = null;
       if (remoteSweepRef.current) {
         window.clearInterval(remoteSweepRef.current);
         remoteSweepRef.current = 0;
@@ -6422,8 +6515,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleMpMessage = useCallback(
     (data) => {
+      // While a catch-up history frame is still applying in slices, defer the
+      // canvas-mutating types so they land after it (stream order). They drain
+      // when the replay settles — see replayHistoryChunked's completion.
+      if (historyReplayActiveRef.current && DEFERRED_MP_TYPES.has(data.type)) {
+        deferredMpMessagesRef.current.push(data);
+        return;
+      }
       switch (data.type) {
         case "connected": {
+          // A fresh connection supersedes work from the previous socket.
+          historyReplayEpochRef.current += 1;
+          historyReplayActiveRef.current = false;
+          deferredMpMessagesRef.current = [];
+          pendingSnapshotRef.current = null;
           myUserIdRef.current = data.userId;
           // Join curtain: the room answered. Only the history frame that
           // follows actually puts art on the canvas, so this is not "done" yet.
@@ -6549,7 +6654,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // state — local drafts never auto-restore over it. `frames` rides
           // along: the whole flipbook rebuilds, so leaving and coming back
           // shows everything friends did in the meantime (Google-Docs model).
-          const incomingOps = data.ops || [];
+          const incomingOps = Array.isArray(data.ops) ? data.ops : [];
+          const epoch = ++historyReplayEpochRef.current;
+          historyReplayActiveRef.current = true;
+          if (playTimerRef.current) stopPlayback();
           // Scene bookkeeping: a history frame may be one SCENE's slice of the
           // film (join, page, resync). Track which scene we now hold.
           if (data.scenes) {
@@ -6574,49 +6682,89 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // Only a BUFFERED local stroke is skipped below; an in-flight eraser
           // has no buffer, so the replayed copy is its only restoration.
           const liveLocalStrokeId = localStrokeRef.current ? strokeNetRef.current?.id : null;
-          incomingOps.forEach((op) => {
-            // Our OWN in-flight stroke echoes back in the history; skip it —
-            // its single source of truth is the local buffer, which commits at
-            // pen-up (replaying it too would double-composite the overlap).
-            if (!(op?.kind === "draw" && liveLocalStrokeId && op.strokeId === liveLocalStrokeId)) {
-              applyRemoteOp(op);
+          // A preceding `snapshot` frame baked a PNG of the mural — draw it onto
+          // layer 0 first, then replay only the tail ops (the server already
+          // filtered the history to what came after the snapshot's opId).
+          const pendingSnapshot = pendingSnapshotRef.current;
+          pendingSnapshotRef.current = null;
+          // Apply the catch-up in bounded slices (progressive + non-blocking —
+          // the old synchronous forEach froze the thread and left the canvas
+          // blank until the very last op). The completion runs the once-per-
+          // frame finalization below, THEN drains any live messages that were
+          // deferred while the replay was in flight.
+          void (async () => {
+            if (pendingSnapshot) {
+              const snapFrame = framesRef.current[0];
+              const snapLayer = snapFrame?.layers?.[0];
+              if (snapFrame && snapLayer) {
+                const snapCtx = snapLayer.canvas.getContext("2d");
+                await new Promise((resolve) => {
+                  const img = new Image();
+                  img.onload = () => {
+                    if (historyReplayEpochRef.current === epoch) {
+                      try { snapCtx.drawImage(img, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); } catch { /* ignore */ }
+                    }
+                    resolve();
+                  };
+                  img.onerror = () => resolve();
+                  img.src = pendingSnapshot.dataUrl;
+                });
+                if (historyReplayEpochRef.current !== epoch) return;
+                touchFrame(snapFrame.id);
+              }
             }
-            if (typeof op?.opId === "number" && op.opId > lastOpIdRef.current) lastOpIdRef.current = op.opId;
+            if (!(await replayHistoryChunked(incomingOps, liveLocalStrokeId, epoch))) return;
+            // Replayed strokes with no end marker (legacy clients, strokes cut
+            // off by the snapshot) stay open above — commit them all now.
+            commitAllRemoteStrokes();
+            // Every cel was rebuilt wholesale: stale-mark all proxies + thumbs.
+            framesRef.current.forEach((frame) => touchFrame(frame.id));
+            nsfwWatcherRef.current?.markDirty();
+            // The active frame's layer 0 was rebuilt — re-mirror the wet-mix map
+            // on its next sample, and repaint the visible composite.
+            mixMapRef.current?.markAllDirty();
+            renderDisplay();
+            // Join curtain: everyone's art is now ON the canvas. This is the real
+            // "the experience has loaded" moment, so the bar finishes here.
+            setJoinStep((step) => Math.max(step, 3));
+            if (data.restored) {
+              setClearBanner(null);
+              setStatus("Canvas brought back 🎉");
+            }
+            // Now that a scene is hydrated (join or scene-switch), let the crew
+            // know which cel we're parked on so their pips include us.
+            announcePresence();
+            // Wake anything awaiting this scene's hydration (export stitching) —
+            // but only after embedded image ops finish decoding, or the exporter
+            // would encode frames whose pictures haven't landed yet.
+            if (data.sceneId) {
+              const waiters = sceneWaitersRef.current.get(data.sceneId);
+              if (waiters) {
+                sceneWaitersRef.current.delete(data.sceneId);
+                const pendingLoads = pendingAssetLoadsRef.current.splice(0);
+                Promise.allSettled(pendingLoads).then(() => {
+                  if (historyReplayEpochRef.current !== epoch) return;
+                  renderDisplay();
+                  waiters.forEach((resolve) => resolve());
+                });
+              }
+            }
+            // Drain deferred canvas messages (op / clear / sheet / resync) so
+            // they apply AFTER the replayed history, in stream order.
+            pendingAssetLoadsRef.current = [];
+            historyReplayActiveRef.current = false;
+            const deferred = deferredMpMessagesRef.current;
+            deferredMpMessagesRef.current = [];
+            for (const d of deferred) {
+              handleMpMessageRef.current?.(d);
+            }
+          })().catch(() => {
+            if (historyReplayEpochRef.current !== epoch) return;
+            historyReplayActiveRef.current = false;
+            deferredMpMessagesRef.current = [];
+            setStatus("Couldn't finish loading the drawing. Reload the room to try again.");
+            showToast("Couldn't finish loading the drawing. Reload to try again.");
           });
-          // Replayed strokes with no end marker (legacy clients, strokes cut
-          // off by the snapshot) stay open above — commit them all now.
-          commitAllRemoteStrokes();
-          // Every cel was rebuilt wholesale: stale-mark all proxies + thumbs.
-          framesRef.current.forEach((frame) => touchFrame(frame.id));
-          nsfwWatcherRef.current?.markDirty();
-          // The active frame's layer 0 was rebuilt — re-mirror the wet-mix map
-          // on its next sample, and repaint the visible composite.
-          mixMapRef.current?.markAllDirty();
-          renderDisplay();
-          // Join curtain: everyone's art is now ON the canvas. This is the real
-          // "the experience has loaded" moment, so the bar finishes here.
-          setJoinStep((step) => Math.max(step, 3));
-          if (data.restored) {
-            setClearBanner(null);
-            setStatus("Canvas brought back 🎉");
-          }
-          // Now that a scene is hydrated (join or scene-switch), let the crew
-          // know which cel we're parked on so their pips include us.
-          announcePresence();
-          // Wake anything awaiting this scene's hydration (export stitching) —
-          // but only after embedded image ops finish decoding, or the exporter
-          // would encode frames whose pictures haven't landed yet.
-          if (data.sceneId) {
-            const waiters = sceneWaitersRef.current.get(data.sceneId);
-            if (waiters) {
-              sceneWaitersRef.current.delete(data.sceneId);
-              const pendingLoads = pendingAssetLoadsRef.current.splice(0);
-              Promise.allSettled(pendingLoads).then(() => {
-                renderDisplay();
-                waiters.forEach((resolve) => resolve());
-              });
-            }
-          }
           break;
         }
         case "resync": {
@@ -6676,6 +6824,47 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // everyone else keeps painting and can open it from the strip.
             if (isRoomHostRef.current) setShowStoryboard(true);
           }
+          break;
+        }
+        case "snapshot": {
+          // A baked mural PNG sent right before a tail history frame. Hold it;
+          // the history handler draws it onto layer 0 before replaying the ops
+          // that came after it (the server filters those for us).
+          if (typeof data.opId === "number" && typeof data.dataUrl === "string" && data.dataUrl.startsWith("data:image/")) {
+            pendingSnapshotRef.current = { opId: data.opId, dataUrl: data.dataUrl };
+          }
+          break;
+        }
+        case "snapshot_request": {
+          // The server elected us to bake the current mural into a catch-up
+          // snapshot (the room just got big). Render layer 0 — the canonical
+          // replay target — to a full-res PNG and upload it, off the hot path.
+          const snapFrame = framesRef.current[0];
+          const snapLayer = snapFrame?.layers?.[0];
+          if (!snapFrame || !snapLayer) break;
+          // Defensive: if our own mural is still replaying, layer 0 is
+          // incomplete — a snapshot now would bake a half-empty canvas. The
+          // server normally elects an established member, so this is rare; it
+          // re-requests after the cooldown.
+          if (historyReplayActiveRef.current) break;
+          const snapCanvas = snapLayer.canvas;
+          const snapOpId = lastOpIdRef.current;
+          window.setTimeout(() => {
+            try {
+              let dataUrl = snapCanvas.toDataURL("image/png");
+              // A dense mural's full-res PNG can exceed the WS payload cap —
+              // fall back to a high-quality JPEG (snapshots are a visual
+              // starting point, not byte-parity-gated).
+              if (dataUrl.length > 12 * 1024 * 1024) {
+                dataUrl = snapCanvas.toDataURL("image/jpeg", 0.9);
+              }
+              if (dataUrl.length > 14 * 1024 * 1024) return; // still too big — skip
+              mpRef.current?.sendSnapshot?.(snapOpId, dataUrl);
+            } catch {
+              // Tainted canvas (cross-origin sheet) or memory pressure — skip;
+              // the next joiner just replays full history.
+            }
+          }, 100);
           break;
         }
         case "op": {
@@ -6843,7 +7032,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           commitLayersToFrame();
           const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
-          const frame = createFrame({ layers: createDefaultLayers(), durationMs: data.frame.durationMs || DEFAULT_FRAME_DURATION });
+          const frame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: data.frame.durationMs || DEFAULT_FRAME_DURATION });
           frame.id = data.frame.id; // server ids are canonical
           if (data.duplicateOf) {
             // Pixel-clone the source's visible composite; the server copied the
@@ -6851,7 +7040,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             commitAllRemoteStrokes();
             const source = framesRef.current.find((f) => f.id === data.duplicateOf);
             if (source) {
-              frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source), 0, 0);
+              frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }), 0, 0);
             }
           }
           const insertIndex = afterIndex >= 0 ? afterIndex + 1 : framesRef.current.length;
@@ -7231,8 +7420,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
+
+  // Deferred messages drain by re-entering handleMpMessage, so it needs a
+  // stable self-reference (the same pattern applyRemoteOpRef uses above).
+  useEffect(() => {
+    handleMpMessageRef.current = handleMpMessage;
+  }, [handleMpMessage]);
 
   const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
 
@@ -7348,6 +7543,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   useEffect(() => {
     mpRef.current = {
       sendOp: relayOp,
+      sendSnapshot: mp.sendSnapshot,
       sendCursor: mp.sendCursor,
       sendClear: mp.sendClear,
       sendRestore: mp.sendRestore,
@@ -7393,7 +7589,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -7871,8 +8067,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     overlay.height = CANVAS_HEIGHT;
     overlayContextRef.current = overlay.getContext("2d", { alpha: true });
 
-    // The 1600x1200 art-resolution document everything composites into.
-    const doc = createLayerCanvas();
+    // Murals and animation share the same persisted world coordinates.
+    const doc = createLayerCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
     docCanvasRef.current = doc;
     docContextRef.current = doc.getContext("2d", { alpha: true });
 
@@ -7880,7 +8076,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // resizeDisplayCanvas creates its context and performs the first blit.
     resizeDisplayCanvas();
 
-    const firstFrame = createFrame({ layers: createDefaultLayers() });
+    const firstFrame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT) });
     framesRef.current = [firstFrame];
     activeFrameIndexRef.current = 0;
     layersRef.current = firstFrame.layers;
@@ -8612,7 +8808,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   : "Animation — unlock the shared film strip for this room"
               }
             >
-              🎬
+              <span aria-hidden="true">🎬</span>{" "}
+              <span className="mp-anim-label">Animation</span>
             </button>
           ) : null}
 
