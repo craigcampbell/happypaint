@@ -269,6 +269,18 @@ const smudgeSettings = ({ size, strength }) => ({
   strength,
 });
 
+// Goo ops exactly as startStroke puts them on the wire: v:3 + gooiness
+// (opacity forced to 1 — gooiness IS goo's strength).
+const gooSettings = ({ size, gooiness }) => ({
+  brush: "goo",
+  color: COLORS.yellow,
+  size,
+  opacity: 1,
+  variation: 0,
+  seed: nextSeed(),
+  gooiness,
+  v: 3,
+});
 // ---- Groups ------------------------------------------------------------------------
 // (a) Legacy draw ops (no `v`): the pre-Stage-2 history of every brush that
 // went through drawBrushSegment. Unseeded = Math.random (never gates);
@@ -632,6 +644,32 @@ const v3PhysicsGroup = () => {
   return ops;
 };
 
+// ---- Stage 6 group: gooey finger paint ------------------------------------------
+// A red|blue field, thick + runny goo passes across the boundary (displacement
+// smears it, the yellow pigment lays on top), and a goo stroke that leaves the
+// field onto blank paper (the carried paint thins out). Deterministic: goo has
+// no dice — it is a pure function of the points + the sampled layer 0.
+const v3GooGroup = () => {
+  const boundary = 2000;
+  const ops = [
+    { kind: "shape", tool: "rect", start: { x: 600, y: 400 }, end: { x: boundary, y: 2100 }, opts: { color: COLORS.red, size: 8, opacity: 1, fillShape: true } },
+    { kind: "shape", tool: "rect", start: { x: boundary, y: 400 }, end: { x: 3400, y: 2100 }, opts: { color: COLORS.mixBlue, size: 8, opacity: 1, fillShape: true } },
+  ];
+  const pass = (y, from, to, count = 120) => {
+    const points = [];
+    for (let i = 0; i < count; i += 1) {
+      const t = i / (count - 1);
+      points.push({ x: from + (to - from) * t, y: y + 6 * Math.sin(t * Math.PI * 4), pressure: 0.7 });
+    }
+    return points;
+  };
+  ops.push(...strokeOps("gooThick", gooSettings({ size: 48, gooiness: 0.85 }), pass(700, boundary - 260, boundary + 260)));
+  ops.push(...strokeOps("gooRunny", gooSettings({ size: 48, gooiness: 0.15 }), pass(1100, boundary + 260, boundary - 260)));
+  // Carry: from inside the red field out past its left edge onto blank paper.
+  ops.push(...strokeOps("gooCarry", gooSettings({ size: 48, gooiness: 0.5 }), pass(1500, 1000, 100, 160)));
+  return ops;
+};
+
 // ---- Assemble ------------------------------------------------------------------------
 const groups = [
   {
@@ -663,6 +701,8 @@ const groups = [
   { name: "v3-september-paint", deterministic: true, note: "September 2026 authoring presets: updated watercolor/oil plus Wet Wash/Palette Knife, dry blue and wet yellow crossing at sizes 12/40/90; all earlier groups remain frozen", ops: v3SeptemberPaintGroup() },
   // Stage 5 (appended).
   { name: "v3-physics", deterministic: true, note: "Stage 5/6: pen tilt (lean ramp + twist) on oil/acrylic, splay under pressure, the wash reservoir draining over a long stroke (charge), wet-into-wet spread over under-paint (diffuse), and the leaned-mop pools-downhill shift (pool)", ops: v3PhysicsGroup() },
+  // Stage 6 goo (appended).
+  { name: "v3-goo", deterministic: true, note: "Stage 6: gooey finger paint (displacement + pigment) — thick and runny passes over a red|blue field plus a carry stroke that leaves the field", ops: v3GooGroup() },
 ];
 
 const fixture = {

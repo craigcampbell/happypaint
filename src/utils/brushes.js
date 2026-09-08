@@ -218,6 +218,20 @@ export const brushCatalog = [
     description: "Drag and blend the paint that's already there — like a finger on wet paint.",
   },
   {
+    // No `dab`: goo is special-cased BY ID in every consumer (Stage 6), like
+    // smudge — it has no dab params and no commit passes. It is the gooey
+    // finger paint: displacement + pigment in one dab walk, with `settings.
+    // gooiness` (0 = runny, 1 = thick) captured into the op at pen-down.
+    // privateOnly: dropped in kid_safe rooms (server + client), like smudge;
+    // the finger-paint / fun rooms are the exception.
+    id: "goo",
+    name: "Goo",
+    icon: "🫠",
+    tier: "free",
+    privateOnly: true,
+    description: "Squishy finger paint — drags the colour underneath and leaves a gooey blob. Set how thick with Gooeyness.",
+  },
+  {
     id: "glow",
     name: "Glow",
     icon: "✨",
@@ -2394,6 +2408,35 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
       pad: strokeBufferPad(settings, null),
     };
   }
+  if (settings.brush === "goo") {
+    // Stage 6 gooey: displacement + pigment, buffered exactly like v3 smudge.
+    // No dab, no commit passes, source-over, opacity 1 (gooiness is goo's
+    // strength; the opacity slider is hidden for it). Samples the pre-stroke
+    // layer 0 (smudgeSource) and the mix map (getMix). Past a consumer's
+    // buffer cap there is no direct fallback, so it gets a SKIP entry like
+    // smudge — a consistently missing stroke, never a partial one.
+    if (!buffered || !smudgeSource) {
+      return {
+        buf: null,
+        renderer: null,
+        fx: null,
+        composite: "source-over",
+        opacity: 1,
+        drawSettings: { ...settings, opacity: 1 },
+        pad: strokeBufferPad(settings, null),
+        skip: true,
+      };
+    }
+    return {
+      buf: createStrokeBuffer(),
+      renderer: makeGooRenderer(settings, smudgeSource, getMix),
+      fx: null,
+      composite: "source-over",
+      opacity: 1,
+      drawSettings: { ...settings, opacity: 1 },
+      pad: strokeBufferPad(settings, null),
+    };
+  }
   const dab = getStrokeDab(settings);
   if (settings.v >= 3 && !dab) {
     return null;
@@ -2920,6 +2963,273 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
   // prepareStrokeCommit never asks; null means "the whole buffer" anyway)
   // and nothing to restart on an overflow bank: the walk and the carry
   // survive a buffer restart as they are, like every dab renderer's.
+  const end = () => {};
+  const inkBounds = () => null;
+  const resetInk = () => {};
+
+  return { addPoints, end, inkBounds, resetInk };
+}
+
+// ---------------------------------------------------------------------------
+// Gooey finger paint (Stage 6): ONE dab walk that merges the two mechanisms
+// the engine already ships — displacement (smudge drag) and a wet-tinted
+// pigment deposit. The dab first re-stamps the paint TRAILING the motion (the
+// v3 smudge carry pad + feather, reusing the same singleton scratches), then
+// lays a soft blob of the brush's own colour, whose pigment bends toward what
+// it crosses via the mix map. `gooiness` (0 = runny tempera, 1 = thick
+// pudding) is the ONE knob, captured into the op at pen-down like smudge's
+// strength, so replay is deterministic; it maps onto the smear strength, the
+// trail length, the pigment pickup and the finger-load turnover.
+//
+// Determinism: no dice. The walk, the carry and the pigment are pure functions
+// of the fed point sequence + the mix-map sample (op-order deterministic). The
+// carry scratch is the SAME singleton the v3 smudge drag uses, so two goo /
+// smudge strokes that interleave in one consumer share it — the documented,
+// bounded live-overlap divergence (cleared at every stroke start). Like
+// smudge, goo samples the PRE-stroke layer 0 (`sourceCanvas`) and commits once
+// at pen-up through a stroke buffer, so opacity is locked to 1.
+
+const GOO_MIN_SIZE = 0.35;
+const GOO_SPACING = 0.16;
+const GOO_FLOW = 0.55; // base alpha of the pigment blob (pressure-scaled)
+
+// The one reading of a goo op's settings (gooiness 0..1 + the shared size
+// clamp); missing / hostile values degrade to the defaults, never throw.
+export function normalizeGooSettings(settings) {
+  const s = settings || {};
+  const gooiness = typeof s.gooiness === "number" && Number.isFinite(s.gooiness) ? s.gooiness : 0.5;
+  const size = typeof s.size === "number" && Number.isFinite(s.size) && s.size > 0 ? s.size : 24;
+  return {
+    gooiness: clamp(gooiness, 0, 1),
+    size: clamp(size, 1, 160),
+  };
+}
+
+export function makeGooRenderer(settings, sourceCanvas, getMix) {
+  const { gooiness, size } = normalizeGooSettings(settings);
+  const color = settings.color;
+  // Viscosity → physics (0 = runny, 1 = thick): the roadmap's goo-thick /
+  // paint-runny presets, interpolated. Frozen once shipped — a goo op carries
+  // only gooiness, so these numbers ARE the persisted look.
+  const smear = 0.2 + 0.4 * gooiness; // displacement re-stamp alpha
+  const drag = 0.5 - 0.25 * gooiness; // sample trail, fraction of dab size
+  const pickup = 0.5 - 0.35 * gooiness; // pigment bend toward under-paint
+  const dragRate = 0.3 - 0.22 * gooiness; // carried-colour chase
+  const carryFade = 0.04 + 0.06 * (1 - gooiness); // finger-load turnover per dab
+  const baseRgb = parseColorRgb(color);
+  const dabSizeAt = (pressure) => size * (GOO_MIN_SIZE + (1 - GOO_MIN_SIZE) * Math.pow(pressure, 1.35));
+  // Pressure drives deposit strength, like smudge.
+  const strengthAt = (pressure) => smear * (0.35 + 0.65 * pressure * (0.5 + 0.5 * pressure));
+  const feather = getSoftMaskInverse();
+  const sampler = typeof getMix === "function" ? getMix : null;
+
+  // Carried pigment colour (floats) — the deposit's tint, chasing the paint
+  // the goo crosses. Per renderer, not a singleton: remote strokes interleave
+  // with the local one, each carrying its own colour.
+  let carryR = baseRgb[0];
+  let carryG = baseRgb[1];
+  let carryB = baseRgb[2];
+  const depositRgb = [baseRgb[0], baseRgb[1], baseRgb[2]]; // the blob's tint, written per dab
+
+  // The scratches are re-fetched per addPoints call (releaseBrushSprites can
+  // drop them mid-stroke — see makeSmudgeV3Renderer); the carry is cleared on
+  // first bind so the finger starts clean. Same singletons as smudge drag.
+  let scratch = null;
+  let scratchCtx = null;
+  let carry = null;
+  let carryCtx = null;
+  const bindScratches = () => {
+    const nextScratch = getSmudgeScratch();
+    if (nextScratch !== scratch) {
+      scratch = nextScratch;
+      scratchCtx = scratch ? scratch.getContext("2d") : null;
+      if (scratchCtx) {
+        scratchCtx.setTransform(1, 0, 0, 1, 0, 0);
+        scratchCtx.globalAlpha = 1;
+      }
+    }
+    const nextCarry = getCarryScratch();
+    if (nextCarry !== carry) {
+      carry = nextCarry;
+      carryCtx = carry ? carry.getContext("2d") : null;
+      if (carryCtx) {
+        carryCtx.setTransform(1, 0, 0, 1, 0, 0);
+        carryCtx.globalCompositeOperation = "source-over";
+        carryCtx.globalAlpha = 1;
+        carryCtx.fillStyle = "#000000";
+        carryCtx.clearRect(0, 0, carry.width, carry.height);
+      }
+    }
+    return scratchCtx != null && carryCtx != null && feather != null;
+  };
+
+  // The dab's footprint on layer 0, clamped to the canvas (the smudge rule).
+  let fx = 0;
+  let fy = 0;
+  let fw = 0;
+  let fh = 0;
+  let fdx = 0;
+  let fdy = 0;
+  const clipFootprint = (ux, uy, sizePx, x, y) => {
+    const half = sizePx / 2;
+    fx = ux;
+    fy = uy;
+    fw = sizePx;
+    fh = sizePx;
+    fdx = x - half;
+    fdy = y - half;
+    if (fx < 0) {
+      fdx -= fx;
+      fw += fx;
+      fx = 0;
+    }
+    if (fy < 0) {
+      fdy -= fy;
+      fh += fy;
+      fy = 0;
+    }
+    if (fx + fw > sourceCanvas.width) {
+      fw = sourceCanvas.width - fx;
+    }
+    if (fy + fh > sourceCanvas.height) {
+      fh = sourceCanvas.height - fy;
+    }
+    return fw >= 1 && fh >= 1;
+  };
+
+  // Layer 0's [fx, fy, fw, fh] -> scratch (0, 0), feathered by the inverse
+  // mask centred on the UNCLIPPED dab (identical to the smudge drag sample).
+  const sampleFootprint = (ux, uy, sizePx) => {
+    scratchCtx.globalCompositeOperation = "source-over";
+    scratchCtx.globalAlpha = 1;
+    scratchCtx.clearRect(0, 0, fw + 1, fh + 1);
+    scratchCtx.drawImage(sourceCanvas, fx, fy, fw, fh, 0, 0, fw, fh);
+    scratchCtx.globalCompositeOperation = "destination-out";
+    const cell = sizePx * SMUDGE_MASK_CELL;
+    scratchCtx.drawImage(feather, ux - fx + (sizePx - cell) / 2, uy - fy + (sizePx - cell) / 2, cell, cell);
+  };
+
+  // DAB-PATH-BEGIN — the goo per-dab path. Layer 0 is a drawImage SOURCE (into
+  // the scratch) or a DESTINATION (the deposit) never both in one call; every
+  // step is a bounded fill / drawImage — no readbacks, no allocation, no
+  // save/restore. `ctx` is the stroke buffer's context (world coords): the
+  // displacement and the pigment accumulate there and commit once at pen-up.
+  const emitDab = (ctx, x, y, pressure, angle) => {
+    const sizePx = dabSizeAt(pressure);
+    const half = sizePx / 2;
+    // Displacement: only once the motion has a direction (a tap has none, so
+    // it lays pigment alone).
+    if (angle != null) {
+      const shift = sizePx * drag;
+      const ux = x - Math.cos(angle) * shift - half;
+      const uy = y - Math.sin(angle) * shift - half;
+      if (clipFootprint(ux, uy, sizePx, x, y)) {
+        sampleFootprint(ux, uy, sizePx);
+        const padK = SMUDGE_PAD / sizePx;
+        const px = (fx - ux) * padK;
+        const py = (fy - uy) * padK;
+        const pw = fw * padK;
+        const ph = fh * padK;
+        const alpha = strengthAt(pressure);
+        carryCtx.globalCompositeOperation = "destination-out";
+        carryCtx.globalAlpha = carryFade;
+        carryCtx.fillRect(0, 0, SMUDGE_PAD, SMUDGE_PAD);
+        carryCtx.globalCompositeOperation = "destination-over";
+        carryCtx.globalAlpha = 1;
+        carryCtx.drawImage(scratch, 0, 0, fw, fh, px, py, pw, ph);
+        carryCtx.globalCompositeOperation = "destination-out";
+        carryCtx.drawImage(feather, SMUDGE_PAD_MASK_ORIGIN, SMUDGE_PAD_MASK_ORIGIN, SMUDGE_PAD_MASK_CELL, SMUDGE_PAD_MASK_CELL);
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(carry, px, py, pw, ph, fdx, fdy, fw, fh);
+      }
+    }
+    // Pigment: the brush's own colour, dragged toward what it crosses. A
+    // sampled dab bends by `pickup`; blank paper lets the carry relax (it
+    // stays where it is — no re-supply, so a picked-up hue persists like a
+    // dirty finger, which is the goo toy).
+    if (sampler) {
+      const sampled = sampler(x, y);
+      if (sampled) {
+        carryR += (sampled[0] - carryR) * dragRate;
+        carryG += (sampled[1] - carryG) * dragRate;
+        carryB += (sampled[2] - carryB) * dragRate;
+        depositRgb[0] = carryR + (sampled[0] - carryR) * pickup;
+        depositRgb[1] = carryG + (sampled[1] - carryG) * pickup;
+        depositRgb[2] = carryB + (sampled[2] - carryB) * pickup;
+      } else {
+        depositRgb[0] = carryR;
+        depositRgb[1] = carryG;
+        depositRgb[2] = carryB;
+      }
+    }
+    const r = depositRgb[0] < 0 ? 0 : depositRgb[0] > 255 ? 255 : (depositRgb[0] + 0.5) | 0;
+    const g = depositRgb[1] < 0 ? 0 : depositRgb[1] > 255 ? 255 : (depositRgb[1] + 0.5) | 0;
+    const b = depositRgb[2] < 0 ? 0 : depositRgb[2] > 255 ? 255 : (depositRgb[2] + 0.5) | 0;
+    // The soft feather tinted (5-bit ring slot, like every wet sprite dab);
+    // no sample → the tint stays the carry (falls back to the brush colour).
+    const slot = getTintedSprite("softMask", 0, r, g, b);
+    if (slot) {
+      ctx.globalAlpha = GOO_FLOW * (0.35 + 0.65 * pressure);
+      ctx.drawImage(slot, x - half, y - half, sizePx, sizePx);
+    }
+  };
+  // DAB-PATH-END
+
+  // The batching-proof walk (per-stroke residual + stationary-point skip, fed
+  // one point at a time), with a first-point pigment-only dab so a tap leaves
+  // a blob.
+  let lastX = 0;
+  let lastY = 0;
+  let lastP = 0;
+  let residual = 0;
+  let started = false;
+
+  const addPoints = (ctx, points) => {
+    if (!bindScratches()) {
+      return; // no DOM / no sprites: nothing to smear or lay down
+    }
+    ctx.globalCompositeOperation = "source-over";
+    let emitted = 0;
+    for (const raw of points) {
+      const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
+      if (!started) {
+        started = true;
+        emitDab(ctx, raw.x, raw.y, pressure, null); // tap: pigment, no trail
+        residual = Math.max(DAB_MIN_STEP, GOO_SPACING * dabSizeAt(pressure));
+        lastX = raw.x;
+        lastY = raw.y;
+        lastP = pressure;
+        continue;
+      }
+      const sdx = raw.x - lastX;
+      const sdy = raw.y - lastY;
+      const d = Math.hypot(sdx, sdy);
+      if (d < 1e-6) {
+        continue; // stationary pressure-only update — see makeStrokeRenderer
+      }
+      const angle = Math.atan2(sdy, sdx);
+      let pos = residual;
+      while (pos <= d) {
+        const t = pos / d;
+        const p = lastP + (pressure - lastP) * t;
+        emitDab(ctx, lastX + sdx * t, lastY + sdy * t, p, angle);
+        emitted += 1;
+        let step = Math.max(DAB_MIN_STEP, GOO_SPACING * dabSizeAt(p));
+        if (emitted > DAB_CAP) {
+          step *= Math.min(16, 2 ** Math.floor(emitted / DAB_CAP)); // giant-flick guardrail
+        }
+        pos += step;
+      }
+      residual = pos - d;
+      lastX = raw.x;
+      lastY = raw.y;
+      lastP = pressure;
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  // No commit passes (fx is null), no ink bbox, nothing to flush at pen-up;
+  // the walk + carry survive an overflow restart like smudge's.
   const end = () => {};
   const inkBounds = () => null;
   const resetInk = () => {};

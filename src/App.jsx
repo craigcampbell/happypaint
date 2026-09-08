@@ -270,11 +270,11 @@ const FRAME_THUMB_HEIGHT = 60;
 
 // The toddler finger-paint room shows only chunky, wet, smeary brushes — no
 // pencils, no tech. Everything else about the studio hides there too.
-const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge"]);
+const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge", "goo"]);
 // "Fun" brush mode (per-room toggle): a bold, wet, smeary subset for loose
 // painting. Realistic mode shows the full catalog. (The toddler room keeps its
 // own tighter set above.)
-const FUN_BRUSHES = new Set(["marker", "crayon", "paint", "watercolor", "watercolor-wet", "gouache", "glow", "spray", "smudge", "eraser"]);
+const FUN_BRUSHES = new Set(["marker", "crayon", "paint", "watercolor", "watercolor-wet", "gouache", "glow", "spray", "smudge", "goo", "eraser"]);
 // The brush list a room shows, given its finger-paint kind and brush mode.
 const visibleBrushList = (fingerPaint, brushMode) => {
   if (fingerPaint) return brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id));
@@ -943,6 +943,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // pulls paint), independent of brush opacity so switching brushes doesn't
   // clobber it. Rides the op so replay is deterministic.
   const [smudgeStrength, setSmudgeStrength] = useState(0.5);
+  // Gooeyness: the goo brush's viscosity (0 = runny tempera, 1 = thick
+  // pudding). Session-local like smudge strength; rides the op as
+  // settings.gooiness so replay is deterministic.
+  const [gooiness, setGooiness] = useState(0.5);
   // Smudge | Blend (brush engine Stage 4): "drag" pushes paint along with
   // the finger and carries colour; "blend" softens in place. Rides the op as
   // settings.smudgeMode (with v: 3) so every consumer renders the same mode.
@@ -1438,6 +1442,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       variation: brushVariation,
       strength: smudgeStrength, // smudge blend strength (ignored by other brushes)
       smudgeMode, // smudge only: "drag" | "blend"
+      gooiness, // goo only: 0 = runny, 1 = thick
       v: recipeSettings?.v,
       dab: recipeSettings?.dab,
       texture: selectedTexture,
@@ -1457,6 +1462,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     selectedTool,
     smudgeMode,
     smudgeStrength,
+    gooiness,
     studioUnlocked,
     textSize,
   ]);
@@ -3537,7 +3543,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // guards restored drafts / audience races — without the fingerPaint
       // exception it would silently turn FINGERS smudge into a colored marker.
       const smudgeBlocked = roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current;
-      const brushId = settings.brush === "smudge" && smudgeBlocked ? "marker" : settings.brush;
+      const brushId = (settings.brush === "smudge" || settings.brush === "goo") && smudgeBlocked ? "marker" : settings.brush;
       if (roomAudienceRef.current === "kid_safe" && settings.dab?.shape === "stamp") {
         setStatus("Imported brushes work in private rooms");
         event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -3547,7 +3553,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       const authoringDab = settings.v >= 3 && settings.dab
         ? { version: 3, dab: settings.dab }
-        : brushId === "eraser" || brushId === "smudge" ? null : getAuthoringDab(brushId);
+        : brushId === "eraser" || brushId === "smudge" || brushId === "goo" ? null : getAuthoringDab(brushId);
       const dab = authoringDab?.dab || null;
       if (dab?.shape === "stamp" && !isBrushStampReady(dab)) {
         setStatus("Brush tip is still loading");
@@ -3560,9 +3566,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       velocityRef.current.lastT = null;
       velocityRef.current.ema = null;
       lastPointRef.current = getPoint(event.nativeEvent);
-      // Smudge edits LAYER 0 even when another layer is active — snapshot the
-      // full stack in that case so undo restores the right layer's pixels.
-      pushHistory(brushId === "smudge" && activeLayerIdRef.current !== layersRef.current[0]?.id ? "full" : "active");
+      // Smudge + goo edit LAYER 0 even when another layer is active — snapshot
+      // the full stack in that case so undo restores the right layer's pixels.
+      pushHistory((brushId === "smudge" || brushId === "goo") && activeLayerIdRef.current !== layersRef.current[0]?.id ? "full" : "active");
       buildCompositeCache();
       // Per-stroke randomness seed: rides the wire so every client renders the
       // exact same jitter/scatter for this stroke (see pointRand in brushes).
@@ -3581,7 +3587,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         variation: settings.variation,
         seed,
       };
-      const strokeSymmetry = brushId === "smudge"
+      const strokeSymmetry = brushId === "smudge" || brushId === "goo"
         ? normalizeSymmetry("none")
         : normalizeSymmetry(roomSymmetryRef.current);
       if (strokeSymmetry.copies > 1) {
@@ -3601,6 +3607,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // square renderer everywhere, so old history never repaints.
         netSettings.v = 3;
         netSettings.smudgeMode = normalizeSmudgeSettings({ v: 3, smudgeMode: settings.smudgeMode }).mode;
+      }
+      if (brushId === "goo") {
+        netSettings.opacity = 1; // Gooeyness IS goo's strength — the opacity slider is hidden for it
+        netSettings.gooiness = settings.gooiness;
+        // Stage 6: v:3 + gooiness ride the wire, read through the engine's
+        // one normalizer, so every consumer lays the identical goo.
+        netSettings.v = 3;
       }
       if (authoringDab) {
         netSettings.v = authoringDab.version;
@@ -3642,7 +3655,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // copy has its own buffer + walk state); the shared fields ride on
         // the stroke.
         const layer0 = layersRef.current[0];
-        const core = makeStrokeEntryCore(netSettings, sampleMix, { smudgeSource: brushId === "smudge" && layer0 ? layer0.canvas : null });
+        const core = makeStrokeEntryCore(netSettings, sampleMix, { smudgeSource: (brushId === "smudge" || brushId === "goo") && layer0 ? layer0.canvas : null });
         if (!core) {
           // A v3 dab that can't normalize draws nowhere (remotes drop it too).
           setStatus("That brush can't be used here");
@@ -3653,7 +3666,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           return;
         }
         const sharedStroke = {
-          layer: brushId === "smudge" ? layer0 : getActiveLayer(),
+          layer: brushId === "smudge" || brushId === "goo" ? layer0 : getActiveLayer(),
           settings: netSettings,
           seed,
           drawSettings: core.drawSettings,
@@ -6336,10 +6349,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           return;
         }
-        if (settings.brush === "smudge") {
-          // Ignore smudge in public rooms (the server drops these too — this
-          // is belt-and-braces against a hacked/stale client). The finger-
-          // paint room is the exception: smearing is the whole toy there.
+        if (settings.brush === "smudge" || settings.brush === "goo") {
+          // Ignore smudge/goo in public rooms (the server drops these too —
+          // this is belt-and-braces against a hacked/stale client). The
+          // finger-paint room is the exception: smearing is the whole toy.
           if (roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
             return;
           }
@@ -6351,7 +6364,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // makeStrokeEntryCore builds their drag / blend renderer over this
           // frame's layer 0 (smudgeSource) and the buffer commits there —
           // the same normalizer decides in every consumer.
-          if (!normalizeSmudgeSettings(settings).v3) {
+          if (settings.brush === "smudge" && !normalizeSmudgeSettings(settings).v3) {
             const strokes = remoteStrokesRef.current;
             let entry = strokes.get(op.strokeId);
             if (!entry) {
@@ -8525,6 +8538,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // shows a Strength control instead of a colour + opacity + variation. The
   // eraser likewise ignores colour (it cuts to transparent).
   const isSmudgeActive = selectedTool === "brush" && selectedBrush === "smudge";
+  const isGooActive = selectedTool === "brush" && selectedBrush === "goo";
   const noColorBrush = selectedTool === "brush" && (selectedBrush === "smudge" || selectedBrush === "eraser");
 
   // Tapping Paint flips to the brush; tapping it again (already painting) opens
@@ -10271,6 +10285,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               />
               <output>{Math.round(smudgeStrength * 100)}%</output>
             </label>
+          ) : isGooActive ? (
+            <label>
+              <span>Gooeyness</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={Math.round(gooiness * 100)}
+                aria-label="Gooeyness"
+                aria-valuetext={gooiness > 0.66 ? "Thick" : gooiness > 0.33 ? "Gooey" : "Runny"}
+                onChange={(event) => setGooiness(Number(event.target.value) / 100)}
+              />
+              <output>{gooiness > 0.66 ? "Thick" : gooiness > 0.33 ? "Gooey" : "Runny"}</output>
+            </label>
           ) : (
             <label>
               <span>Opacity</span>
@@ -10286,7 +10314,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               <output>{Math.round(brushOpacity * 100)}%</output>
             </label>
           )}
-          {isSmudgeActive ? null : (
+          {isSmudgeActive || isGooActive ? null : (
             <label>
               <span>Variation</span>
               <input

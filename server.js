@@ -3120,9 +3120,9 @@ wss.on('connection', async (ws, req) => {
             break;
           }
         }
-        // Smudge is a private-room brush: never let its ops land in a public
-        // room — EXCEPT the finger-paint room, where smearing is the toy.
-        if (room.audience === 'kid_safe' && !room.fingerPaint && data.op.kind === 'draw' && data.op.settings && data.op.settings.brush === 'smudge') break;
+        // Smudge + goo are private-room brushes: never let their ops land in a
+        // public room — EXCEPT the finger-paint room, where smearing is the toy.
+        if (room.audience === 'kid_safe' && !room.fingerPaint && data.op.kind === 'draw' && data.op.settings && (data.op.settings.brush === 'smudge' || data.op.settings.brush === 'goo')) break;
         // Imported stamp tips are arbitrary user media. Keep public kid-safe
         // rooms on reviewed catalog brushes until brush assets have moderation.
         if (room.audience === 'kid_safe' && data.op.kind === 'draw' && data.op.settings?.dab?.shape === 'stamp') break;

@@ -54,7 +54,7 @@ wash op renders unchanged):
 `watercolor`/`watercolor-wet` ship `pool` in their authoring dabs; the tilted
 watercolor stroke in the `v3-physics` golden group pins it.
 
-## 3. Gooey renderer — "fun" physics  📝 spec (implement next)
+## 3. Gooey renderer — "fun" physics  ✅ implemented
 
 The "fun" mode's *feel* upgrade. See `docs/creative-engine-roadmap.md` §1 for
 the full design; this is the bounded plan on the current engine.
@@ -67,21 +67,32 @@ smudge pattern, NOT the direct-to-layer legacy path):
 1. **Displacement** — sample the *pre-stroke* layer-0 footprint trailing the
    motion (v3 smudge's `makeSmudgeV3Renderer` drag carry: `getSmudgeScratch` /
    `getCarryScratch`, feathered, deposited at pressure-driven strength).
-2. **Pigment deposit** — on top of the displacement, stamp the brush colour
-   wet-tinted by the mix-map pickup (the existing km/wet path).
+2. **Pigment deposit** — on top of the displacement, stamp a soft blob of the
+   brush colour whose pigment bends toward what it crosses via the mix map.
 
 So paint both moves (the smeared under-paint) and lays down its own colour that
-picks up what it crosses — the finger-paint pudding/tempera presets from the
-roadmap become dab params (`smear`, `drag`, `pickup`, `dragRate`).
+picks up what it crosses.
+
+**Adjustable gooeyness.** One slider (`settings.gooiness`, 0..1, captured into
+the op at pen-down so replay is deterministic) maps onto the viscosity — the
+roadmap's pudding/tempera presets, interpolated:
+
+| gooiness | smear | drag | pickup | dragRate |
+|---|---|---|---|---|
+| 0.0 (runny) | 0.20 | 0.50 | 0.50 | 0.30 |
+| 1.0 (thick) | 0.60 | 0.25 | 0.15 | 0.08 |
+
+(`smear` = displacement re-stamp alpha, `drag` = sample trail fraction, `pickup`
+= pigment bend toward under-paint, `dragRate` = carried-colour chase.)
 
 **Room contract.** "fun" mode is where this is safe: the toddler contract —
-single layer (the mix map mirrors layer 0 only), opacity locked to 1 (no
-uniform-opacity buffered commit), wet-on, smudge+goo allowed. `FINGERS` already
-enforces this; the room toggle from §1 generalizes it to any room that picks
-"fun". Displacement is therefore bounded to layer 0, same as smudge, with the
-same documented live-overlap divergence (self-heals on the next history frame).
+single layer (the mix map mirrors layer 0 only), opacity locked to 1, wet-on,
+smudge+goo allowed. `FINGERS` already enforces this; the room toggle from §1
+generalizes it. Displacement is therefore bounded to layer 0, same as smudge,
+with the same documented live-overlap divergence (self-heals on the next history
+frame).
 
-**Acceptance.** Mirror the smudge lab gates: a `goo` golden group (tilt-less,
-deterministic), a lab scenario checking feather (no hard edge), carry-thins-out
-past a field edge, rerun + batch determinism, and the per-dab budget on the real
-4000×2500 layer. Ship only after those pass.
+**Acceptance (all passing).** The `v3-goo` golden group (thick/runny passes over
+a red|blue field + a carry stroke onto blank paper, deterministic) pins the
+pixels; the lab's `goo` scenario gates pigment-on-blank, rerun determinism, and
+the per-dab budget on the real 4000×2500 layer (~0.19 ms/dab software).

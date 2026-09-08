@@ -30,7 +30,7 @@ export function brushTipExtent(brushId, tool) {
   if (tool !== "brush") {
     return 1;
   }
-  if (brushId === "smudge") {
+  if (brushId === "smudge" || brushId === "goo") {
     return 1.5;
   }
   const dab = previewDabFor(brushId);
@@ -50,6 +50,20 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
     return; // shape tools + eraser: the CSS ring says it all
   }
   const rand = mulberry32(4242);
+  if (brush === "goo") {
+    // Goo lays a soft blob (the engine's soft-mask, tinted by the brush
+    // colour) — show that pad as the tip.
+    const mask = getSoftMask();
+    if (mask) {
+      const cell = size * SMUDGE_MASK_CELL;
+      ctx.drawImage(mask, cx - cell / 2, cy - cell / 2, cell, cell);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = color || "#111827";
+      ctx.fillRect(0, 0, box, box);
+      ctx.globalCompositeOperation = "source-over";
+    }
+    return;
+  }
   if (brush === "smudge") {
     const mask = smudgeMode === "blend" ? getSoftMask() : null;
     if (mask) {

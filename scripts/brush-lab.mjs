@@ -118,6 +118,12 @@ const SMUDGE_BUDGET = 0.15;
 const SMUDGE_BUDGET_SOFTWARE = 1;
 const smudgeBudget = useGpu ? SMUDGE_BUDGET : SMUDGE_BUDGET_SOFTWARE;
 const SMUDGE_BUDGET_SIZE = "4000x2500";
+// Stage 6 goo: displacement (a smudge-drag carry) + a tinted soft-blob deposit,
+// so its per-dab cost is roughly smudge drag + one drawImage + one mix read.
+const GOO_BUDGET = 0.35;
+const GOO_BUDGET_SOFTWARE = 2;
+const gooBudget = useGpu ? GOO_BUDGET : GOO_BUDGET_SOFTWARE;
+const GOO_BUDGET_SIZE = "4000x2500";
 const mode = args.includes("--guard")
   ? "guard"
   : args.includes("--golden-record")
@@ -541,6 +547,7 @@ try {
       { kind: "strokes" },
       { kind: "mixing" },
       { kind: "smudge" },
+      { kind: "goo" },
       { kind: "determinism" },
       { kind: "timing" },
       { kind: "contact" },
@@ -616,6 +623,18 @@ try {
         if (t && t.msPerDab != null && t.msPerDab > smudgeBudget) {
           failures.push({ scenario: spec.kind, error: `${mode} costs ${t.msPerDab} ms/dab at ${SMUDGE_BUDGET_SIZE} (budget ${smudgeBudget} on the ${report.renderer} renderer)` });
         }
+      }
+    }
+    if (spec.kind === "goo") {
+      if (result.ok === false) {
+        for (const c of (result.report?.checks || []).filter((c) => !c.pass)) {
+          failures.push({ scenario: spec.kind, error: `${c.name}: ${c.detail}` });
+        }
+      }
+      // Stage 6 budget: goo per-dab cost on the real layer size.
+      const t = result.report?.timing || {};
+      if (t.msPerDab != null && t.msPerDab > gooBudget) {
+        failures.push({ scenario: spec.kind, error: `goo costs ${t.msPerDab} ms/dab at ${GOO_BUDGET_SIZE} (budget ${gooBudget} on the ${report.renderer} renderer)` });
       }
     }
     if (spec.kind === "mixPrefetch" && result.ok === false) {

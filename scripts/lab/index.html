@@ -80,7 +80,7 @@
     const COLORS = { blue: "#2f6fd6", red: "#e04b2a", yellow: "#f9d423", mixBlue: "#1e88e5" };
 
     const listBrushes = (filter) => {
-      const ids = brushCatalog.map((b) => b.id).filter((id) => id !== "eraser" && id !== "smudge");
+      const ids = brushCatalog.map((b) => b.id).filter((id) => id !== "eraser" && id !== "smudge" && id !== "goo");
       if (!filter || !filter.length) {
         return ids;
       }
@@ -1164,6 +1164,120 @@
       };
     };
 
+    // (c2) GOO (Stage 6): displacement + pigment in one dab walk. Checks:
+    //   pigment — a yellow stroke on blank paper must read yellow (not white);
+    //   determinism — two reruns over a field + mix map are pixel-identical;
+    //   timing — per-dab cost on the real 4000x2500 layer (budgeted).
+    const scenarioGoo = ({ runs = 3 }) => {
+      const images = [];
+      const checks = [];
+      const check = (name, pass, detail) => { checks.push({ name, pass, detail }); return pass; };
+      const boundary = TILE_W / 2;
+      const gooSettings = (gooiness, size = 48) => ({ brush: "goo", color: COLORS.yellow, size, opacity: 1, variation: 0, seed: SEED_A, gooiness, v: 3 });
+      // Paint one goo stroke into `work` (its layer 0), buffered like the app.
+      const paintGoo = (work, settings, points, mix) => {
+        const ctx = work.getContext("2d");
+        const { buf, renderer, fx, pad, opacity } = makeStrokeEntryCore(settings, mix ? mix.sample : undefined, { smudgeSource: work });
+        for (const point of points) {
+          if (buf.ensure(point.x, point.y, pad).overflow) {
+            prepareStrokeCommit(buf, renderer, fx, false);
+            buf.commit(ctx, opacity);
+            buf.reset();
+            buf.ensure(point.x, point.y, pad);
+          }
+          renderer.addPoints(buf.getCtx(), [point], buf.base());
+        }
+        prepareStrokeCommit(buf, renderer, fx);
+        buf.commit(ctx, opacity);
+        buf.dispose();
+      };
+      const straight = () => {
+        const pts = [];
+        for (let i = 0; i < STROKE_POINTS; i += 1) {
+          const t = i / (STROKE_POINTS - 1);
+          pts.push({ x: q4(80 + (TILE_W - 160) * t), y: q4(160 + 40 * Math.sin(t * Math.PI * 3)), pressure: 0.7 });
+        }
+        return pts;
+      };
+      // Pigment on blank paper: the stroke's OWN pixels (alpha > 0) must read
+      // yellow, not white — measure only what the goo actually laid down.
+      const pigment = makeCanvas(TILE_W, TILE_H / 2);
+      paintGoo(pigment, gooSettings(0.5), straight(), null);
+      const mean = pixelStats(pigment).meanRgb;
+      const dYellow = rgbDistance(mean, [249, 212, 35]);
+      const dWhite = rgbDistance(mean, [255, 255, 255]);
+      check("goo pigment", dYellow < dWhite, `stroke mean [${mean}] is ${dYellow} from yellow, ${dWhite} from white`);
+      // Determinism over a field + mix map (pigment pickup live).
+      const renderDet = () => {
+        const work = makeCanvas(TILE_W, TILE_H);
+        const ctx = work.getContext("2d");
+        smudgeField(ctx, boundary);
+        const mix = createMixMap(() => work, work.width, work.height);
+        mix.flush();
+        paintGoo(work, gooSettings(0.5), smudgeStrokes(boundary)[0], mix);
+        return work;
+      };
+      const detA = renderDet();
+      const detB = renderDet();
+      const rerun = comparePixels(detA, detB);
+      check("goo determinism", rerun.identical, `rerun diff ${rerun.differingPixels}px, max ${rerun.maxChannelDelta}`);
+      [detA, detB].forEach((c) => { c.width = 0; });
+      // Per-dab timing on the real layer.
+      const dims = { w: CANVAS_WIDTH, h: CANVAS_HEIGHT };
+      const cx = dims.w / 2;
+      const cy = dims.h / 2;
+      const points = [];
+      for (let i = 0; i < STROKE_POINTS; i += 1) {
+        const t = i / (STROKE_POINTS - 1);
+        points.push({ x: q4(cx - 350 + 700 * t), y: q4(cy + 20 * Math.sin(t * Math.PI * 3)), pressure: 0.7 });
+      }
+      const times = [];
+      for (let run = 0; run < runs; run += 1) {
+        const work = makeCanvas(dims.w, dims.h);
+        const ctx = work.getContext("2d");
+        const { buf, renderer, fx, pad, opacity } = makeStrokeEntryCore(gooSettings(0.5), undefined, { smudgeSource: work });
+        for (const point of points) buf.ensure(point.x, point.y, pad);
+        const base = buf.base();
+        const t0 = performance.now();
+        for (const point of points) renderer.addPoints(buf.getCtx(), [point], base);
+        flushGpu(buf.getCtx());
+        const t1 = performance.now();
+        prepareStrokeCommit(buf, renderer, fx);
+        buf.commit(ctx, opacity);
+        flushGpu(ctx);
+        times.push(t1 - t0);
+        work.width = 0;
+      }
+      // One counted run (2 drawImage per dab: carry deposit + pigment).
+      const countWork = makeCanvas(dims.w, dims.h);
+      const countCtx = countWork.getContext("2d");
+      const countedCore = makeStrokeEntryCore(gooSettings(0.5), undefined, { smudgeSource: countWork });
+      for (const point of points) countedCore.buf.ensure(point.x, point.y, countedCore.pad);
+      const counter = makeCountingCtx(countedCore.buf.getCtx());
+      for (const point of points) countedCore.renderer.addPoints(counter.proxy, [point], countedCore.buf.base());
+      const dabs = counter.counts.drawImage / 2;
+      countWork.width = 0;
+      const timing = { msMedian: +median(times).toFixed(2), msPerDab: dabs > 0 ? +(median(times) / dabs).toFixed(4) : null, dabs: Math.round(dabs), targetDraws: counter.counts.drawImage, saveCalls: counter.counts.save, getImageDataOnDrawPath: counter.counts.getImageData };
+      // Sheet: the pigment strip, then a thick + runny pass over the field.
+      const sheet = makeCanvas(TILE_W, TILE_H / 2 + TILE_H);
+      const sctx = sheet.getContext("2d");
+      sctx.fillStyle = "#ffffff";
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      sctx.drawImage(pigment, 0, 0);
+      const tiles = [["thick (0.85)", 0.85], ["runny (0.15)", 0.15]];
+      tiles.forEach(([name, g], index) => {
+        const tile = makeCanvas(TILE_W, TILE_H);
+        const tctx = tile.getContext("2d");
+        smudgeField(tctx, boundary);
+        paintGoo(tile, gooSettings(g), smudgeStrokes(boundary)[index === 0 ? 0 : 1], null);
+        sctx.drawImage(tile, 0, TILE_H / 2);
+        label(sctx, `goo ${name}`, 12, TILE_H / 2 + 8, 14);
+        tile.width = 0;
+      });
+      emit(images, "goo.png", sheet);
+      return { images, report: { pigmentMean: mean, dYellow, dWhite, determinism: rerun, timing, checks }, ok: checks.every((c) => c.pass) };
+    };
+
     // (d) DETERMINISM: same seed + same points through two fresh renderers
     // (the app's per-point flow) must be pixel-identical; so must batch-1 vs
     // batch-7 point feeding. The batching pair is rendered into PRE-SIZED
@@ -1660,6 +1774,7 @@
       strokes: scenarioStrokes,
       mixing: scenarioMixing,
       smudge: scenarioSmudge,
+      goo: scenarioGoo,
       determinism: scenarioDeterminism,
       timing: scenarioTiming,
       contact: scenarioContact,

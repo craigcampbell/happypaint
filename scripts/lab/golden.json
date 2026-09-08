@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-09-08T17:47:04.222Z",
+  "recordedAt": "2026-09-08T18:23:11.698Z",
   "engine": {
-    "src/utils/brushes.js": "a3b9a22d4eb3",
+    "src/utils/brushes.js": "a016335eced8",
     "src/utils/brushSprites.js": "68eddb5f6d26",
     "src/utils/strokeBuffer.js": "b3e8a858e965",
     "src/utils/mixMap.js": "cdd825f94bfa",
@@ -10,7 +10,7 @@
     "src/utils/symmetry.js": "880d686d96e0",
     "src/utils/shapes.js": "4d2839771715"
   },
-  "fixture": "e424366f1b1f",
+  "fixture": "7be8fc5a1c29",
   "fixtureSeed": "0x5eed0001",
   "canvas": {
     "width": 4000,
@@ -18,10 +18,10 @@
   },
   "groups": {
     "legacy-unseeded": {
-      "hash": "1ebeff60f1cfaba09fdb818f71e66c75445f2749af8b988c9b8f0a4be785fafd",
+      "hash": "1ff63ea90562e2d42889b126c18e2cd41f39dd793479aab21b314a8290bc8a9c",
       "deterministic": false,
       "machineBound": false,
-      "painted": 3298012,
+      "painted": 3297663,
       "ops": 720
     },
     "legacy-seeded": {
@@ -156,6 +156,13 @@
       "machineBound": false,
       "painted": 996699,
       "ops": 182
+    },
+    "v3-goo": {
+      "hash": "c2d8a4060737165f42072ae7a05fa2a8e5ac83a135e664fee953089529c7e530",
+      "deterministic": true,
+      "machineBound": false,
+      "painted": 4775113,
+      "ops": 63
     }
   }
 }
