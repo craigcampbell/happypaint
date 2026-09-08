@@ -12,11 +12,16 @@ wall-clock, no readbacks / `ctx.filter` / allocation on the per-dab hot path.
 
 ## 1. Room brush mode — "realistic" vs "fun"  ✅ implemented
 
-**What it is.** A per-room *palette + wetness* affordance, not a rendering fork.
-Both modes draw with the same brushes and the same op contract, so toggling it
-never repaints history. "Realistic" is today's full catalog; "fun" is a bold,
-wet, smeary subset (`marker, crayon, paint, watercolor, watercolor-wet, gouache,
-glow, spray, smudge, eraser`) with wet mixing forced on at pen-down.
+**What it is.** A per-room *palette + wetness + single-layer* affordance, not a
+rendering fork. Both modes draw with the same brushes and the same op contract,
+so toggling it never repaints history. "Realistic" is today's full catalog;
+"fun" is a bold, wet, smeary subset (`marker, crayon, paint, watercolor,
+watercolor-wet, gouache, glow, spray, smudge, goo, eraser`) with wet mixing
+forced on at pen-down, **and it collapses the local layer stack to a single
+layer 0** (the layers panel is hidden). That single-layer guarantee is what lets
+goo/smudge displacement sample exactly the paint every peer already sees — ops
+carry no layer, so a smear on layer ≥ 1 would otherwise read different pixels
+than everyone else.
 
 **How the switch works — and why it's safe on/off.** It is the exact `set_wet` /
 `wetCanvas` design the room already uses:

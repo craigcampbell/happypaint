@@ -4586,6 +4586,39 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [markChanged, pushHistory, renderDisplay, syncLayerState],
   );
 
+  // Flatten every layer onto a single layer 0 (respecting visibility + opacity)
+  // — "fun" brush mode is single-layer so goo/smudge displacement samples
+  // exactly the paint everyone else sees (ops carry no layer; peers already see
+  // everything on layer 0). Undoable: a full snapshot restores the stack.
+  const flattenLayers = useCallback(() => {
+    const stack = layersRef.current;
+    if (stack.length <= 1) {
+      if (activeLayerIdRef.current !== stack[0]?.id) {
+        activeLayerIdRef.current = stack[0]?.id || null;
+        syncLayerState();
+      }
+      return;
+    }
+    pushHistory("full");
+    const flat = createLayer({ name: "Canvas", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+    compositeLayers(flat.canvas.getContext("2d"), stack);
+    layersRef.current = [flat];
+    activeLayerIdRef.current = flat.id;
+    renderDisplay();
+    syncLayerState();
+    markChanged("Fun mode — flattened to one layer");
+  }, [markChanged, pushHistory, renderDisplay, syncLayerState]);
+
+  // Entering fun mode (the toggle, or joining a fun/toddler room, or a draft
+  // restoring a multi-layer stack into one) collapses the local stack to a
+  // single layer 0. `layers.length` watches the layer state so a draft restore
+  // after the handshake still triggers it.
+  useEffect(() => {
+    if (roomBrushMode === "fun" && layers.length > 1) {
+      flattenLayers();
+    }
+  }, [roomBrushMode, layers.length, flattenLayers]);
+
   const moveLayer = useCallback(
     (id, direction) => {
       const index = layersRef.current.findIndex((layer) => layer.id === id);
@@ -10005,23 +10038,25 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           </section>
         )}
 
-        <LayerPanel
-          layers={layers}
-          activeLayerId={activeLayerId}
-          onSelect={handleSelectLayer}
-          onAdd={handleAddLayer}
-          onDelete={handleDeleteLayer}
-          onDuplicate={handleDuplicateLayer}
-          onMergeDown={handleMergeDown}
-          onMoveUp={handleMoveUp}
-          onMoveDown={handleMoveDown}
-          onToggleVisible={handleToggleVisible}
-          onToggleLock={handleToggleLock}
-          onRename={handleRenameLayer}
-          onOpacityChange={handleOpacityChange}
-          onOpacityDragStart={handleOpacityDragStart}
-          onOpacityDragEnd={handleOpacityDragEnd}
-        />
+        {roomBrushMode === "fun" ? null : (
+          <LayerPanel
+            layers={layers}
+            activeLayerId={activeLayerId}
+            onSelect={handleSelectLayer}
+            onAdd={handleAddLayer}
+            onDelete={handleDeleteLayer}
+            onDuplicate={handleDuplicateLayer}
+            onMergeDown={handleMergeDown}
+            onMoveUp={handleMoveUp}
+            onMoveDown={handleMoveDown}
+            onToggleVisible={handleToggleVisible}
+            onToggleLock={handleToggleLock}
+            onRename={handleRenameLayer}
+            onOpacityChange={handleOpacityChange}
+            onOpacityDragStart={handleOpacityDragStart}
+            onOpacityDragEnd={handleOpacityDragEnd}
+          />
+        )}
 
         <section className="tool-section paint-space-actions">
           <div className="section-title-row">
