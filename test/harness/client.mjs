@@ -7,6 +7,7 @@
 // with a timeout. Deliberately tiny — no app logic, just transport + a mailbox.
 
 import { WebSocket } from 'ws';
+import { gunzipSync } from 'node:zlib';
 
 export class SimClient {
   // baseUrl: e.g. "ws://127.0.0.1:PORT" — the harness appends the /ws path.
@@ -16,6 +17,15 @@ export class SimClient {
     this.room = opts.room || 'MAIN';
     this.token = opts.token || null;
     this.label = opts.name || 'client';
+    // opts.gz: advertise gzip-frame support like the web client (`?gz=1`) and
+    // inflate binary history frames. Off by default so legacy scenarios keep
+    // exercising the plain-text path.
+    this.gz = !!opts.gz;
+    // opts.spectate: join as a read-only homepage viewer (`?spectate=1`). The
+    // server never sends spectators a 'connected' frame, so connect() resolves
+    // on socket open instead.
+    this.spectate = !!opts.spectate;
+    this.binaryFrames = 0; // gzip history frames received (scenarios assert on it)
     this.messages = []; // every parsed server->client message, in order
     this.ws = null;
     this._waiters = []; // { test, resolve, reject, timer }
@@ -28,15 +38,22 @@ export class SimClient {
   connect({ timeoutMs = 4000 } = {}) {
     const params = new URLSearchParams();
     params.set('room', this.room);
+    if (this.gz) params.set('gz', '1');
+    if (this.spectate) params.set('spectate', '1');
     // Like the real client, identity goes in the FIRST frame ({type:'auth'}),
     // never the URL — see the 'open' handler below.
     const url = `${this.baseUrl}/ws?${params.toString()}`;
     this.ws = new WebSocket(url);
 
-    this.ws.on('message', (raw) => {
+    this.ws.on('message', (raw, isBinary) => {
       let msg;
       try {
-        msg = JSON.parse(raw.toString());
+        if (isBinary) {
+          this.binaryFrames += 1;
+          msg = JSON.parse(gunzipSync(raw).toString('utf8'));
+        } else {
+          msg = JSON.parse(raw.toString());
+        }
       } catch {
         return;
       }
@@ -60,6 +77,11 @@ export class SimClient {
         reject(new Error(`${this.label}: connect timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.ws.once('open', () => {
+        if (this.spectate) {
+          clearTimeout(timer);
+          resolve(null);
+          return;
+        }
         // First frame is always auth (token or null) — mirrors the web client.
         try { this.ws.send(JSON.stringify({ type: 'auth', token: this.token || null })); } catch { /* close handler reports */ }
         // Resolve on the 'connected' frame, or immediately if it already landed.

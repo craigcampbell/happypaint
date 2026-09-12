@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
 
 // Realtime multiplayer client. Connects to the server's /ws relay, scoped to a
 // room. The consumer supplies an `onMessage(data)` handler for canvas-affecting
@@ -13,9 +14,11 @@ function resolveSocketUrl(roomId) {
   // NOTE: the auth token deliberately does NOT ride the URL — query strings
   // land in proxy/CDN access logs and browser history. Identity is sent as the
   // socket's first frame ({type:'auth', token}) instead; see onopen below.
+  // `gz=1` opts into the server's shared gzipped history frame (wsInflate.js).
+  const gz = supportsGzipFrames() ? "&gz=1" : "";
   const override = import.meta.env.VITE_WS_URL;
   if (override) {
-    return `${override}?room=${encodeURIComponent(roomId)}`;
+    return `${override}?room=${encodeURIComponent(roomId)}${gz}`;
   }
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   let host = window.location.host;
@@ -27,7 +30,7 @@ function resolveSocketUrl(roomId) {
       host = `${pageUrl.hostname}:8787`;
     }
   }
-  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}`;
+  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${gz}`;
 }
 
 // The browser-local device key the wall already uses. Sent with client_info so
@@ -98,11 +101,12 @@ export function useMultiplayer(roomId, onMessage, token) {
       return;
     }
     wsRef.current = ws;
+    ws.binaryType = "arraybuffer"; // the gzipped history frame (see wsInflate.js)
 
-    ws.onmessage = (event) => {
+    ws.onmessage = orderedFrameDecoder((text) => {
       let data;
       try {
-        data = JSON.parse(event.data);
+        data = JSON.parse(text);
       } catch {
         return;
       }
@@ -172,7 +176,7 @@ export function useMultiplayer(roomId, onMessage, token) {
           break;
       }
       onMessageRef.current?.(data);
-    };
+    }, () => wsRef.current === ws);
 
     ws.onopen = () => {
       setConnected(true);

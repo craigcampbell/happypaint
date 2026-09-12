@@ -71,8 +71,23 @@ The defining design choice: **everyone draws onto the same layer**
 op-agnostic relay + store:
 
 - Clients send `{type:'op', op:{kind, ...}}`; the server tags it with the author,
-  appends to a capped per-room history (`MAX_HISTORY` 6000), and rebroadcasts.
-- **Late joiners replay the full history** → they see the whole mural.
+  appends to a capped per-room history (`MAX_HISTORY` 20000 for private rooms,
+  `MAX_PUBLIC_HISTORY` 12000 for public ones — public rooms wipe every 3 days
+  and are the ones that go viral), and rebroadcasts. Ops are the only WS
+  mutation with size caps but, until 2026-09, no rate cap: a per-socket token
+  bucket (`OP_RATE_PER_SEC` 30, `OP_RATE_BURST` 120) now bounds how MANY, far
+  above a human's ~7 batches/s.
+- **Late joiners replay the full history** → they see the whole mural. The
+  history frame is served from a per-room cache (`sendHistoryCatchUp`): one
+  gzipped `history` frame per variant (member / spectator), shared by every
+  joiner that advertised `?gz=1` (the web client does when
+  `DecompressionStream` exists; `src/utils/wsInflate.js` decodes it in arrival
+  order), plus the ops newer than the frame as ordinary `op` messages. The
+  frame is rebuilt lazily once that tail passes `HISTORY_CACHE_TAIL_MAX` (400)
+  or the history changed shape — `room.history` is an accessor whose setter
+  bumps `historyGen`, and `hiddenGen` tracks moderation hides — so a cap-full
+  room costs one stringify+gzip per ~400 ops instead of one per joiner.
+  Clients without `gz=1` (old builds, the test harness by default) get text.
   The studio replays in elapsed-time slices (8ms target between operations),
   awaits embedded images in order, and defers scene mutations until catch-up
   finishes. A new connection or unmount cancels the previous replay.
@@ -84,8 +99,15 @@ op-agnostic relay + store:
   `ENABLE_CLIENT_SNAPSHOTS` unset. Validation and invalidation checks do not
   solve the live-pixel/watermark race; enabling requires an authoritative frozen
   operation list and a separate fidelity review. Full history is the default.
-- Room history persists to `.rooms/<ROOM>.json` (debounced 2.5s) and reloads on
-  boot, so restarts and empty-then-refill keep the art.
+- Room persistence is split by cost (debounced 2.5s, write-behind): draw ops
+  APPEND to `.rooms/<ROOM>.ops.jsonl`; the history base `.rooms/<ROOM>.history.json`
+  is rewritten only when the history was reassigned (clear / wipe / restore /
+  moderation remove) or the log passes `OPLOG_COMPACT_OPS` (2000); everything
+  else (owner, title, chat buffer, frames…) lives in the small `.rooms/<ROOM>.json`.
+  Before the split a chat line, a join (mention key) or a leave (engagement
+  seconds) re-stringified and rewrote the whole multi-MB mural. Boot merges
+  base + log (ops newer than the base's last opId) and trims to the cap; a
+  legacy file with `history` inline still loads and migrates on its first save.
 
 ### Op kinds (the `op` payload)
 `draw` (incremental brush points keyed by `strokeId`), `shape`, `text`, `image`.
@@ -255,7 +277,10 @@ display, creator payouts, tips-as-cash) are **OFF and must stay off** — real m
 
 All mutable server state lives under **`DATA_DIR`** (default the app dir; `/data`
 in Docker) so one volume persists everything:
-- `.rooms/<ID>.json` — per-room mural history, owner, coHosts, locked, mutes, sheet.
+- `.rooms/<ID>.json` — per-room meta: owner, coHosts, locked, mutes, sheet, chat
+  buffer, `opCount`/`savedAt` (the idle sweep reads these instead of parsing art).
+  `.rooms/<ID>.history.json` — the op history base; `.rooms/<ID>.ops.jsonl` —
+  ops appended since (see "Realtime model").
 - `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.

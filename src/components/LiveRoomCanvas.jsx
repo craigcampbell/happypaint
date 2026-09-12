@@ -11,6 +11,7 @@ import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
 // The op interpreter lives in utils/opReplay now, shared byte-for-byte with
 // the production film renderer — one parity-tested replay path for both.
 import { applyOp } from "../utils/opReplay";
+import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
 
 // Strokes whose end-op never arrives are committed by the idle sweep after this long.
 const STROKE_IDLE_MS = 8000;
@@ -235,11 +236,14 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
       if (closed) return;
       reconnectTimer = null;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//${window.location.host}/ws?room=${encodeURIComponent(roomCode)}&spectate=1`);
-      ws.onmessage = (event) => {
+      const gz = supportsGzipFrames() ? "&gz=1" : "";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws?room=${encodeURIComponent(roomCode)}&spectate=1${gz}`);
+      ws.binaryType = "arraybuffer"; // the server's shared gzipped history frame
+      const socket = ws;
+      ws.onmessage = orderedFrameDecoder((text) => {
         let data;
         try {
-          data = JSON.parse(event.data);
+          data = JSON.parse(text);
         } catch {
           return;
         }
@@ -272,7 +276,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
           // (the conversation is the show; this canvas only paints ops).
           onSocial?.(data);
         }
-      };
+      }, () => !closed && ws === socket);
       ws.onclose = () => {
         if (closed) return;
         scheduleReconnect(); // homepage keeps watching

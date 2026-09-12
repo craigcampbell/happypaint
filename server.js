@@ -18,6 +18,7 @@ import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
+import { gzip } from 'zlib';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { scan } from './server/moderation/textFilter.js';
@@ -52,6 +53,28 @@ const __dirname = dirname(__filename);
 
 const PORT = Number(process.env.PORT || 8787);
 const MAX_HISTORY = Number(process.env.MAX_HISTORY || 20000);
+// Public rooms are the ones that go viral AND they wipe every 3 days anyway, so
+// they carry a lower op cap than private rooms: every O(history) path (join
+// payload, RAM, client replay, boot parse) scales with this number.
+const MAX_PUBLIC_HISTORY = Math.min(MAX_HISTORY, Number(process.env.MAX_PUBLIC_HISTORY || 12000));
+// Per-socket draw-op token bucket. The size caps below bound how BIG an op is;
+// this bounds how MANY. A real client sends ~7 batches/s per stroke (150ms
+// flush) plus end markers, so 30/s sustained with a 120 burst never touches a
+// human — it only stops a scripted socket from filling a room's history.
+const OP_RATE_PER_SEC = Number(process.env.OP_RATE_PER_SEC || 30);
+const OP_RATE_BURST = Number(process.env.OP_RATE_BURST || 120);
+// Join catch-up cache: rooms past HISTORY_CACHE_MIN_OPS keep ONE gzipped
+// history frame that every joiner shares; only the ops newer than it (the
+// "tail") are serialised per join. The frame is rebuilt once the tail passes
+// HISTORY_CACHE_TAIL_MAX — so a cap-full room costs one stringify+gzip per
+// ~400 ops instead of one per joiner.
+const HISTORY_CACHE_MIN_OPS = Number(process.env.HISTORY_CACHE_MIN_OPS || 200);
+const HISTORY_CACHE_TAIL_MAX = Number(process.env.HISTORY_CACHE_TAIL_MAX || 400);
+const SPECTATOR_HISTORY_OPS = 1500; // newest ops a read-only homepage viewer gets
+// Append-only persistence: draw ops append to `.rooms/<CODE>.ops.jsonl`; the
+// full room JSON is rewritten (and the log truncated) only when non-op state
+// changes or the log passes this many ops.
+const OPLOG_COMPACT_OPS = Number(process.env.OPLOG_COMPACT_OPS || 2000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
 const MAX_SPECTATORS = Number(process.env.MAX_SPECTATORS || 40); // read-only homepage viewers per public room
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
@@ -805,6 +828,83 @@ const persistTimers = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
+function opLogFile(roomId) {
+  return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.ops.jsonl`);
+}
+function historyFile(roomId) {
+  return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.history.json`);
+}
+async function writeAtomic(file, data) {
+  // Temp-file + rename so a crash mid-write never leaves a truncated file.
+  const tmp = `${file}.tmp`;
+  await fsp.writeFile(tmp, data);
+  await fsp.rename(tmp, file);
+}
+function historyCapFor(room) {
+  return room.audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+}
+// `room.history` is reassigned wholesale by clears, wipes, restores, frame
+// deletes and moderation removes, and mutated in place ONLY by the op push and
+// the front trim. Turning it into an accessor gives every reassignment a
+// generation bump for free — the join cache and the append-only persistence
+// both key on it, so neither can ever serve or save a stale mural.
+function trackHistory(room) {
+  let history = room.history;
+  room.historyGen = 0;
+  Object.defineProperty(room, 'history', {
+    enumerable: true,
+    configurable: true,
+    get() { return history; },
+    set(next) { history = next; room.historyGen += 1; },
+  });
+  return room;
+}
+// Token bucket per connected user (see OP_RATE_PER_SEC). O(1), no allocations.
+function opRateOk(user) {
+  const now = Date.now();
+  if (user.opTokens == null) { user.opTokens = OP_RATE_BURST; user.opTokensAt = now; }
+  const refill = ((now - user.opTokensAt) / 1000) * OP_RATE_PER_SEC;
+  if (refill > 0) {
+    user.opTokens = Math.min(OP_RATE_BURST, user.opTokens + refill);
+    user.opTokensAt = now;
+  }
+  if (user.opTokens < 1) return false;
+  user.opTokens -= 1;
+  return true;
+}
+// Ops appended since the last full room write, merged back on load. Only ops
+// NEWER than the base file's last opId count (a crash between "write base" and
+// "truncate log" leaves duplicates behind; a torn last line is skipped).
+function mergeOpLog(roomId, base) {
+  let text;
+  try { text = readFileSync(opLogFile(roomId), 'utf8'); } catch { return base; }
+  const history = base.slice();
+  let last = history.length ? (history[history.length - 1].opId || 0) : 0;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    let op;
+    try { op = JSON.parse(line); } catch { continue; }
+    if (!op || typeof op !== 'object' || Array.isArray(op) || !(op.opId > last)) continue;
+    history.push(op);
+    last = op.opId;
+  }
+  return history.length > MAX_HISTORY ? history.slice(-MAX_HISTORY) : history;
+}
+// The persisted history: the `.history.json` base (newest) wins; a legacy room
+// file that still carries `history` inline is the fallback; the op log is
+// merged on top of either.
+function loadRoomHistory(roomId, inline) {
+  let base = null;
+  try {
+    const parsed = JSON.parse(readFileSync(historyFile(roomId), 'utf8'));
+    base = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.history) ? parsed.history : null);
+  } catch {
+    base = null;
+  }
+  const onDisk = !!base;
+  if (!base) base = Array.isArray(inline) ? inline : [];
+  return { history: mergeOpLog(roomId, base), onDisk };
+}
 
 // ---- Rendered-snapshot catch-up -------------------------------------------
 // A client-rendered PNG of the mural, stored beside the room file (NOT in it —
@@ -936,13 +1036,18 @@ setInterval(() => { sweepChatLogs(); }, 6 * 3_600_000).unref();
 sweepChatLogs();
 
 function loadRoom(roomId) {
+  let data = null;
+  try { data = JSON.parse(readFileSync(roomFile(roomId), 'utf8')); } catch { data = null; }
+  // Recover files written by the experimental settings-once transport.
+  // Each op must stand alone when moderation, previews or paging select
+  // only part of a stroke. Never borrow settings from another author/cel.
+  const stored = loadRoomHistory(roomId, data ? data.history : null);
+  const history = hydrateHistorySettings(stored.history);
   try {
-    const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
+    if (!data) throw new Error('no room file');
     return {
-      // Recover files written by the experimental settings-once transport.
-      // Each op must stand alone when moderation, previews or paging select
-      // only part of a stroke. Never borrow settings from another author/cel.
-      history: hydrateHistorySettings(Array.isArray(data.history) ? data.history : []),
+      history,
+      historyOnDisk: stored.onDisk, // false → first save migrates it into .history.json
       sheetId: data.sheetId || null,
       // Only the opaque profile id is persisted — never a human-readable name —
       // so a deleted account leaves no identifying data on disk. Display names
@@ -983,7 +1088,7 @@ function loadRoom(roomId) {
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
     };
   } catch {
-    return { history: [], sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
+    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -1004,59 +1109,95 @@ async function saveRoomNow(roomId) {
   persistInFlight.add(roomId);
   try {
     mkdirSync(ROOM_DIR, { recursive: true });
-    // Note: room.lastCleared is intentionally in-memory only — never persisted.
-    const json = JSON.stringify({
-      history: room.history,
-      sheetId: room.sheetId || null,
-      ownerProfileId: room.ownerProfileId || null,
-      coHosts: Array.isArray(room.coHosts) ? room.coHosts : [],
-      mutedProfileIds: Array.from(room.mutedProfileIds || []),
-      locked: !!room.locked,
-      title: room.title || null,
-      audience: room.audience || null,
-      listed: typeof room.listed === 'boolean' ? room.listed : null,
-      hiddenOpIds: Array.from(room.hiddenOpIds || []),
-      userSeconds: room.userSeconds || 0,
-      chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
-      chatSeq: room.chatSeq || 0,
-      wipeAt: room.wipeAt || 0,
-      wetCanvas: !!room.wetCanvas,
-      brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
-      customPrompt: room.customPrompt || null,
-      frames: room.frames,
-      scenes: room.scenes,
-      animation: !!room.animationEnabled,
-      game: !!room.gameEnabled,
-      phone: !!room.phoneEnabled,
-      dailyDate: room.dailyDate || null,
-      productionId: room.productionId || null,
-      symmetry: room.symmetry,
-      quests: room.quests ? {
-        setId: room.quests.setId,
-        missionIds: room.quests.missionIds,
-        completedIds: Array.from(room.quests.completedIds || []),
-      } : null,
-      storybook: room.storybook || null,
-      remixSource: room.remixSource || null,
-      // Mention-watch capability keys (see issueMentionKey). Server-side only:
-      // this file never leaves the host, and keys never appear in any API.
-      mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
-      savedAt: Date.now(),
-    });
-    // Temp-file + rename so a crash mid-write never leaves a truncated room file.
-    const file = roomFile(roomId);
-    const tmp = `${file}.tmp`;
-    await fsp.writeFile(tmp, json);
-    await fsp.rename(tmp, file);
+    // Three files per room, split by how often each changes and how big it is:
+    //  - <CODE>.ops.jsonl     draw ops appended since the history base — a few
+    //                         KB per save; the common case while people draw.
+    //  - <CODE>.history.json  the history base — rewritten only when the history
+    //                         was REASSIGNED (clear/wipe/restore/moderation) or
+    //                         the log passed OPLOG_COMPACT_OPS (compaction).
+    //  - <CODE>.json          everything else (owner, title, chat buffer, frames,
+    //                         …) — small, rewritten on any meta change.
+    // Before the split a chat line, a join (mention key) or a leave (engagement
+    // seconds) re-stringified and rewrote the whole multi-MB mural.
+    const pending = room.pendingOps || [];
+    const needsHistory = !room.historyBaseOk || room.persistedGen !== room.historyGen
+      || (room.opLogCount || 0) + pending.length > OPLOG_COMPACT_OPS;
+    const needsMeta = room.baseDirty !== false || needsHistory;
+    if (needsHistory) {
+      const gen = room.historyGen;
+      room.pendingOps = []; // every pending op is inside room.history already
+      await writeAtomic(historyFile(roomId), JSON.stringify({ history: room.history }));
+      // The base now holds everything → the op log restarts empty. (A crash
+      // between these two steps just leaves stale lines that mergeOpLog skips.)
+      await fsp.writeFile(opLogFile(roomId), '');
+      room.persistedGen = gen;
+      room.opLogCount = 0;
+      room.historyBaseOk = true;
+    } else if (pending.length) {
+      room.pendingOps = [];
+      let lines = '';
+      for (const op of pending) lines += `${JSON.stringify(op)}\n`;
+      try {
+        await fsp.appendFile(opLogFile(roomId), lines);
+        room.opLogCount = (room.opLogCount || 0) + pending.length;
+      } catch (err) {
+        room.historyBaseOk = false; // the ops are still in room.history — next save rewrites the base
+        throw err;
+      }
+    }
+    if (needsMeta) {
+      room.baseDirty = false;
+      // Note: room.lastCleared is intentionally in-memory only — never persisted.
+      await writeAtomic(roomFile(roomId), JSON.stringify({
+        sheetId: room.sheetId || null,
+        ownerProfileId: room.ownerProfileId || null,
+        coHosts: Array.isArray(room.coHosts) ? room.coHosts : [],
+        mutedProfileIds: Array.from(room.mutedProfileIds || []),
+        locked: !!room.locked,
+        title: room.title || null,
+        audience: room.audience || null,
+        listed: typeof room.listed === 'boolean' ? room.listed : null,
+        hiddenOpIds: Array.from(room.hiddenOpIds || []),
+        userSeconds: room.userSeconds || 0,
+        chat: (room.chat || []).slice(-CHAT_BUFFER_MAX),
+        chatSeq: room.chatSeq || 0,
+        wipeAt: room.wipeAt || 0,
+        wetCanvas: !!room.wetCanvas,
+        brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
+        customPrompt: room.customPrompt || null,
+        frames: room.frames,
+        scenes: room.scenes,
+        animation: !!room.animationEnabled,
+        game: !!room.gameEnabled,
+        phone: !!room.phoneEnabled,
+        dailyDate: room.dailyDate || null,
+        productionId: room.productionId || null,
+        symmetry: room.symmetry,
+        quests: room.quests ? {
+          setId: room.quests.setId,
+          missionIds: room.quests.missionIds,
+          completedIds: Array.from(room.quests.completedIds || []),
+        } : null,
+        storybook: room.storybook || null,
+        remixSource: room.remixSource || null,
+        // Mention-watch capability keys (see issueMentionKey). Server-side only:
+        // this file never leaves the host, and keys never appear in any API.
+        mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
+        opCount: room.history.length, // the idle sweep sizes a room's TTL by this
+        savedAt: Date.now(),
+      }));
+    }
   } catch {
-    // Non-fatal — persistence is best-effort.
+    // Non-fatal — persistence is best-effort. Whatever failed, the next attempt
+    // re-evaluates every file so disk can never lag memory by more than one save.
+    room.baseDirty = true;
     if (shuttingDown) shutdownPersistenceFailed = true;
   } finally {
     persistInFlight.delete(roomId);
     if (persistDirty.delete(roomId)) saveRoomNow(roomId);
   }
 }
-function persistRoom(roomId) {
+function schedulePersist(roomId) {
   if (persistTimers.has(roomId)) {
     return;
   }
@@ -1064,6 +1205,19 @@ function persistRoom(roomId) {
     persistTimers.delete(roomId);
     saveRoomNow(roomId);
   }, 2500));
+}
+// Something other than a plain op push changed: the next save rewrites the file.
+function persistRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (room) room.baseDirty = true;
+  schedulePersist(roomId);
+}
+// A draw op landed: queue it for the append-only log.
+function persistOp(roomId, op) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  (room.pendingOps || (room.pendingOps = [])).push(op);
+  schedulePersist(roomId);
 }
 
 // The one legacy room that is public by default; everything else reached by an
@@ -1370,7 +1524,7 @@ function hydrateHistorySettings(history) {
 // onto only their first surviving op; the author and cel scope prevent collisions.
 function trimHistoryFront(room) {
   const history = room.history;
-  const excess = history.length - MAX_HISTORY;
+  const excess = history.length - historyCapFor(room);
   if (excess <= 0) return;
   // splice in place (no throwaway slice allocations on the per-op hot path).
   const removed = history.splice(0, excess);
@@ -1425,6 +1579,10 @@ function getRoom(roomId) {
     // via POST /api/rooms persists its audience, which wins here.
     const audience = saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
     const listed = saved.listed != null ? saved.listed : audience === 'kid_safe';
+    // Public rooms carry a lower cap than the global file cap — apply it on load
+    // too, so a file written under the old cap doesn't reload oversized.
+    const loadCap = audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+    if (saved.history.length > loadCap) saved.history = saved.history.slice(-loadCap);
     // Recover the op-id counter from persisted history so ids stay monotonic
     // across restarts (selective moderation hides/restores by opId).
     let opSeq = 0;
@@ -1442,10 +1600,17 @@ function getRoom(roomId) {
       const m = /^s(\d+)$/.exec((s && s.id) || '');
       if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
     }
-    rooms.set(roomId, {
+    const fresh = trackHistory({
       code: roomId,
       users: new Map(),
       history: saved.history,
+      hiddenGen: 0, // bumps with every hiddenOpIds change (join cache key)
+      historyCache: {}, // gzipped join frames per variant (see sendHistoryCatchUp)
+      pendingOps: [], // ops awaiting the append-only log
+      opLogCount: 0, // ops in the on-disk log since the last full write
+      baseDirty: true, // the small meta file is (re)written on the first save
+      historyBaseOk: !!saved.historyOnDisk, // false → first save writes .history.json (legacy migration)
+      persistedGen: 0, // history generation the .history.json base was written at
       lastCleared: null,
       // Rendered-snapshot catch-up: {opId, dataUrl} loaded lazily from the
       // sidecar; snapshotOpId doubles as the "no snapshot yet" flag when 0.
@@ -1525,7 +1690,8 @@ function getRoom(roomId) {
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
       lastActivity: Date.now(),
     });
-    const created = rooms.get(roomId);
+    rooms.set(roomId, fresh);
+    const created = fresh;
     // Storybooks reuse the paged animation scene model: one scene is one page.
     // Preserve any pre-existing first scene/art, then add blank pages up to four.
     if (saved.storybook?.enabled) enableStorybookRoom(created);
@@ -1597,12 +1763,107 @@ function visibleHistory(room) {
   return room.history.filter((op) => !room.hiddenOpIds.has(op.opId));
 }
 
+// ---- Join catch-up cache ----------------------------------------------------
+// Joining a big room used to cost one full JSON.stringify (~37ms at the cap)
+// plus one per-message deflate (~55ms) of the whole history PER JOINER, on the
+// single event-loop thread — a reconnect wave stalled every room on the box.
+// Now each room keeps one gzipped history frame per variant (full / spectator)
+// and joiners that opted in (`?gz=1`) get that buffer as a binary frame plus the
+// few ops newer than it as ordinary text `op` messages (the client already
+// defers live ops behind a replay). The frame is rebuilt lazily, on a join,
+// once the tail passes HISTORY_CACHE_TAIL_MAX or the history changed shape.
+function opIndexOf(history, opId) {
+  let lo = 0;
+  let hi = history.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const v = history[mid].opId || 0;
+    if (v === opId) return mid;
+    if (v < opId) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+function spectatorOpsOf(room) {
+  // Animation rooms: spectators watch the FIRST frame only (mirrors broadcast).
+  const ops = room.animationEnabled
+    ? visibleHistory(room).filter((op) => opFrameId(room, op) === room.frames[0].id)
+    : visibleHistory(room);
+  return ops.length > SPECTATOR_HISTORY_OPS ? ops.slice(-SPECTATOR_HISTORY_OPS) : ops;
+}
+function historyMessageFor(room, variant) {
+  if (variant === 'spectator') return { type: 'history', ops: spectatorOpsOf(room) };
+  return { type: 'history', ops: visibleHistory(room), frames: room.frames };
+}
+function framesKeyOf(room) {
+  return JSON.stringify(room.frames);
+}
+// The ops newer than the cached frame that this variant would include, or null
+// when the cache can't be extended (watermark gone, tail too long).
+function historyTailAfter(room, variant, lastOpId) {
+  const history = room.history;
+  const at = opIndexOf(history, lastOpId);
+  if (at < 0) return null;
+  const firstFrameId = room.frames[0]?.id;
+  const tail = [];
+  for (let i = at + 1; i < history.length; i += 1) {
+    const op = history[i];
+    if (room.hiddenOpIds.size && room.hiddenOpIds.has(op.opId)) continue;
+    if (variant === 'spectator' && room.animationEnabled && opFrameId(room, op) !== firstFrameId) continue;
+    if (tail.length >= HISTORY_CACHE_TAIL_MAX) return null;
+    tail.push(op);
+  }
+  return tail;
+}
+function historyCacheUsable(room, entry) {
+  return !!entry && entry.gen === room.historyGen && entry.hiddenGen === (room.hiddenGen || 0)
+    && (entry.variant === 'spectator' || entry.framesKey === framesKeyOf(room));
+}
+function buildHistoryCache(room, variant) {
+  const gen = room.historyGen;
+  const hiddenGen = room.hiddenGen || 0;
+  const framesKey = framesKeyOf(room);
+  const msg = historyMessageFor(room, variant);
+  const lastOpId = msg.ops.length ? (msg.ops[msg.ops.length - 1].opId || 0) : 0;
+  const json = JSON.stringify(msg); // the one synchronous cost per window
+  return new Promise((resolve, reject) => {
+    gzip(json, { level: 6 }, (err, gz) => (err ? reject(err) : resolve({ variant, gen, hiddenGen, framesKey, lastOpId, gz, opCount: msg.ops.length })));
+  });
+}
+async function sendHistoryCatchUp(ws, room, variant) {
+  const sendText = () => {
+    if (ws.readyState === 1) ws.send(JSON.stringify(historyMessageFor(room, variant)));
+  };
+  if (!ws.acceptsGzip || room.animationEnabled || visibleHistory(room).length < HISTORY_CACHE_MIN_OPS) {
+    sendText();
+    return;
+  }
+  const cache = room.historyCache || (room.historyCache = {});
+  let entry = cache[variant];
+  let tail = historyCacheUsable(room, entry) ? historyTailAfter(room, variant, entry.lastOpId) : null;
+  if (!tail) {
+    // Rebuild once, shared by every joiner that lands while it's in flight.
+    const key = `${variant}Building`;
+    if (!cache[key]) {
+      cache[key] = buildHistoryCache(room, variant).finally(() => { cache[key] = null; });
+    }
+    try { entry = await cache[key]; } catch { entry = null; }
+    if (!entry) { sendText(); return; }
+    cache[variant] = entry;
+    tail = historyCacheUsable(room, entry) ? historyTailAfter(room, variant, entry.lastOpId) : null;
+    if (!tail) { sendText(); return; } // the mural changed shape while gzipping
+  }
+  if (ws.readyState !== 1) return;
+  // Pre-compressed → tell ws not to deflate it again.
+  ws.send(entry.gz, { binary: true, compress: false });
+  for (const op of tail) ws.send(JSON.stringify({ type: 'op', op }));
+}
+
 // Allowed idle time before an EMPTY room is auto-closed. Scales with complexity
 // (op count) and engagement (cumulative user-seconds), capped — so a rich, busy
 // mural lingers much longer than a quick scribble. Works on a live room or a
 // plain {history,userSeconds} read from disk.
 function allowedIdleMs(room) {
-  const ops = Array.isArray(room.history) ? room.history.length : 0;
+  const ops = Number.isFinite(room.opCount) ? room.opCount : (Array.isArray(room.history) ? room.history.length : 0);
   const userSeconds = room.userSeconds || 0;
   const bonus = ops * AUTO_CLOSE_PER_OP_MS + userSeconds * AUTO_CLOSE_PER_USER_SEC_MS;
   return Math.min(AUTO_CLOSE_MAX_MS, AUTO_CLOSE_BASE_MS + bonus);
@@ -1632,6 +1893,8 @@ function closeRoom(roomId, reason) {
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
+  try { unlinkSync(historyFile(roomId)); } catch { /* no history base */ }
+  try { unlinkSync(opLogFile(roomId)); } catch { /* no op log */ }
   try { unlinkSync(snapshotFile(roomId)); } catch { /* no snapshot */ }
 }
 
@@ -1653,14 +1916,24 @@ function autoCloseSweep() {
   let files = [];
   try { files = readdirSync(ROOM_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
   for (const f of files) {
+    if (f.endsWith('.history.json')) continue; // a room's history base rides with its meta file below
     const id = f.replace(/\.json$/, '');
     if (FEATURED_CODES.has(id) || rooms.has(id)) continue;
     try {
-      const data = JSON.parse(readFileSync(join(ROOM_DIR, f), 'utf8'));
+      const path = join(ROOM_DIR, f);
+      // The meta file is small once a room has been saved by this build; only a
+      // legacy file with the history still inline costs a big parse here.
+      const data = JSON.parse(readFileSync(path, 'utf8'));
       if (data.productionId && getProduction(data.productionId)) continue; // only live films are exempt
-      const pseudo = { history: data.history || [], userSeconds: Number(data.userSeconds) || 0 };
-      if (now - (data.savedAt || 0) > allowedIdleMs(pseudo)) {
-        unlinkSync(join(ROOM_DIR, f));
+      // Ops appended after the last meta write live in the log — its mtime is
+      // the room's real "last saved" moment.
+      let lastSaved = Number(data.savedAt) || 0;
+      try { lastSaved = Math.max(lastSaved, statSync(opLogFile(id)).mtimeMs); } catch { /* no log */ }
+      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0 };
+      if (now - lastSaved > allowedIdleMs(pseudo)) {
+        unlinkSync(path);
+        try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
+        try { unlinkSync(opLogFile(id)); } catch { /* no op log */ }
         try { unlinkSync(snapshotFile(id)); } catch { /* no snapshot */ }
       }
     } catch { /* ignore unreadable file */ }
@@ -1695,7 +1968,7 @@ function ensureDailyFresh() {
   room.lastClearedSheet = null;
   // Yesterday's ops are gone — stale moderation state on them is pure liability
   // (recycled opIds would silently hide innocent new-day strokes).
-  room.hiddenOpIds.clear();
+  room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
   room.flaggedOps.clear();
   broadcast('DAILY', { type: 'clear', userId: 'system', name: 'Daily Challenge', gameRound: true });
   broadcast('DAILY', { type: 'sheet', sheetId: null });
@@ -1807,7 +2080,7 @@ function ensureRoomFresh(roomId) {
   room.lastClearedSheet = null;
   // The old ops are gone; stale moderation state on recycled opIds would
   // silently hide innocent new strokes (same reasoning as the daily wipe).
-  room.hiddenOpIds.clear();
+  room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
   room.flaggedOps.clear();
   if (room.keepVotes) room.keepVotes.clear();
   room.wipeAt = Date.now() + ROOM_WIPE_MS;
@@ -2648,6 +2921,9 @@ function finishVote(roomId) {
 wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
+  // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
+  // everything else — old builds, the test harness by default — gets text.
+  ws.acceptsGzip = url.searchParams.get('gz') === '1';
 
   // Notify mode: a lightweight cross-room mention watcher. It joins NO room for
   // drawing/presence — it just subscribes to a set of rooms' chat and receives
@@ -2738,10 +3014,7 @@ wss.on('connection', async (ws, req) => {
     // Animation rooms: spectators watch the FIRST frame only (their single
     // canvas would otherwise overdraw the whole flipbook into one smear).
     // (Chat catch-up rides along below — the banter is part of the show.)
-    const spectatorOps = live.animationEnabled
-      ? visibleHistory(live).filter((op) => opFrameId(live, op) === live.frames[0].id)
-      : visibleHistory(live);
-    ws.send(JSON.stringify({ type: 'history', ops: spectatorOps.slice(-1500) }));
+    void sendHistoryCatchUp(ws, live, 'spectator');
     // Don't point a spectator at a trace-photo id whose in-memory image is gone
     // (e.g. after a restart) — same guard as the member join path.
     if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
@@ -2992,7 +3265,7 @@ wss.on('connection', async (ws, req) => {
         frames: room.frames,
       }));
     } else {
-      ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
+      void sendHistoryCatchUp(ws, room, 'full');
     }
     // Elect one connected member to refresh the snapshot if it's due (the room
     // crossed the min-op threshold, or enough new ops landed since the last one).
@@ -3014,7 +3287,7 @@ wss.on('connection', async (ws, req) => {
       }
     }
   } else {
-    ws.send(JSON.stringify({ type: 'history', ops: visibleHistory(room), frames: room.frames }));
+    void sendHistoryCatchUp(ws, room, 'full');
   }
   // A persisted trace-photo id whose in-memory image is gone (server restart)
   // resolves to nothing — drop it rather than pointing joiners at a 404.
@@ -3101,6 +3374,10 @@ wss.on('connection', async (ws, req) => {
         break;
       case 'op': {
         if (!data.op || typeof data.op !== 'object' || Array.isArray(data.op)) break;
+        // The only unguarded mutation path until now: every other WS action has
+        // a rateOk; ops had size caps but no rate cap. Silently dropped, like
+        // every other rejected op (a human never gets near this bucket).
+        if (!opRateOk(user)) break;
         // When a host locks the room, only hosts may keep drawing. This is the
         // real boundary — clients also disable the canvas, but this enforces it.
         if (room.locked && !isHost(room, user)) break;
@@ -3188,13 +3465,13 @@ wss.on('connection', async (ws, req) => {
         analyticsRecordDraw(roomId, user, op);
         room.history.push(op);
         room.frameOpCounts.set(countKey, frameCount + 1);
-        if (!multiFrame && room.history.length > MAX_HISTORY) {
+        if (!multiFrame && room.history.length > historyCapFor(room)) {
           // Trimming decrements just the removed counts; a full recount would
           // scan the entire mural for each batch after the cap is reached.
           trimHistoryFront(room);
         }
         broadcast(roomId, { type: 'op', op }, id);
-        persistRoom(roomId);
+        persistOp(roomId, op);
         break;
       }
       // Only the elected member may answer one live request. Never accept a
@@ -4371,7 +4648,7 @@ wss.on('connection', async (ws, req) => {
         if (!isHost(room, user)) break;
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
-        ids.forEach((opId) => room.hiddenOpIds.add(opId));
+        ids.forEach((opId) => room.hiddenOpIds.add(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
         invalidateRoomSnapshot(room); // the baked pixels may include now-hidden ops
         if (room.animationEnabled) {
           broadcast(roomId, { type: 'resync' });
@@ -4385,7 +4662,7 @@ wss.on('connection', async (ws, req) => {
         if (!isHost(room, user)) break;
         const ids = Array.isArray(data.opIds) ? data.opIds : [];
         if (!ids.length) break;
-        ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+        ids.forEach((opId) => room.hiddenOpIds.delete(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
         invalidateRoomSnapshot(room); // restored ops change the baked pixels
         if (room.animationEnabled) {
           broadcast(roomId, { type: 'resync', restored: true });
@@ -4400,7 +4677,7 @@ wss.on('connection', async (ws, req) => {
         const ids = new Set(Array.isArray(data.opIds) ? data.opIds : []);
         if (!ids.size) break;
         room.history = room.history.filter((op) => !ids.has(op.opId));
-        ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+        ids.forEach((opId) => room.hiddenOpIds.delete(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
         recountFrameOps(room);
         invalidateRoomSnapshot(room); // removed ops are gone from the baked pixels
         if (room.animationEnabled) {
@@ -4466,7 +4743,7 @@ wss.on('connection', async (ws, req) => {
         if (corroborated) {
           const toHide = implicated.filter((opId) => !room.hiddenOpIds.has(opId));
           if (toHide.length) {
-            toHide.forEach((opId) => room.hiddenOpIds.add(opId));
+            toHide.forEach((opId) => room.hiddenOpIds.add(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
             invalidateRoomSnapshot(room); // baked pixels may include the hidden ops
             const authorIds = new Set(room.history.filter((op) => toHide.includes(op.opId)).map((op) => op.userId));
             authorIds.forEach((uid) => { const au = room.users.get(uid); if (au) au.muted = true; });

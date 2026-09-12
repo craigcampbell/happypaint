@@ -5,7 +5,27 @@ import assert from 'node:assert/strict';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+
+// Rooms persist as <CODE>.json (meta) + <CODE>.history.json (base) + <CODE>.ops.jsonl
+// (appended ops) — read them back the way the server does on boot.
+function readRoomHistory(scratch, code) {
+  const dir = join(scratch, '.rooms');
+  let history = [];
+  if (existsSync(join(dir, `${code}.history.json`))) {
+    history = JSON.parse(readFileSync(join(dir, `${code}.history.json`), 'utf8')).history;
+  } else if (existsSync(join(dir, `${code}.json`))) {
+    history = JSON.parse(readFileSync(join(dir, `${code}.json`), 'utf8')).history || [];
+  }
+  let last = history.length ? history[history.length - 1].opId : 0;
+  if (existsSync(join(dir, `${code}.ops.jsonl`))) {
+    for (const line of readFileSync(join(dir, `${code}.ops.jsonl`), 'utf8').split('\n').filter(Boolean)) {
+      const op = JSON.parse(line);
+      if (op.opId > last) { history.push(op); last = op.opId; }
+    }
+  }
+  return history;
+}
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -121,8 +141,7 @@ await withServer({}, async ({ connect, stroke, stop, scratch, base }) => {
   const result = await stop('SIGINT');
   check('SIGINT exits successfully within the deployment grace', result.code === 0 && result.elapsed < 8000);
   check('both active drawing clients close cleanly for restart', [painter, observer].every((client) => client.closeInfo?.code === 1012));
-  const room = JSON.parse(readFileSync(join(scratch, '.rooms/ZZSTOP.json'), 'utf8'));
-  check('latest acknowledged stroke survives immediate shutdown', room.history.some((op) => op.strokeId === 'latest-before-debounce'));
+  check('latest acknowledged stroke survives immediate shutdown', readRoomHistory(scratch, 'ZZSTOP').some((op) => op.strokeId === 'latest-before-debounce'));
   check('acknowledged anonymous artwork remains saved', JSON.parse(readFileSync(join(scratch, '.artworks/shutdown-device.json'), 'utf8')).length === 1);
   const analytics = JSON.parse(readFileSync(join(scratch, '.analytics.json'), 'utf8'));
   check('disconnect analytics are flushed after clients close', analytics.sessions.length === 2 && analytics.sessions.every((session) => !session.active && session.leftAt));
@@ -141,8 +160,8 @@ await withServer({ delayWrite: true }, async ({ child, connect, stroke, stop, sc
   child.send({ type: 'release-write' });
   const result = await stopped;
   check('SIGTERM exits successfully after the pending write completes', result.code === 0);
-  const room = JSON.parse(readFileSync(join(scratch, '.rooms/ZZSTOP.json'), 'utf8'));
-  check('queued newer room state follows the older in-flight write', ['already-writing', 'newer-than-write'].every((id) => room.history.some((op) => op.strokeId === id)));
+  const history = readRoomHistory(scratch, 'ZZSTOP');
+  check('queued newer room state follows the older in-flight write', ['already-writing', 'newer-than-write'].every((id) => history.some((op) => op.strokeId === id)));
 });
 
 await withServer({}, async ({ connect, stroke, stop, scratch }) => {
@@ -152,7 +171,7 @@ await withServer({}, async ({ connect, stroke, stop, scratch }) => {
   painter.ws.pause();
   const result = await stop();
   check('unresponsive WebSocket clients cannot block a graceful restart', result.code === 0 && result.elapsed >= 1800 && result.elapsed < 8000);
-  check('forced socket cleanup still flushes the final mural', JSON.parse(readFileSync(join(scratch, '.rooms/ZZSTOP.json'), 'utf8')).history.some((op) => op.strokeId === 'unresponsive-client'));
+  check('forced socket cleanup still flushes the final mural', readRoomHistory(scratch, 'ZZSTOP').some((op) => op.strokeId === 'unresponsive-client'));
 });
 
 let authSeen;
