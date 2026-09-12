@@ -124,7 +124,9 @@ import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
 import WallPostModal from "./components/WallPostModal";
-import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops } from "./utils/filmPlan";
+import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "./utils/filmPlan";
+import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, renderSoundtrackSlice } from "./utils/soundtrack";
+import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
@@ -924,6 +926,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Trace-a-photo: upload a photo as the room's traced underlay.
   const tracePhotoInputRef = useRef(null);
   const [traceBusy, setTraceBusy] = useState(false);
+  // Film soundtrack: server-synced meta {id, mime, name, durationMs}; every
+  // client fetches + decodes the bytes itself (utils/soundtrack.js).
+  const [soundtrack, setSoundtrack] = useState(null);
+  const soundtrackRef = useRef({ meta: null, buffer: null, stop: null });
+  const soundtrackInputRef = useRef(null);
+  const [soundtrackBusy, setSoundtrackBusy] = useState(false);
+  // Rotoscope clip — LOCAL to this browser only (utils/videoTrace.js): never
+  // uploaded, never shown to friends, never exported. Meta mirrors the ref
+  // for the tools panel; the ref holds the <video>.
+  const [videoTrace, setVideoTrace] = useState(null);
+  const videoTraceRef = useRef(null);
+  const videoTraceInputRef = useRef(null);
+  const syncVideoTraceRef = useRef(null);
   const brushSectionRef = useRef(null); // scroll target when "Paint" opens the tools
   const lastPaintBrushRef = useRef("marker"); // remember the brush to restore after erasing
   const [savingArt, setSavingArt] = useState(false);
@@ -1868,6 +1883,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (sheetModeRef.current === "under") {
       drawSheet(context);
     }
+    drawVideoTrace(context, videoTraceRef.current); // rotoscope clip, editing view only
     compositeLayers(context, layersRef.current);
     paintRemoteStrokeOverlays(context);
     if (sheetModeRef.current !== "under") {
@@ -1951,6 +1967,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (sheetModeRef.current === "under") {
       drawSheet(context);
     }
+    drawVideoTrace(context, videoTraceRef.current); // rotoscope clip, editing view only
     context.drawImage(belowCacheRef.current, 0, 0);
     if (active.visible && active.opacity > 0) {
       context.globalAlpha = active.opacity;
@@ -4791,6 +4808,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       playTimerRef.current = null;
     }
     setIsPlaying(false);
+    soundtrackRef.current.stop?.();
+    soundtrackRef.current.stop = null;
     // Restore the active frame's editable composite.
     renderDisplay();
   }, [renderDisplay]);
@@ -4982,6 +5001,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     commitLayersToFrame();
     setIsPlaying(true);
     const context = docContextRef.current;
+    // Soundtrack: play from this scene's start in the film, restarting each
+    // time the (looped) scene wraps so picture and sound stay lined up.
+    const sceneStartMs = scenesRef.current
+      .slice(0, Math.max(0, scenesRef.current.findIndex((s) => s.id === activeSceneIdRef.current)))
+      .reduce((sum, s) => sum + sceneRuntimeMs(s), 0);
+    const startAudio = () => {
+      soundtrackRef.current.stop?.();
+      soundtrackRef.current.stop = soundtrackRef.current.buffer ? playSoundtrack(soundtrackRef.current.buffer, sceneStartMs) : null;
+    };
+    startAudio();
     let cursor = 0;
     let lastTime = 0;
     let accumulator = 0;
@@ -5033,7 +5062,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       let duration = clampHold(frames[cursor % frames.length].durationMs);
       while (accumulator >= duration && guard < frames.length + 1) {
         accumulator -= duration;
+        const wrapped = sceneElapsed + duration >= sceneTotal;
         sceneElapsed = (sceneElapsed + duration) % sceneTotal;
+        if (wrapped) startAudio();
         cursor += 1;
         advanced = true;
         guard += 1;
@@ -5088,6 +5119,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setActiveFrameIndex(clamped);
       recordReplay(true);
       coldFramesRef.current?.scheduleFrameWindow();
+      syncVideoTraceRef.current?.(); // the clip shows THIS cel's moment
     },
     [abortActiveStroke, pruneOnionCache, recordReplay, renderDisplay, syncLayerState, updateHistoryCounts],
   );
@@ -5284,6 +5316,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       frame.durationMs = clampHold(durationMs);
       setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
       dirtyRef.current = true;
+      syncVideoTraceRef.current?.(); // holds move every later cel's moment in the clip
       // Shared timing: debounce the relay so slider drags send one message.
       if (roomAnimationRef.current) {
         const timers = frameDurationSendRef.current;
@@ -5548,11 +5581,21 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     try {
       const width = 1600;
       const height = 1000;
+      // The soundtrack slice this export covers: the whole film, or from this
+      // scene's start for a single-scene export.
+      const filmStartMs = multiScene
+        ? 0
+        : scenesRef.current
+            .slice(0, Math.max(0, scenesRef.current.findIndex((s) => s.id === activeSceneIdRef.current)))
+            .reduce((sum, s) => sum + sceneRuntimeMs(s), 0);
+      const exportMs = plan.reduce((sum, shot) => sum + shot.durationMs, 0);
+      const audio = soundtrackRef.current.buffer ? await renderSoundtrackSlice(soundtrackRef.current.buffer, filmStartMs, exportMs) : null;
       const { blob, ext } = await encodeAnimationVideo({
         width,
         height,
         count: plan.length,
         allowMediaRecorder: !multiScene,
+        audio,
         durationMsAt: (i) => plan[i]?.durationMs || DEFAULT_FRAME_DURATION,
         draw: async (context, i) => {
           const item = plan[i];
@@ -5594,7 +5637,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!multiScene && roomAnimationRef.current && scenesRef.current.length > 1) {
         setStatus(`Exported this scene (.${ext}) — full-film export needs a newer browser`);
       } else {
-        setStatus(`Film exported (.${ext}) 🎬`);
+        setStatus(audio ? `Film exported with sound (.${ext}) 🎬🎵` : `Film exported (.${ext}) 🎬`);
       }
     } catch {
       setStatus("Video export failed on this browser — try Export GIF");
@@ -5703,12 +5746,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const height = 1000;
       // 1) Fetch every segment's frame plan + complete visible op log.
       const plan = [];
+      let productionSound = null; // the first part with music scores the film
       for (const segment of activeProduction.segments) {
         const response = await fetch(`/api/rooms/${encodeURIComponent(segment.code)}/film`, { cache: "no-store" });
         if (!response.ok) {
           throw new Error("segment fetch failed");
         }
         const film = await response.json();
+        if (!productionSound && film.soundtrack?.id) productionSound = film.soundtrack;
         // Warm the module-level stamp cache from this segment's pixel-bearing
         // ops BEFORE any frame renders. Export replays frames in index order,
         // not draw order, so a "reuse" op (stampDataUrl compressed out) can
@@ -5739,7 +5784,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       world.width = CANVAS_WIDTH;
       world.height = CANVAS_HEIGHT;
       let lastReplayedFrameId = null;
+      let productionAudio = null;
+      if (productionSound) {
+        try {
+          const bytes = await (await fetch(`/api/audio/${encodeURIComponent(productionSound.id)}`)).arrayBuffer();
+          const decoded = await decodeSoundtrack(bytes);
+          productionAudio = await renderSoundtrackSlice(decoded, 0, plan.reduce((sum, shot) => sum + shot.durationMs, 0));
+        } catch {
+          productionAudio = null; // silent film beats a failed export
+        }
+      }
       const { blob, ext } = await encodeAnimationVideo({
+        audio: productionAudio,
         width,
         height,
         count: plan.length,
@@ -6457,6 +6513,132 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Trace-a-photo: read a chosen photo, downscale it, run a best-effort NSFW
   // pre-check, then hand it to the server (which host-gates + validates it) as
   // the room's traced underlay. Defaults the overlay to "under" (trace on top).
+  // ---- Soundtrack + rotoscope clip -------------------------------------------
+  // Apply server soundtrack meta: fetch + decode the bytes once per client.
+  const applySoundtrack = useCallback((meta) => {
+    const state = soundtrackRef.current;
+    state.meta = meta;
+    state.buffer = null;
+    setSoundtrack(meta);
+    setSoundtrackBusy(false);
+    if (!meta?.id) return;
+    fetch(`/api/audio/${encodeURIComponent(meta.id)}`, { cache: "force-cache" })
+      .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error("audio fetch failed"))))
+      .then((bytes) => decodeSoundtrack(bytes))
+      .then((buffer) => {
+        if (soundtrackRef.current.meta?.id === meta.id) soundtrackRef.current.buffer = buffer;
+      })
+      .catch(() => {
+        if (soundtrackRef.current.meta?.id === meta.id) showToast("Couldn't load the soundtrack on this device");
+      });
+  }, [showToast]);
+
+  // Pick an audio file → decode locally (proves it plays + reads its length)
+  // → send to the room. `null` removes the current soundtrack.
+  const handleSoundtrackFile = useCallback(async (file) => {
+    if (!roomAnimationRef.current) return;
+    if (!file) {
+      mpRef.current?.sendSoundtrack?.(null);
+      return;
+    }
+    if (file.size > SOUNDTRACK_MAX_BYTES) {
+      showToast("That audio file is too big (8MB max) — try a shorter clip or an MP3");
+      return;
+    }
+    setSoundtrackBusy(true);
+    try {
+      const decoded = await decodeSoundtrack(await file.arrayBuffer());
+      const dataUrl = await fileToDataUrl(file);
+      mpRef.current?.sendSoundtrack?.(dataUrl, file.name, Math.round(decoded.duration * 1000));
+      showToast("🎵 Adding your soundtrack…");
+    } catch {
+      setSoundtrackBusy(false);
+      showToast("That file isn't audio we can play here — try an MP3, M4A or WAV");
+    }
+  }, [showToast]);
+
+  // Film time of the active cel: previous scenes' runtime + earlier cels' holds.
+  const activeCelFilmMs = useCallback(() => {
+    const sceneIndex = scenesRef.current.findIndex((s) => s.id === activeSceneIdRef.current);
+    const before = scenesRef.current.slice(0, Math.max(0, sceneIndex)).reduce((sum, s) => sum + sceneRuntimeMs(s), 0);
+    let within = 0;
+    for (let i = 0; i < activeFrameIndexRef.current && i < framesRef.current.length; i += 1) {
+      within += clampHold(framesRef.current[i].durationMs);
+    }
+    return before + within;
+  }, []);
+
+  // Seek the clip to the active cel's moment and repaint once it's decoded.
+  const syncVideoTrace = useCallback(() => {
+    const trace = videoTraceRef.current;
+    if (!trace || !trace.visible) return;
+    seekVideoTrace(trace, trace.offsetMs + activeCelFilmMs()).then((ok) => {
+      if (ok && videoTraceRef.current === trace) renderDisplay();
+    });
+  }, [activeCelFilmMs, renderDisplay]);
+  useEffect(() => {
+    syncVideoTraceRef.current = syncVideoTrace;
+  }, [syncVideoTrace]);
+
+  const removeVideoTrace = useCallback(() => {
+    disposeVideoTrace(videoTraceRef.current);
+    videoTraceRef.current = null;
+    setVideoTrace(null);
+    renderDisplay();
+  }, [renderDisplay]);
+  useEffect(() => () => disposeVideoTrace(videoTraceRef.current), []);
+
+  const handleVideoTraceFile = useCallback(async (file) => {
+    if (!file) return;
+    if (file.size > VIDEO_TRACE_MAX_BYTES) {
+      showToast("That clip is too big (200MB max) — trim it first");
+      return;
+    }
+    try {
+      const trace = await createVideoTrace(file);
+      disposeVideoTrace(videoTraceRef.current);
+      videoTraceRef.current = trace;
+      setVideoTrace({ name: trace.name, durationMs: trace.durationMs, opacity: trace.opacity, offsetMs: trace.offsetMs, visible: trace.visible });
+      showToast("🎥 Clip loaded — only you can see it. Draw over each cel!");
+      syncVideoTrace();
+    } catch (error) {
+      showToast(error?.message || "Couldn't load that clip");
+    }
+  }, [showToast, syncVideoTrace]);
+
+  const updateVideoTrace = useCallback((patch) => {
+    const trace = videoTraceRef.current;
+    if (!trace) return;
+    Object.assign(trace, patch);
+    setVideoTrace({ name: trace.name, durationMs: trace.durationMs, opacity: trace.opacity, offsetMs: trace.offsetMs, visible: trace.visible });
+    if ("offsetMs" in patch || "visible" in patch) {
+      if (trace.visible) syncVideoTrace();
+      else renderDisplay();
+    } else {
+      renderDisplay();
+    }
+  }, [renderDisplay, syncVideoTrace]);
+
+  // Add blank cels after the last one until the clip is covered at the active
+  // cel's hold (capped by the room's per-scene frame cap).
+  const matchFramesToClip = useCallback(() => {
+    const trace = videoTraceRef.current;
+    if (!trace || !roomAnimationRef.current) return;
+    const hold = clampHold(framesRef.current[activeFrameIndexRef.current]?.durationMs || DEFAULT_FRAME_DURATION);
+    const needed = framesToCoverClip(trace, hold) - framesRef.current.length;
+    const room = animMaxFrames - framesRef.current.length;
+    const count = Math.min(needed, room);
+    if (count <= 0) {
+      showToast(needed <= 0 ? "Your cels already cover the clip" : `This scene is full (${animMaxFrames} cels) — start a new scene for the rest`);
+      return;
+    }
+    const lastId = framesRef.current[framesRef.current.length - 1]?.id;
+    for (let i = 0; i < count; i += 1) {
+      window.setTimeout(() => mpRef.current?.sendFrameAdd?.(lastId, null, activeSceneIdRef.current), i * 80);
+    }
+    showToast(`Adding ${count} cels to cover the clip…`);
+  }, [animMaxFrames, showToast]);
+
   const handleTracePhotoFile = useCallback(
     async (file) => {
       if (!file || !file.type.startsWith("image/")) return;
@@ -6889,6 +7071,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           roomAnimationRef.current = !!data.animation;
           setRoomAnimation(!!data.animation);
           if (Number.isFinite(data.animMaxFrames)) setAnimMaxFrames(data.animMaxFrames);
+          if (data.soundtrack !== undefined) applySoundtrack(data.soundtrack || null);
           productionRef.current = data.production || null;
           setProduction(data.production || null);
           // Learn our ownership/host standing for this room from the server.
@@ -7117,6 +7300,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             pendingAssetLoadsRef.current = [];
             historyReplayActiveRef.current = false;
             coldFramesRef.current?.scheduleFrameWindow(); // rasters for the cold frames, on idle
+            syncVideoTraceRef.current?.();
             const deferred = deferredMpMessagesRef.current;
             deferredMpMessagesRef.current = [];
             for (const d of deferred) {
@@ -7371,6 +7555,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         // ---- Shared animation frames (server-ordered; echoed to sender too) --
+        case "soundtrack": {
+          applySoundtrack(data.soundtrack || null);
+          if (data.byUserId && data.byUserId !== myUserIdRef.current) {
+            showToast(data.soundtrack ? `🎵 ${data.soundtrack.name} is the film's soundtrack` : "🎵 Soundtrack removed");
+          }
+          break;
+        }
+        case "soundtrack_rejected":
+          setSoundtrackBusy(false);
+          showToast(data.reason === "too_big" ? "That audio file is too big (8MB max)" : "That file isn't audio we can play");
+          break;
         case "room_animation": {
           roomAnimationRef.current = !!data.enabled;
           setRoomAnimation(!!data.enabled);
@@ -7827,7 +8022,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
   // Deferred messages drain by re-entering handleMpMessage, so it needs a
@@ -7984,6 +8179,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendSceneAdd: mp.sendSceneAdd,
       sendSceneDel: mp.sendSceneDel,
       sendSceneSet: mp.sendSceneSet,
+      sendSoundtrack: mp.sendSoundtrack,
       sendProductionCreate: mp.sendProductionCreate,
       sendProductionAddSegment: mp.sendProductionAddSegment,
       sendProductionRename: mp.sendProductionRename,
@@ -7999,7 +8195,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -10465,6 +10661,99 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 }}
               />
             </>
+          ) : null}
+          {roomAnimation ? (
+            <div className="film-media">
+              {roomAudience !== "kid_safe" || isRoomHost ? (
+                <>
+                  <button
+                    type="button"
+                    className="sheet-browse-btn"
+                    onClick={() => soundtrackInputRef.current?.click()}
+                    disabled={soundtrackBusy}
+                    title="Music or a voice-over for the whole film (MP3, M4A, WAV, OGG — 8MB max)"
+                  >
+                    {soundtrackBusy ? "Adding music…" : soundtrack ? `🎵 ${soundtrack.name}` : "🎵 Add a soundtrack"}
+                  </button>
+                  {soundtrack ? (
+                    <button type="button" className="film-media-remove" onClick={() => handleSoundtrackFile(null)}>
+                      Remove music
+                    </button>
+                  ) : null}
+                  <input
+                    ref={soundtrackInputRef}
+                    type="file"
+                    accept="audio/*"
+                    style={{ display: "none" }}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) handleSoundtrackFile(file);
+                      event.target.value = "";
+                    }}
+                  />
+                </>
+              ) : soundtrack ? (
+                <p className="account-note">🎵 {soundtrack.name}</p>
+              ) : null}
+              <button
+                type="button"
+                className="sheet-browse-btn"
+                onClick={() => videoTraceInputRef.current?.click()}
+                title="Rotoscope: load a video clip and draw over it cel by cel. The clip stays on this device."
+              >
+                {videoTrace ? `🎥 ${videoTrace.name}` : "🎥 Trace a video (rotoscope)"}
+              </button>
+              <input
+                ref={videoTraceInputRef}
+                type="file"
+                accept="video/*"
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) handleVideoTraceFile(file);
+                  event.target.value = "";
+                }}
+              />
+              {videoTrace ? (
+                <div className="video-trace-controls">
+                  <label className="video-trace-row">
+                    <span>Clip opacity</span>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="1"
+                      step="0.05"
+                      value={videoTrace.opacity}
+                      onChange={(event) => updateVideoTrace({ opacity: Number(event.target.value) })}
+                    />
+                  </label>
+                  <label className="video-trace-row">
+                    <span>Clip starts at {(videoTrace.offsetMs / 1000).toFixed(1)}s</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max={Math.max(0, videoTrace.durationMs - 100)}
+                      step="100"
+                      value={videoTrace.offsetMs}
+                      onChange={(event) => updateVideoTrace({ offsetMs: Number(event.target.value) })}
+                    />
+                  </label>
+                  <label className="color-picker sheet-toggle">
+                    <span>Show clip under my drawing</span>
+                    <input type="checkbox" checked={videoTrace.visible} onChange={(event) => updateVideoTrace({ visible: event.target.checked })} />
+                  </label>
+                  <div className="video-trace-actions">
+                    <button type="button" onClick={matchFramesToClip} title="Add blank cels after the last one until the clip is covered at the current hold">
+                      ➕ Cels to cover the clip
+                    </button>
+                    <button type="button" className="film-media-remove" onClick={removeVideoTrace}>
+                      Remove clip
+                    </button>
+                  </div>
+                  <p className="account-note">Only you can see the clip. It never uploads or exports — your drawings do.</p>
+                </div>
+              ) : null}
+            </div>
           ) : null}
           {sheetId ? (
             <label className="color-picker sheet-toggle">

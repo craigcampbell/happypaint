@@ -1084,11 +1084,12 @@ function loadRoom(roomId) {
       quests: data.quests && typeof data.quests === 'object' ? data.quests : null,
       storybook: data.storybook && typeof data.storybook === 'object' ? data.storybook : null,
       remixSource: data.remixSource && typeof data.remixSource === 'object' ? data.remixSource : null,
+      soundtrack: sanitizeSoundtrack(data.soundtrack),
       // Server-side capability secrets for cross-room @mention watching.
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
     };
   } catch {
-    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, mentionKeys: [] };
+    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [] };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -1180,6 +1181,7 @@ async function saveRoomNow(roomId) {
         } : null,
         storybook: room.storybook || null,
         remixSource: room.remixSource || null,
+        soundtrack: room.soundtrack || null,
         // Mention-watch capability keys (see issueMentionKey). Server-side only:
         // this file never leaves the host, and keys never appear in any API.
         mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
@@ -1685,6 +1687,9 @@ function getRoom(roomId) {
       quests: roomId === 'QUEST' || saved.quests ? normalizeQuestState(saved.quests, roomId) : null,
       storybook: saved.storybook || null,
       remixSource: saved.remixSource || null,
+      // Film soundtrack meta; the bytes are served from /api/audio/:id (a
+      // missing file after a restart just means no music until re-added).
+      soundtrack: saved.soundtrack && soundtracks.has(saved.soundtrack.id) ? saved.soundtrack : null,
       vote: null, // open theme vote: { options, votes: {userId: 0|1|2}, endsAt }
       voteTimer: null, // the vote-close timeout (cleared with the room)
       lastVoteAt: 0, // vote_start cooldown anchor (in-memory)
@@ -1916,6 +1921,7 @@ function closeRoom(roomId, reason) {
     dropRoomPhonePages(room); // free any Draw Phone page images
     dropRoomChatDoodles(room); // free the room's chat-doodle images
     dropRoomTracePhoto(room); // free any uploaded trace photo when the room dies
+    dropRoomSoundtrack(room); // and its soundtrack file
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
@@ -3256,6 +3262,7 @@ wss.on('connection', async (ws, req) => {
     quests: questPayload(room),
     storybook: storybookPayload(room),
     remixSource: room.remixSource || null,
+    soundtrack: room.soundtrack || null,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
   // ALWAYS send a history frame on join — even an empty one. The client treats it
@@ -3552,6 +3559,45 @@ wss.on('connection', async (ws, req) => {
       // group) or when the sender is the HOST of an owned public room; the
       // hostless public drawing rooms can NEVER accept one. The client also
       // runs an NSFW pre-check, but the gate is the real control.
+      // Film soundtrack (one per animation room). Same accountability gate as
+      // a trace photo: private rooms — any member; public rooms — the host of
+      // an OWNED room only; never muted members, nor non-hosts in a locked room.
+      // `audio: null` removes it. The server can't listen, so the name goes
+      // through the text filter and the bytes through a magic-byte sniff.
+      case 'set_soundtrack': {
+        if (!room.animationEnabled) break;
+        if (user.muted) break;
+        if (room.locked && !isHost(room, user)) break;
+        if (room.audience === 'kid_safe' && (!room.ownerProfileId || !isHost(room, user))) break;
+        if (!rateOk(`sound:${id}`, 6, 60_000)) break;
+        if (data.audio == null) {
+          dropRoomSoundtrack(room);
+          broadcast(roomId, { type: 'soundtrack', soundtrack: null, byUserId: id });
+          persistRoom(roomId);
+          break;
+        }
+        if (typeof data.audio !== 'string' || data.audio.length > AUDIO_MAX_CHARS) {
+          ws.send(JSON.stringify({ type: 'soundtrack_rejected', reason: 'too_big' }));
+          break;
+        }
+        const stored = storeSoundtrack(data.audio);
+        if (!stored) {
+          ws.send(JSON.stringify({ type: 'soundtrack_rejected', reason: 'not_audio' }));
+          break;
+        }
+        dropRoomSoundtrack(room);
+        const rawName = typeof data.name === 'string' ? data.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 60).trim() : '';
+        const nameVerdict = rawName ? scan(rawName) : { hit: false };
+        room.soundtrack = {
+          id: stored.id,
+          mime: stored.mime,
+          name: rawName && !nameVerdict.hit ? rawName : 'Soundtrack',
+          durationMs: Math.max(0, Math.min(3_600_000, Number(data.durationMs) || 0)),
+        };
+        broadcast(roomId, { type: 'soundtrack', soundtrack: room.soundtrack, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
       case 'set_trace_photo': {
         if (room.storybook?.enabled) break;
         if (user.muted) break; // a muted member can't push a photo either
@@ -5995,7 +6041,7 @@ app.get('/api/rooms/:code/film', (req, res) => {
   if (!room.animationEnabled) {
     return res.status(404).json({ error: 'not_a_film' });
   }
-  res.json({ code, title: room.title || null, scenes: scenesMeta(room), ops: visibleHistory(room) });
+  res.json({ code, title: room.title || null, scenes: scenesMeta(room), soundtrack: room.soundtrack || null, ops: visibleHistory(room) });
 });
 
 // The discovery lobby source: live, listed, kid_safe rooms only. Sanitized —
@@ -6160,6 +6206,101 @@ app.post('/api/admin/trace/:id/remove', (req, res) => {
 // host-gated in owned rooms and blocked in the hostless public rooms (see the
 // set_trace_photo WS handler); the payload is validated to be a real raster
 // image (never SVG/scripts) here.
+// ---- Film soundtracks -------------------------------------------------------
+// One audio file per animation room (set_soundtrack). Bytes live on disk under
+// DATA_DIR/.audio so a film keeps its music across restarts; the room meta
+// holds {id, mime, name, durationMs}. Ids are unguessable and only ever handed
+// to room members (the soundtrack broadcast + the connected handshake).
+const AUDIO_DIR = process.env.AUDIO_DIR || join(DATA_DIR, '.audio');
+const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
+const AUDIO_MAX_CHARS = Math.ceil((AUDIO_MAX_BYTES * 4) / 3) + 128; // base64 dataURL cap
+const AUDIO_MAX_FILES = Number(process.env.AUDIO_MAX_FILES || 300);
+const AUDIO_EXT = { 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/mp4': 'm4a', 'audio/webm': 'webm' };
+const AUDIO_MIME_BY_EXT = Object.fromEntries(Object.entries(AUDIO_EXT).map(([mime, ext]) => [ext, mime]));
+const soundtracks = new Map(); // id -> { file, mime }
+try {
+  for (const f of readdirSync(AUDIO_DIR)) {
+    const m = /^(snd_[a-f0-9]{24})\.([a-z0-9]+)$/.exec(f);
+    if (m && AUDIO_MIME_BY_EXT[m[2]]) soundtracks.set(m[1], { file: join(AUDIO_DIR, f), mime: AUDIO_MIME_BY_EXT[m[2]] });
+  }
+} catch { /* no audio dir yet */ }
+// Magic-byte sniff — the declared mime is untrusted. Anything else is refused.
+function sniffAudio(bytes) {
+  if (bytes.length < 12) return null;
+  const head = bytes.subarray(0, 12).toString('latin1');
+  if (head.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) return 'audio/mpeg';
+  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WAVE') return 'audio/wav';
+  if (head.startsWith('OggS')) return 'audio/ogg';
+  if (head.startsWith('fLaC')) return 'audio/flac';
+  if (head.slice(4, 8) === 'ftyp') return 'audio/mp4';
+  if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'audio/webm';
+  return null;
+}
+function storeSoundtrack(dataUrl) {
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0 || !dataUrl.startsWith('data:') || !dataUrl.slice(0, comma).includes(';base64')) return null;
+  const bytes = Buffer.from(dataUrl.slice(comma + 1), 'base64');
+  if (!bytes.length || bytes.length > AUDIO_MAX_BYTES) return null;
+  const mime = sniffAudio(bytes);
+  if (!mime) return null;
+  const id = `snd_${randomBytes(12).toString('hex')}`;
+  const file = join(AUDIO_DIR, `${id}.${AUDIO_EXT[mime]}`);
+  try {
+    mkdirSync(AUDIO_DIR, { recursive: true });
+    writeFileSync(file, bytes);
+  } catch {
+    return null;
+  }
+  soundtracks.set(id, { file, mime });
+  // Bound the store: evict the oldest files no LIVE room references.
+  if (soundtracks.size > AUDIO_MAX_FILES) {
+    const active = new Set();
+    for (const r of rooms.values()) if (r.soundtrack?.id) active.add(r.soundtrack.id);
+    const candidates = [...soundtracks.entries()].filter(([key]) => key !== id && !active.has(key));
+    candidates.sort((a, b) => {
+      let ta = 0; let tb = 0;
+      try { ta = statSync(a[1].file).mtimeMs; } catch { ta = 0; }
+      try { tb = statSync(b[1].file).mtimeMs; } catch { tb = 0; }
+      return ta - tb;
+    });
+    for (const [key, entry] of candidates) {
+      if (soundtracks.size <= AUDIO_MAX_FILES) break;
+      try { unlinkSync(entry.file); } catch { /* gone */ }
+      soundtracks.delete(key);
+    }
+  }
+  return { id, mime };
+}
+function dropRoomSoundtrack(room) {
+  const current = room && room.soundtrack;
+  if (!current) return;
+  room.soundtrack = null;
+  const entry = soundtracks.get(current.id);
+  if (entry) {
+    try { unlinkSync(entry.file); } catch { /* gone */ }
+    soundtracks.delete(current.id);
+  }
+}
+function sanitizeSoundtrack(value) {
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !/^snd_[a-f0-9]{24}$/.test(value.id)) return null;
+  return {
+    id: value.id,
+    mime: AUDIO_EXT[value.mime] ? value.mime : 'audio/mpeg',
+    name: typeof value.name === 'string' ? value.name.slice(0, 60) : 'Soundtrack',
+    durationMs: Math.max(0, Math.min(3_600_000, Number(value.durationMs) || 0)),
+  };
+}
+app.get('/api/audio/:id', (req, res) => {
+  const entry = soundtracks.get(String(req.params.id || ''));
+  if (!entry) return res.status(404).json({ error: 'not found' });
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.type(entry.mime);
+  // `.audio` is a dot-directory: send() refuses those unless told otherwise.
+  res.sendFile(entry.file, { dotfiles: 'allow' }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'not found' });
+  });
+});
+
 const tracePhotos = new Map(); // id -> { image, roomId, ts }
 const TRACE_MAX = 240;
 const TRACE_MAX_CHARS = 2_400_000; // ~1.8MB decoded photo

@@ -9815,3 +9815,35 @@ img.cc-doodle { background: #fff; }
     display: none; /* the runtime label needs the wide strip; loops/camera stay */
   }
 }
+
+/* ---- Film media: soundtrack + rotoscope clip (tools panel) ---------------- */
+.film-media {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.film-media-remove {
+  justify-self: start;
+  font-size: 0.85rem;
+}
+.video-trace-controls {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(124, 58, 237, 0.06);
+}
+.video-trace-row {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.video-trace-row input[type="range"] {
+  width: 100%;
+}
+.video-trace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

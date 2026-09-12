@@ -88,6 +88,36 @@ op-agnostic relay + store:
   bumps `historyGen`, and `hiddenGen` tracks moderation hides — so a cap-full
   room costs one stringify+gzip per ~400 ops instead of one per joiner.
   Clients without `gz=1` (old builds, the test harness by default) get text.
+- **Minutes-long films (2026-09).** Length comes from time and from cold frames:
+  - Timing (`src/utils/filmPlan.js`): a frame HOLDS up to 10s, a scene LOOPS up
+    to 20× and carries a camera move (pan/tilt/zoom presets; `scene_set`,
+    host-only). `buildFilmPlan(scenes)` is the one flat shot list that studio
+    playback, `exportVideo`, `exportProduction` and the storyboard runtime walk.
+  - Cold frames (`src/utils/frameRasters.js`): in a server-synced room only the
+    active frame ± 2 hold live layer canvases. Other frames keep their own op
+    list (bucketed from the scene history, appended for every op sent/received)
+    plus a 1600×1000 WebP raster — made from the live pixels when a frame cools,
+    or by the offline interpreter on idle. Stepping onto a cold frame allocates
+    canvases and replays its ops (`hydrateFrame`); playback/scrub/onion/thumbs/
+    exports paint cold frames from a small decoded-raster LRU. Local layer
+    stacks flatten when a frame cools (the shared truth is flat). Caps: private
+    rooms 60 frames/scene, 40 scenes, 120k ops; the handshake carries
+    `animMaxFrames`. `window.__drawesomeFrames()` is a read-only diagnostic.
+  - Export (`src/utils/videoExport.js`): past 90s the muxer streams into Blob
+    parts (fragmented MP4 / streaming WebM), bitrate scales to keep a film under
+    ~220MB, the soundtrack is muxed (AAC in MP4 where the platform encodes it,
+    else Opus), `signal` cancels.
+  - Soundtrack (`set_soundtrack`, `/api/audio/:id`, `src/utils/soundtrack.js`):
+    one audio file per animation room, stored under `DATA_DIR/.audio` (8MB,
+    magic-byte sniffed, name through the text filter), same accountability gate
+    as a trace photo (private rooms: any member; public: host of an owned room —
+    FLIPBOOK never). Meta rides the handshake, `soundtrack` broadcast and
+    `/film`; each client fetches + decodes the bytes. Playback starts the track
+    at the scene's film offset and restarts when the looped scene wraps.
+  - Rotoscope (`src/utils/videoTrace.js`): a LOCAL video clip (object URL on a
+    hidden `<video>`; never uploaded, shared or exported) drawn under the layers
+    at the active cel's film time + a user offset; "Cels to cover the clip" adds
+    blank frames at the current hold.
   The studio replays in elapsed-time slices (8ms target between operations),
   awaits embedded images in order, and defers scene mutations until catch-up
   finishes. A new connection or unmount cancels the previous replay.

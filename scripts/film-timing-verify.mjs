@@ -127,6 +127,39 @@ try {
   }
   check('a private scene grows past the old 8-frame cap', sceneNow.frames.length === 13, `${sceneNow.frames.length} frames`);
 
+  // Stage 4: soundtrack upload (host/member gate, sniffed, served, persisted meta).
+  const wavHeader = Buffer.alloc(44);
+  wavHeader.write('RIFF', 0); wavHeader.writeUInt32LE(36 + 4800, 4); wavHeader.write('WAVE', 8);
+  wavHeader.write('fmt ', 12); wavHeader.writeUInt32LE(16, 16); wavHeader.writeUInt16LE(1, 20); wavHeader.writeUInt16LE(1, 22);
+  wavHeader.writeUInt32LE(8000, 24); wavHeader.writeUInt32LE(16000, 28); wavHeader.writeUInt16LE(2, 32); wavHeader.writeUInt16LE(16, 34);
+  wavHeader.write('data', 36); wavHeader.writeUInt32LE(4800, 40);
+  const wav = Buffer.concat([wavHeader, Buffer.alloc(4800)]);
+  const wavDataUrl = `data:audio/wav;base64,${wav.toString('base64')}`;
+  host.send({ type: 'set_soundtrack', audio: `data:audio/wav;base64,${Buffer.from('definitely not audio bytes here!!').toString('base64')}`, name: 'junk.wav', durationMs: 1000 });
+  const rejected = await host.waitFor((m) => m.type === 'soundtrack_rejected', { timeoutMs: 4000, label: 'junk rejected' });
+  check('non-audio bytes are refused by the magic-byte sniff', rejected.reason === 'not_audio');
+  guest.send({ type: 'set_soundtrack', audio: wavDataUrl, name: 'guest.wav', durationMs: 300 });
+  await sleep(400);
+  check('a private-room member may set the soundtrack too', guest.messages.some((m) => m.type === 'soundtrack' && m.soundtrack?.name === 'guest'), JSON.stringify(guest.messages.filter((m) => /soundtrack/.test(m.type)).slice(-3)));
+  host.send({ type: 'set_soundtrack', audio: wavDataUrl, name: 'Ocean Song.wav', durationMs: 300 });
+  const setSound = await guest.waitFor((m) => m.type === 'soundtrack' && m.soundtrack?.name === 'Ocean Song', { timeoutMs: 4000, label: 'soundtrack set' });
+  check('soundtrack meta relays to everyone (name minus extension, sniffed mime)', setSound.soundtrack.mime === 'audio/wav' && setSound.soundtrack.durationMs === 300 && /^snd_[a-f0-9]{24}$/.test(setSound.soundtrack.id));
+  const served = await fetch(`http://127.0.0.1:${port}/api/audio/${setSound.soundtrack.id}`);
+  const servedBytes = served.ok ? (await served.arrayBuffer()).byteLength : -1;
+  check('/api/audio serves the bytes with the sniffed content type', served.ok && served.headers.get('content-type').startsWith('audio/wav') && servedBytes === wav.length, `status ${served.status} type ${served.headers.get('content-type')} bytes ${servedBytes}/${wav.length}`);
+  const later = await connect('ZZFILM');
+  check('a later joiner gets the soundtrack in the handshake', later.connected.soundtrack?.id === setSound.soundtrack.id);
+  const filmWithSound = await (await fetch(`http://127.0.0.1:${port}/api/rooms/ZZFILM/film`)).json();
+  check('/film carries the soundtrack for production exports', filmWithSound.soundtrack?.id === setSound.soundtrack.id);
+  host.send({ type: 'set_soundtrack', audio: null });
+  await guest.waitFor((m) => m.type === 'soundtrack' && m.soundtrack === null, { timeoutMs: 4000, label: 'soundtrack removed' });
+  check('removing the soundtrack deletes the served file', (await fetch(`http://127.0.0.1:${port}/api/audio/${setSound.soundtrack.id}`)).status === 404);
+  // Hostless public FLIPBOOK: nobody is an accountable uploader.
+  const flip = await connect('FLIPBOOK');
+  flip.send({ type: 'set_soundtrack', audio: wavDataUrl, name: 'nope.wav', durationMs: 300 });
+  await sleep(400);
+  check('the hostless public animation room refuses soundtracks', !flip.messages.some((m) => m.type === 'soundtrack'));
+
   // Storyboard runtime counts loops.
   host.send({ type: 'production_create', title: 'Loop test' });
   const prod = await host.waitFor((m) => m.type === 'production_state', { timeoutMs: 4000, label: 'production_state' });
