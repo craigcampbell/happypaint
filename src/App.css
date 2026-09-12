@@ -9669,3 +9669,109 @@ img.cc-doodle { background: #fff; }
     transform: translate(-50%, 0) rotate(-11deg);
   }
 }
+
+/* ---- Invite friends share sheet (copy / OS share / Instagram / X) --------- */
+.share-invite-sheet {
+  width: min(460px, 100%);
+  gap: 14px;
+  border-radius: 18px;
+}
+.share-invite-sheet h2 { margin: 0; font-size: 1.3rem; }
+.share-invite-close {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
+}
+.share-invite-preview {
+  aspect-ratio: 1 / 1;
+  width: min(100%, 300px);
+  margin: 0 auto;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #f3e8ff, #ffe4f1 55%, #fff1d6);
+  box-shadow: 0 10px 30px rgba(59, 29, 94, 0.18);
+}
+.share-invite-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.share-invite-preview-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #5b3a86;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.share-invite-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #3b1d5e;
+  color: #fff;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.share-invite-code strong {
+  font-family: "Fredoka Variable", "Arial Rounded MT Bold", ui-rounded, sans-serif;
+  font-size: 1.35rem;
+  letter-spacing: 0.12em;
+}
+.share-invite-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+/* Desktop has no OS share sheet, so 3 buttons: let Copy link take the top row. */
+.share-invite-grid > .share-invite-btn:first-child:nth-last-child(3) { grid-column: 1 / -1; }
+.share-invite-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-weight: 700;
+  font-size: 1rem;
+}
+.share-invite-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+.share-invite-btn.share-instagram {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(45deg, #f9ce34, #ee2a7b 55%, #6228d7);
+}
+.share-invite-btn.share-instagram:hover:not(:disabled) { filter: brightness(1.06); }
+.share-invite-btn.share-x {
+  color: #fff;
+  border-color: #000;
+  background: #000;
+}
+.share-invite-btn.share-x:hover:not(:disabled) { background: #222; }
+.share-invite-btn:disabled { opacity: 0.55; cursor: wait; }
+.share-invite-note {
+  margin: 0;
+  color: #5b6472;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  text-align: center;
+}
+@media (max-width: 480px) {
+  .share-invite-preview { width: min(100%, 220px); }
+}

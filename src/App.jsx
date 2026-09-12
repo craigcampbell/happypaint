@@ -112,6 +112,7 @@ import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
 import WallPostModal from "./components/WallPostModal";
+import ShareInviteSheet from "./components/ShareInviteSheet";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
 import ColorWheelPicker from "./components/ColorWheelPicker";
@@ -1039,6 +1040,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [showSheetModal, setShowSheetModal] = useState(false);
   // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
   const [wallPostDraft, setWallPostDraft] = useState(null);
+  const [showShareInvite, setShowShareInvite] = useState(false); // "Invite friends" sheet (copy / share / Instagram / X)
   const [remixSource, setRemixSource] = useState(null);
   // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
   // pointer handlers: startStroke captures it INTO the op settings, so a
@@ -2888,32 +2890,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [getActiveLayer, markChanged, markMixDirty, pushHistory, refreshActiveThumbnail, renderDisplay],
   );
 
-  const shareRoomLink = useCallback(async () => {
-    const joinUrl = `${window.location.origin}/join/${encodeURIComponent(roomId)}`;
-    const title = roomTitle || `Drawesome room ${roomId}`;
-    const text = `Come paint with me on Drawesome! 🎨 ${joinUrl}`;
+  // Every "Share" / "Invite" button opens the invite sheet (copy link, OS share,
+  // Instagram, X). The sheet renders an invite card from the current art so
+  // Instagram — which has no share URL and drops text — still gets the invite.
+  const shareRoomLink = useCallback(() => {
+    setShowShareInvite(true);
+  }, []);
 
-    // Call the native share sheet directly from the button tap. In particular,
-    // iPadOS can drop a URL when a file is shared alongside it, so Share is
-    // deliberately link-only; Export remains available for the artwork itself.
-    if (navigator.share) {
-      try {
-        await navigator.share({ title, text, url: joinUrl });
-        showToast("Invite shared! 🎨");
-        return;
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        // If the share sheet fails, fall through and copy the same link.
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(joinUrl);
-      showToast("Invite link copied — paste it into a text or social post!");
-    } catch {
-      window.prompt("Copy this invite link:", joinUrl);
-    }
-  }, [roomId, roomTitle, showToast]);
+  const getInviteArt = useCallback(() => composeCanvas({ width: 1280, height: 800 }), [composeCanvas]);
 
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
@@ -10665,6 +10649,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       {showSheetModal ? (
         <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
+      ) : null}
+
+      {showShareInvite ? (
+        <ShareInviteSheet
+          roomId={roomId}
+          roomTitle={roomTitle}
+          getArt={getInviteArt}
+          onClose={() => setShowShareInvite(false)}
+          showToast={showToast}
+        />
       ) : null}
 
       {wallPostDraft ? (
