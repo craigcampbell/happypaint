@@ -1351,6 +1351,22 @@ const MAX_SCENES = Number(process.env.MAX_SCENES || 20);
 // A whole segment's op budget (protects the room file + join/fetch payloads;
 // per-frame caps alone would allow 160 x 1500 = 240k ops ≈ 260MB JSON).
 const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 40000);
+// Film timing (mirrors src/utils/filmPlan.js): a frame can HOLD up to 10s, a
+// scene can LOOP up to 20x and carry a camera move — minutes of film without
+// minutes of frames.
+const MAX_FRAME_HOLD_MS = 10000;
+const MAX_SCENE_LOOPS = 20;
+const CAMERA_PRESETS = new Set(['none', 'pan-right', 'pan-left', 'pan-down', 'pan-up', 'zoom-in', 'zoom-out']);
+function clampHold(value) {
+  return Math.max(40, Math.min(MAX_FRAME_HOLD_MS, Number(value) || 120));
+}
+function clampLoops(value) {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.max(1, Math.min(MAX_SCENE_LOOPS, n)) : 1;
+}
+function sceneRuntimeMs(room, scene) {
+  return framesOfScene(room, scene.id).reduce((sum, f) => sum + (f.durationMs || 120), 0) * clampLoops(scene.loops);
+}
 
 function sanitizeFrames(list) {
   if (!Array.isArray(list)) return null;
@@ -1358,7 +1374,7 @@ function sanitizeFrames(list) {
     .filter((f) => f && typeof f.id === 'string' && f.id.length <= 24)
     .map((f) => ({
       id: f.id,
-      durationMs: Math.max(40, Math.min(2000, Number(f.durationMs) || 120)),
+      durationMs: clampHold(f.durationMs),
       sceneId: typeof f.sceneId === 'string' && f.sceneId.length <= 24 ? f.sceneId : null,
     }));
   return frames.length ? frames : null;
@@ -1368,7 +1384,12 @@ function sanitizeScenes(list) {
   if (!Array.isArray(list)) return null;
   const scenes = list
     .filter((s) => s && typeof s.id === 'string' && s.id.length <= 24)
-    .map((s) => ({ id: s.id, name: typeof s.name === 'string' ? s.name.slice(0, 30) : 'Scene' }));
+    .map((s) => ({
+      id: s.id,
+      name: typeof s.name === 'string' ? s.name.slice(0, 30) : 'Scene',
+      loops: clampLoops(s.loops),
+      camera: CAMERA_PRESETS.has(s.camera) ? s.camera : 'none',
+    }));
   return scenes.length ? scenes : null;
 }
 
@@ -1388,6 +1409,8 @@ function scenesMeta(room) {
   return room.scenes.map((s) => ({
     id: s.id,
     name: s.name,
+    loops: clampLoops(s.loops),
+    camera: CAMERA_PRESETS.has(s.camera) ? s.camera : 'none',
     frames: framesOfScene(room, s.id).map((f) => ({ id: f.id, durationMs: f.durationMs })),
   }));
 }
@@ -1458,7 +1481,7 @@ function productionSummary(production) {
         crew: room ? Array.from(room.users.values()).slice(0, 6).map((u) => ({ name: u.name, color: u.color })) : [],
         frames: room ? room.frames.length : 0,
         scenes: room ? room.scenes.length : 0,
-        runtimeMs: room ? room.frames.reduce((sum, f) => sum + (f.durationMs || 120), 0) : 0,
+        runtimeMs: room ? room.scenes.reduce((sum, sc) => sum + sceneRuntimeMs(room, sc), 0) : 0,
       };
     }),
   };
@@ -4037,7 +4060,9 @@ wss.on('connection', async (ws, req) => {
           stopPhone(roomId, 'animation_on');
           broadcast(roomId, { type: 'room_phone', enabled: false });
         }
-        broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled });
+        // Scenes ride along so the strip knows its active scene (and its
+        // timing) the moment it unlocks, before any frame/scene mutation lands.
+        broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled, scenes: scenesMeta(room) });
         persistRoom(roomId);
         break;
       }
@@ -4283,12 +4308,25 @@ wss.on('connection', async (ws, req) => {
           ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_SCENES} scenes` }));
           break;
         }
-        const scene = { id: `s${(room.opSeq = (room.opSeq || 0) + 1)}`, name: `Scene ${room.scenes.length + 1}` };
+        const scene = { id: `s${(room.opSeq = (room.opSeq || 0) + 1)}`, name: `Scene ${room.scenes.length + 1}`, loops: 1, camera: 'none' };
         const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId: scene.id };
         room.scenes.push(scene);
         room.frames.push(firstFrame); // scene blocks stay contiguous: appended at the end
         room.frameOpCounts.set(firstFrame.id, 0);
         broadcast(roomId, { type: 'scene_add', scene, scenes: scenesMeta(room), byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'scene_set': {
+        if (!room.animationEnabled) break;
+        if (room.storybook?.enabled) break;
+        if (!isHost(room, user)) break;
+        const setId = String(data.sceneId || '').slice(0, 24);
+        const target = room.scenes.find((sc) => sc.id === setId);
+        if (!target) break;
+        if (data.loops != null) target.loops = clampLoops(data.loops);
+        if (data.camera != null) target.camera = CAMERA_PRESETS.has(data.camera) ? data.camera : 'none';
+        broadcast(roomId, { type: 'scene_set', sceneId: setId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
       }
@@ -4469,7 +4507,7 @@ wss.on('connection', async (ws, req) => {
         const durId = String(data.frameId || '').slice(0, 24);
         const target = room.frames.find((f) => f.id === durId);
         if (!target) break;
-        target.durationMs = Math.max(40, Math.min(2000, Number(data.durationMs) || 120));
+        target.durationMs = clampHold(data.durationMs);
         broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, sceneId: target.sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;

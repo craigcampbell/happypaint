@@ -112,6 +112,7 @@ import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
 import WallPostModal from "./components/WallPostModal";
+import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops } from "./utils/filmPlan";
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
@@ -1106,6 +1107,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // scene navigation while it runs so strokes can't land in scenes the artist
   // never opened (guards read this ref, not state, on the hot paths).
   const isExportingVideoRef = useRef(false);
+  const exportShotCanvasRef = useRef(null); // reusable export-size canvas for camera moves
   // Async op assets (image dataURLs) still decoding when a scene's history
   // finishes replaying — hydration isn't "done" until these settle.
   const pendingAssetLoadsRef = useRef([]);
@@ -4748,13 +4750,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     let lastTime = 0;
     let accumulator = 0;
 
-    const paintFrame = (frame) => {
+    // The active scene's timing: loops multiply the pass, and a camera move
+    // glides across the WHOLE looped runtime (what the export will show).
+    const sceneMeta = scenesRef.current.find((s) => s.id === activeSceneIdRef.current);
+    const sceneLoops = normalizeLoops(sceneMeta?.loops);
+    const sceneCamera = normalizeCamera(sceneMeta?.camera);
+    const paintFrame = (frame, cameraT) => {
       // Composite the frame into the art-resolution document, then blit it to
       // the DPR-sized display canvas (same path as editing — stays crisp).
+      context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      // A camera move composites the layers straight through the camera
+      // window (a transform, not a scratch canvas — no extra 40MB surface).
+      if (sceneCamera !== "none") applyCameraTransform(context, sceneCamera, cameraT, CANVAS_WIDTH, CANVAS_HEIGHT);
       compositeLayers(context, frame.layers);
+      context.setTransform(1, 0, 0, 1, 0, 0);
       blitToDisplay();
     };
+    let sceneElapsed = 0; // ms into the looped scene, for the camera
 
     const step = (timestamp) => {
       // Eyeball-hidden frames sit out of playback (local preview mute). If
@@ -4766,10 +4779,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (frames.length === 0) {
         return;
       }
+      const passMs = frames.reduce((sum, f) => sum + clampHold(f.durationMs), 0) || 1;
+      const sceneTotal = passMs * sceneLoops;
       if (lastTime === 0) {
         // First tick: show frame 0 immediately and start the clock.
         lastTime = timestamp;
-        paintFrame(frames[0]);
+        paintFrame(frames[0], 0);
         playTimerRef.current = window.requestAnimationFrame(step);
         return;
       }
@@ -4779,16 +4794,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // background-throttle pause), clamping each duration like the old loop.
       let advanced = false;
       let guard = 0;
-      let duration = Math.max(40, frames[cursor % frames.length].durationMs);
+      let duration = clampHold(frames[cursor % frames.length].durationMs);
       while (accumulator >= duration && guard < frames.length + 1) {
         accumulator -= duration;
+        sceneElapsed = (sceneElapsed + duration) % sceneTotal;
         cursor += 1;
         advanced = true;
         guard += 1;
-        duration = Math.max(40, frames[cursor % frames.length].durationMs);
+        duration = clampHold(frames[cursor % frames.length].durationMs);
       }
-      if (advanced) {
-        paintFrame(frames[cursor % frames.length]);
+      if (advanced || sceneCamera !== "none") {
+        // A camera move repaints every tick (it glides within a hold too).
+        paintFrame(frames[cursor % frames.length], (sceneElapsed + Math.min(accumulator, duration)) / sceneTotal);
       }
       playTimerRef.current = window.requestAnimationFrame(step);
     };
@@ -5024,7 +5041,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!frame) {
         return;
       }
-      frame.durationMs = durationMs;
+      frame.durationMs = clampHold(durationMs);
       setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
       dirtyRef.current = true;
       // Shared timing: debounce the relay so slider drags send one message.
@@ -5042,6 +5059,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     },
     [],
   );
+
+  // Scene timing (host-only, relayed): loop count + camera move.
+  const handleSceneSet = useCallback((sceneId, patch) => {
+    if (!roomAnimationRef.current || !sceneId) return;
+    mpRef.current?.sendSceneSet?.(sceneId, patch);
+  }, []);
 
   const handleToggleOnion = useCallback(() => {
     setOnionSkin((value) => {
@@ -5261,16 +5284,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const originalSceneId = activeSceneIdRef.current;
     let plan;
     if (multiScene) {
-      plan = [];
-      for (const scene of scenesRef.current) {
-        for (const meta of scene.frames || []) {
-          plan.push({ sceneId: scene.id, frameId: meta.id, durationMs: meta.durationMs });
-        }
-      }
+      // Every scene, expanded through its loops, with camera progress per shot.
+      plan = buildFilmPlan(scenesRef.current);
     } else {
-      plan = framesRef.current
-        .slice()
-        .map((frame) => ({ sceneId: activeSceneIdRef.current, frameId: frame.id, durationMs: frame.durationMs, frame }));
+      // This scene only: snapshot the frame list (remote edits mid-export can't
+      // shrink or reorder it), still honouring its loops + camera.
+      const sceneMeta = scenesRef.current.find((s) => s.id === activeSceneIdRef.current);
+      const snapshot = framesRef.current.slice();
+      const byId = new Map(snapshot.map((frame) => [frame.id, frame]));
+      plan = buildFilmPlan([{
+        id: activeSceneIdRef.current,
+        loops: sceneMeta?.loops,
+        camera: sceneMeta?.camera,
+        frames: snapshot.map((frame) => ({ id: frame.id, durationMs: frame.durationMs })),
+      }]).map((shot) => ({ ...shot, frame: byId.get(shot.frameId) }));
     }
     if (plan.length === 0) {
       return;
@@ -5306,7 +5333,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           await renderPaper(context, { width, height, textureId: selectedTexture });
           if (frame) {
-            compositeLayers(context, frame.layers, { width, height });
+            if (item.camera && item.camera !== "none") {
+              // Camera move: composite the whole picture, then re-project the
+              // window the camera shows at this shot's midpoint.
+              const shotCanvas = exportShotCanvasRef.current || (exportShotCanvasRef.current = document.createElement("canvas"));
+              shotCanvas.width = width;
+              shotCanvas.height = height;
+              const shotCtx = shotCanvas.getContext("2d");
+              await renderPaper(shotCtx, { width, height, textureId: selectedTexture });
+              compositeLayers(shotCtx, frame.layers, { width, height });
+              drawThroughCamera(context, shotCanvas, item.camera, (item.cameraT0 + item.cameraT1) / 2, width, height);
+            } else {
+              compositeLayers(context, frame.layers, { width, height });
+            }
           }
         },
         onProgress: (pct) => setStatus(`Encoding film… ${Math.round(pct * 100)}%`),
@@ -5447,10 +5486,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           list.push(op);
           opsByFrame.set(frameId, list);
         }
-        for (const scene of film.scenes || []) {
-          for (const meta of scene.frames || []) {
-            plan.push({ ops: opsByFrame.get(meta.id) || [], durationMs: meta.durationMs });
-          }
+        for (const shot of buildFilmPlan(film.scenes || [])) {
+          plan.push({ ...shot, ops: opsByFrame.get(shot.frameId) || [] });
         }
       }
       if (plan.length === 0) {
@@ -5461,15 +5498,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const world = document.createElement("canvas");
       world.width = CANVAS_WIDTH;
       world.height = CANVAS_HEIGHT;
+      let lastReplayedFrameId = null;
       const { blob, ext } = await encodeAnimationVideo({
         width,
         height,
         count: plan.length,
         durationMsAt: (i) => plan[i]?.durationMs || DEFAULT_FRAME_DURATION,
         draw: async (context, i) => {
-          await replayFrameOnto(world, plan[i]?.ops || []);
+          const shot = plan[i];
+          // Loops replay the same frame many times: skip the offline replay
+          // when the world canvas already holds this frame.
+          if (lastReplayedFrameId !== shot?.frameId) {
+            await replayFrameOnto(world, shot?.ops || []);
+            lastReplayedFrameId = shot?.frameId;
+          }
           await renderPaper(context, { width, height, textureId: selectedTexture });
-          context.drawImage(world, 0, 0, width, height);
+          if (shot?.camera && shot.camera !== "none") {
+            drawThroughCamera(context, world, shot.camera, (shot.cameraT0 + shot.cameraT1) / 2, width, height);
+          } else {
+            context.drawImage(world, 0, 0, width, height);
+          }
         },
         onProgress: (pct) => setStatus(`🎬 Rendering "${activeProduction.title}"… ${Math.round(pct * 100)}%`),
       });
@@ -6851,6 +6899,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           break;
         }
+        case "scene_set": {
+          // Loops / camera changed on a scene (host action, echoed to all).
+          if (data.scenes) {
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+          }
+          break;
+        }
         case "scene_del": {
           if (data.scenes) {
             scenesRef.current = data.scenes;
@@ -7052,6 +7108,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         case "room_animation": {
           roomAnimationRef.current = !!data.enabled;
           setRoomAnimation(!!data.enabled);
+          if (data.enabled && Array.isArray(data.scenes) && data.scenes.length) {
+            // The strip unlocks with its scene list (+ timing) in hand; land on
+            // the first scene so the pager and scene controls have a target.
+            scenesRef.current = data.scenes;
+            setScenes(data.scenes);
+            if (!activeSceneIdRef.current || !data.scenes.some((s) => s.id === activeSceneIdRef.current)) {
+              activeSceneIdRef.current = data.scenes[0].id;
+              setActiveSceneId(data.scenes[0].id);
+            }
+          }
           if (!data.enabled) {
             // The strip is about to unmount: stop anything it was driving, or
             // a live scrub leaves renderDisplay suppressed forever and a rAF
@@ -7642,6 +7708,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendSceneFetch: mp.sendSceneFetch,
       sendSceneAdd: mp.sendSceneAdd,
       sendSceneDel: mp.sendSceneDel,
+      sendSceneSet: mp.sendSceneSet,
       sendProductionCreate: mp.sendProductionCreate,
       sendProductionAddSegment: mp.sendProductionAddSegment,
       sendProductionRename: mp.sendProductionRename,
@@ -7657,7 +7724,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -9440,6 +9507,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               onSelectScene={handleSelectScene}
               onAddScene={() => mpRef.current?.sendSceneAdd?.()}
               onDeleteScene={(sceneId) => mpRef.current?.sendSceneDel?.(sceneId)}
+              onSceneSet={handleSceneSet}
               onSelectFrame={handleSelectFrame}
               onAddFrame={handleAddFrame}
               onDuplicateFrame={handleDuplicateFrame}

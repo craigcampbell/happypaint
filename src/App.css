@@ -9775,3 +9775,43 @@ img.cc-doodle { background: #fff; }
 @media (max-width: 480px) {
   .share-invite-preview { width: min(100%, 220px); }
 }
+
+/* ---- Film strip: scene timing (loops / camera / runtime) ------------------ */
+.fs-scene-timing {
+  font-size: 0.78rem;
+  font-weight: 700;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.fs-scene-loops,
+.fs-scene-camera {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+.fs-scene-loops select,
+.fs-scene-camera select {
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.fs-menu-hold {
+  display: grid;
+  gap: 4px;
+  padding: 6px 10px 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.fs-menu-hold input[type="range"] {
+  width: 100%;
+}
+@media (max-width: 1024px), (pointer: coarse) {
+  .fs-scene-timing {
+    display: none; /* the runtime label needs the wide strip; loops/camera stay */
+  }
+}

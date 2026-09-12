@@ -300,6 +300,8 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendSceneFetch = useCallback((sceneId) => send({ type: "scene_fetch", sceneId }), [send]);
   const sendSceneAdd = useCallback(() => send({ type: "scene_add" }), [send]);
   const sendSceneDel = useCallback((sceneId) => send({ type: "scene_del", sceneId }), [send]);
+  // Scene timing: loop count + camera move (host-only, server-enforced).
+  const sendSceneSet = useCallback((sceneId, patch) => send({ type: "scene_set", sceneId, ...patch }), [send]);
   // Productions: tie segment rooms into one film (host-only, server-enforced).
   const sendProductionCreate = useCallback((title) => send({ type: "production_create", title: title || null }), [send]);
   const sendProductionAddSegment = useCallback(() => send({ type: "production_add_segment" }), [send]);
@@ -366,7 +368,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
     sendWipeKeep, sendForkPrivate,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
-    sendSceneFetch, sendSceneAdd, sendSceneDel,
+    sendSceneFetch, sendSceneAdd, sendSceneDel, sendSceneSet,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,
     sendFramePresence, sendBeacon, sendCheer,
     sendWatcherAck, sendFlag, sendModHide, sendModRestore, sendModRemove,

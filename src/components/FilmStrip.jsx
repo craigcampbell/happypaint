@@ -8,6 +8,7 @@
 // host enabled it) — there, every frame is shared state like a document.
 
 import { useRef, useState } from "react";
+import { CAMERA_PRESETS, HOLD_STEPS, MAX_SCENE_LOOPS, formatHold, formatRuntime, holdStepIndex, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "../utils/filmPlan";
 
 export default function FilmStrip({
   frames,
@@ -25,6 +26,7 @@ export default function FilmStrip({
   onSelectScene,
   onAddScene,
   onDeleteScene,
+  onSceneSet,
   onSelectFrame,
   onAddFrame,
   onDuplicateFrame,
@@ -63,6 +65,7 @@ export default function FilmStrip({
   const multiFrame = frames.length > 1;
   const displayIndex = scrubIndex == null ? activeFrameIndex : scrubIndex;
   const sceneIndex = scenes.findIndex((scene) => scene.id === activeSceneId);
+  const activeScene = sceneIndex >= 0 ? scenes[sceneIndex] : scenes[0] || null;
 
   const indexFromEvent = (event) => {
     const rect = railRef.current?.getBoundingClientRect();
@@ -206,6 +209,44 @@ export default function FilmStrip({
                 +🎬
               </button>
             ) : null}
+            {activeScene ? (
+              <span className="fs-scene-timing" title="This scene's runtime (frames × loops)">
+                ⏱ {formatRuntime(sceneRuntimeMs(activeScene))}
+                {scenes.length > 1 ? ` · film ${formatRuntime(scenes.reduce((sum, s) => sum + sceneRuntimeMs(s), 0))}` : ""}
+              </span>
+            ) : null}
+            {activeScene && canManageScenes ? (
+              <>
+                <label className="fs-scene-loops" title="Play this scene this many times (a walk cycle, rain, a candle flicker…)">
+                  🔁
+                  <select
+                    value={normalizeLoops(activeScene.loops)}
+                    onChange={(event) => onSceneSet?.(activeScene.id, { loops: Number(event.target.value) })}
+                    aria-label="Scene loops"
+                  >
+                    {Array.from({ length: MAX_SCENE_LOOPS }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={n}>×{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="fs-scene-camera" title="Camera move across the whole scene (a slow pan or zoom over a still)">
+                  <select
+                    value={normalizeCamera(activeScene.camera)}
+                    onChange={(event) => onSceneSet?.(activeScene.id, { camera: event.target.value })}
+                    aria-label="Camera move"
+                  >
+                    {CAMERA_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.emoji} {preset.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : activeScene && (normalizeLoops(activeScene.loops) > 1 || normalizeCamera(activeScene.camera) !== "none") ? (
+              <span className="fs-scene-timing" title="Scene timing set by the host">
+                {normalizeLoops(activeScene.loops) > 1 ? `🔁 ×${normalizeLoops(activeScene.loops)} ` : ""}
+                {normalizeCamera(activeScene.camera) !== "none" ? CAMERA_PRESETS.find((c) => c.id === activeScene.camera)?.emoji : ""}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -288,16 +329,16 @@ export default function FilmStrip({
           </button>
         ) : null}
         {activeFrame ? (
-          <label className="fs-duration" title="How long this frame shows">
+          <label className="fs-duration" title="How long this frame shows (hold it for up to 10 seconds)">
             <input
               type="range"
-              min="40"
-              max="1000"
-              step="10"
-              value={activeFrame.durationMs}
-              onChange={(event) => onDurationChange(activeFrameIndex, Number(event.target.value))}
+              min="0"
+              max={HOLD_STEPS.length - 1}
+              step="1"
+              value={holdStepIndex(activeFrame.durationMs)}
+              onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
             />
-            <output>{activeFrame.durationMs}ms</output>
+            <output>{formatHold(activeFrame.durationMs)}</output>
           </label>
         ) : null}
         <button
@@ -312,6 +353,19 @@ export default function FilmStrip({
         </button>
         {menuOpen ? (
           <div className="fs-menu" role="menu">
+            {activeFrame ? (
+              <label className="fs-menu-hold" title="How long this frame shows (hold it for up to 10 seconds)">
+                <span>⏱ Hold {formatHold(activeFrame.durationMs)}</span>
+                <input
+                  type="range"
+                  min="0"
+                  max={HOLD_STEPS.length - 1}
+                  step="1"
+                  value={holdStepIndex(activeFrame.durationMs)}
+                  onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
+                />
+              </label>
+            ) : null}
             <button
               type="button"
               onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, -1))}
