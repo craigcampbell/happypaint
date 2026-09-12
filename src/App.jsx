@@ -37,10 +37,22 @@ import { drawShape, drawText } from "./utils/shapes";
 import {
   DEFAULT_FRAME_DURATION,
   MAX_FRAMES,
+  allocateFrameLayers,
   cloneFrame,
   compositeFrameToCanvas,
+  createColdFrame,
   createFrame,
 } from "./utils/frames";
+import {
+  HYDRATED_RADIUS,
+  encodeRaster,
+  paintFrameInto,
+  paintFrameSync,
+  peekFrameBitmap,
+  prefetchFrameBitmaps,
+  getFrameBitmap,
+  rasterizeOps,
+} from "./utils/frameRasters";
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
 import { replayFrameOnto } from "./utils/opReplay";
@@ -1071,6 +1083,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // shared state — ops carry frameId and frame CRUD relays through the server,
   // so everyone sees the same flipbook and rejoiners catch up like a document.
   const [roomAnimation, setRoomAnimation] = useState(false);
+  // Per-scene frame cap for server-synced rooms (the handshake sends it; cold
+  // frames — utils/frameRasters.js — are what let it exceed the local 8).
+  const [animMaxFrames, setAnimMaxFrames] = useState(MAX_FRAMES);
+  // The cold-frame machinery (hydrate / cool / raster queue) is defined later
+  // than some of its callers (message handlers, activateFrame); reach it by ref.
+  const coldFramesRef = useRef(null);
   const roomAnimationRef = useRef(false);
   // Finger-paint room (FINGERS): smudge allowed, always wet, no chat, chunky
   // wet brushes only.
@@ -1186,8 +1204,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, FRAME_THUMB_WIDTH, FRAME_THUMB_HEIGHT);
-    const composed = compositeFrameToCanvas(frame, { width: FRAME_THUMB_WIDTH, height: FRAME_THUMB_HEIGHT });
-    ctx.drawImage(composed, 0, 0);
+    if (frame.layers) {
+      const composed = compositeFrameToCanvas(frame, { width: FRAME_THUMB_WIDTH, height: FRAME_THUMB_HEIGHT });
+      ctx.drawImage(composed, 0, 0);
+    } else if (frame.raster) {
+      // Cold frame: paint its raster if it's decoded; otherwise keep the old
+      // thumb (null) — the decode we just kicked off re-queues this frame.
+      const bitmap = peekFrameBitmap(frame);
+      if (!bitmap) return null;
+      ctx.drawImage(bitmap, 0, 0, FRAME_THUMB_WIDTH, FRAME_THUMB_HEIGHT);
+    } else if ((frame.ops || []).length) {
+      return null; // cold + no raster yet: the idle rasterizer lands it soon
+    }
     return canvas.toDataURL("image/png");
   }, []);
 
@@ -1209,7 +1237,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const thumbs = {};
         for (const frame of framesRef.current) {
           const needsRegen = regenerateIds === "all" || !current[frame.id] || forced?.has(frame.id);
-          thumbs[frame.id] = needsRegen ? renderFrameThumbnail(frame) : current[frame.id];
+          thumbs[frame.id] = needsRegen ? renderFrameThumbnail(frame) ?? current[frame.id] : current[frame.id];
         }
         return thumbs;
       });
@@ -1254,6 +1282,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           existing.durationMs = meta.durationMs;
           return existing;
         }
+        if (roomAnimationRef.current) {
+          // Server-synced flipbook: frames arrive COLD (ops + raster, no
+          // canvases). The window around the active frame is allocated below
+          // and the history replay that follows paints into it.
+          return createColdFrame(meta.id, meta.durationMs);
+        }
         const frame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: meta.durationMs });
         frame.id = meta.id; // server ids are canonical
         return frame;
@@ -1261,6 +1295,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       framesRef.current = next;
       const keptIndex = next.findIndex((frame) => frame.id === activeId);
       activeFrameIndexRef.current = keptIndex >= 0 ? keptIndex : Math.max(0, Math.min(activeFrameIndexRef.current, next.length - 1));
+      const lo = Math.max(0, activeFrameIndexRef.current - HYDRATED_RADIUS);
+      const hi = Math.min(next.length - 1, activeFrameIndexRef.current + HYDRATED_RADIUS);
+      for (let i = lo; i <= hi; i += 1) allocateFrameLayers(next[i]);
       const active = next[activeFrameIndexRef.current];
       if (!active.layers.some((layer) => layer.id === active.activeLayerId)) {
         active.activeLayerId = active.layers[active.layers.length - 1].id;
@@ -1296,7 +1333,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         for (const id of ids) {
           const frame = framesRef.current.find((item) => item.id === id);
           if (frame) {
-            updates[id] = renderFrameThumbnail(frame);
+            const thumb = renderFrameThumbnail(frame);
+            if (thumb) {
+              updates[id] = thumb;
+            } else if (!frame.layers && frame.raster) {
+              // Decode in flight: come back once it lands (a failed decode
+              // resolves null and stops the loop).
+              getFrameBitmap(frame).then((bitmap) => bitmap && queueThumbnailRefresh(id));
+            }
           }
         }
         if (Object.keys(updates).length) {
@@ -1711,7 +1755,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (cached && cached.stamp === stamp) {
       return cached.canvas;
     }
-    const canvas = compositeFrameToCanvas(frame, { width: CANVAS_WIDTH / 2, height: CANVAS_HEIGHT / 2 });
+    let canvas;
+    if (frame.layers) {
+      canvas = compositeFrameToCanvas(frame, { width: CANVAS_WIDTH / 2, height: CANVAS_HEIGHT / 2 });
+    } else {
+      // Cold neighbour: its raster (decoded or not yet — null skips this pass).
+      const bitmap = peekFrameBitmap(frame);
+      if (!bitmap) return null;
+      canvas = document.createElement("canvas");
+      canvas.width = CANVAS_WIDTH / 2;
+      canvas.height = CANVAS_HEIGHT / 2;
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    }
     onionCacheRef.current.set(frame.id, { canvas, stamp });
     return canvas;
   }, []);
@@ -1728,13 +1783,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const hidden = hiddenFramesRef.current;
     const previous = framesRef.current[index - 1];
     const next = framesRef.current[index + 1];
-    if (previous && !hidden.has(previous.id)) {
+    const before = previous && !hidden.has(previous.id) ? getOnionProxy(previous) : null;
+    if (before) {
       context.globalAlpha = 0.28;
-      context.drawImage(getOnionProxy(previous), 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      context.drawImage(before, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
-    if (next && !hidden.has(next.id)) {
+    const after = next && !hidden.has(next.id) ? getOnionProxy(next) : null;
+    if (after) {
       context.globalAlpha = 0.2;
-      context.drawImage(getOnionProxy(next), 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      context.drawImage(after, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
     context.globalAlpha = 1;
   }, [getOnionProxy]);
@@ -2761,7 +2818,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           canvas.height = WALL_POST_HEIGHT;
           const context = canvas.getContext("2d");
           await renderPaper(context, { width: WALL_POST_WIDTH, height: WALL_POST_HEIGHT, textureId: selectedTexture });
-          compositeLayers(context, f.layers, { width: WALL_POST_WIDTH, height: WALL_POST_HEIGHT });
+          await paintFrameInto(context, f, WALL_POST_WIDTH, WALL_POST_HEIGHT);
           frames.push(await canvasToDataUrl(canvas));
         }
         durationMs = framesRef.current[0]?.durationMs || 400;
@@ -4104,6 +4161,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (isExportingVideoRef.current || historyReplayActiveRef.current) {
       return; // don't start a stroke on a scene that is still being rebuilt
     }
+    if (framesRef.current[activeFrameIndexRef.current]?.hydrating) {
+      setStatus("Loading this frame…"); // its ops are still replaying in
+      return;
+    }
     // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
     // slides off-canvas or a system gesture interrupts. Without this, a lost
@@ -4734,6 +4795,181 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     renderDisplay();
   }, [renderDisplay]);
 
+  // ---- Cold frames: hydrate / cool / raster queue ---------------------------
+  // In a server-synced animation room only the active frame ± HYDRATED_RADIUS
+  // hold live canvases. Everything else is an op list + a WebP raster (see
+  // utils/frameRasters.js). One idle rasterizer fills rasters nearest the
+  // artist first; frames re-hydrate by replaying their ops when activated.
+  const rasterQueueRef = useRef({ pending: false, running: false, run: null });
+  const scheduleRasterQueue = useCallback(() => {
+    const q = rasterQueueRef.current;
+    if (q.pending || !roomAnimationRef.current) return;
+    q.pending = true;
+    scheduleIdle(() => {
+      q.pending = false;
+      q.run?.();
+    }, { timeout: 1500 });
+  }, []);
+  const runRasterQueue = useCallback(async () => {
+    const q = rasterQueueRef.current;
+    if (q.running || !roomAnimationRef.current) return;
+    q.running = true;
+    try {
+      const stale = (frame) => !frame.layers && (frame.ops || []).length > 0 && frame.rasterCount !== (frame.ops || []).length;
+      const active = activeFrameIndexRef.current;
+      // Nearest-to-active first: the strip fills in around the artist.
+      const next = framesRef.current
+        .map((frame, index) => ({ frame, dist: Math.abs(index - active) }))
+        .filter(({ frame }) => stale(frame))
+        .sort((a, b) => a.dist - b.dist)[0];
+      if (next) {
+        const { frame } = next;
+        const ops = frame.ops || [];
+        const count = ops.length;
+        const blob = await rasterizeOps(ops);
+        if (framesRef.current.includes(frame) && !frame.layers) {
+          if (blob) {
+            frame.raster = blob;
+            frame.rasterCount = count;
+            bumpFrameStamp(frame.id);
+            queueThumbnailRefresh(frame.id);
+            renderDisplay(); // it may be an onion neighbour
+          } else {
+            frame.rasterCount = count; // encode unsupported here — don't spin
+          }
+        }
+      }
+      q.running = false;
+      if (framesRef.current.some(stale)) scheduleRasterQueue();
+    } catch {
+      q.running = false;
+    }
+  }, [bumpFrameStamp, queueThumbnailRefresh, renderDisplay, scheduleRasterQueue]);
+  useEffect(() => {
+    rasterQueueRef.current.run = runRasterQueue;
+  }, [runRasterQueue]);
+
+  // Record an op on its frame's own list — both ops we send and ops we receive
+  // — so any frame can re-hydrate or re-raster without asking the server. A
+  // cold frame's raster is stale from now on.
+  const noteFrameOp = useCallback((op) => {
+    if (!roomAnimationRef.current || !op) return;
+    const frame = op.frameId ? framesRef.current.find((item) => item.id === op.frameId) : framesRef.current[0];
+    if (!frame) return;
+    (frame.ops || (frame.ops = [])).push(op);
+    if (!frame.layers) {
+      frame.rasterCount = -1;
+      scheduleRasterQueue();
+    }
+  }, [scheduleRasterQueue]);
+
+  // Give a cold frame live canvases NOW and replay its ops into layer 0 in the
+  // background (the parity-tested offline interpreter — the same pixels every
+  // peer sees). Resolves when the replay lands.
+  const hydrateFrame = useCallback((frame) => {
+    if (!frame) return Promise.resolve();
+    if (frame.layers) return frame.hydrating || Promise.resolve();
+    allocateFrameLayers(frame);
+    const layers = frame.layers;
+    const ops = frame.ops || [];
+    if (!ops.length) {
+      frame.hydrating = null;
+      return Promise.resolve();
+    }
+    const gen = (frame.hydrateGen = (frame.hydrateGen || 0) + 1);
+    const job = replayFrameOnto(layers[0].canvas, ops, CANVAS_WIDTH, CANVAS_HEIGHT)
+      .catch(() => {})
+      .then(() => {
+        if (frame.hydrateGen !== gen || frame.layers !== layers) return;
+        frame.hydrating = null;
+        bumpFrameStamp(frame.id);
+        queueThumbnailRefresh(frame.id);
+        if (isActiveFrame(frame)) {
+          mixMapRef.current?.markAllDirty();
+        }
+        renderDisplay(); // the active frame filled in, or an onion neighbour did
+      });
+    frame.hydrating = job;
+    return job;
+  }, [bumpFrameStamp, isActiveFrame, queueThumbnailRefresh, renderDisplay]);
+
+  // Drop a far-away frame's canvases after snapshotting them into its raster
+  // (exact pixels). Local layer stacks flatten on the way back — the shared
+  // truth (ops) is flat anyway. Skipped while the frame is mid-hydration or
+  // took edits while we were encoding.
+  const coolFrame = useCallback(async (frame) => {
+    if (!roomAnimationRef.current || !frame?.layers || frame.hydrating || isActiveFrame(frame)) return;
+    const layers = frame.layers;
+    const count = (frame.ops || []).length;
+    if (count > 0) {
+      const blob = await encodeRaster((ctx, w, h) => compositeLayers(ctx, layers, { width: w, height: h }));
+      if (!blob || frame.layers !== layers || !framesRef.current.includes(frame)) return;
+      if ((frame.ops || []).length !== count) return; // edited meanwhile — next sweep
+      frame.raster = blob;
+      frame.rasterCount = count;
+    } else {
+      frame.raster = null;
+      frame.rasterCount = 0;
+    }
+    const index = framesRef.current.indexOf(frame);
+    if (index < 0 || isActiveFrame(frame) || Math.abs(index - activeFrameIndexRef.current) <= HYDRATED_RADIUS) return;
+    frame.layers = null;
+    frame.activeLayerId = null;
+    onionCacheRef.current.delete(frame.id);
+  }, [isActiveFrame]);
+
+  // Keep the hydrated window centred on the active frame: warm one neighbour
+  // per idle pass, cool everything outside the radius, then let the rasterizer
+  // fill in the rest of the strip.
+  const frameWindowRef = useRef({ pending: false });
+  const scheduleFrameWindow = useCallback(() => {
+    if (!roomAnimationRef.current) return;
+    const state = frameWindowRef.current;
+    if (state.pending) return;
+    state.pending = true;
+    scheduleIdle(() => {
+      state.pending = false;
+      if (!roomAnimationRef.current || isExportingVideoRef.current || historyReplayActiveRef.current) return;
+      const frames = framesRef.current;
+      const active = activeFrameIndexRef.current;
+      let warmed = false;
+      for (let d = 1; d <= HYDRATED_RADIUS && !warmed; d += 1) {
+        for (const index of [active - d, active + d]) {
+          const frame = frames[index];
+          if (frame && !frame.layers && !warmed) {
+            hydrateFrame(frame);
+            warmed = true;
+          }
+        }
+      }
+      for (let index = 0; index < frames.length; index += 1) {
+        const frame = frames[index];
+        if (frame.layers && index !== active && Math.abs(index - active) > HYDRATED_RADIUS) void coolFrame(frame);
+      }
+      if (warmed) scheduleFrameWindow();
+      scheduleRasterQueue();
+    }, { timeout: 800 });
+  }, [coolFrame, hydrateFrame, scheduleRasterQueue]);
+  useEffect(() => {
+    coldFramesRef.current = { noteFrameOp, hydrateFrame, scheduleFrameWindow, scheduleRasterQueue };
+    // Read-only diagnostics for the verify harnesses / devtools: which frames
+    // are cold, how many ops each holds, whether its raster is current.
+    window.__drawesomeFrames = () =>
+      framesRef.current.map((frame, index) => ({
+        id: frame.id,
+        index,
+        active: index === activeFrameIndexRef.current,
+        cold: !frame.layers,
+        hydrating: !!frame.hydrating,
+        ops: (frame.ops || []).length,
+        raster: !!frame.raster,
+        rasterFresh: !!frame.raster && frame.rasterCount === (frame.ops || []).length,
+      }));
+    return () => {
+      delete window.__drawesomeFrames;
+    };
+  }, [noteFrameOp, hydrateFrame, scheduleFrameWindow, scheduleRasterQueue]);
+
   // Playback uses a requestAnimationFrame loop with a timestamp accumulator
   // (W17) instead of a drifting setTimeout chain: each rAF advances by the real
   // elapsed time, so authored per-frame durations are honoured even when the
@@ -4763,7 +4999,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // A camera move composites the layers straight through the camera
       // window (a transform, not a scratch canvas — no extra 40MB surface).
       if (sceneCamera !== "none") applyCameraTransform(context, sceneCamera, cameraT, CANVAS_WIDTH, CANVAS_HEIGHT);
-      compositeLayers(context, frame.layers);
+      paintFrameSync(context, frame, CANVAS_WIDTH, CANVAS_HEIGHT); // cold frames paint their decoded raster
       context.setTransform(1, 0, 0, 1, 0, 0);
       blitToDisplay();
     };
@@ -4803,6 +5039,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         guard += 1;
         duration = clampHold(frames[cursor % frames.length].durationMs);
       }
+      // Keep the next few cold frames' rasters decoded ahead of the cursor.
+      prefetchFrameBitmaps(frames, (cursor + 1) % frames.length, 4);
       if (advanced || sceneCamera !== "none") {
         // A camera move repaints every tick (it glides within a hold too).
         paintFrame(frames[cursor % frames.length], (sceneElapsed + Math.min(accumulator, duration)) / sceneTotal);
@@ -4834,6 +5072,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       activeFrameIndexRef.current = clamped;
       pruneOnionCache(); // keep only the NEW neighbours' proxies warm
       const frame = framesRef.current[clamped];
+      if (!frame.layers) coldFramesRef.current?.hydrateFrame(frame); // canvases now, ops replay in the background
       layersRef.current = frame.layers;
       activeLayerIdRef.current = frame.activeLayerId;
       // The wet-mix mirror follows layersRef[0], which just changed identity —
@@ -4848,6 +5087,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       setActiveFrameIndex(clamped);
       recordReplay(true);
+      coldFramesRef.current?.scheduleFrameWindow();
     },
     [abortActiveStroke, pruneOnionCache, recordReplay, renderDisplay, syncLayerState, updateHistoryCounts],
   );
@@ -5127,7 +5367,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           return;
         }
         context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        compositeLayers(context, frame.layers);
+        paintFrameSync(context, frame, CANVAS_WIDTH, CANVAS_HEIGHT);
         blitToDisplay();
       });
     },
@@ -5198,7 +5438,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           height: GIF_EXPORT_HEIGHT,
           textureId: selectedTexture,
         });
-        compositeLayers(context, frame.layers, { width: GIF_EXPORT_WIDTH, height: GIF_EXPORT_HEIGHT });
+        await paintFrameInto(context, frame, GIF_EXPORT_WIDTH, GIF_EXPORT_HEIGHT);
         const imageData = context.getImageData(0, 0, GIF_EXPORT_WIDTH, GIF_EXPORT_HEIGHT);
         imageFrames.push({ data: imageData, delayMs: frame.durationMs });
       }
@@ -5341,10 +5581,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               shotCanvas.height = height;
               const shotCtx = shotCanvas.getContext("2d");
               await renderPaper(shotCtx, { width, height, textureId: selectedTexture });
-              compositeLayers(shotCtx, frame.layers, { width, height });
+              await paintFrameInto(shotCtx, frame, width, height);
               drawThroughCamera(context, shotCanvas, item.camera, (item.cameraT0 + item.cameraT1) / 2, width, height);
             } else {
-              compositeLayers(context, frame.layers, { width, height });
+              await paintFrameInto(context, frame, width, height);
             }
           }
         },
@@ -5755,7 +5995,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const loopFrames = [];
     for (const frame of framesRef.current) {
       // 200x125 keeps the canvas's 8:5 ratio (200x150 squashed the art).
-      const canvas = compositeFrameToCanvas(frame, { width: 200, height: 125 });
+      const canvas = document.createElement("canvas");
+      canvas.width = 200;
+      canvas.height = 125;
+      await paintFrameInto(canvas.getContext("2d"), frame, 200, 125);
       loopFrames.push({ image: canvas.toDataURL("image/png"), durationMs: frame.durationMs });
     }
     const asset = createAsset({
@@ -6645,6 +6888,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // whose host enabled it.) Frames arrive in the history frame next.
           roomAnimationRef.current = !!data.animation;
           setRoomAnimation(!!data.animation);
+          if (Number.isFinite(data.animMaxFrames)) setAnimMaxFrames(data.animMaxFrames);
           productionRef.current = data.production || null;
           setProduction(data.production || null);
           // Learn our ownership/host standing for this room from the server.
@@ -6779,8 +7023,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // undo-clear restores). Open live buffers are stale — the replay
           // re-delivers their points.
           framesRef.current.forEach((frame) =>
-            frame.layers.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
+            frame.layers?.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
           );
+          if (roomAnimationRef.current) {
+            // Each frame keeps its own op list (the shared truth) so a cold
+            // frame can re-hydrate or re-raster without asking the server.
+            // The replay below only paints the hydrated window.
+            const byFrameId = new Map(framesRef.current.map((frame) => [frame.id, frame]));
+            for (const frame of framesRef.current) {
+              frame.ops = [];
+              frame.raster = null;
+              frame.rasterCount = -1;
+            }
+            for (const op of incomingOps) {
+              const target = op.frameId ? byFrameId.get(op.frameId) : framesRef.current[0];
+              if (target) target.ops.push(op);
+            }
+          }
           dropRemoteStrokes();
           remoteStrokeLastRef.current.clear();
           // Only a BUFFERED local stroke is skipped below; an in-flight eraser
@@ -6857,6 +7116,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // they apply AFTER the replayed history, in stream order.
             pendingAssetLoadsRef.current = [];
             historyReplayActiveRef.current = false;
+            coldFramesRef.current?.scheduleFrameWindow(); // rasters for the cold frames, on idle
             const deferred = deferredMpMessagesRef.current;
             deferredMpMessagesRef.current = [];
             for (const d of deferred) {
@@ -6991,6 +7251,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               sourceId: data.op.userId || "remote",
             });
           }
+          coldFramesRef.current?.noteFrameOp(data.op); // its frame's own op list (cold frames re-raster)
           applyRemoteOp(data.op);
           if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
             lastOpIdRef.current = data.op.opId;
@@ -7045,9 +7306,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             break;
           }
           const clearedIds = new Set(clearedFrames.map((frame) => frame.id));
-          clearedFrames.forEach((frame) =>
-            frame.layers.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
-          );
+          clearedFrames.forEach((frame) => {
+            frame.layers?.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
+            if (roomAnimationRef.current) {
+              frame.ops = [];
+              frame.raster = null;
+              frame.rasterCount = -1;
+            }
+          });
           // In-progress remote strokes on cleared frames are wiped with them;
           // strokes on surviving frames keep buffering. A live LOCAL stroke
           // keeps drawing — only its pre-clear part drops.
@@ -7154,15 +7420,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           commitLayersToFrame();
           const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
-          const frame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: data.frame.durationMs || DEFAULT_FRAME_DURATION });
-          frame.id = data.frame.id; // server ids are canonical
+          // New frames arrive COLD (no canvases); the actor lands on it below and
+          // activateFrame hydrates it (instant — nothing to replay yet).
+          const frame = createColdFrame(data.frame.id, data.frame.durationMs || DEFAULT_FRAME_DURATION);
           if (data.duplicateOf) {
-            // Pixel-clone the source's visible composite; the server copied the
-            // ops, so rejoiners replay to the same pixels (deterministic engine).
+            // The server copied the ops under fresh ids; mirror the copy so the
+            // duplicate can re-hydrate / re-raster on its own. A hydrated
+            // source also seeds the pixels directly (deterministic engine).
             commitAllRemoteStrokes();
             const source = framesRef.current.find((f) => f.id === data.duplicateOf);
             if (source) {
-              frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }), 0, 0);
+              frame.ops = (source.ops || []).slice();
+              frame.raster = source.raster;
+              frame.rasterCount = source.raster ? frame.ops.length : -1;
+              if (source.layers) {
+                allocateFrameLayers(frame);
+                frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }), 0, 0);
+              }
             }
           }
           const insertIndex = afterIndex >= 0 ? afterIndex + 1 : framesRef.current.length;
@@ -7667,6 +7941,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const relayOp = useCallback((op) => {
     const ph = phoneRef.current;
     if (ph && (ph.phase === "starting" || ph.phase === "drawing" || ph.phase === "guessing")) return;
+    coldFramesRef.current?.noteFrameOp(op); // the frame's own op list (re-hydration source)
     mp.sendOp(op);
     // mp.sendOp is a stable useCallback; the plugin over-broadly wants `mp`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9500,7 +9775,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               isExporting={isExportingGif}
               isExportingVideo={isExportingVideo}
               hiddenFrameIds={hiddenFrameIds}
-              maxFrames={MAX_FRAMES}
+              maxFrames={roomAnimation ? animMaxFrames : MAX_FRAMES}
               scenes={scenes}
               activeSceneId={activeSceneId}
               canManageScenes={isRoomHost}

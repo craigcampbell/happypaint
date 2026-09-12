@@ -115,6 +115,18 @@ try {
   check('/film exposes the same timing for exports', film.scenes.find((s) => s.id === sceneId).loops === 20);
   check('film plan from /film honours the 10s hold × 20 loops', buildFilmPlan(film.scenes).filter((p) => p.sceneId === sceneId).reduce((s, p) => s + p.durationMs, 0) === 200000);
 
+  // Stage 2: private rooms allow 60 frames per scene (cold frames client-side);
+  // the handshake tells the strip the cap.
+  check('handshake carries the per-scene frame cap', host.connected.animMaxFrames === 60);
+  let sceneNow = null;
+  for (let i = 0; i < 12; i += 1) {
+    host.send({ type: 'frame_add', afterFrameId: null, duplicateOf: null, sceneId });
+    // waitFor scans from the start of the mailbox, so match on the frame COUNT.
+    const echo = await host.waitFor((m) => m.type === 'frame_add' && m.scenes.find((s) => s.id === sceneId)?.frames.length === i + 2, { timeoutMs: 4000, label: `frame_add ${i}` });
+    sceneNow = echo.scenes.find((s) => s.id === sceneId);
+  }
+  check('a private scene grows past the old 8-frame cap', sceneNow.frames.length === 13, `${sceneNow.frames.length} frames`);
+
   // Storyboard runtime counts loops.
   host.send({ type: 'production_create', title: 'Loop test' });
   const prod = await host.waitFor((m) => m.type === 'production_state', { timeoutMs: 4000, label: 'production_state' });

@@ -1332,7 +1332,10 @@ function storybookPayload(room) {
 // full-res canvas per frame (~40MB at 4000x2500), so 12 frames ≈ 480MB on an
 // iPad. Raise these only after frames move to the smaller animation doc size.
 const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 8);
-const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 8);
+// Private rooms: clients keep only the active frame (+ neighbours) as live
+// canvases and hold the rest as ops + a WebP raster (src/utils/frameRasters.js),
+// so a scene can run to 60 frames (5s at 12fps, minutes with holds/loops).
+const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 60);
 // Bound a single op's serialized weight (image ops embed dataURLs — a photo
 // import is a few MB; nothing legitimate approaches this).
 const MAX_OP_DATAURL_CHARS = Number(process.env.MAX_OP_DATAURL_CHARS || 8_000_000);
@@ -1347,10 +1350,10 @@ const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
 // design) stays single-scene. Multi-segment "productions" (several linked
 // rooms stitched into one film) build on top of this: see
 // docs/animation-rooms-spec.md.
-const MAX_SCENES = Number(process.env.MAX_SCENES || 20);
+const MAX_SCENES = Number(process.env.MAX_SCENES || 40);
 // A whole segment's op budget (protects the room file + join/fetch payloads;
 // per-frame caps alone would allow 160 x 1500 = 240k ops ≈ 260MB JSON).
-const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 40000);
+const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 120000);
 // Film timing (mirrors src/utils/filmPlan.js): a frame can HOLD up to 10s, a
 // scene can LOOP up to 20x and carry a camera move — minutes of film without
 // minutes of frames.
@@ -3232,6 +3235,8 @@ wss.on('connection', async (ws, req) => {
     mentionKey: issueMentionKey(room, name),
     // Shared animation: whether this room has the film strip, and its frames.
     animation: !!room.animationEnabled,
+    // The per-scene frame cap the strip should enforce locally (server-authoritative).
+    animMaxFrames: room.audience === 'kid_safe' ? MAX_ANIM_FRAMES_PUBLIC : MAX_ANIM_FRAMES_PRIVATE,
     // Finger-paint room: smudge-friendly, always wet, chat-free (pre-readers).
     fingerPaint: !!room.fingerPaint,
     // If this room is a segment of a film, the whole storyboard rides along.

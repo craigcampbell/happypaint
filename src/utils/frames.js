@@ -60,13 +60,30 @@ export function cloneFrame(frame, { durationMs } = {}) {
 
 // Composite a single frame (its visible layers) onto a fresh canvas of the
 // given size. Used for thumbnails, onion-skin, GIF export, loop assets.
+// A COLD frame (layers === null — see utils/frameRasters.js) composites to a
+// blank canvas here; callers that can wait use the frame's raster instead.
 export function compositeFrameToCanvas(frame, {
-  width = frame.layers[0]?.canvas.width || CANVAS_WIDTH,
-  height = frame.layers[0]?.canvas.height || CANVAS_HEIGHT,
+  width = frame.layers?.[0]?.canvas.width || CANVAS_WIDTH,
+  height = frame.layers?.[0]?.canvas.height || CANVAS_HEIGHT,
 } = {}) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  compositeLayers(canvas.getContext("2d"), frame.layers, { width, height });
+  compositeLayers(canvas.getContext("2d"), frame.layers || [], { width, height });
   return canvas;
+}
+
+// A frame shell for a server-synced animation room: no canvases until it is
+// hydrated, just its identity, timing and (soon) its ops + raster.
+export function createColdFrame(id, durationMs = DEFAULT_FRAME_DURATION) {
+  return { id, durationMs, layers: null, activeLayerId: null, ops: [], raster: null, rasterCount: -1, hydrating: null };
+}
+
+// Give a cold frame blank live canvases (its ops replay into them next).
+export function allocateFrameLayers(frame) {
+  if (!frame || frame.layers) return frame;
+  const layers = createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT);
+  frame.layers = layers;
+  frame.activeLayerId = layers[layers.length - 1].id;
+  return frame;
 }
