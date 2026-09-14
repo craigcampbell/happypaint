@@ -74,6 +74,17 @@
       ]
     }
     </script>
+
+    <!-- Google tag (gtag.js) — site-wide pageviews. Loaded async so it never
+         blocks the canvas; no data-seo marker, so server.js leaves it alone. -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-9TG5C3N1YP"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-9TG5C3N1YP');
+    </script>
   </head>
   <body>
     <div id="root"></div>
