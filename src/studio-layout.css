@@ -216,6 +216,42 @@
   --rail-w: min(380px, 42vw);
 }
 
+/* Zoom at the head of the tablet quick bar (the floating top-right pill is
+   not rendered on this tier): slim -/+ glyph buttons and a "fit" readout,
+   separated from the tools by a hairline like the desktop cluster. */
+.studio-shell[data-layout="tablet"] .mobile-quickbar .qb-zoom {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #2d3b49;
+}
+
+.studio-shell[data-layout="tablet"] .mobile-quickbar .qb-zoom-pct {
+  min-width: 56px;
+  font-size: 13px;
+  color: #5a6b7b;
+}
+
+.studio-shell[data-layout="tablet"] .mobile-quickbar .qb-sep {
+  align-self: center;
+  width: 1px;
+  height: 28px;
+  margin: 0 2px;
+  background: var(--snap-gray-200, #dfe3e8);
+}
+
+/* With the side sheet open the bar shares the screen with it: drop the
+   button captions so the whole bar (zoom included) still fits beside it. */
+.studio-shell[data-layout="tablet"].rail-open .mobile-quickbar .qb-btn {
+  min-width: 46px;
+}
+
+.studio-shell[data-layout="tablet"].rail-open .mobile-quickbar .qb-label {
+  display: none;
+}
+
 .studio-shell[data-layout="tablet"] .tool-rail {
   top: 0;
   right: 0;

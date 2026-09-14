@@ -163,7 +163,10 @@ async function runControls(page, tier, tap, drag, shot) {
       bar ? `bar ${Math.round(bar.x)}..${Math.round(bar.x + bar.w)} of ${vw}` : "no bar");
     if (tier !== "desktop") {
       const items = await page.$$eval(`${barSel} > button`, (els) => els.map((e) => e.textContent.trim()));
-      check("A2b seven quick bar items", items.length === 7, items.join(" · "));
+      // The tablet bar leads with the zoom trio (- / fit% / +), like the
+      // desktop cluster; the phone bar carries only the seven quick tools.
+      const expected = tier === "tablet" ? 10 : 7;
+      check(`A2b ${expected} quick bar items`, items.length === expected, items.join(" · "));
       await shot("bar");
     }
     if (!size || !color) return;

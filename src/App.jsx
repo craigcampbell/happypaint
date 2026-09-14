@@ -1557,7 +1557,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     return { w: rect.width || 1, h: rect.height || 1 };
   };
 
-  const fitScaleFor = (w, h) => Math.min(w / CANVAS_WIDTH, h / CANVAS_HEIGHT);
+  // "Fit" leaves a gutter of table around the page so there is always somewhere
+  // OFF the page to start a stroke that sweeps onto it (an edge-to-edge page
+  // makes the first dab land inside the page, never across its edge) and so
+  // the page border never sits under the floating chrome.
+  const fitGutterFor = (w, h) => Math.max(12, Math.min(28, Math.min(w, h) * 0.04));
+  const fitScaleFor = (w, h) => {
+    const pad = fitGutterFor(w, h);
+    return Math.min(Math.max(1, w - pad * 2) / CANVAS_WIDTH, Math.max(1, h - pad * 2) / CANVAS_HEIGHT);
+  };
 
   // The page's four corners in screen space under view `v` (rotation-aware).
   const pageCornersScreen = (v) => {
@@ -1569,17 +1577,25 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     ].map(([x, y]) => worldToScreen(v, x, y));
   };
 
+  // Zoom range: down to a third of "fit" (the page floats small in the middle
+  // of the table, so the whole thing plus a wide gutter is reachable) and up
+  // to 8x.
+  const MIN_ZOOM_OF_FIT = 0.3;
   const clampScale = (v) => {
     const { w, h } = getViewportSize();
     const fit = fitScaleFor(w, h);
-    v.scale = Math.max(fit * 0.9, Math.min(8, v.scale));
+    v.scale = Math.max(fit * MIN_ZOOM_OF_FIT, Math.min(8, v.scale));
     return v;
   };
 
-  // Keep the page framed using its screen-space bounding box (so it works at any
-  // rotation): centred on an axis when the page is smaller than the viewport,
-  // otherwise pinned so it always covers that axis. tx/ty are a pure screen-space
-  // translation, so we can correct by shifting them by a screen delta.
+  // Keep the page reachable using its screen-space bounding box (so it works
+  // at any rotation). The page may be pushed anywhere as long as a decent
+  // slice of it (`keep` px: a third of the viewport axis, or the whole page
+  // if that is smaller) stays inside the viewport. That slack is what lets
+  // you drag an edge out from under the floating tool chrome, or park the
+  // page half off-screen to work its border from the table side; it is never
+  // possible to lose the page entirely. tx/ty are a pure screen-space
+  // translation, so we correct by shifting them by a screen delta.
   const clampPan = (v) => {
     const { w, h } = getViewportSize();
     const pts = pageCornersScreen(v);
@@ -1595,19 +1611,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     const bw = maxX - minX;
     const bh = maxY - minY;
-    if (bw <= w) {
-      v.tx += (w - bw) / 2 - minX; // centre horizontally
-    } else if (minX > 0) {
-      v.tx -= minX; // pull left edge back to the viewport edge
-    } else if (maxX < w) {
-      v.tx += w - maxX; // pull right edge back
+    const keepX = Math.min(bw, Math.max(64, w / 3));
+    const keepY = Math.min(bh, Math.max(64, h / 3));
+    if (maxX < keepX) {
+      v.tx += keepX - maxX; // too far left: pull the right edge back in
+    } else if (minX > w - keepX) {
+      v.tx -= minX - (w - keepX); // too far right: pull the left edge back in
     }
-    if (bh <= h) {
-      v.ty += (h - bh) / 2 - minY;
-    } else if (minY > 0) {
-      v.ty -= minY;
-    } else if (maxY < h) {
-      v.ty += h - maxY;
+    if (maxY < keepY) {
+      v.ty += keepY - maxY;
+    } else if (minY > h - keepY) {
+      v.ty -= minY - (h - keepY);
     }
     return v;
   };
@@ -9729,6 +9743,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             {layoutTier === "desktop" && quickMenu ? (
               <div className="qs-backdrop" onPointerDown={closeQuickMenu} aria-hidden="true" />
             ) : null}
+            {/* Tablet carries zoom in the bottom quick bar (like the desktop
+                cluster) instead of a floating pill in the top corner. */}
+            {layoutTier === "tablet" ? null : (
             <div
               className={`zoom-controls${layoutTier === "desktop" && quickMenu ? " has-pop" : ""}`}
               role="group"
@@ -9806,6 +9823,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 </>
               ) : null}
             </div>
+            )}
 
             {roomPrompt && !promptDismissed && !(roomGame && game) && !(roomPhone && phone) ? (
               <div className="room-prompt-chip" role="note">
@@ -11139,6 +11157,22 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <div className="qs-backdrop" onPointerDown={closeQuickMenu} aria-hidden="true" />
       ) : null}
       <div className="mobile-quickbar" role="toolbar" aria-label="Quick tools">
+        {/* Tablet: zoom lives here, at the head of the bottom bar, the way the
+            desktop cluster pairs zoom with the quick tools. */}
+        {layoutTier === "tablet" ? (
+          <>
+            <button type="button" className="qb-btn qb-zoom" onClick={() => zoomByButton(1 / 1.25)} aria-label="Zoom out">
+              −
+            </button>
+            <button type="button" className="qb-btn qb-zoom qb-zoom-pct" onClick={fitView} title="Fit whole canvas">
+              {zoomPct}%
+            </button>
+            <button type="button" className="qb-btn qb-zoom" onClick={() => zoomByButton(1.25)} aria-label="Zoom in">
+              +
+            </button>
+            <span className="qb-sep" aria-hidden="true" />
+          </>
+        ) : null}
         <button
           type="button"
           className={isPaintActive ? "qb-btn is-active" : "qb-btn"}
