@@ -89,6 +89,7 @@ import {
   SNAPSHOT_HEIGHT,
   createReplayRecorder,
   loadReplaySnapshots,
+  purgeLegacyReplaySnapshots,
 } from "./utils/replay";
 import {
   isAiConsented,
@@ -8703,12 +8704,30 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
     // Snapshot-based replay recorder. It paints downscaled composited snapshots
     // (via paintReplayComposite) on a debounced cadence while dirty + on events.
-    const recorder = createReplayRecorder({ paintComposite: paintReplayComposite });
-    recorder.setOnChange((count) => setReplayCount(count));
+    // Keyed by ROOM: the timelapse is this room's story only. StudioApp is
+    // remounted per room code by the Router, so roomId is stable for the life
+    // of this recorder and the previous room's series was flushed on unmount.
+    const recorder = createReplayRecorder({ paintComposite: paintReplayComposite, id: roomId });
+    recorder.setOnChange((count, reason) => {
+      setReplayCount(count);
+      // Persist after every capture, not just after every edit: the timed
+      // keyframe lands ~4s after the edit that armed a 5s flush, so a flush
+      // armed by an earlier (empty) event used to write 0 snapshots and the
+      // keyframe itself never reached disk until the next edit. A 'load'
+      // just read the series from disk — nothing new to write.
+      if (reason !== "load") {
+        scheduleReplayFlush();
+      }
+    });
     replayRecorderRef.current = recorder;
-    loadReplaySnapshots().then((snaps) => {
-      if (snaps.length > 0 && replayRecorderRef.current) {
-        replayRecorderRef.current.setSnapshots(snaps);
+    purgeLegacyReplaySnapshots();
+    loadReplaySnapshots(roomId).then((snaps) => {
+      // Only adopt the persisted series if it is still OUR recorder and it
+      // hasn't started capturing this session (a fast first stroke must not
+      // be clobbered by the async load).
+      const current = replayRecorderRef.current;
+      if (snaps.length > 0 && current === recorder && current.getCount() === 0) {
+        current.setSnapshots(snaps);
       }
     });
 

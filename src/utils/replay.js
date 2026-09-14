@@ -35,16 +35,57 @@ export const SNAPSHOT_CADENCE_MS = 4000;
 // Minimum gap between ANY two captures so a burst of events can't spam.
 const MIN_CAPTURE_GAP_MS = 1200;
 
-// IndexedDB key prefix for a per-artwork snapshot series in the "kv" store.
-const REPLAY_KEY_PREFIX = "replay:v1:";
+// IndexedDB key prefix for a per-room snapshot series in the "kv" store.
+// v2 = per-room keys. Bumping the version restarted every timelapse fresh
+// when per-room recording shipped (2026-09); v1 series are purged on boot.
+const REPLAY_KEY_PREFIX = "replay:v2:";
+const LEGACY_REPLAY_KEY_PREFIX = "replay:v1:";
 
-// The single stable key used for the studio's current/default session. The
-// studio is single-artwork at a time, so one key is enough; the prefix keeps
-// the shape ready for keying per-artwork/per-session later.
-export const DEFAULT_REPLAY_ID = "current";
+// The series id is the ROOM CODE (e.g. "MAIN", "ABCD"). Each room the artist
+// visits gets its own timelapse; the studio remounts per room (Router keys
+// StudioApp by code) so a recorder never outlives its room. Before this the
+// studio used one shared id for every room, which stitched strokes from every
+// room visited into a single timelapse — that legacy key is purged on boot.
+export const LEGACY_REPLAY_ID = "current";
+export const DEFAULT_REPLAY_ID = "MAIN";
+
+// How many rooms' series stay on disk. Each is up to MAX_SNAPSHOTS small PNGs
+// (a few MB), so an artist hopping between rooms shouldn't accumulate dozens.
+// The least-recently-flushed rooms beyond this cap are deleted.
+export const MAX_REPLAY_ROOMS = 8;
+const REPLAY_INDEX_KEY = `${REPLAY_KEY_PREFIX}index`;
+
+export function normalizeReplayId(id) {
+  const trimmed = String(id || "").trim().toUpperCase().slice(0, 16);
+  return trimmed || DEFAULT_REPLAY_ID;
+}
 
 export function replayKey(id = DEFAULT_REPLAY_ID) {
-  return `${REPLAY_KEY_PREFIX}${id}`;
+  return `${REPLAY_KEY_PREFIX}${normalizeReplayId(id)}`;
+}
+
+// LRU index of the rooms that have a persisted series, most recent first.
+// Best-effort: a failure here never fails the flush that called it.
+async function touchReplayIndex(id) {
+  const self = normalizeReplayId(id);
+  let ids = [];
+  try {
+    const record = await idbGetKV(REPLAY_INDEX_KEY);
+    if (record && Array.isArray(record.ids)) {
+      ids = record.ids.filter((entry) => typeof entry === "string" && entry !== self);
+    }
+  } catch {
+    ids = [];
+  }
+  ids.unshift(self);
+  const keep = ids.slice(0, MAX_REPLAY_ROOMS);
+  const evict = ids.slice(MAX_REPLAY_ROOMS);
+  try {
+    await idbSetKV(REPLAY_INDEX_KEY, { version: 1, ids: keep });
+  } catch {
+    return;
+  }
+  await Promise.all(evict.map((stale) => idbDeleteKV(replayKey(stale)).catch(() => {})));
 }
 
 // Persisted snapshot record. `blob` is the PNG; the rest mirrors
@@ -105,7 +146,8 @@ export function decimateSnapshots(snapshots, max = MAX_SNAPSHOTS) {
 //   recorder.captureEvent('layer_add');   // on meaningful events
 //   const all = recorder.getSnapshots();  // for the player
 //   await recorder.flush();               // persist to IndexedDB
-export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } = {}) {
+export function createReplayRecorder({ paintComposite, id: rawId = DEFAULT_REPLAY_ID } = {}) {
+  const id = normalizeReplayId(rawId);
   let snapshots = [];
   let seq = 0;
   let lastCaptureAt = 0;
@@ -125,9 +167,11 @@ export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } 
     return scratch;
   }
 
-  function notify() {
+  // `reason` is 'capture' | 'load' | 'reset' so the owner can persist on real
+  // changes without rewriting a series it only just read back from disk.
+  function notify(reason) {
     if (onChange) {
-      onChange(snapshots.length);
+      onChange(snapshots.length, reason);
     }
   }
 
@@ -159,7 +203,7 @@ export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } 
     dirty = false;
     snapshots.push(makeSnapshotRecord({ seq, blob, kind }));
     snapshots = decimateSnapshots(snapshots, MAX_SNAPSHOTS);
-    notify();
+    notify("capture");
   }
 
   // Schedule a timed keyframe if the canvas is dirty. Coalesces so idle time
@@ -206,14 +250,14 @@ export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } 
     setSnapshots(next) {
       snapshots = Array.isArray(next) ? next.slice() : [];
       seq = snapshots.reduce((max, snap) => Math.max(max, snap.seq || 0), 0);
-      notify();
+      notify("load");
     },
     reset() {
       snapshots = [];
       seq = 0;
       lastCaptureAt = 0;
       dirty = false;
-      notify();
+      notify("reset");
     },
     // Persist the current series to IndexedDB (Blobs survive structured-clone).
     async flush() {
@@ -223,9 +267,11 @@ export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } 
       try {
         await idbSetKV(replayKey(id), {
           version: 1,
+          roomId: id,
           updatedAt: new Date().toISOString(),
           snapshots: snapshots.map((snap) => ({ ...snap })),
         });
+        await touchReplayIndex(id);
         return true;
       } catch {
         return false;
@@ -243,7 +289,7 @@ export function createReplayRecorder({ paintComposite, id = DEFAULT_REPLAY_ID } 
   };
 }
 
-// Load a persisted snapshot series for an artwork. Returns the snapshot array
+// Load a persisted snapshot series for a room. Returns the snapshot array
 // (each with a `blob`) or [] when none/unavailable. Never throws.
 export async function loadReplaySnapshots(id = DEFAULT_REPLAY_ID) {
   if (!isIdbAvailable()) {
@@ -266,6 +312,20 @@ export async function clearReplaySnapshots(id = DEFAULT_REPLAY_ID) {
   }
   try {
     await idbDeleteKV(replayKey(id));
+  } catch {
+    // non-fatal
+  }
+}
+
+// One-time cleanup of the pre-per-room series. It mixed every room the artist
+// had visited, so it is wrong for any room; drop it rather than migrate it.
+// Idempotent and never throws (a missing key is a no-op delete).
+export async function purgeLegacyReplaySnapshots() {
+  if (!isIdbAvailable()) {
+    return;
+  }
+  try {
+    await idbDeleteKV(`${LEGACY_REPLAY_KEY_PREFIX}${LEGACY_REPLAY_ID}`);
   } catch {
     // non-fatal
   }
