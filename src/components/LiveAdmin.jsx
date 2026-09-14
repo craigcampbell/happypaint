@@ -223,7 +223,11 @@ export default function LiveAdmin({ onNavigate }) {
     refresh();
   };
 
-  const openRoom = (id) => window.open(`/join/${id}`, "_blank", "noopener");
+  // Watching is the incognito path: /watch/<code> opens the glass room, where
+  // the admin sees the canvas, roster and chat but is never listed, counted or
+  // announced — and cannot draw. (Opening /join/<code> would join for real,
+  // visible and with a brush in hand, which is not what moderation wants.)
+  const watchRoom = (id) => window.open(`/watch/${id}`, "_blank", "noopener");
 
   if (!authed) {
     return (
@@ -436,7 +440,7 @@ export default function LiveAdmin({ onNavigate }) {
                   ) : null}
                 </div>
                 <div className="admin-actions">
-                  <button type="button" onClick={() => openRoom(r.room)}>View room</button>
+                  <button type="button" onClick={() => watchRoom(r.room)}>🕵️ Watch (invisible)</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(r.room)}>Clear room</button>
                   <button type="button" className="primary-action" onClick={() => resolveReport(r.id)}>Resolve</button>
                 </div>
@@ -462,7 +466,7 @@ export default function LiveAdmin({ onNavigate }) {
                   </span>
                 </div>
                 <div className="admin-actions">
-                  <button type="button" onClick={() => openRoom(room.id)}>View</button>
+                  <button type="button" onClick={() => watchRoom(room.id)}>🕵️ Watch</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(room.id)}>Clear</button>
                   <button type="button" className="admin-danger" onClick={() => deleteRoom(room.id)}>Delete</button>
                 </div>

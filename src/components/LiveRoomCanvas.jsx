@@ -57,7 +57,20 @@ function boundsOf(ops) {
   };
 }
 
-export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
+export default function LiveRoomCanvas({
+  roomCode,
+  onActivity,
+  onSocial,
+  // Moderator watch (admin "glass room"): the socket authenticates with the admin
+  // key in its FIRST frame (never the URL) and is a watcher only — the server
+  // drops anything that isn't a moderation action, so this view cannot paint or
+  // chat even if the UI were wrong.
+  modKey = null,
+  onModState,
+  onOps,
+  onDenied,
+  onSend,
+}) {
   const visRef = useRef(null);
   const offRef = useRef(null);
   const boundsRef = useRef(null);
@@ -237,9 +250,17 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
       reconnectTimer = null;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       const gz = supportsGzipFrames() ? "&gz=1" : "";
-      ws = new WebSocket(`${proto}//${window.location.host}/ws?room=${encodeURIComponent(roomCode)}&spectate=1${gz}`);
+      const mode = modKey ? `&modwatch=1` : `&spectate=1`;
+      ws = new WebSocket(`${proto}//${window.location.host}/ws?room=${encodeURIComponent(roomCode)}${mode}${gz}`);
       ws.binaryType = "arraybuffer"; // the server's shared gzipped history frame
       const socket = ws;
+      // The admin key goes in a frame, not the URL: query strings land in proxy
+      // and CDN access logs, and this one is the whole account.
+      ws.onopen = () => {
+        if (modKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "mod_auth", key: modKey }));
+        }
+      };
       ws.onmessage = orderedFrameDecoder((text) => {
         let data;
         try {
@@ -259,9 +280,11 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           blit();
           onActivity?.((data.ops || []).length);
+          if (data.ops?.length) onOps?.(data.ops);
         } else if (data.type === "op") {
           applyOp(offCtx, data.op, lastMapRef.current, strokes, blit, mix, deferred);
           blit();
+          onOps?.([data.op]);
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);
         } else if (data.type === "clear") {
@@ -275,6 +298,30 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
           // The room's live banter — the parent renders it over the viewport
           // (the conversation is the show; this canvas only paints ops).
           onSocial?.(data);
+        } else if (data.type === "mod_denied") {
+          // Wrong key, no such room, too many watchers: stop — retrying would
+          // just hammer the server with a key that isn't going to start working.
+          closed = true;
+          if (reconnectTimer) window.clearTimeout(reconnectTimer);
+          onDenied?.(data.reason || "denied");
+          try {
+            socket.close();
+          } catch {
+            /* ignore */
+          }
+        } else if (data.type === "room_closed") {
+          closed = true;
+          onDenied?.("room_closed");
+        } else if (data.type === "connected") {
+          onModState?.({ room: data });
+        } else if (data.type === "userList" && Array.isArray(data.users)) {
+          onModState?.({ users: data.users });
+        } else if (data.type === "mod_log") {
+          onModState?.({ modLog: data.entries || [] });
+        } else if (data.type === "mod_alert") {
+          onModState?.({ alert: data });
+        } else if (data.type === "room_state" || data.type === "room_renamed") {
+          onModState?.({ roomState: data });
         }
       }, () => !closed && ws === socket);
       ws.onclose = () => {
@@ -289,6 +336,17 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
         }
       };
     };
+    // Hand the parent a way to send moderation actions over this socket. Only the
+    // action types the server's watcher allowlist accepts (clear, mod_hide,
+    // mod_restore, mod_remove, kick, mute, lock/unlock) reach a room from here.
+    const sendControl = (message) => {
+      try {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(message));
+      } catch {
+        /* ignore */
+      }
+    };
+    onSend?.(sendControl);
     connect();
 
     // Coming back to a tab whose socket died while hidden: reconnect right away.
@@ -334,7 +392,7 @@ export default function LiveRoomCanvas({ roomCode, onActivity, onSocial }) {
       }
       window.removeEventListener("resize", onResize);
     };
-  }, [roomCode, onActivity, onSocial]);
+  }, [roomCode, modKey, onActivity, onSocial, onModState, onOps, onDenied, onSend]);
 
   return <canvas ref={visRef} className="live-room-canvas" aria-label="Live public room artwork" />;
 }

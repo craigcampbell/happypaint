@@ -4902,6 +4902,127 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* ---- Admin glass-room (moderator watch) ---------------------------------- */
+/* Wider than the console: the mural IS the evidence, so it gets the room. */
+.watch-portal { max-width: 1280px; }
+.watch-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.watch-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.watch-title h1 { margin: 0; font-size: 1.35rem; }
+.watch-ghost {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+.watch-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #475569; font-weight: 700; }
+.watch-dot { width: 10px; height: 10px; border-radius: 999px; background: #cbd5e1; }
+.watch-dot.is-ok { background: #22c55e; }
+.watch-dot.is-bad { background: #ef4444; }
+.watch-banner {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 0.9rem;
+}
+.watch-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.watch-canvas {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+}
+.watch-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+.watch-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+.watch-tabs button {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: transparent;
+  border-color: transparent;
+  color: #475569;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+.watch-tabs button.is-active { background: #0f172a; border-color: #0f172a; color: #fff; }
+.watch-tabs .admin-badge { background: #e2e8f0; color: #334155; margin-left: 4px; }
+.watch-tabs button.is-active .admin-badge { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.watch-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  max-height: min(62vh, 620px);
+  overflow-y: auto;
+}
+.watch-chat p { margin: 0; line-height: 1.4; word-break: break-word; }
+.watch-chat p.is-system { color: #64748b; font-style: italic; }
+.watch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+.watch-row.is-warn { border-color: #f59e0b; background: #fffbeb; }
+.watch-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.watch-row-main small { color: #64748b; font-weight: 700; }
+.watch-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.watch-row-actions button { min-height: 32px; padding: 0 10px; font-size: 0.82rem; }
+.watch-hidden-tag {
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 900px) {
+  .watch-split { grid-template-columns: minmax(0, 1fr); }
+  .watch-canvas { aspect-ratio: 3 / 4; }
+  .watch-list { max-height: none; }
+}
+
 /* ---- Admin metrics cards ------------------------------------------------- */
 .metric-grid {
   display: grid;

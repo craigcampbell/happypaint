@@ -278,7 +278,15 @@ token)`), returns `send*` emitters + `disconnect()`.
   cancellations and retains only a short-lived one-way profile hash after
   cleanup so late webhook retries cannot recreate erased mappings.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)
-  and per-room host (profileId). Admins outrank hosts.
+  and per-room host (profileId). Admins outrank hosts. The key also opens the
+  **glass room** (`/watch/<code>`, WS `?modwatch=1` + a first-frame
+  `{type:'mod_auth'}`, never a URL param): a moderator socket that lives in
+  `room.mods` instead of `room.users`, so it is invisible to the room's roster,
+  headcount, beacons and analytics, works in PRIVATE rooms, and is allowlisted to
+  moderation actions only — it cannot draw, chat or impersonate. Moderation
+  actions themselves are shared with the host paths (`moderateClear`,
+  `moderateHideOps`, …) and attributed to "a moderator". See
+  [docs/CONTENT_MODERATION.md](docs/CONTENT_MODERATION.md) §7.
 
 ## Coloring-sheet library (6,294 sheets)
 

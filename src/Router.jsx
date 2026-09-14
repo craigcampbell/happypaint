@@ -13,6 +13,7 @@ const ParentsPage = lazy(() => import("./components/ParentsPage"));
 const FamilyPage = lazy(() => import("./components/FamilyPage"));
 const FaqPage = lazy(() => import("./components/FaqPage"));
 const LiveAdmin = lazy(() => import("./components/LiveAdmin"));
+const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const WallPage = lazy(() => import("./components/WallPage"));
 
 class RouteErrorBoundary extends Component {
@@ -58,6 +59,11 @@ export default function Router() {
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "MAIN";
     // A new room must get a fresh canvas, socket, and undo history.
     page = <StudioApp key={`room-${code}`} initialJoinCode={code} />;
+  } else if (path.startsWith("/watch")) {
+    // The admin glass-room. Not a drawing route: no studio bundle, no canvas
+    // tools — the watch view is read-only by construction.
+    const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+    page = <RoomWatch key={`watch-${code}`} roomCode={code} onNavigate={navigate} />;
   } else if (path.startsWith("/admin")) {
     page = <LiveAdmin onNavigate={navigate} />;
   } else if (path.startsWith("/safety")) {

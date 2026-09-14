@@ -77,6 +77,10 @@ const SPECTATOR_HISTORY_OPS = 1500; // newest ops a read-only homepage viewer ge
 const OPLOG_COMPACT_OPS = Number(process.env.OPLOG_COMPACT_OPS || 2000);
 const MAX_ROOM_USERS = Number(process.env.MAX_ROOM_USERS || 30);
 const MAX_SPECTATORS = Number(process.env.MAX_SPECTATORS || 40); // read-only homepage viewers per public room
+// Admin moderator watchers per room (see the modwatch join path) and how long a
+// modwatch socket may sit unauthenticated before the server hangs up.
+const MAX_MOD_WATCHERS = Number(process.env.MAX_MOD_WATCHERS || 4);
+const MOD_WATCH_AUTH_MS = 5_000;
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
 const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
 const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min ms between watcher samples
@@ -1671,6 +1675,10 @@ function getRoom(roomId) {
       keepVotes: new Set(), // ephemeral: gameKeys voting to extend this cycle
       watchers: new Set(), // elected client ids running the in-browser watcher
       spectators: new Set(), // read-only homepage viewers (not counted as users)
+      // Admin moderator watchers ("glass room"): authenticated observer sockets
+      // that are NOT in room.users, so the room can never see them in the roster,
+      // presence, headcount or analytics. Ephemeral, like spectators.
+      mods: new Set(),
       // Ephemeral "who's on which cel" presence for animation rooms: userId ->
       // {sceneId, frameId, ts}. Never persisted (like cursors/spectators),
       // bounded by MAX_ROOM_USERS, cleared on disconnect + overwritten on hop.
@@ -1913,6 +1921,24 @@ function closeRoom(roomId, reason) {
         }
       } catch { /* ignore */ }
     });
+    // Watchers hold sockets too, and they are deliberately NOT in room.users:
+    // without this, homepage spectators and moderator watchers would sit on a
+    // room that no longer exists (a deleted room would keep streaming nothing
+    // and an admin's watch tab would look alive).
+    const closeWatchers = (set) => {
+      if (!set || !set.size) return;
+      set.forEach((w) => {
+        try {
+          if (w.readyState === 1) {
+            w.send(JSON.stringify({ type: 'room_closed', reason: reason || 'closed' }));
+            w.close(1000, 'room closed');
+          }
+        } catch { /* ignore */ }
+      });
+      set.clear();
+    };
+    closeWatchers(room.spectators);
+    closeWatchers(room.mods);
     const t = persistTimers.get(roomId);
     if (t) { clearTimeout(t); persistTimers.delete(roomId); }
     if (room.voteTimer) { clearTimeout(room.voteTimer); room.voteTimer = null; }
@@ -2305,6 +2331,36 @@ function broadcast(roomId, message, exceptId = null) {
     room.spectators.forEach((sws) => {
       if (sws.readyState === 1) sws.send(data);
     });
+  }
+  // Moderator watchers ("glass room") are the operator's eyes: they get everything
+  // a member would — roster, chat, alerts, the mural — because seeing it is the
+  // job. The only cut is the one-canvas rule: an animation room pages by scene,
+  // so a watcher follows the FIRST SCENE and is handed that scene back after a
+  // history/resync rebuild it could not receive whole.
+  if (room.mods && room.mods.size) {
+    const t = message.type;
+    let deliver = true;
+    if (room.animationEnabled) {
+      const firstScene = room.scenes[0] && room.scenes[0].id;
+      const frameInFirstScene = (frameId) => {
+        const f = room.frames.find((x) => x.id === frameId);
+        return !!f && f.sceneId === firstScene;
+      };
+      if (t === 'history') deliver = false;
+      else if (t === 'op' && message.op) deliver = frameInFirstScene(opFrameId(room, message.op));
+      else if (t === 'clear' && message.frameId) deliver = frameInFirstScene(message.frameId);
+    }
+    if (deliver) {
+      room.mods.forEach((mws) => {
+        if (mws.readyState === 1) mws.send(data);
+      });
+    }
+    if (room.animationEnabled && (t === 'history' || t === 'resync')) {
+      const sceneId = room.scenes[0] && room.scenes[0].id;
+      room.mods.forEach((mws) => {
+        if (mws.readyState === 1) mws.send(JSON.stringify(sceneHistoryMsg(room, sceneId)));
+      });
+    }
   }
 }
 
@@ -3064,6 +3120,139 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
+  // Moderator watch ("glass room"): the owner inspects a room WITHOUT being seen.
+  // This socket is neither a member nor a homepage spectator — it never enters
+  // room.users, so it is absent from the roster, presence, headcount, colours,
+  // analytics and every broadcast the room's own members receive. It is the ONE
+  // watcher allowed into private rooms, which is exactly where abuse hides.
+  //
+  // The admin key arrives in the FIRST FRAME, never in the URL: a WS query string
+  // lands in proxy/CDN access logs and browser history — the same leak class the
+  // HTTP admin guard avoids by taking a header.
+  if (url.searchParams.get('modwatch') === '1') {
+    let watched = null; // the live room, once the key has checked out
+    const deny = (reason) => {
+      try {
+        ws.send(JSON.stringify({ type: 'mod_denied', reason }));
+        ws.close(1008, reason);
+      } catch { /* ignore */ }
+    };
+    const authTimer = setTimeout(() => {
+      if (!watched) deny('auth_timeout');
+    }, MOD_WATCH_AUTH_MS);
+
+    ws.on('message', (raw) => {
+      let data;
+      try {
+        data = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+
+      if (!watched) {
+        if (data.type !== 'mod_auth') return;
+        // The key is short, so guessing has to cost something even over a socket.
+        if (!rateOk(`modauth:${rawClientIp(req)}`, 8, 60_000)) return deny('rate_limited');
+        if (typeof data.key !== 'string' || !adminKeyMatches(data.key)) return deny('bad_key');
+        // Watch rooms that EXIST: a probe must never lazily materialize one, and
+        // there is nothing to moderate in a room nobody is in.
+        const live = rooms.get(roomId);
+        if (!live) return deny('no_room');
+        if (live.mods.size >= MAX_MOD_WATCHERS) return deny('too_many');
+        clearTimeout(authTimer);
+        watched = live;
+        live.mods.add(ws);
+        // Handshake — the same facts a member gets, minus an identity of our own.
+        ws.send(JSON.stringify({
+          type: 'connected',
+          moderator: true,
+          ghost: true, // never listed, never counted, never announced
+          userId: 'admin',
+          userName: 'moderator',
+          roomId,
+          roomTitle: live.title || null,
+          audience: live.audience,
+          moderated: live.audience === 'kid_safe',
+          locked: !!live.locked,
+          wetCanvas: !!live.wetCanvas,
+          prompt: live.customPrompt || null,
+          wipe: wipeState(live, roomId),
+          animation: !!live.animationEnabled,
+        }));
+        // The full roster — names included. This is the moderation job, and the
+        // socket is authenticated as the owner; the count-only rule that protects
+        // homepage spectators exists to stop strangers harvesting a room.
+        ws.send(JSON.stringify({ type: 'userList', users: userListOf(live) }));
+        // The mural as members see it (animation rooms page by scene, like a
+        // member's join), plus the conversation and the moderation trail.
+        if (live.animationEnabled) {
+          ws.send(JSON.stringify(sceneHistoryMsg(live, live.scenes[0].id)));
+        } else {
+          void sendHistoryCatchUp(ws, live, 'full');
+        }
+        if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
+          ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
+        }
+        if (live.chat.length) ws.send(JSON.stringify(chatHistoryMsg(live)));
+        ws.send(JSON.stringify({ type: 'mod_log', entries: live.modLog.slice(0, 40) }));
+        return;
+      }
+
+      // An attached watcher may MODERATE, never CREATE. The allowlist is the
+      // enforcement: op / chat / cursor / rename / vote / game messages are
+      // dropped right here, so an observer socket can't paint, talk or
+      // impersonate anyone — the client hides those tools too, but this is the
+      // boundary that counts.
+      switch (data.type) {
+        case 'clear':
+          // The Draw Phone engine owns the canvas mid-game; don't fight it.
+          if (!phoneActive(watched)) moderateClear(watched, MOD_ACTOR);
+          break;
+        case 'undo_clear':
+          if (!phoneActive(watched)) moderateUndoClear(watched, MOD_ACTOR);
+          break;
+        case 'mod_hide':
+          moderateHideOps(watched, MOD_ACTOR, data.opIds);
+          break;
+        case 'mod_restore':
+          moderateRestoreOps(watched, MOD_ACTOR, data.opIds);
+          break;
+        case 'mod_remove':
+          moderateRemoveOps(watched, MOD_ACTOR, data.opIds);
+          break;
+        // The admin outranks a room's host: during an abuse report they must be
+        // able to stop the person causing it, host or not.
+        case 'kick':
+          moderateKick(watched, MOD_ACTOR, String(data.targetId || ''), true);
+          break;
+        case 'mute':
+          moderateMute(watched, MOD_ACTOR, String(data.targetId || ''), data.muted !== false, true);
+          break;
+        case 'lock':
+        case 'unlock':
+          moderateLock(watched, MOD_ACTOR, data.type === 'lock');
+          break;
+        case 'ping':
+          ws.send(JSON.stringify({ type: 'pong' }));
+          break;
+        default:
+          break;
+      }
+    });
+
+    const dropModWatch = () => {
+      clearTimeout(authTimer);
+      if (watched) {
+        watched.mods.delete(ws);
+        watched = null;
+      }
+    };
+    ws.on('close', dropModWatch);
+    ws.on('error', dropModWatch);
+    return;
+  }
+
   const room = getRoom(roomId);
 
   // DAILY: flip the day on first contact, not the next 60s tick — otherwise a
@@ -3751,78 +3940,13 @@ wss.on('connection', async (ws, req) => {
         if (phoneActive(room)) break;
         if (room.storybook?.enabled && !isHost(room, user)) break;
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
-        if (room.animationEnabled && clearFrameId && room.frames.some((f) => f.id === clearFrameId)) {
-          // Animation rooms: Clear wipes ONE frame for everyone (never the whole
-          // movie, and never the room's coloring sheet).
-          const belongs = (op) => opFrameId(room, op) === clearFrameId;
-          room.lastCleared = room.history.filter(belongs);
-          room.lastClearedFrameId = clearFrameId;
-          room.lastClearedSheet = null;
-          room.history = room.history.filter((op) => !belongs(op));
-          invalidateRoomSnapshot(room);
-          room.frameOpCounts.set(clearFrameId, 0);
-          analyticsRecordClear(roomId, user, 'user');
-          broadcast(roomId, { type: 'clear', userId: id, name: user.name, frameId: clearFrameId }, id);
-          persistRoom(roomId);
-          break;
-        }
-        // Keep a backup so the room can undo a clear (everyone gets mad otherwise).
-        room.lastCleared = room.history;
-        room.lastClearedFrameId = null;
-        room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
-        room.history = [];
-        invalidateRoomSnapshot(room);
-        recountFrameOps(room);
-        analyticsRecordClear(roomId, user, 'user');
-        broadcast(roomId, { type: 'clear', userId: id, name: user.name }, id);
-        // A full clear blanks the canvas completely — drop the coloring sheet too.
-        // Sheet state is separate from stroke history, so without this the sheet
-        // survives every wipe and reloads for everyone on each visit (the stuck
-        // "Pikachu on MAIN" bug). Echoed to the clearer too (no sender exclusion).
-        if (room.sheetId) {
-          room.sheetId = null;
-          broadcast(roomId, { type: 'sheet', sheetId: null });
-        }
-        persistRoom(roomId);
+        moderateClear(room, memberActor(id, user), clearFrameId);
         break;
       }
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
         if (phoneActive(room)) break; // no resurrecting the pre-game canvas mid-game
-        // Restore the most recently cleared mural/frame AND any sheet it removed.
-        if ((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet) {
-          if (room.lastCleared && room.lastCleared.length) {
-            if (room.lastClearedFrameId) {
-              // Per-frame restore: merge the backup in and re-sort by opId so
-              // replay order stays globally monotonic.
-              if (room.frames.some((f) => f.id === room.lastClearedFrameId)) {
-                room.history = room.history.concat(room.lastCleared).sort((a, b) => (a.opId || 0) - (b.opId || 0));
-              }
-              room.lastClearedFrameId = null;
-            } else {
-              // Full-mural restore: drop ops for frames deleted after the clear
-              // (they'd be zombie ops nothing can render or moderate away).
-              const live = new Set(room.frames.map((f) => f.id));
-              room.history = room.lastCleared.filter((op) => live.has(opFrameId(room, op)));
-            }
-            recountFrameOps(room);
-            invalidateRoomSnapshot(room); // restored content ≠ the baked snapshot
-            if (room.animationEnabled) {
-              // Scene-paged clients can't take a whole-movie history frame —
-              // each refetches its own active scene instead.
-              broadcast(roomId, { type: 'resync', restored: true });
-            } else {
-              broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
-            }
-          }
-          room.lastCleared = null;
-          if (room.lastClearedSheet) {
-            room.sheetId = room.lastClearedSheet;
-            room.lastClearedSheet = null;
-            broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
-          }
-          persistRoom(roomId);
-        }
+        moderateUndoClear(room, memberActor(id, user));
         break;
       case 'chat': {
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
@@ -4664,9 +4788,7 @@ wss.on('connection', async (ws, req) => {
       case 'lock':
       case 'unlock': {
         if (!isHost(room, user)) break;
-        room.locked = data.type === 'lock';
-        broadcast(roomId, { type: 'room_state', locked: room.locked, by: user.name });
-        persistRoom(roomId);
+        moderateLock(room, memberActor(id, user), data.type === 'lock');
         break;
       }
       case 'rename_room': {
@@ -4679,36 +4801,12 @@ wss.on('connection', async (ws, req) => {
       }
       case 'mute': {
         if (!isHost(room, user)) break;
-        const target = room.users.get(data.targetId);
-        if (target && !isHost(room, target)) {
-          target.muted = data.muted !== false;
-          // Bind the mute to the signed-in identity so it survives a reconnect.
-          if (target.profileId) {
-            if (target.muted) room.mutedProfileIds.add(target.profileId);
-            else room.mutedProfileIds.delete(target.profileId);
-            persistRoom(roomId);
-          }
-          if (target.ws.readyState === 1) {
-            target.ws.send(JSON.stringify({ type: 'muted', muted: target.muted }));
-          }
-          broadcast(roomId, { type: 'userList', users: userListOf(room) });
-        }
+        moderateMute(room, memberActor(id, user), data.targetId, data.muted !== false);
         break;
       }
       case 'kick': {
         if (!isHost(room, user)) break;
-        const target = room.users.get(data.targetId);
-        if (target && target.id !== id && !isHost(room, target)) {
-          // Short ban so a signed-in kicked user can't immediately reconnect.
-          if (target.profileId) {
-            room.kickedProfiles.set(target.profileId, Date.now() + KICK_BAN_MS);
-          }
-          if (target.ws.readyState === 1) {
-            target.ws.send(JSON.stringify({ type: 'kicked', by: user.name }));
-            target.ws.close(1008, 'kicked');
-          }
-          // close handler removes them + broadcasts userLeft
-        }
+        moderateKick(room, memberActor(id, user), data.targetId);
         break;
       }
       case 'promote':
@@ -4735,46 +4833,17 @@ wss.on('connection', async (ws, req) => {
       // `history` rebuild on clients, so no extra client canvas logic is needed.
       case 'mod_hide': {
         if (!isHost(room, user)) break;
-        const ids = Array.isArray(data.opIds) ? data.opIds : [];
-        if (!ids.length) break;
-        ids.forEach((opId) => room.hiddenOpIds.add(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
-        invalidateRoomSnapshot(room); // the baked pixels may include now-hidden ops
-        if (room.animationEnabled) {
-          broadcast(roomId, { type: 'resync' });
-        } else {
-          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
-        }
-        persistRoom(roomId);
+        moderateHideOps(room, memberActor(id, user), data.opIds);
         break;
       }
       case 'mod_restore': {
         if (!isHost(room, user)) break;
-        const ids = Array.isArray(data.opIds) ? data.opIds : [];
-        if (!ids.length) break;
-        ids.forEach((opId) => room.hiddenOpIds.delete(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
-        invalidateRoomSnapshot(room); // restored ops change the baked pixels
-        if (room.animationEnabled) {
-          broadcast(roomId, { type: 'resync', restored: true });
-        } else {
-          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
-        }
-        persistRoom(roomId);
+        moderateRestoreOps(room, memberActor(id, user), data.opIds);
         break;
       }
       case 'mod_remove': {
         if (!isHost(room, user)) break;
-        const ids = new Set(Array.isArray(data.opIds) ? data.opIds : []);
-        if (!ids.size) break;
-        room.history = room.history.filter((op) => !ids.has(op.opId));
-        ids.forEach((opId) => room.hiddenOpIds.delete(opId)); room.hiddenGen = (room.hiddenGen || 0) + 1;
-        recountFrameOps(room);
-        invalidateRoomSnapshot(room); // removed ops are gone from the baked pixels
-        if (room.animationEnabled) {
-          broadcast(roomId, { type: 'resync' });
-        } else {
-          broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames });
-        }
-        persistRoom(roomId);
+        moderateRemoveOps(room, memberActor(id, user), data.opIds);
         break;
       }
 
@@ -5106,7 +5175,7 @@ function fileReport({ room, reason, reporterName, source }) {
     room: roomCode,
     reason: String(reason || '').slice(0, 300),
     reporterName: String(reporterName || 'anonymous').slice(0, 20),
-    source: source === 'auto' ? 'auto' : 'user',
+    source: source === 'auto' ? 'auto' : source === 'admin' ? 'admin' : 'user',
     chatContext,
     ts: Date.now(),
     status: 'open',
@@ -5158,14 +5227,212 @@ function maskMessage(message) {
     .join('');
 }
 
-function isAdmin(req) {
-  // Header only — never a query param, which would land the key in proxy/CDN
-  // access logs and browser history (same leak class as tokens in WS URLs).
-  const key = req.get('x-admin-key');
+// ---- Room moderation actions, shared by hosts and admin watchers ------------
+// One implementation per action so a host's Clear and an admin's Wipe can never
+// drift apart. `actor` is a member ({ id, name, user }) or MOD_ACTOR — the
+// room-facing identity a watching admin acts under. A watcher never appears as
+// themselves: the room sees "a moderator", which is what it is.
+const MOD_ACTOR = { id: 'admin', name: 'a moderator', user: null };
+
+// A member acting in their own room: their id is the broadcast sender-exclusion
+// key AND the analytics "user"; `user` doubles as the audit-log name.
+function memberActor(id, user) {
+  return { id, name: user.name, user };
+}
+
+function noteMod(room, action, actor, detail) {
+  room.modLog.unshift({
+    ts: Date.now(),
+    action,
+    by: actor.id === MOD_ACTOR.id ? 'admin' : 'host',
+    ...(actor.user ? { who: actor.user.name } : {}),
+    ...(detail ? { detail } : {}),
+  });
+  if (room.modLog.length > 100) room.modLog.length = 100;
+}
+
+// Wipe the shared mural — or ONE frame in an animation room. Keeps a backup so
+// the room can undo, drops the coloring sheet on a full wipe, and re-broadcasts
+// the blank canvas to members (and watchers).
+function moderateClear(room, actor, frameId = null) {
+  const roomId = room.code;
+  const except = actor.user ? actor.id : null;
+  if (room.animationEnabled && frameId && room.frames.some((f) => f.id === frameId)) {
+    const belongs = (op) => opFrameId(room, op) === frameId;
+    room.lastCleared = room.history.filter(belongs);
+    room.lastClearedFrameId = frameId;
+    room.lastClearedSheet = null;
+    room.history = room.history.filter((op) => !belongs(op));
+    invalidateRoomSnapshot(room);
+    room.frameOpCounts.set(frameId, 0);
+    analyticsRecordClear(roomId, actor.user || null, actor.user ? 'user' : 'admin');
+    broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name, frameId }, except);
+    noteMod(room, 'clear_frame', actor, frameId);
+    persistRoom(roomId);
+    return true;
+  }
+  room.lastCleared = room.history;
+  room.lastClearedFrameId = null;
+  room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
+  room.history = [];
+  invalidateRoomSnapshot(room);
+  recountFrameOps(room);
+  analyticsRecordClear(roomId, actor.user || null, actor.user ? 'user' : 'admin');
+  broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name }, except);
+  // A full clear blanks the canvas completely — drop the coloring sheet too
+  // (it would otherwise reload for everyone on every visit). Echoed to the
+  // clearer as well, hence no sender exclusion.
+  if (room.sheetId) {
+    room.sheetId = null;
+    broadcast(roomId, { type: 'sheet', sheetId: null });
+  }
+  noteMod(room, 'clear', actor);
+  persistRoom(roomId);
+  return true;
+}
+
+// Put back the most recently cleared mural/frame AND any sheet that wipe removed.
+function moderateUndoClear(room, actor) {
+  const roomId = room.code;
+  if (!((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet)) return false;
+  if (room.lastCleared && room.lastCleared.length) {
+    if (room.lastClearedFrameId) {
+      // Per-frame restore: merge the backup in and re-sort by opId so replay
+      // order stays globally monotonic.
+      if (room.frames.some((f) => f.id === room.lastClearedFrameId)) {
+        room.history = room.history.concat(room.lastCleared).sort((a, b) => (a.opId || 0) - (b.opId || 0));
+      }
+      room.lastClearedFrameId = null;
+    } else {
+      // Full-mural restore: drop ops for frames deleted after the clear (they'd
+      // be zombie ops nothing can render or moderate away).
+      const live = new Set(room.frames.map((f) => f.id));
+      room.history = room.lastCleared.filter((op) => live.has(opFrameId(room, op)));
+    }
+    recountFrameOps(room);
+    invalidateRoomSnapshot(room); // restored content ≠ the baked snapshot
+    if (room.animationEnabled) {
+      // Scene-paged clients can't take a whole-movie history frame — each
+      // refetches its own active scene instead.
+      broadcast(roomId, { type: 'resync', restored: true });
+    } else {
+      broadcast(roomId, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+    }
+  }
+  room.lastCleared = null;
+  if (room.lastClearedSheet) {
+    room.sheetId = room.lastClearedSheet;
+    room.lastClearedSheet = null;
+    broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
+  }
+  noteMod(room, 'undo_clear', actor);
+  persistRoom(roomId);
+  return true;
+}
+
+function normalizeOpIds(opIds) {
+  return Array.from(new Set((Array.isArray(opIds) ? opIds : []).map((n) => Number(n)).filter((n) => Number.isFinite(n))));
+}
+
+// Reversible hide: the ops stay in history but drop out of replay.
+function moderateHideOps(room, actor, opIds) {
+  const ids = normalizeOpIds(opIds);
+  if (!ids.length) return 0;
+  ids.forEach((opId) => room.hiddenOpIds.add(opId));
+  room.hiddenGen = (room.hiddenGen || 0) + 1;
+  invalidateRoomSnapshot(room); // the baked pixels may include now-hidden ops
+  if (room.animationEnabled) broadcast(room.code, { type: 'resync' });
+  else broadcast(room.code, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+  noteMod(room, 'hide', actor, `${ids.length} op${ids.length === 1 ? '' : 's'}`);
+  persistRoom(room.code);
+  return ids.length;
+}
+
+function moderateRestoreOps(room, actor, opIds) {
+  const ids = normalizeOpIds(opIds);
+  if (!ids.length) return 0;
+  ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+  room.hiddenGen = (room.hiddenGen || 0) + 1;
+  invalidateRoomSnapshot(room); // restored ops change the baked pixels
+  if (room.animationEnabled) broadcast(room.code, { type: 'resync', restored: true });
+  else broadcast(room.code, { type: 'history', ops: visibleHistory(room), frames: room.frames, restored: true });
+  noteMod(room, 'restore', actor, `${ids.length} op${ids.length === 1 ? '' : 's'}`);
+  persistRoom(room.code);
+  return ids.length;
+}
+
+// Permanent removal — the op leaves history entirely.
+function moderateRemoveOps(room, actor, opIds) {
+  const ids = new Set(normalizeOpIds(opIds));
+  if (!ids.size) return 0;
+  room.history = room.history.filter((op) => !ids.has(op.opId));
+  ids.forEach((opId) => room.hiddenOpIds.delete(opId));
+  room.hiddenGen = (room.hiddenGen || 0) + 1;
+  recountFrameOps(room);
+  invalidateRoomSnapshot(room); // removed ops are gone from the baked pixels
+  if (room.animationEnabled) broadcast(room.code, { type: 'resync' });
+  else broadcast(room.code, { type: 'history', ops: visibleHistory(room), frames: room.frames });
+  noteMod(room, 'remove', actor, `${ids.size} op${ids.size === 1 ? '' : 's'}`);
+  persistRoom(room.code);
+  return ids.size;
+}
+
+function moderateKick(room, actor, targetId, allowHost = false) {
+  const target = room.users.get(targetId);
+  if (!target || target.id === actor.id) return false;
+  if (!allowHost && isHost(room, target)) return false; // hosts don't kick hosts
+  // Short ban so a signed-in kicked user can't immediately reconnect.
+  if (target.profileId) room.kickedProfiles.set(target.profileId, Date.now() + KICK_BAN_MS);
+  if (target.ws.readyState === 1) {
+    target.ws.send(JSON.stringify({ type: 'kicked', by: actor.name }));
+    target.ws.close(1008, 'kicked');
+    // The close handler removes them + broadcasts userLeft.
+  }
+  noteMod(room, 'kick', actor, target.name);
+  return true;
+}
+
+function moderateMute(room, actor, targetId, muted, allowHost = false) {
+  const target = room.users.get(targetId);
+  if (!target) return false;
+  if (!allowHost && isHost(room, target)) return false;
+  target.muted = muted;
+  // Bind the mute to the signed-in identity so it survives a reconnect.
+  if (target.profileId) {
+    if (muted) room.mutedProfileIds.add(target.profileId);
+    else room.mutedProfileIds.delete(target.profileId);
+    persistRoom(room.code);
+  }
+  if (target.ws.readyState === 1) {
+    target.ws.send(JSON.stringify({ type: 'muted', muted: target.muted }));
+  }
+  broadcast(room.code, { type: 'userList', users: userListOf(room) });
+  noteMod(room, muted ? 'mute' : 'unmute', actor, target.name);
+  return true;
+}
+
+function moderateLock(room, actor, locked) {
+  room.locked = locked;
+  broadcast(room.code, { type: 'room_state', locked: room.locked, by: actor.name });
+  noteMod(room, locked ? 'lock' : 'unlock', actor);
+  persistRoom(room.code);
+  return true;
+}
+
+// Constant-time admin-key check, shared by the HTTP guard and the WebSocket
+// moderator-watch handshake (which receives the key in a first frame, never a
+// URL). Returns false for anything that isn't an exact match.
+function adminKeyMatches(key) {
   if (!key || typeof ADMIN_KEY !== 'string' || !ADMIN_KEY) return false;
   const a = Buffer.from(String(key));
   const b = Buffer.from(ADMIN_KEY);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function isAdmin(req) {
+  // Header only — never a query param, which would land the key in proxy/CDN
+  // access logs and browser history (same leak class as tokens in WS URLs).
+  return adminKeyMatches(req.get('x-admin-key'));
 }
 function adminGuard(req, res) {
   res.set('Cache-Control', 'no-store');
@@ -5390,6 +5657,26 @@ app.post('/api/admin/rooms/:id/delete', (req, res) => {
   }
   closeRoom(id, 'a moderator closed this room');
   res.json({ ok: true });
+});
+
+// A moderator's flag while watching a room: the takedown itself goes over the
+// watch socket (mod_hide/mod_remove), but the record has to outlive the session,
+// so it lands in the same reports queue /admin already works from — with the
+// implicated op ids in the reason, and the room's chat context attached.
+app.post('/api/admin/rooms/:id/flag', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().slice(0, 16);
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const opIds = Array.isArray(req.body?.opIds)
+    ? req.body.opIds.map((n) => Number(n)).filter((n) => Number.isFinite(n)).slice(0, 200)
+    : [];
+  const report = fileReport({
+    room: id,
+    reason: `${reason || 'flagged while watching'}${opIds.length ? ` — ops ${opIds.join(', ')}` : ''}`,
+    reporterName: 'moderator',
+    source: 'admin',
+  });
+  res.json({ ok: true, report });
 });
 
 app.get('/api/admin/reports', (req, res) => {
@@ -6777,6 +7064,16 @@ const FAQ_JSON_LD = {
 // Head overrides for one request path, or null for the untouched default shell.
 function seoOverridesFor(reqPath) {
   const path = reqPath.replace(/\/+$/, '') || '/';
+  // The admin glass-room: never a landing page. robots.txt disallows the whole
+  // /watch/ prefix; this keeps the <head> honest for anything that ignores that
+  // (and stops the room's code leaking into a canonical tag).
+  if (/^\/watch\/[A-Za-z0-9]{1,16}$/.test(path)) {
+    return {
+      title: 'Room watch — Drawesome',
+      description: 'Moderator view of a live room.',
+      url: `${SITE_ORIGIN}${path}`,
+    };
+  }
   if (PAGE_META[path]) {
     const over = { ...PAGE_META[path], url: `${SITE_ORIGIN}${path}` };
     if (path === '/faq') over.jsonLd = FAQ_JSON_LD;
@@ -6823,7 +7120,7 @@ function seoOverridesFor(reqPath) {
 
 app.get('/robots.txt', (_req, res) => {
   res.type('text/plain').send(
-    `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /join/\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,
+    `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /join/\nDisallow: /watch/\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,
   );
 });
 

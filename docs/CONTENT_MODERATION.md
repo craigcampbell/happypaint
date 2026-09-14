@@ -216,7 +216,51 @@ store gains a `source` field. Reversible by design end-to-end.
 
 ---
 
-## 7. Surfaces
+## 7. Admin moderator watch (the "glass room")
+
+`/watch/<code>` + `GET /ws?room=<code>&modwatch=1` is how the owner inspects a
+room without being seen. It exists because the console's old "View room" opened
+`/join/<code>` — a real join: listed in the roster, counted in the headcount, and
+holding a brush.
+
+**Invisible by construction.** A watcher socket is never added to `room.users`.
+It lives in `room.mods` (ephemeral, like `spectators`), so it is absent from
+`userListOf`, the `userJoined`/`userLeft` beacons, presence, `room.users.size`,
+`totalUsers()`/peak metrics, analytics sessions, host election, watcher/NSFW
+election, snapshot election, game and Draw Phone seating, and the auto-close TTL.
+The room cannot observe it; only the server's own logs can.
+
+**Read-only by construction.** The socket's first frame must carry the admin key
+(`{type:'mod_auth', key}`) — never the URL, which lands in proxy/CDN access logs.
+Until it is authenticated the socket is bound to nothing, and it is hung up after
+5 s of silence. Once attached, its message handler is an ALLOWLIST: `clear`,
+`undo_clear`, `mod_hide`, `mod_restore`, `mod_remove`, `kick`, `mute`,
+`lock`/`unlock`, `ping`. `op`, `chat`, `cursor`, `rename`, `vote` and the rest are
+dropped, so the observer can moderate but can never paint, talk, or impersonate.
+CLIENTS must not be trusted for this: the `/watch` page also mounts no studio, no
+brush, no composer and no chat box, but that is the honest UI, not the boundary.
+
+**Private rooms included.** Homepage spectators are a public-room privilege
+(`spectate=1` still refuses private/listed=false rooms). Watching is not: abuse
+hides in private rooms, and the watcher is the owner, authenticated by key.
+Rooms that do not exist are refused rather than created, and each IP gets 8 auth
+attempts a minute.
+
+**What the room sees.** Watchers receive everything a member would — the mural,
+roster with names, chat, hype, mod alerts — because seeing it is the job. Mod
+actions route through the same helpers hosts use (`moderateClear`,
+`moderateHideOps`, `moderateKick`, …) so a host action and an admin action can
+never drift apart, and they are attributed to the neutral `MOD_ACTOR`
+("a moderator"), never to a person. A wipe is therefore visible; who did it is
+not. Animation rooms page by scene: a watcher follows scene 1.
+
+Flags filed with `POST /api/admin/rooms/:id/flag` land in the same reports queue
+`/admin` reviews, with the implicated op ids in the reason, so the record outlives
+the watch session.
+
+---
+
+## 8. Surfaces
 
 - **HostControlPanel** (`src/components/HostControlPanel.jsx`): a "Moderation"
   section — open flags + hidden strokes with **Restore** / **Remove permanently** /
@@ -225,10 +269,15 @@ store gains a `source` field. Reversible by design end-to-end.
   flags + hidden ops), an `audience` column on rooms, and the public-room list.
 - **Discovery/lobby**: a browse surface listing `GET /api/rooms/public`, with a
   "Create a public room" entry (the New-room modal). Reuses the `DiscoveryHub` shell.
+- **RoomWatch** (`src/components/RoomWatch.jsx`, route `/watch/<code>`): the glass
+  room. The console's room/report rows open it with **🕵️ Watch** (the old
+  "View room" opened a real join). Read-only mural (`LiveRoomCanvas` in modwatch
+  mode) beside a four-tab panel: **Strokes** (grouped per artist, with
+  Flag-and-hide / Restore), **Chat**, **People** (Mute / Remove), **Log** (mod
+  alerts + the room's moderation trail). Header actions: Wipe, Undo wipe,
+  Lock/Unlock. It cannot draw, chat or appear in the room.
 
----
-
-## 8. Phasing
+## 9. Phasing
 
 0. Room audience model + opId (server). 1. Public rooms + discovery (REST + UI).
 2. Text moderation. 3. Reversible hide / selective undo + host/admin surfaces.
@@ -237,7 +286,7 @@ independent of the image-model choice; Phase 4 ships **NSFWJS (MobileNetV2)**,
 bundled + lazy-loaded in the worker for elected watchers only, with the
 dependency-free heuristic as an automatic fallback.
 
-## 9. Verification
+## 10. Verification
 
 `node test/harness/run.mjs` boots `server.js` with a mock PocketBase auth endpoint
 and simulated WS clients, asserting: audience gating on join, `POST /api/rooms` +
@@ -245,3 +294,18 @@ and simulated WS clients, asserting: audience gating on join, `POST /api/rooms` 
 `mod_remove` by opId, and watcher election + flag corroboration. `npm run build`
 and `node --check server.js` must pass. The anonymous (PocketBase-unset) path must
 not regress.
+
+Two suites cover the glass room (§7):
+
+- `node scripts/modwatch-verify.mjs` — raw WS against a private room: a watcher
+  attaches and reads the mural/roster/chat, the room sees no join beacon and still
+  counts one person, a watcher's `op` and `chat` are dropped (never relayed, never
+  in history), hide/restore/wipe/undo/kick land on the members, a bad key, an
+  unknown room and a silent socket are refused, the public spectator path still
+  refuses private rooms, and the flag reaches the reports queue.
+- `node scripts/modwatch-ui-verify.mjs` — a real browser: the key gate, the watch
+  layout, no studio shell / brush / composer on the page, the stroke list
+  attributing paint to its author, flag-and-hide and wipe reaching the painter's
+  canvas, and the painter's screen showing only "a moderator". Screenshots land in
+  `output/modwatch/`.
+
