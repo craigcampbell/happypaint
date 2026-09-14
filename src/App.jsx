@@ -2174,6 +2174,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     setStatus("Bringing the canvas back…");
   }, []);
 
+  // A whole-mural wipe starts a new drawing, so the timelapse starts over too:
+  // the recorder empties and the (empty) series is flushed via onChange.
+  const resetReplay = useCallback(() => {
+    replayRecorderRef.current?.reset();
+  }, []);
+
   const clearCanvas = useCallback(() => {
     if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
     if (layersRef.current.length === 0) {
@@ -2206,7 +2212,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (animated || onLiveFrame) {
       showClearBanner("You");
     }
-  }, [dropRemoteStrokes, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, showClearBanner]);
+    // The server doesn't echo our own clear back, so reset here. Only a
+    // whole-mural wipe restarts the timelapse; clearing one frame of a
+    // flipbook or a local frame 2+ leaves the room's story intact.
+    if (!animated && onLiveFrame) {
+      resetReplay();
+    }
+  }, [dropRemoteStrokes, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, resetReplay, showClearBanner]);
 
   // Build the paper-texture background as an offscreen canvas at any size.
   const renderPaper = useCallback(async (context, { width, height, textureId }) => {
@@ -7487,6 +7499,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             : roomAnimationRef.current
               ? [...framesRef.current]
               : framesRef.current.slice(0, 1);
+          // A FULL wipe (no frameId) — a friend's or moderator's clear, the
+          // 3-day refresh, the daily wipe, a game round — is a new drawing:
+          // the timelapse starts over with it.
+          if (!data.frameId) {
+            resetReplay();
+          }
           if (!clearedFrames.length) {
             break;
           }
@@ -8023,7 +8041,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
   );
 
   // Deferred messages drain by re-entering handleMpMessage, so it needs a
