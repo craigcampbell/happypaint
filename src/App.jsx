@@ -133,7 +133,7 @@ import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
 import ColorWheelPicker from "./components/ColorWheelPicker";
 import { ColorDot, SizePill } from "./components/QuickStrokeControls";
-import { loadInputPrefs, saveInputPrefs } from "./utils/inputPrefs";
+import { loadInputPrefs, saveInputPrefs, pressureFlagsFor } from "./utils/inputPrefs";
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import { useLayoutTier, resolveLayoutTier } from "./hooks/useLayoutTier";
 import {
@@ -1507,6 +1507,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       strength: smudgeStrength, // smudge blend strength (ignored by other brushes)
       smudgeMode, // smudge only: "drag" | "blend"
       gooiness, // goo only: 0 = runny, 1 = thick
+      // What pen pressure drives (Hand & pen → Pressure); rides each op.
+      ...pressureFlagsFor(inputPrefs.pressure),
       v: recipeSettings?.v,
       dab: recipeSettings?.dab,
       texture: selectedTexture,
@@ -1520,6 +1522,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     brushSize,
     brushVariation,
     fillShape,
+    inputPrefs.pressure,
     selectedBrush,
     selectedColor,
     selectedTexture,
@@ -3674,6 +3677,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         variation: settings.variation,
         seed,
       };
+      // Pressure mode rides the op only when it differs from the default
+      // (size on, opacity off), so ordinary strokes stay as small as before
+      // and every peer / replay lays the same taper and flow.
+      if (settings.pressureSize === false) {
+        netSettings.pressureSize = false;
+      }
+      if (settings.pressureOpacity === true) {
+        netSettings.pressureOpacity = true;
+      }
       const strokeSymmetry = brushId === "smudge" || brushId === "goo"
         ? normalizeSymmetry("none")
         : normalizeSymmetry(roomSymmetryRef.current);
@@ -11034,6 +11046,38 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               />
               <output>{Math.round(brushVariation * 100)}%</output>
             </label>
+          )}
+          {isGooActive || selectedTool === "text" ? null : (
+            <div className="pref-row pref-pressure" role="group" aria-label="Pen pressure">
+              <span>Pressure</span>
+              <div className="seg-toggle">
+                {[
+                  ["size", "Size"],
+                  ["opacity", "Opacity"],
+                  ["both", "Both"],
+                  ["off", "Off"],
+                ].map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={inputPrefs.pressure === mode ? "is-on" : ""}
+                    aria-pressed={inputPrefs.pressure === mode}
+                    onClick={() => updateInputPrefs({ pressure: mode })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="tool-hint">
+                {inputPrefs.pressure === "opacity"
+                  ? "Press harder for stronger paint; a light touch lays a faint line at full width."
+                  : inputPrefs.pressure === "both"
+                    ? "Press harder for a thicker AND stronger line; a light touch is thin and faint."
+                    : inputPrefs.pressure === "off"
+                      ? "Pressure is ignored: the same line however hard you press."
+                      : "Press harder for a thicker line; a light touch is thin. (Apple Pencil, Wacom, Surface pen.)"}
+              </p>
+            </div>
           )}
           {selectedTool === "text" ? (
             <label>

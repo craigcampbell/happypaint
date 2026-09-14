@@ -4484,6 +4484,19 @@ button:disabled {
 @media (max-width: 1024px), (pointer: coarse) {
   .seg-toggle button { min-height: 44px; }
 }
+/* Pressure (Stroke section): Size | Opacity | Both | Off — four cells of the
+   same pill track, captions a touch smaller so all four fit the rail. */
+.pref-pressure {
+  display: grid;
+  gap: 8px;
+}
+.pref-pressure .seg-toggle {
+  grid-template-columns: repeat(4, 1fr);
+}
+.pref-pressure .seg-toggle button {
+  padding: 0 4px;
+  font-size: 0.8rem;
+}
 /* Touch: room-info controls (Invite + 🌐/🔒/⚠️ icon buttons) hit 44px (B3). */
 @media (max-width: 1024px), (pointer: coarse) {
   .mp-chat-room .mp-chat-invite {

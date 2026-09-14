@@ -1077,10 +1077,15 @@ function dot(ctx, point, size, color, opacity) {
 // strokes pass a pointRand(seed, x, y) generator so every client rolls the
 // same dice for the same point.
 export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
-  const pressure = clamp(to.pressure || 0.55, 0.06, 1);
+  const rawPressure = clamp(to.pressure || 0.55, 0.06, 1);
+  // What pressure drives (see pressureFlags): the width terms below read
+  // `pressure`, which is pinned to full when size isn't pressure-driven; the
+  // opacity term fades with a light touch only when asked to.
+  const pflags = pressureFlags(settings);
+  const pressure = pflags.sizeOn ? rawPressure : 1;
   const sizeJitter = 1 + (rand() * 2 - 1) * settings.variation;
   const baseSize = clamp(settings.size * sizeJitter, 1, 160);
-  const opacity = clamp(settings.opacity, 0.05, 1);
+  const opacity = clamp(settings.opacity, 0.05, 1) * (pflags.opacityOn ? pressureAlpha(rawPressure) : 1);
   const isTap = Math.hypot(to.x - from.x, to.y - from.y) < 0.1;
 
   if (settings.brush === "eraser") {
@@ -1203,6 +1208,28 @@ export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
   }
 
   line(ctx, from, to, baseSize * (0.28 + pressure * 1.05), settings.color, opacity);
+}
+
+// What pen pressure drives for a stroke. Both flags ride the op (see
+// utils/inputPrefs pressureFlagsFor) so every consumer agrees:
+//   sizeOn    (default true)  dab size tapers with pressure via the brush's
+//                             minSize; off = every dab at the full size.
+//   opacityOn (default false) dab flow follows pressure — a light touch lays
+//                             near-nothing, full press the brush's full flow
+//                             — instead of the fixed half-to-full flow ramp.
+// The stroke's overall opacity (the buffer commit alpha) is untouched either
+// way: pressure shapes the paint WITHIN the stroke, the slider caps it.
+function pressureFlags(settings) {
+  return {
+    sizeOn: settings.pressureSize !== false,
+    opacityOn: settings.pressureOpacity === true,
+  };
+}
+
+// pressure -> flow multiplier in opacity mode. The same 1.35 taper the size
+// path uses, so a light touch fades in step with how it thins.
+function pressureAlpha(pressure) {
+  return Math.pow(clamp(pressure, 0.06, 1), 1.35);
 }
 
 // ---------------------------------------------------------------------------
@@ -1518,7 +1545,11 @@ export function makeStrokeRenderer(settings, getMix) {
 
   // pressure^1.35 taper: light touches thin out faster than linear, and the
   // widened minSize band gives every brush a ≥3x thin-to-thick range.
-  const dabSizeAt = (pressure) => size * (minSize + (1 - minSize) * Math.pow(pressure, 1.35));
+  // (Pressure → size off: every dab at the full size.)
+  const pflags = pressureFlags(settings);
+  const dabSizeAt = pflags.sizeOn
+    ? (pressure) => size * (minSize + (1 - minSize) * Math.pow(pressure, 1.35))
+    : () => size;
 
   // One stamp. `rand` consumption order is FROZEN per shape, so the same seed
   // + dab coordinate rolls the same dice on every client — and reordering
@@ -1917,7 +1948,7 @@ export function makeStrokeRenderer(settings, getMix) {
   const emitDab = (ctx, x, y, pressure, angle, dabTx, dabTy) => {
     const rand = seed != null ? pointRand(seed, x, y) : Math.random;
     const sizePx = dabSizeAt(pressure);
-    const flowAlpha = flowBase * (0.5 + 0.5 * pressure);
+    const flowAlpha = flowBase * (pflags.opacityOn ? pressureAlpha(pressure) : 0.5 + 0.5 * pressure);
     if (spriteShape) {
       emitSpriteDab(ctx, rand, x, y, pressure, angle, sizePx, flowAlpha, dabTx, dabTy);
       return;
@@ -2569,7 +2600,11 @@ function makeLegacySmudgeRenderer(settings, sourceCanvas) {
   // How hard the finger pulls paint: the per-dab re-stamp alpha. User-set via
   // the Strength slider (settings.strength, 0..1); falls back to the default.
   const strength = clamp(settings.strength == null ? SMUDGE_STRENGTH : settings.strength, 0.05, 0.95);
-  const dabSizeAt = (pressure) => size * (SMUDGE_MIN_SIZE + (1 - SMUDGE_MIN_SIZE) * Math.pow(pressure, 1.35));
+  // Pressure → size follows the stroke flag like every brush; the finger's
+  // strength is its own slider, so the opacity flag has nothing to do here.
+  const dabSizeAt = pressureFlags(settings).sizeOn
+    ? (pressure) => size * (SMUDGE_MIN_SIZE + (1 - SMUDGE_MIN_SIZE) * Math.pow(pressure, 1.35))
+    : () => size;
 
   let lastPoint = null;
   let residual = 0;
