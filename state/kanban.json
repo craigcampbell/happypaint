@@ -120,6 +120,73 @@
     "status": "backlog",
     "created_cycle": 5,
     "evidence": "captures/verify5/rooms2-head-live-820.png vs rooms2-after-live-820.png; S6 measurement [45,0,0,0,0,0,0] px"
+   },
+   {
+    "card_id": "CARD-020",
+    "title": "Cartoon mode: fps presets (8/12/15/24) instead of fixed 120ms holds",
+    "description": "No fps concept exists: timing is per-frame holds (40ms-10s, default 120ms ~= 8.3fps). Add presets mapping to durationMs=round(1000/fps) (15fps = 67ms). Playback + both exporters already honour exact durations, so no engine change. Scope: NEW frames default to the chosen fps; existing films keep their timing unless the artist explicitly applies it.",
+    "effort": 2,
+    "files": [
+     "src/components/FilmStrip.jsx",
+     "src/App.jsx",
+     "src/utils/filmPlan.js"
+    ],
+    "status": "backlog",
+    "created_cycle": "animation",
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+   },
+   {
+    "card_id": "CARD-021",
+    "title": "Cartoon mode: scene auto-chaining so a 30s film needs no manual scene taps",
+    "description": "Private animation rooms cap at 60 frames/scene x 40 scenes = 2,400 frames today, but scene creation is host-only and manual. When the active scene hits the cap, adding a frame auto-creates and advances to the next scene (8 x 60 = 480 >= 450 frames for 30s @ 15fps). Strip shows buildFilmPlan across scenes so it reads as one reel.",
+    "effort": 3,
+    "files": [
+     "server.js (frame_add branch)",
+     "src/App.jsx",
+     "src/components/FilmStrip.jsx"
+    ],
+    "status": "backlog",
+    "created_cycle": "animation",
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+   },
+   {
+    "card_id": "CARD-022",
+    "title": "Cartoon mode: restricted studio (2 layers Ink/Paint, ~10 colours, simple tools, 1600x1000 doc)",
+    "description": "Owner approved limiting colours/brushes/layers inside animation mode. Mirrors the anishare constraint set (3 fixed layers, <=10 colours, 4 tools) that the owner admires. Also cuts per-cel memory from ~40MB (4000x2500) to ~6.4MB, which is what makes long films affordable. Flag-gated to animation rooms only; normal drawing/colouring rooms untouched.",
+    "effort": 3,
+    "files": [
+     "server.js (room flag)",
+     "src/App.jsx",
+     "src/components/FilmStrip.jsx"
+    ],
+    "status": "backlog",
+    "created_cycle": "animation",
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+   },
+   {
+    "card_id": "CARD-023",
+    "title": "FLIPBOOK: auto-roll a scene when the shared public scene fills",
+    "description": "The public animation room is hostless, so scene_add is refused and a full 8-frame scene stalls every visitor until the room wipes (it is 8/8 on disk right now). Server-side auto-rollover (not a host) keeps the public room growable without handing a 'host' power to a stranger.",
+    "effort": 2,
+    "files": [
+     "server.js"
+    ],
+    "status": "backlog",
+    "created_cycle": "animation",
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+   },
+   {
+    "card_id": "CARD-024",
+    "title": "Cartoon export polish: optional drawesome.art end-card (export stays watermark-free)",
+    "description": "We already beat anishare here (MP4/WebM 1600x1000, no watermark). The July audit flagged exports carrying the wrong brand; add an optional end-card toggle rather than a gate.",
+    "effort": 2,
+    "files": [
+     "src/utils/videoExport.js",
+     "src/App.jsx"
+    ],
+    "status": "backlog",
+    "created_cycle": "animation",
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
    }
   ],
   "ready": [

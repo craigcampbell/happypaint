@@ -46,3 +46,10 @@ Questions:
 4. Should /admin/* require the same key for all four pages (it does), or should
    gallery/removal power sit behind a stronger/second key?
 5. LLM synopsis: want me to wire one to your existing provider, and if so which?
+
+## Animation decisions (owner, 2026-09-16)
+- Cartoon mode = PRIVATE invite-only rooms; FLIPBOOK stays the shared public animation room.
+- Animation mode may restrict colours/brushes/layers (approved) as long as normal drawing/colouring rooms are unaffected.
+- Private rooms require a registered account (shipped): invited-only rooms are now gated at the join, env-gated on PB_URL so self-hosted/no-account installs still work anonymously.
+- Plan queued as CARD-020 (fps presets) -> CARD-021 (scene auto-chaining) -> CARD-022 (restricted cartoon studio) -> CARD-023 (FLIPBOOK rollover) -> CARD-024 (export end-card).
+- Still unanswered: where exactly the "6 frames" was seen (the caps are 8 public / 60 private; the only 6s are layer caps).
