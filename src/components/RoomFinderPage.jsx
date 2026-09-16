@@ -22,6 +22,15 @@ export default function RoomFinderPage({ onNavigate }) {
     };
   }, []);
 
+  // "Where are the people?" — the feed already carries live counts, but a flat
+  // grid of 20 identical "Be the first!" cards answers that question with a
+  // shrug. Busy rooms rise to the top, cards with someone in them get a hot
+  // highlight, and when nobody is anywhere we say so once instead of 20 times.
+  const ordered = [...rooms].sort(
+    (a, b) => (b.users || 0) - (a.users || 0) || (b.ops || 0) - (a.ops || 0),
+  );
+  const anyLive = ordered.some((r) => (r.users || 0) > 0);
+
   return (
     <div className="site-page">
       <SiteNav onNavigate={onNavigate} current="/rooms" />
@@ -47,12 +56,34 @@ export default function RoomFinderPage({ onNavigate }) {
           <button type="submit" className="primary-action">Join →</button>
         </form>
 
+        {rooms.length > 0 && !anyLive ? (
+          <p
+            className="open-rooms-quiet"
+            style={{
+              margin: "0 0 14px",
+              padding: "10px 14px",
+              borderRadius: 12,
+              background: "#fff7e6",
+              border: "2px solid #ffd98a",
+              color: "#7a5200",
+              fontWeight: 600,
+            }}
+          >
+            Nobody&rsquo;s drawing this minute. Pick any room &mdash; your canvas lights up the
+            moment you&rsquo;re in, and a friend can join with its code.
+          </p>
+        ) : null}
+
         <div className="open-rooms-grid">
-          {rooms.map((room) => (
+          {ordered.map((room, i) => {
+            const live = (room.users || 0) > 0;
+            const busiest = live && i === 0;
+            return (
             <button
               type="button"
               key={room.code}
-              className="open-room-card"
+              className={`open-room-card${live ? " open-room-card-hot" : ""}`}
+              style={live ? { borderColor: "#19a463", boxShadow: "0 0 0 3px rgba(25,164,99,.18)" } : undefined}
               onClick={() => onNavigate(`/join/${room.code}`)}
             >
               <span className="open-room-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
@@ -81,9 +112,26 @@ export default function RoomFinderPage({ onNavigate }) {
                 <span className="open-room-live"><i className="live-dot" aria-hidden="true" /> Open now</span>
                 <span className="open-room-count">{room.users === 0 ? "Be the first!" : `${room.users} painting`}</span>
               </span>
+              {busiest ? (
+                <span
+                  className="open-room-here"
+                  style={{
+                    alignSelf: "flex-start",
+                    padding: "2px 10px",
+                    borderRadius: 999,
+                    background: "#e6f7ee",
+                    color: "#127a49",
+                    fontWeight: 800,
+                    fontSize: "0.95rem",
+                  }}
+                >
+                  People are here now
+                </span>
+              ) : null}
               <span className="open-room-go">Paint here →</span>
             </button>
-          ))}
+            );
+          })}
         </div>
       </main>
     </div>
