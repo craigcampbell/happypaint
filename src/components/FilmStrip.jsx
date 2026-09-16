@@ -7,7 +7,7 @@
 // Shown only in animation rooms (the FLIPBOOK studio, or a private room whose
 // host enabled it) — there, every frame is shared state like a document.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CAMERA_PRESETS, HOLD_STEPS, MAX_SCENE_LOOPS, formatHold, formatRuntime, holdStepIndex, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "../utils/filmPlan";
 
 export default function FilmStrip({
@@ -29,6 +29,7 @@ export default function FilmStrip({
   onSceneSet,
   onSelectFrame,
   onAddFrame,
+  onFrameCap,
   onDuplicateFrame,
   onDeleteFrame,
   onMoveFrame,
@@ -50,6 +51,16 @@ export default function FilmStrip({
   onCheer = null, // cheer the active frame
 }) {
   const railRef = useRef(null);
+  const reelRef = useRef(null);
+  // Keep the cel you are working on — and the + pinned beside it — in view. The
+  // reel scrolls horizontally; without this the newest cel lands off-screen and
+  // a child who just tapped + sees nothing happen (reported from the studio).
+  useEffect(() => {
+    const reel = reelRef.current;
+    if (!reel) return;
+    const active = reel.querySelector(".fs-cel.is-active");
+    active?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [frames.length, activeFrameIndex]);
   // Visual-only scrub position; the canvas preview is painted by StudioApp
   // through onScrub. null = not scrubbing.
   const [scrubIndex, setScrubIndex] = useState(null);
@@ -251,7 +262,7 @@ export default function FilmStrip({
         ) : null}
       </div>
 
-      <div className="fs-reel" role="list">
+      <div className="fs-reel" role="list" ref={reelRef}>
         {frames.map((frame, index) => {
           const isActive = index === activeFrameIndex;
           const hidden = hiddenFrameIds.has(frame.id);
@@ -306,11 +317,22 @@ export default function FilmStrip({
         })}
         <button
           type="button"
-          className="fs-add"
-          onClick={onAddFrame}
-          disabled={frames.length >= maxFrames}
-          title={frames.length >= maxFrames ? `Loops are capped at ${maxFrames} frames` : "Add blank frame"}
-          aria-label="Add frame"
+          className={`fs-add${frames.length >= maxFrames ? " is-full" : ""}`}
+          // Never DISABLE the + (and not aria-disabled either): a disabled or
+          // aria-disabled control gives a child no feedback at all — no toast, no
+          // tooltip on a tablet tap, and assistive tech announces it as simply
+          // unavailable. Instead the tap stays live and explains the ceiling
+          // (onFrameCap), and the label carries the same information for a
+          // screen reader without claiming the control is broken.
+          onClick={() => (frames.length >= maxFrames ? onFrameCap?.() : onAddFrame())}
+          title={frames.length >= maxFrames
+            ? (canManageScenes
+              ? `This scene is full (${maxFrames} cels) — start a new scene for the rest`
+              : `This scene is full (${maxFrames} cels)`)
+            : `Add blank frame (${frames.length}/${maxFrames})`}
+          aria-label={frames.length >= maxFrames
+            ? `Add frame — this scene is full at ${maxFrames} cels`
+            : `Add frame (${frames.length} of ${maxFrames} used)`}
         >
           +
         </button>

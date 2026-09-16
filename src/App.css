@@ -6681,6 +6681,23 @@ textarea:focus-visible,
   background: #26313c;
   color: #9fb0c0;
   font-size: 1.4rem;
+  /* Pinned to the reel's right edge: the + is the last item in a horizontally
+     scrolling row, so on a phone or tablet it would otherwise scroll out of
+     sight exactly when a kid has enough cels to need it. */
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  box-shadow: -12px 0 12px -6px rgba(13, 19, 25, 0.95);
+}
+
+.fs-add.is-full {
+  /* At the cap: visibly spent, but still TAPPABLE so the tap can explain why
+     (a disabled or aria-disabled control taught a child nothing). */
+  opacity: 0.75;
+  border-style: solid;
+  border-color: #b98a2a;
+  color: #f4b840;
+  box-shadow: -12px 0 12px -6px rgba(13, 19, 25, 0.95), inset 0 0 0 1px rgba(244, 184, 64, 0.35);
 }
 
 .fs-add:disabled {

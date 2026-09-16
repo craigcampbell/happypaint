@@ -2796,12 +2796,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [composeCanvas]);
 
   // ---- Saved artwork on the server ("My Art") ----
-  const showToast = useCallback((message) => {
+  // `ms` lets a longer explanation (e.g. why the + is done) stay up long enough
+  // to read; every existing caller keeps the 3.6s default.
+  const showToast = useCallback((message, ms = 3600) => {
     setToast(message);
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);
     }
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 3600);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), ms);
   }, []);
 
   const closeStepBackPreview = useCallback(() => {
@@ -5481,6 +5483,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     syncFrameState();
     markChanged("Frame added");
   }, [activateFrame, commitLayersToFrame, syncFrameState, markChanged]);
+
+  // The reel is at this scene's cel cap. Say so out loud, and give the way
+  // forward that actually exists for this person: a host can open a new scene,
+  // while a guest in the shared public room (where scene_add is refused) is
+  // pointed at making their own animation room. Before this, the + simply went
+  // dead with no message — a child read that as a broken app.
+  const handleFrameCap = useCallback(() => {
+    const cap = animMaxFrames;
+    if (isRoomHost) {
+      showToast(`This scene is full (${cap} cels) — tap 🎬 + for a new scene`, 5200);
+      return;
+    }
+    showToast(`This scene is full (${cap} cels). Start your own animation room for a longer film.`, 6000);
+  }, [animMaxFrames, isRoomHost, showToast]);
 
   const handleDuplicateFrame = useCallback(
     (index) => {
@@ -10438,6 +10454,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               onSceneSet={handleSceneSet}
               onSelectFrame={handleSelectFrame}
               onAddFrame={handleAddFrame}
+              onFrameCap={handleFrameCap}
               onDuplicateFrame={handleDuplicateFrame}
               onDeleteFrame={handleDeleteFrame}
               onMoveFrame={handleMoveFrame}
