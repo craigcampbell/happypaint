@@ -4714,6 +4714,123 @@ button:disabled {
 .admin-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .admin-danger { background: #dc2626; border-color: #dc2626; color: #fff; }
 .admin-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+
+/* ---- Admin: room thumbnails, trend bars, chat log, traffic ---------------- */
+.admin-room { align-items: flex-start; }
+.admin-room-main { flex: 1 1 260px; display: grid; gap: 6px; }
+.admin-room-thumb-btn {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  line-height: 0;
+}
+.admin-room-thumb {
+  display: block;
+  width: 176px;
+  height: 110px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+}
+.admin-room-thumb.is-empty {
+  display: grid;
+  place-items: center;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: repeating-linear-gradient(45deg, #f8fafc 0 8px, #f1f5f9 8px 16px);
+}
+.admin-trend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.admin-trend-grid.is-compact { margin-top: 2px; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.admin-trend { display: grid; gap: 2px; min-width: 0; }
+.admin-trend svg {
+  display: block;
+  width: 100%;
+  height: 30px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.admin-trend-grid.is-compact .admin-trend svg { height: 22px; }
+.admin-trend rect { fill: #2d6cdf; }
+.admin-trend-label { color: #64748b; font-size: 0.72rem; font-weight: 800; }
+.admin-room-stat { display: grid; gap: 4px; }
+.admin-note { margin: 12px 0 0; font-size: 0.82rem; line-height: 1.45; }
+.admin-traffic { display: grid; gap: 4px; }
+.admin-traffic-row {
+  display: grid;
+  grid-template-columns: 96px 90px 80px 90px 80px minmax(140px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  font-weight: 700;
+  font-size: 0.86rem;
+}
+.admin-traffic-head {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.admin-chat-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 8px;
+}
+.admin-chat-filters label { display: grid; gap: 4px; font-size: 0.78rem; font-weight: 800; color: #475569; }
+.admin-chat-filters input[type="search"],
+.admin-chat-filters select { min-width: 200px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-weight: 600; }
+.admin-chat-filters .admin-check { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; }
+.admin-chat-log { display: grid; gap: 4px; }
+.admin-chat-row {
+  display: grid;
+  grid-template-columns: 64px 72px minmax(110px, 0.7fr) minmax(200px, 3fr);
+  gap: 10px;
+  align-items: start;
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.88rem;
+}
+.admin-chat-row.is-blocked { background: #fef2f2; border-color: #fca5a5; }
+.admin-chat-when { color: #64748b; font-weight: 700; font-size: 0.78rem; padding-top: 2px; }
+.admin-chat-room {
+  min-height: 0;
+  padding: 2px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  font-size: 0.74rem;
+  font-weight: 900;
+  box-shadow: none;
+}
+.admin-chat-who { display: grid; min-width: 0; }
+.admin-chat-who strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-chat-who small { color: #64748b; font-weight: 700; }
+.admin-chat-text { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.admin-chat-flag { color: #b91c1c; font-style: normal; font-weight: 900; }
+@media (max-width: 720px) {
+  .admin-chat-row { grid-template-columns: 56px 1fr; }
+  .admin-chat-text { grid-column: 1 / -1; }
+  .admin-traffic-row { grid-template-columns: 90px 1fr 1fr 1fr 1fr; }
+  .admin-traffic-row span:last-child { display: none; }
+}
 .admin-table {
   display: grid;
   gap: 8px;

@@ -237,6 +237,9 @@ export function useMultiplayer(roomId, onMessage, token) {
   // Upload a client-rendered mural snapshot for late-joiner catch-up (the
   // server elects one member via snapshot_request; see the join handler).
   const sendSnapshot = useCallback((opId, dataUrl) => send({ type: "snapshot", opId, dataUrl }), [send]);
+  // A small JPEG of the mural for the admin room list (server elects a member
+  // via thumb_request on a timer; see sweepRoomThumbs in server.js).
+  const sendThumb = useCallback((dataUrl) => send({ type: "thumb", dataUrl }), [send]);
   const sendCursor = useCallback((x, y, drawing) => send({ type: "cursor", x, y, drawing }), [send]);
   // In an animation room `frameId` scopes the clear to one shared frame;
   // omitted (legacy rooms) it wipes the whole mural.
@@ -362,7 +365,7 @@ export function useMultiplayer(roomId, onMessage, token) {
 
   return {
     connected, users, self, chat, disconnect,
-    sendOp, sendSnapshot, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
+    sendOp, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendSetBrushMode, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,

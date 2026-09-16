@@ -44,6 +44,88 @@ function health(value, warn, bad) {
   return "is-ok";
 }
 
+function clock(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const sameDay = new Date().toDateString() === d.toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// ---- Trend graphs -----------------------------------------------------------
+// The server keeps sparse hourly buckets per room and site-wide:
+// [hour, joins, strokes, chats, peakUsers, pageViews]. TrendBars draws the last
+// `hours` hours of one field as bars (quiet hours are zero-height).
+const SERIES_FIELD = { joins: 1, strokes: 2, chats: 3, peak: 4, views: 5 };
+function seriesWindow(rows, nowHour, hours, field) {
+  const index = SERIES_FIELD[field];
+  const out = new Array(hours).fill(0);
+  for (const row of rows || []) {
+    const i = row[0] - (nowHour - hours + 1);
+    if (i >= 0 && i < hours) out[i] = Number(row[index]) || 0;
+  }
+  return out;
+}
+function seriesDayTotals(rows, field, days = 14) {
+  const index = SERIES_FIELD[field];
+  const totals = {};
+  for (const row of rows || []) {
+    const day = new Date(row[0] * 3600000).toISOString().slice(0, 10);
+    totals[day] = (totals[day] || 0) + (Number(row[index]) || 0);
+  }
+  return Object.entries(totals).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, days);
+}
+function TrendBars({ rows, nowHour, hours = 48, field = "joins", label, height = 30 }) {
+  const values = seriesWindow(rows, nowHour, hours, field);
+  const max = Math.max(1, ...values);
+  const total = values.reduce((a, b) => a + b, 0);
+  const span = hours >= 48 ? `${Math.round(hours / 24)}d` : `${hours}h`;
+  return (
+    <div className="admin-trend" title={`${label || field}: ${total.toLocaleString()} in the last ${span}, busiest hour ${max.toLocaleString()}`}>
+      <svg viewBox={`0 0 ${hours * 3} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+        {values.map((v, i) => (
+          <rect key={i} x={i * 3} y={height - (v / max) * height} width={2.2} height={(v / max) * height} />
+        ))}
+      </svg>
+      <span className="admin-trend-label">
+        {label || field} · {total.toLocaleString()} / {span}
+      </span>
+    </div>
+  );
+}
+
+// The room's latest baked thumbnail (see sweepRoomThumbs in server.js). It is
+// fetched with the admin header (an <img src> can't carry one) and re-fetched
+// only when the server reports a newer bake.
+function RoomThumb({ id, thumbAt, adminKey }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    if (!thumbAt) {
+      setSrc(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let url = null;
+    fetch(`/api/admin/rooms/${encodeURIComponent(id)}/thumb?_=${thumbAt}`, { headers: { "x-admin-key": adminKey }, cache: "no-store" })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((blob) => {
+        if (cancelled || !blob) return;
+        url = URL.createObjectURL(blob);
+        setSrc(url);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [id, thumbAt, adminKey]);
+  if (!src) {
+    return <div className="admin-room-thumb is-empty">{thumbAt ? "loading…" : "no snapshot yet"}</div>;
+  }
+  return <img className="admin-room-thumb" src={src} alt={`Room ${id} right now`} title={`baked ${timeAgo(thumbAt)}`} />;
+}
+
 export default function LiveAdmin({ onNavigate }) {
   const [adminKey, setAdminKey] = useState(() => {
     try {
@@ -63,6 +145,11 @@ export default function LiveAdmin({ onNavigate }) {
   const [billing, setBilling] = useState(null);
   const [page, setPage] = useState("overview");
   const [uploading, setUploading] = useState(false);
+  // Cross-room chat feed (policing): newest lines of every room's audit log.
+  const [chatFeed, setChatFeed] = useState({ chat: [], rooms: [], blocked24h: 0, total: 0 });
+  const [chatRoom, setChatRoom] = useState("");
+  const [chatQuery, setChatQuery] = useState("");
+  const [chatBlockedOnly, setChatBlockedOnly] = useState(false);
 
   // A unique query string per request defeats any stale service-worker / proxy
   // cache (a cached 401 would otherwise lock you out no matter the key).
@@ -80,14 +167,16 @@ export default function LiveAdmin({ onNavigate }) {
   const refresh = useCallback(async () => {
     if (!adminKey) return;
     try {
-      const [r1, r2, r3, r4, r5] = await Promise.all([
+      const chatUrl = `/api/admin/chat?limit=300&room=${encodeURIComponent(chatRoom)}&q=${encodeURIComponent(chatQuery)}&blocked=${chatBlockedOnly ? 1 : 0}`;
+      const [r1, r2, r3, r4, r5, r6] = await Promise.all([
         fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/analytics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/billing"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust(chatUrl), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
-      if ([r1, r2, r3, r4, r5].some((response) => response.status === 401)) {
+      if ([r1, r2, r3, r4, r5, r6].some((response) => response.status === 401)) {
         setAuthed(false);
         return;
       }
@@ -96,18 +185,20 @@ export default function LiveAdmin({ onNavigate }) {
       const d3 = r3.ok ? await r3.json() : null;
       const d4 = r4.ok ? await r4.json() : null;
       const d5 = r5.ok ? await r5.json() : null;
+      const d6 = r6.ok ? await r6.json() : null;
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       if (d3) setAnalytics(d3);
       if (d4) setMetrics(d4);
       if (d5) setBilling(d5);
+      if (d6) setChatFeed({ chat: Array.isArray(d6.chat) ? d6.chat : [], rooms: Array.isArray(d6.rooms) ? d6.rooms : [], blocked24h: Number(d6.blocked24h) || 0, total: Number(d6.total) || 0 });
       setAuthed(true);
       const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
     } catch {
       // leave as-is on a transient error
     }
-  }, [adminKey]);
+  }, [adminKey, chatRoom, chatQuery, chatBlockedOnly]);
 
   const uploadSheet = (file) => {
     if (!file) return;
@@ -266,6 +357,12 @@ export default function LiveAdmin({ onNavigate }) {
   const countryStats = analytics?.countries || [];
   const timezoneStats = analytics?.timezones || [];
   const gallerySaves = analytics?.gallerySaves || [];
+  const series = analytics?.series || { hour: Math.floor(Date.now() / 3600000), site: [], rooms: {} };
+  const traffic = analytics?.traffic || [];
+  // Daily room joins from the site series, keyed by day, for the traffic table.
+  const joinsByDay = Object.fromEntries(seriesDayTotals(series.site, "joins", 30));
+  const strokesByDay = Object.fromEntries(seriesDayTotals(series.site, "strokes", 30));
+  const chatRoomOptions = Array.from(new Set([...(chatFeed.rooms || []), ...rooms.map((r) => r.id)])).sort();
 
   return (
     <main className="admin-portal">
@@ -293,6 +390,9 @@ export default function LiveAdmin({ onNavigate }) {
         </button>
         <button type="button" className={page === "content" ? "is-active" : ""} onClick={() => setPage("content")}>
           Content
+        </button>
+        <button type="button" className={page === "chat" ? "is-active" : ""} onClick={() => setPage("chat")}>
+          Chat log {chatFeed.blocked24h ? <span className="admin-badge">{chatFeed.blocked24h} blocked</span> : null}
         </button>
       </nav>
 
@@ -369,6 +469,51 @@ export default function LiveAdmin({ onNavigate }) {
           </div>
         </section>
       ) : null}
+
+      <section className="admin-section">
+        <h2>Traffic <span className="admin-muted" style={{ fontSize: "0.8rem" }}>server-side, last 14 days</span></h2>
+        {traffic.length === 0 ? (
+          <p className="admin-empty">No page loads counted yet (this counter started with this deploy).</p>
+        ) : (
+          <div className="admin-traffic">
+            <div className="admin-traffic-row admin-traffic-head">
+              <span>Day</span>
+              <span>Page loads</span>
+              <span>Visitors</span>
+              <span>Room joins</span>
+              <span>Strokes</span>
+              <span>Where they landed</span>
+            </div>
+            {traffic.slice(0, 14).map((day) => (
+              <div key={day.day} className="admin-traffic-row">
+                <span>{day.day}</span>
+                <span>{formatCount(day.views)}</span>
+                <span>{formatCount(day.uniques)}</span>
+                <span>{formatCount(joinsByDay[day.day] || 0)}</span>
+                <span>{formatCount(strokesByDay[day.day] || 0)}</span>
+                <span className="admin-muted">
+                  {Object.entries(day.routes || {})
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([route, n]) => `${route} ${n}`)
+                    .join(" · ") || "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="admin-trend-grid">
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="views" label="Page loads" />
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="joins" label="Room joins" />
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="peak" label="Peak online" />
+        </div>
+        <p className="admin-muted admin-note">
+          Why this won&apos;t match Google Analytics: GA counts only visitors whose browser ran its script (content blockers,
+          Safari and consent settings drop a large share), while these page loads are every HTML page this server sent to a
+          non-bot browser. &quot;Visitors&quot; here is one per device per day, GA&apos;s &quot;users&quot; is per cookie. And the
+          Users tab counts <em>room joins</em> — one per room entered, so one visitor hopping through three rooms is three
+          sessions there, and someone who only reads the homepage or the Wall is none.
+        </p>
+      </section>
 
       {billing ? (
         <section className="admin-section">
@@ -458,15 +603,24 @@ export default function LiveAdmin({ onNavigate }) {
           <div className="admin-list">
             {rooms.map((room) => (
               <div key={room.id} className="admin-room">
-                <div className="admin-report-main">
+                <button type="button" className="admin-room-thumb-btn" onClick={() => watchRoom(room.id)} title="Open the glass room">
+                  <RoomThumb id={room.id} thumbAt={room.thumbAt} adminKey={adminKey} />
+                </button>
+                <div className="admin-report-main admin-room-main">
                   <strong>Room {room.id}</strong>
                   <span className="admin-muted">
-                    · {room.users} painting · {room.strokes} strokes · active {timeAgo(room.lastActivity)}
+                    · {room.users} painting · {room.strokes} strokes · {room.chats || 0} chats · active {timeAgo(room.lastActivity)}
                     {room.expiresInMs != null ? ` · auto-closes in ${formatLeft(room.expiresInMs)}` : ""}
                   </span>
+                  <div className="admin-trend-grid is-compact">
+                    <TrendBars rows={series.rooms[room.id]} nowHour={series.hour} hours={48} field="joins" label="Joins" height={22} />
+                    <TrendBars rows={series.rooms[room.id]} nowHour={series.hour} hours={48} field="strokes" label="Strokes" height={22} />
+                    <TrendBars rows={series.rooms[room.id]} nowHour={series.hour} hours={48} field="chats" label="Chats" height={22} />
+                  </div>
                 </div>
                 <div className="admin-actions">
                   <button type="button" onClick={() => watchRoom(room.id)}>🕵️ Watch</button>
+                  <button type="button" onClick={() => { setChatRoom(room.id); setPage("chat"); }}>💬 Chat log</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(room.id)}>Clear</button>
                   <button type="button" className="admin-danger" onClick={() => deleteRoom(room.id)}>Delete</button>
                 </div>
@@ -477,6 +631,66 @@ export default function LiveAdmin({ onNavigate }) {
       </section>
 
         </>
+      ) : null}
+
+      {page === "chat" ? (
+        <section className="admin-section">
+          <h2>
+            Chat log <span className="admin-muted" style={{ fontSize: "0.8rem" }}>every room, newest first · {formatCount(chatFeed.total)} lines on file</span>
+          </h2>
+          <div className="admin-chat-filters">
+            <label>
+              Room
+              <select value={chatRoom} onChange={(e) => setChatRoom(e.target.value)}>
+                <option value="">All rooms</option>
+                {chatRoomOptions.map((id) => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Search
+              <input type="search" value={chatQuery} placeholder="word, phrase or name" onChange={(e) => setChatQuery(e.target.value)} />
+            </label>
+            <label className="admin-check">
+              <input type="checkbox" checked={chatBlockedOnly} onChange={(e) => setChatBlockedOnly(e.target.checked)} />
+              Blocked by the safety filter only
+            </label>
+          </div>
+          <p className="admin-muted admin-note">
+            Every accepted message from every room lands here as it is sent, plus the messages the safety filter refused
+            (red — they were never shown to anyone, and the sender was auto-moderated). Private rooms included. Use Watch
+            on a room to see its canvas alongside the conversation.
+          </p>
+          {chatFeed.chat.length === 0 ? (
+            <p className="admin-empty">Nothing matches — or no one has chatted yet.</p>
+          ) : (
+            <div className="admin-chat-log">
+              {chatFeed.chat.map((line, i) => (
+                <div key={`${line.ts}-${line.room}-${i}`} className={line.blocked ? "admin-chat-row is-blocked" : "admin-chat-row"}>
+                  <span className="admin-chat-when">{clock(line.ts)}</span>
+                  <button type="button" className="admin-chat-room" onClick={() => watchRoom(line.room)} title="Watch this room">
+                    {line.room}
+                  </button>
+                  <span className="admin-chat-who">
+                    <strong>{line.name}</strong>
+                    <small>{line.account ? `account ${line.account}` : "guest"}</small>
+                  </span>
+                  <span className="admin-chat-text">
+                    {line.blocked ? <em className="admin-chat-flag">BLOCKED{line.terms?.length ? ` (${line.terms.join(", ")})` : ""} · </em> : null}
+                    {line.message || (line.doodle ? "" : "(empty)")}
+                    {line.doodle ? (
+                      <span className="admin-doodle">
+                        <em> (doodle {line.doodle})</em>
+                        <button type="button" className="admin-danger" onClick={() => removeDoodle(line.doodle)}>Remove doodle</button>
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       ) : null}
 
       {page === "users" ? (
@@ -603,9 +817,10 @@ export default function LiveAdmin({ onNavigate }) {
                 ) : (
                   <div className="admin-mini-list">
                     {roomStats.slice(0, 12).map((room) => (
-                      <div key={room.id}>
+                      <div key={room.id} className="admin-room-stat">
                         <strong>{room.id}</strong>
                         <span>{formatCount(room.sessions)} sessions · {formatDuration(room.totalDurationSec)} · {formatCount(room.clears)} wipes</span>
+                        <TrendBars rows={series.rooms[room.id]} nowHour={series.hour} hours={168} field="joins" label="Joins" height={22} />
                       </div>
                     ))}
                   </div>

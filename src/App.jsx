@@ -7430,6 +7430,33 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           break;
         }
+        case "thumb_request": {
+          // The server asked us (a rotating member, every ~15s while the room
+          // draws) for a small JPEG of the shared mural — layer 0, what every
+          // member sees — for the admin room list. Off the hot path; skipped
+          // while our own mural is still replaying (it would be half-empty).
+          const thumbLayer = framesRef.current[0]?.layers?.[0];
+          if (!thumbLayer || historyReplayActiveRef.current) break;
+          const thumbSource = thumbLayer.canvas;
+          window.setTimeout(() => {
+            try {
+              const tw = 320;
+              const th = Math.max(1, Math.round((tw * CANVAS_HEIGHT) / CANVAS_WIDTH));
+              const tc = document.createElement("canvas");
+              tc.width = tw;
+              tc.height = th;
+              const tctx = tc.getContext("2d");
+              tctx.fillStyle = "#ffffff";
+              tctx.fillRect(0, 0, tw, th);
+              tctx.drawImage(thumbSource, 0, 0, tw, th);
+              const dataUrl = tc.toDataURL("image/jpeg", 0.72);
+              if (dataUrl.length <= 200 * 1024) mpRef.current?.sendThumb?.(dataUrl);
+            } catch {
+              // Tainted canvas or memory pressure — the next sweep asks again.
+            }
+          }, 50);
+          break;
+        }
         case "snapshot_request": {
           // The server elected us to bake the current mural into a catch-up
           // snapshot (the room just got big). Render layer 0 — the canonical
@@ -8192,6 +8219,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     mpRef.current = {
       sendOp: relayOp,
       sendSnapshot: mp.sendSnapshot,
+      sendThumb: mp.sendThumb,
       sendCursor: mp.sendCursor,
       sendClear: mp.sendClear,
       sendRestore: mp.sendRestore,
@@ -8240,7 +8268,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled

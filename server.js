@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, promises as fsp } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, openSync, readSync, closeSync, promises as fsp } from 'fs';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { gzip } from 'zlib';
@@ -227,6 +227,10 @@ function blankAnalytics() {
     timezones: {},
     gallerySaves: [],
     sessions: [],
+    // Hourly activity buckets (trend graphs) and server-side page traffic —
+    // see seriesBump / recordPageView below.
+    series: { rooms: {}, site: {} },
+    traffic: {},
   };
 }
 
@@ -242,6 +246,10 @@ try {
   analytics.timezones = loaded.timezones && typeof loaded.timezones === 'object' ? loaded.timezones : {};
   analytics.gallerySaves = Array.isArray(loaded.gallerySaves) ? loaded.gallerySaves : [];
   analytics.sessions = Array.isArray(loaded.sessions) ? loaded.sessions : [];
+  analytics.series = loaded.series && typeof loaded.series === 'object'
+    ? { rooms: loaded.series.rooms && typeof loaded.series.rooms === 'object' ? loaded.series.rooms : {}, site: loaded.series.site && typeof loaded.series.site === 'object' ? loaded.series.site : {} }
+    : { rooms: {}, site: {} };
+  analytics.traffic = loaded.traffic && typeof loaded.traffic === 'object' ? loaded.traffic : {};
 } catch {
   analytics = blankAnalytics();
 }
@@ -273,6 +281,124 @@ function bumpBag(bag, key, amount = 1) {
   const clean = typeof key === 'string' ? key.trim().slice(0, 80) : '';
   if (!clean) return;
   bag[clean] = (Number(bag[clean]) || 0) + amount;
+}
+
+// ---- Hourly activity series (the admin trend graphs) ----------------------
+// One bucket per UTC hour, [joins, strokes, chats, peakUsers, pageViews],
+// kept sparse (a quiet hour is simply absent) per room and site-wide.
+// SERIES_HOURS deep; the SERIES_ROOM_CAP most recently active rooms.
+const SERIES_HOURS = 24 * 14;
+const SERIES_ROOM_CAP = 150;
+const HOUR_MS = 3_600_000;
+const SERIES_JOINS = 0;
+const SERIES_STROKES = 1;
+const SERIES_CHATS = 2;
+const SERIES_PEAK = 3;
+const SERIES_VIEWS = 4;
+function seriesBucket(bag, hour) {
+  const key = String(hour);
+  if (!Array.isArray(bag[key]) || bag[key].length < 5) bag[key] = [0, 0, 0, 0, 0];
+  return bag[key];
+}
+// Bump `field` by `amount` in this hour's site bucket and (when roomId is
+// given) the room's bucket; `roomPeak` / `sitePeak` raise the concurrent-user
+// high-water marks for the hour.
+function seriesBump(roomId, field, amount = 1, roomPeak = null, sitePeak = null) {
+  const hour = Math.floor(Date.now() / HOUR_MS);
+  const site = seriesBucket(analytics.series.site, hour);
+  if (field != null) site[field] += amount;
+  if (sitePeak != null) site[SERIES_PEAK] = Math.max(site[SERIES_PEAK], sitePeak);
+  if (roomId) {
+    const bags = analytics.series.rooms;
+    if (!bags[roomId] || typeof bags[roomId] !== 'object') bags[roomId] = {};
+    const bucket = seriesBucket(bags[roomId], hour);
+    if (field != null) bucket[field] += amount;
+    if (roomPeak != null) bucket[SERIES_PEAK] = Math.max(bucket[SERIES_PEAK], roomPeak);
+  }
+}
+function connectedUserTotal() {
+  let n = 0;
+  rooms.forEach((room) => { n += room.users.size; });
+  return n;
+}
+function trimSeries() {
+  const oldest = Math.floor(Date.now() / HOUR_MS) - SERIES_HOURS;
+  const prune = (bag) => { for (const key of Object.keys(bag)) if (Number(key) < oldest) delete bag[key]; };
+  prune(analytics.series.site);
+  const newest = (bag) => Object.keys(bag).reduce((max, key) => Math.max(max, Number(key) || 0), 0);
+  const alive = [];
+  for (const [id, bag] of Object.entries(analytics.series.rooms)) {
+    if (!bag || typeof bag !== 'object') continue;
+    prune(bag);
+    if (Object.keys(bag).length) alive.push([id, bag]);
+  }
+  alive.sort((a, b) => newest(b[1]) - newest(a[1]));
+  analytics.series.rooms = Object.fromEntries(alive.slice(0, SERIES_ROOM_CAP));
+}
+function seriesSnapshot() {
+  const nowHour = Math.floor(Date.now() / HOUR_MS);
+  const pack = (bag) => Object.entries(bag || {})
+    .map(([hour, values]) => [Number(hour), ...values])
+    .filter((row) => row[0] > nowHour - SERIES_HOURS)
+    .sort((a, b) => a[0] - b[0]);
+  const roomsOut = {};
+  for (const [id, bag] of Object.entries(analytics.series.rooms)) roomsOut[id] = pack(bag);
+  return { hour: nowHour, hours: SERIES_HOURS, site: pack(analytics.series.site), rooms: roomsOut };
+}
+
+// ---- Server-side traffic (page views + unique visitors per day) -----------
+// Counts every HTML shell this origin serves to a non-bot user agent. It is
+// what Google Analytics would see if every visitor ran the GA script — which
+// they don't (content blockers, Safari ITP, consent), so this is the number to
+// reconcile GA against. Uniques are a per-day set of sha1(ip|ua|day) kept in
+// memory only (never written); a restart continues the stored day count and
+// may re-count a returning visitor once.
+const TRAFFIC_DAYS = 60;
+const BOT_UA = /^node$|^undici|bot|crawl|spider|slurp|preview|fetch|monitor|headless|lighthouse|pagespeed|python|curl|wget|httpclient|java\/|okhttp|facebookexternalhit|whatsapp|telegram|discord|skype|slack|embedly|pinterest|vkshare|validator|uptime|semrush|ahrefs|mj12|dotbot|petalbot|bytespider|gptbot|claudebot|anthropic|ccbot|applebot|yandex|baidu|bingpreview|duckduck/i;
+const trafficUniques = new Map(); // day -> Set(hash)
+function routeClassOf(path) {
+  if (path === '/' || path === '') return 'home';
+  if (path.startsWith('/studio')) return 'studio';
+  if (path.startsWith('/join/')) return 'join';
+  if (path.startsWith('/wall')) return 'wall';
+  if (path.startsWith('/watch') || path.startsWith('/admin')) return 'admin';
+  return 'other';
+}
+function recordPageView(req) {
+  const ua = String(req.get('user-agent') || '');
+  if (!ua || BOT_UA.test(ua)) return;
+  const route = routeClassOf(req.path);
+  if (route === 'admin') return;
+  const day = new Date().toISOString().slice(0, 10);
+  const bag = analytics.traffic[day] && typeof analytics.traffic[day] === 'object'
+    ? analytics.traffic[day]
+    : (analytics.traffic[day] = { views: 0, uniques: 0, routes: {} });
+  bag.views = (Number(bag.views) || 0) + 1;
+  if (!bag.routes || typeof bag.routes !== 'object') bag.routes = {};
+  bumpBag(bag.routes, route);
+  let seen = trafficUniques.get(day);
+  if (!seen) {
+    seen = new Set();
+    trafficUniques.set(day, seen);
+    for (const key of [...trafficUniques.keys()]) if (key !== day) trafficUniques.delete(key);
+  }
+  const hash = createHash('sha1').update(`${clientIp(req)}|${ua}|${day}`).digest('base64').slice(0, 16);
+  if (!seen.has(hash)) {
+    seen.add(hash);
+    bag.uniques = (Number(bag.uniques) || 0) + 1;
+  }
+  seriesBump(null, SERIES_VIEWS, 1);
+  scheduleAnalyticsPersist();
+}
+function trimTraffic() {
+  const days = Object.keys(analytics.traffic).sort();
+  while (days.length > TRAFFIC_DAYS) delete analytics.traffic[days.shift()];
+}
+function trafficSnapshot() {
+  return Object.entries(analytics.traffic)
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .slice(0, 30)
+    .map(([day, t]) => ({ day, views: Number(t.views) || 0, uniques: Number(t.uniques) || 0, routes: t.routes && typeof t.routes === 'object' ? t.routes : {} }));
 }
 
 function normalizeAnalytics() {
@@ -314,6 +440,8 @@ function trimAnalytics() {
   if (analytics.gallerySaves.length > ANALYTICS_GALLERY_CAP) {
     analytics.gallerySaves.length = ANALYTICS_GALLERY_CAP;
   }
+  trimSeries();
+  trimTraffic();
 }
 
 function persistAnalyticsNow() {
@@ -477,6 +605,7 @@ function analyticsStartSession(roomId, user, req) {
   if (signedIn) analytics.totals.signedInSessions += 1;
   else analytics.totals.anonymousSessions += 1;
   if (country) bumpBag(analytics.countries, country);
+  seriesBump(roomId, SERIES_JOINS, 1, Math.max(1, rooms.get(roomId)?.users.size || 0), Math.max(1, connectedUserTotal()));
 
   const userRecord = ensureAnalyticsUser(user);
   userRecord.sessions += 1;
@@ -583,6 +712,7 @@ function analyticsRecordDraw(roomId, user, op) {
     session.strokes += 1;
     bumpBag(session.brushes, brush);
     analytics.totals.strokes += 1;
+    seriesBump(roomId, SERIES_STROKES, 1);
     bumpBag(analytics.brushes, brush);
     roomRecord.strokes += 1;
     bumpBag(roomRecord.brushes, brush);
@@ -603,6 +733,7 @@ function analyticsRecordChat(roomId, user) {
   session.lastSeen = Date.now();
   analytics.totals.chats += 1;
   roomRecord.chats += 1;
+  seriesBump(roomId, SERIES_CHATS, 1);
   if (userRecord) {
     userRecord.chats += 1;
     userRecord.lastSeen = session.lastSeen;
@@ -821,6 +952,8 @@ function analyticsSnapshot() {
       rooms: ANALYTICS_ROOM_CAP,
       gallerySaves: ANALYTICS_GALLERY_CAP,
     },
+    series: seriesSnapshot(),
+    traffic: trafficSnapshot(),
   };
 }
 
@@ -958,6 +1091,57 @@ function saveRoomSnapshot(roomId, snapshot) {
     // Best-effort — a lost snapshot just means full-history replay next join.
   }
 }
+// ---- Room thumbnails (the admin's at-a-glance view) -------------------------
+// The server never rasterises ops, so a small JPEG of the live mural is baked
+// by a connected member on request — the catch-up snapshot mechanism, but tiny
+// and on a timer: every THUMB_SWEEP_MS a room that has drawn since its last
+// thumbnail asks a ROTATING member for a fresh one (so in a busy room no single
+// client gets to decide what the admin sees). Rooms keep their last thumbnail
+// after everyone leaves. It is a triage aid for /admin; the authoritative view
+// is /watch, which replays the server's own op history.
+const THUMB_DIR = process.env.THUMB_DIR || join(DATA_DIR, '.thumbs');
+const THUMB_SWEEP_MS = 15_000;
+const THUMB_MAX_CHARS = 200 * 1024;
+const THUMB_REQUEST_TTL_MS = 10_000;
+function thumbFile(roomId) {
+  return join(THUMB_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.jpg`);
+}
+function thumbBakedAt(room) {
+  if (room.thumbBakedAt == null) {
+    try { room.thumbBakedAt = statSync(thumbFile(room.code)).mtimeMs; } catch { room.thumbBakedAt = 0; }
+  }
+  return room.thumbBakedAt;
+}
+function dropRoomThumb(room) {
+  room.thumbRequest = null;
+  room.thumbBakedAt = 0;
+  try { unlinkSync(thumbFile(room.code)); } catch { /* no file */ }
+}
+function validThumbImage(dataUrl) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > THUMB_MAX_CHARS) return null;
+  const match = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!match) return null;
+  const bytes = Buffer.from(match[1], 'base64');
+  if (sniffWallImage(bytes) !== 'image/jpeg') return null;
+  const dims = rasterDimensions(bytes);
+  if (!dims || dims.w < 16 || dims.h < 16 || dims.w > 640 || dims.h > 400) return null;
+  return bytes;
+}
+function sweepRoomThumbs() {
+  const now = Date.now();
+  rooms.forEach((room) => {
+    if (!room.users.size) return;
+    if ((room.lastActivity || 0) <= thumbBakedAt(room)) return; // nothing new since the last bake
+    if (room.thumbRequest && room.thumbRequest.expiresAt > now) return; // one in flight
+    const members = [...room.users.values()].filter((u) => u.ws.readyState === 1 && !u.muted);
+    if (!members.length) return;
+    room.thumbRound = ((room.thumbRound || 0) + 1) % members.length;
+    const candidate = members[room.thumbRound];
+    room.thumbRequest = { userId: candidate.id, expiresAt: now + THUMB_REQUEST_TTL_MS };
+    candidate.ws.send(JSON.stringify({ type: 'thumb_request' }));
+  });
+}
+
 function invalidateRoomSnapshot(room) {
   room.snapshotRequest = null; // an in-flight encoding predates this canvas change
   room.snapshotOpId = 0;
@@ -965,6 +1149,9 @@ function invalidateRoomSnapshot(room) {
   // Also discard dormant files while the experiment is disabled, so a later
   // opt-in cannot resurrect art hidden or removed in the meantime.
   try { unlinkSync(snapshotFile(room.code)); } catch { /* no file */ }
+  // The mural changed under it (clear / wipe / sheet swap): a stale thumbnail
+  // would show the admin art that is no longer there. The next sweep re-bakes.
+  dropRoomThumb(room);
 }
 // A room is worth snapshotting once it's big enough, and its snapshot is due
 // for a refresh once enough ops have accumulated past the baked-in opId.
@@ -1954,6 +2141,7 @@ function closeRoom(roomId, reason) {
   try { unlinkSync(historyFile(roomId)); } catch { /* no history base */ }
   try { unlinkSync(opLogFile(roomId)); } catch { /* no op log */ }
   try { unlinkSync(snapshotFile(roomId)); } catch { /* no snapshot */ }
+  try { unlinkSync(thumbFile(roomId)); } catch { /* no thumbnail */ }
 }
 
 // Periodic cleanup of idle rooms: in-memory empties + abandoned files on disk.
@@ -1993,6 +2181,7 @@ function autoCloseSweep() {
         try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
         try { unlinkSync(opLogFile(id)); } catch { /* no op log */ }
         try { unlinkSync(snapshotFile(id)); } catch { /* no snapshot */ }
+        try { unlinkSync(thumbFile(id)); } catch { /* no thumbnail */ }
       }
     } catch { /* ignore unreadable file */ }
   }
@@ -2160,6 +2349,8 @@ function sweepRoomWipes() {
 }
 sweepRoomWipes(); // boot: a deadline that passed while we were down fires now
 const roomWipeTimer = setInterval(sweepRoomWipes, 60_000);
+const roomThumbTimer = setInterval(sweepRoomThumbs, THUMB_SWEEP_MS);
+roomThumbTimer.unref?.();
 if (roomWipeTimer.unref) roomWipeTimer.unref();
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
@@ -3715,6 +3906,22 @@ wss.on('connection', async (ws, req) => {
         saveRoomSnapshot(roomId, room.snapshot);
         break;
       }
+      case 'thumb': {
+        // Only the member the sweep asked, within its window (see sweepRoomThumbs).
+        const request = room.thumbRequest;
+        if (!request || request.userId !== id || request.expiresAt < Date.now()) break;
+        room.thumbRequest = null;
+        const bytes = validThumbImage(data.dataUrl);
+        if (!bytes) break;
+        try {
+          mkdirSync(THUMB_DIR, { recursive: true });
+          const file = thumbFile(roomId);
+          writeFileSync(`${file}.tmp`, bytes);
+          renameSync(`${file}.tmp`, file);
+          room.thumbBakedAt = Date.now();
+        } catch { /* best-effort: the next sweep tries again */ }
+        break;
+      }
       case 'cursor':
         // Draw Phone: cursors are private too — don't telegraph where a player
         // is drawing their secret page.
@@ -3983,6 +4190,10 @@ wss.on('connection', async (ws, req) => {
           const verdict = scan(message);
           if (verdict.severity === 'severe') {
             autoModerate(room, user, `chat: ${verdict.terms.join(', ')}`);
+            // The attempt goes in the audit log too (flagged, never relayed):
+            // for policing, who TRIED to say what matters as much as what got
+            // through.
+            appendChatAudit(roomId, { ts: Date.now(), room: roomId, userId: id, profileId: user.profileId || null, name: user.name, message, blocked: 'severe', terms: verdict.terms.slice(0, 6) });
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked' }));
             break;
           }
@@ -5600,6 +5811,8 @@ app.get('/api/admin/rooms', (req, res) => {
     users: room.users.size,
     strokes: room.history.length,
     lastActivity: room.lastActivity || 0,
+    chats: (room.chat || []).length,
+    thumbAt: Math.round(thumbBakedAt(room)) || 0, // 0 = no thumbnail baked yet
     audience: room.audience || null,
     // null while occupied or for featured rooms (never auto-close); else ms left.
     expiresInMs: room.users.size > 0 || FEATURED_CODES.has(id)
@@ -5608,6 +5821,88 @@ app.get('/api/admin/rooms', (req, res) => {
   }));
   list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity || b.strokes - a.strokes);
   res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
+});
+
+// A room's current thumbnail (see sweepRoomThumbs). 404 until one is baked.
+app.get('/api/admin/rooms/:id/thumb', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().replace(/[^A-Z0-9_-]/gi, '').slice(0, 32);
+  try {
+    const bytes = readFileSync(thumbFile(id));
+    res.type('image/jpeg').send(bytes);
+  } catch {
+    res.status(404).json({ error: 'no thumbnail yet' });
+  }
+});
+
+// Cross-room chat feed for policing: the newest lines of EVERY room's audit
+// log, merged newest-first, with room / text / blocked-only filters. Each
+// file's tail is cached by size+mtime, so the 4s admin poll costs one stat
+// per room rather than a read.
+const CHAT_TAIL_BYTES = 96 * 1024;
+const chatTailCache = new Map();
+function chatTail(file) {
+  let stat;
+  try { stat = statSync(file); } catch { return []; }
+  const hit = chatTailCache.get(file);
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.entries;
+  let entries = [];
+  try {
+    const length = Math.min(CHAT_TAIL_BYTES, stat.size);
+    const buffer = Buffer.alloc(length);
+    const fd = openSync(file, 'r');
+    try { readSync(fd, buffer, 0, length, stat.size - length); } finally { closeSync(fd); }
+    const lines = buffer.toString('utf8').split('\n');
+    if (length < stat.size) lines.shift(); // a partial first line
+    entries = lines
+      .filter(Boolean)
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+      .filter((entry) => entry && typeof entry === 'object');
+  } catch {
+    entries = [];
+  }
+  chatTailCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, entries });
+  if (chatTailCache.size > 600) chatTailCache.delete(chatTailCache.keys().next().value);
+  return entries;
+}
+app.get('/api/admin/chat', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 300));
+  const roomFilter = req.query.room ? String(req.query.room).toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32) : '';
+  const query = String(req.query.q || '').trim().toLowerCase().slice(0, 80);
+  const blockedOnly = req.query.blocked === '1';
+  let files = [];
+  try { files = readdirSync(CHAT_LOG_DIR).filter((f) => f.endsWith('.jsonl')); } catch { files = []; }
+  const all = [];
+  for (const file of files) {
+    const code = file.slice(0, -6);
+    if (roomFilter && code !== roomFilter) continue;
+    for (const entry of chatTail(join(CHAT_LOG_DIR, file))) all.push(entry.room ? entry : { ...entry, room: code });
+  }
+  all.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const dayAgo = Date.now() - 86_400_000;
+  let blocked24h = 0;
+  for (const entry of all) if (entry.blocked && (entry.ts || 0) > dayAgo) blocked24h += 1;
+  const chat = [];
+  for (const entry of all) {
+    if (blockedOnly && !entry.blocked) continue;
+    if (query) {
+      const haystack = `${entry.message || ''} ${entry.name || ''}`.toLowerCase();
+      if (!haystack.includes(query)) continue;
+    }
+    chat.push({
+      ts: entry.ts || 0,
+      room: entry.room,
+      name: entry.name || '?',
+      account: entry.profileId ? String(entry.profileId).slice(0, 8) : null,
+      message: typeof entry.message === 'string' ? entry.message : '',
+      doodle: entry.doodle || null,
+      blocked: entry.blocked || null,
+      terms: Array.isArray(entry.terms) ? entry.terms : null,
+    });
+    if (chat.length >= limit) break;
+  }
+  res.json({ chat, rooms: files.map((f) => f.slice(0, -6)).sort(), blocked24h, total: all.length });
 });
 
 // Moderator view of a room's chat audit log (durable, with profile ids).
@@ -7182,6 +7477,7 @@ if (existsSync(distPath)) {
       res.sendFile(join(distPath, 'index.html'));
       return;
     }
+    recordPageView(req); // server-side traffic, the number to reconcile GA against
     const over = seoOverridesFor(req.path);
     res.type('html').send(over ? renderShell(shellHtml, over) : shellHtml);
   });
