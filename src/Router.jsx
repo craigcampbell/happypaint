@@ -14,6 +14,7 @@ const FamilyPage = lazy(() => import("./components/FamilyPage"));
 const FaqPage = lazy(() => import("./components/FaqPage"));
 const LiveAdmin = lazy(() => import("./components/LiveAdmin"));
 const RoomWatch = lazy(() => import("./components/RoomWatch"));
+const PublicWatch = lazy(() => import("./components/PublicWatch"));
 const WallPage = lazy(() => import("./components/WallPage"));
 
 class RouteErrorBoundary extends Component {
@@ -64,6 +65,12 @@ export default function Router() {
     // tools — the watch view is read-only by construction.
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
     page = <RoomWatch key={`watch-${code}`} roomCode={code} onNavigate={navigate} />;
+  } else if (path.startsWith("/live")) {
+    // The public read-only watch page: a shareable window into one public room's
+    // mural. Not a drawing route either — it renders the spectator socket client
+    // and nothing that can send, so no studio bundle is pulled in.
+    const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "MAIN";
+    page = <PublicWatch key={`live-${code}`} roomCode={code} onNavigate={navigate} />;
   } else if (path.startsWith("/admin")) {
     page = <LiveAdmin onNavigate={navigate} />;
   } else if (path.startsWith("/safety")) {

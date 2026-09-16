@@ -1,10 +1,10 @@
 {
- "cycle": 3,
+ "cycle": 5,
  "phase": "triage",
  "budget": {
   "max_cycles": 6,
   "max_patches_per_day": 5,
-  "patches_today": 3
+  "patches_today": 4
  },
  "config_resolved_from_placeholders": {
   "port_spec": "spec said localhost:3000; this app's dev port is 5173 (vite)",
@@ -37,5 +37,6 @@
   "ts": "2026-09-16T00:49:30.956560",
   "CARD-011_CARD-012": "approved: moderation stance accepted (watchers: animal aliases, no chat input, count caps, host hide path intact)",
   "CARD-008": "approved by owner despite effort 3 exceeding auto-gate ('I trust you on 008')"
- }
+ },
+ "resume_note": "cycle 4 ran with orchestrator covering S4/S5/S6 (glm-5.3 429); resumed on kimi-k3 with delegates back"
 }
