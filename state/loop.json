@@ -1,10 +1,10 @@
 {
  "cycle": 3,
- "phase": "capture",
+ "phase": "complete",
  "budget": {
   "max_cycles": 3,
   "max_patches_per_day": 5,
-  "patches_today": 2
+  "patches_today": 3
  },
  "config_resolved_from_placeholders": {
   "port_spec": "spec said localhost:3000; this app's dev port is 5173 (vite)",
@@ -31,5 +31,6 @@
   "server_pid_note": "spawned via execute_code kernel (terminal background kills node on this host)",
   "data_dir": "%LOCALAPPDATA%/Temp/loop-data"
  },
- "last_pr": "https://github.com/craigcampbell/happypaint/pull/2"
+ "last_pr": "https://github.com/craigcampbell/happypaint/pull/2",
+ "completed": true
 }

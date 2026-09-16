@@ -6,6 +6,7 @@
   "auto_patches_per_day": 5,
   "cycle_of": 3
  },
+ "updated_at": "2026-09-16",
  "mission": "Get people drawing together, finding friends, sharing artwork; kids-to-young-adults on tablets.",
  "gate_rules": {
   "auto_apply": [
@@ -53,17 +54,6 @@
    }
   ],
   "ready": [
-   {
-    "card_id": "CARD-002",
-    "title": "Print the room code ON the /rooms card in big kid-readable type",
-    "description": "Room codes are currently hidden behind clicks; kids can't tell a friend the code aloud. Render the code in large unambiguous type directly on each /rooms card.",
-    "impact": 6,
-    "surprise": 6,
-    "effort": 1,
-    "score": 36,
-    "gate": "PASS: reversible render-only change in RoomFinderPage.jsx, screenshot-verifiable, effort 1",
-    "source": "S3 #2"
-   },
    {
     "card_id": "CARD-003",
     "title": "Onboarding panel step 4: 'make it together' using existing overlay",
@@ -132,20 +122,6 @@
     "pr": "https://github.com/craigcampbell/happypaint/pull/2"
    },
    {
-    "card_id": "CARD-001",
-    "title": "Commons routing: first 'Draw now' click lands everyone in MAIN (Open Studio)",
-    "description": "Today HomePage.startRoom mints a random 6-char room per click and SiteNav 'Draw now' links to a random /join/{code}, so first-time visitors each land alone in an empty private room (S2: '0 drawing now', 'Be the first!'). Phase 1 (this card): first-time/anonymous-primary entry points route to /join/MAIN \u2014 the already-existing shared room \u2014 so strangers land on the SAME canvas and can actually meet. Phase 2 (superset, ex-S3 #6 'full inversion'): route to the most lived-in room once occupancy data exists. Pure routing change: verified startRoom at HomePage.jsx:285 and SiteNav.jsx:101.",
-    "impact": 8,
-    "surprise": 5,
-    "effort": 1,
-    "score": 40,
-    "gate": "PASS: reversible (restore random code), no auth/payment/migration/CI, screenshot-verifiable (two sessions both land on room MAIN), effort 1",
-    "source": "S3 #1 + #6 (merged: #6 is the phased superset of #1)",
-    "status": "done",
-    "completed_cycle": 1,
-    "pr": "https://github.com/craigcampbell/happypaint/pull/2"
-   },
-   {
     "card_id": "CARD-013",
     "title": "Truth-in-copy: homepage no longer says 'a fresh canvas starts with just you' after CARD-001",
     "description": "CARD-001 routed every startRoom entry point to /join/MAIN (public Open Studio), but homepage copy still misdescribes the behavior: HomePage.jsx:351 blank-canvas choice says 'Start with a fresh canvas' and :410 invite-steps says 'Open a room. A fresh canvas starts with just you.' Both now land a kid in a PUBLIC shared room while the copy promises solitude \u2014 a copy-behavior mismatch created by our own cycle-1 patch (flagged as follow-up risk by S5/S6). Update the strings (and audit adjacent startRoom copy: 'Make a room and invite friends', 'Create a room', hero 'Start drawing') to honestly describe landing in the shared Open Studio canvas. Copy-only JSX/string change.",
@@ -159,6 +135,22 @@
     "column": "ready",
     "status": "done",
     "completed_cycle": 2
+   },
+   {
+    "card_id": "CARD-002",
+    "status_note": "SELECTED for cycle 3 (final auto-cycle). Auto-apply gate passed: reversible render-only change, no auth/payment/migration/CI, screenshot-verifiable, effort 1.",
+    "selected_at": "2026-09-16",
+    "cycle": 3,
+    "title": "Print the room code ON the /rooms card in big kid-readable type",
+    "description": "Room codes are currently hidden behind clicks; kids can't tell a friend the code aloud. Render the code in large unambiguous type directly on each /rooms card.",
+    "impact": 6,
+    "surprise": 6,
+    "effort": 1,
+    "score": 36,
+    "gate": "PASS: reversible render-only change in RoomFinderPage.jsx, screenshot-verifiable, effort 1",
+    "source": "S3 #2",
+    "status": "done",
+    "completed_cycle": 3
    }
   ],
   "rejected": []
@@ -190,17 +182,16 @@
   }
  ],
  "selection": {
-  "cycle": 2,
-  "selected_card_id": "CARD-013",
-  "rationale": "Cycle-1's CARD-001 changed behavior (all 'Draw now' entry points now land in the public MAIN/Open Studio room) but left homepage copy promising a private fresh canvas ('Start with a fresh canvas', 'A fresh canvas starts with just you') \u2014 the loop must keep its own change honest before stacking new ones, exactly the follow-up risk S5/S6 flagged and the cycle-2 capture confirms on both tablet and phone home frames. Copy-only, effort 1, fully gate-passing; score 18 also beats CARD-006 (16) and CARD-007 (15), and only trails CARD-002 (36)/CARD-003 (30)/CARD-004 (30), which remain queued for cycle 3. Budget: patch 2 of 5 today.",
+  "cycle": 3,
+  "selected_card_id": "CARD-002",
+  "rationale": "FINAL auto-cycle (3 of 3). CARD-002 (score 36, top of the ready queue) is the single strongest advance on 'two kids can find each other and draw together': with cycles 1-2 everyone lands in the shared MAIN room, but a kid still can't TELL a friend which room to join \u2014 codes are hidden behind clicks. Printing the code in big kid-readable type on every /rooms card enables mouth-share ('go to happypaint, type DINOS'). Lowest-risk pick: display-only in RoomFinderPage.jsx, fully gate-passing (reversible, no auth/payments/secrets/migrations/CI, screenshot-verifiable, effort 1). Cycle-3 capture (22 frames, 6 changed = home/join copy from CARD-013, no new majors) confirms board evidence unchanged; no new cards added. This closes the auto-patch budget for the day (3 of 5 used, 3 of 3 cycles). FOR HUMAN REVIEW NEXT: (1) CARD-011 watchers/emotes and CARD-012 public /watch remain blocked on safety/moderation policy decisions; (2) effort-3 backlog cards CARD-008 (live occupancy counts \u2014 strongest follow-on, pairs with CARD-002), CARD-009 (Founding Artist empty-wall), CARD-010 (timelapse replay); (3) remaining ready cards CARD-003 (onboarding step 4), CARD-004 (wall\u2194rooms stubs), CARD-005 (T-2h Pin-to-Wall nudge), CARD-006/007 (dead-cue + signup hatch fixes) are all gate-passing and can be queued for the next auto-patch day; (4) verify CARD-001..013 behave together end-to-end on the patched bundle at :8943 before merging loop/social-growth.",
   "deferred_to_later_cycles": [
-   "CARD-002",
    "CARD-003",
    "CARD-004",
    "CARD-005",
    "CARD-006",
    "CARD-007"
   ],
-  "budget_note": "5 auto-patches/day; 2 used after this selection. Cycle 2 of 3. CARD-002 (36), CARD-003 (30), CARD-004 (30) top the cycle-3 queue by (impact x surprise)/effort."
+  "budget_note": "5 auto-patches/day; 3 used after this selection (CARD-001, CARD-013, CARD-002). Cycle 3 of 3 \u2014 FINAL auto-cycle; loop pauses here for human review of the safety-gated cards (CARD-011, CARD-012), the effort-3 backlog, and an end-to-end regression pass on cycles 1-3."
  }
 }
