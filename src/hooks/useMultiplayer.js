@@ -183,7 +183,11 @@ export function useMultiplayer(roomId, onMessage, token) {
       retryRef.current = 0;
       // FIRST frame is always auth (token or null) — the server holds the join
       // until it arrives, so identity lands without ever touching the URL.
-      ws.send(JSON.stringify({ type: "auth", token: token || null }));
+      // userKey is this device's own random id (the same one the gallery sync
+      // uses) and is what lets a moderation block stick for a guest with no
+      // account. It is never a name, an email, or anything a person typed, and
+      // its absence is fine — an older server simply ignores the extra field.
+      ws.send(JSON.stringify({ type: "auth", token: token || null, userKey: localDeviceKey() }));
       ws.send(JSON.stringify(clientInfoPayload()));
       pingTimerRef.current = window.setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));

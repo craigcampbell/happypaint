@@ -369,6 +369,18 @@ export default function LiveAdmin({ onNavigate }) {
       <header className="admin-top">
         <h1>🛡️ Drawesome Admin</h1>
         <div className="admin-top-actions">
+          {/* The consoles that had to become their own pages: a room estate of
+              300+ needs sorting/filtering room (Radar) and the cross-room
+              person view (Users) that this single page can't hold. */}
+          <button type="button" onClick={() => onNavigate("/admin/rooms")}>
+            Room radar
+          </button>
+          <button type="button" onClick={() => onNavigate("/admin/users")}>
+            People
+          </button>
+          <button type="button" onClick={() => onNavigate("/admin/gallery")}>
+            Gallery saves
+          </button>
           <button type="button" onClick={() => onNavigate("/studio")}>
             Open studio
           </button>

@@ -1064,6 +1064,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
+  const [blockedByMod, setBlockedByMod] = useState(false); // moderation console blocked this person everywhere
   const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
   const [roomBlocked, setRoomBlocked] = useState(false); // server refused this room
   // Join curtain: how far this room has got hooking up, as milestones rather
@@ -7465,6 +7466,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           mpRef.current?.disconnect?.();
           setKicked(true);
           break;
+        case "blocked":
+          // Blocked from EVERY room by a moderator (the console's global block),
+          // not just this one. Same teardown as a kick — without it the client
+          // reconnects in a loop and the room curtain sits on "Knocking on the
+          // room door…" forever, which reads as a broken app to a kid.
+          mpRef.current?.disconnect?.();
+          setBlockedByMod(true);
+          break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
           // state — local drafts never auto-restore over it. `frames` rides
@@ -8442,8 +8451,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // A room that refused us has its own full-screen explanation — never leave a
   // loading bar painting hopefully on top of it.
   useEffect(() => {
-    if (kicked || roomFull || roomBlocked) setJoinCurtain(false);
-  }, [kicked, roomFull, roomBlocked]);
+    if (kicked || blockedByMod || roomFull || roomBlocked) setJoinCurtain(false);
+  }, [kicked, blockedByMod, roomFull, roomBlocked]);
 
   // Chat with locally-hidden painters filtered out (see toggleHiddenPainter).
   const visibleChat = useMemo(
@@ -11728,6 +11737,25 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           <section className="studio-modal" role="dialog" aria-modal="true">
             <h2>You were removed</h2>
             <p className="account-note">A host removed you from this room.</p>
+            <div className="account-actions">
+              <button type="button" className="primary-action" onClick={() => { window.location.href = "/"; }}>
+                Back to home
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {blockedByMod ? (
+        // Honest, non-shaming, and actionable: a kid who has been paused needs to
+        // know it wasn't a crash, that it applies everywhere, and who to ask.
+        <div className="modal-backdrop" role="presentation">
+          <section className="studio-modal" role="dialog" aria-modal="true">
+            <h2>Rooms are paused for this device</h2>
+            <p className="account-note">
+              A moderator paused this device, so it can&apos;t join any drawing room right now.
+              If you think that&apos;s a mistake, ask a grown-up to get in touch with us.
+            </p>
             <div className="account-actions">
               <button type="button" className="primary-action" onClick={() => { window.location.href = "/"; }}>
                 Back to home

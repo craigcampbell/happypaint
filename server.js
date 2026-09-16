@@ -22,6 +22,7 @@ import { gzip } from 'zlib';
 import { verifyAccessToken } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { scan } from './server/moderation/textFilter.js';
+import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
 import { questMissions, questSetFor } from './server/questDeck.js';
@@ -485,7 +486,13 @@ function deviceTypeFromReq(req) {
 }
 
 function analyticsUserKey(user) {
-  return user.profileId ? `pb:${user.profileId}` : `anon:${user.id}`;
+  if (user.profileId) return `pb:${user.profileId}`;
+  // A guest with a device key is a RECURRING person, not a new stranger at every
+  // socket: keying them by device is what lets the console see "this one visitor
+  // has been through 14 rooms" and lets a block stick. Without it (older client,
+  // or keys stripped) we fall back to the per-socket id, as before.
+  if (user.deviceKey) return `dev:${user.deviceKey}`;
+  return `anon:${user.id}`;
 }
 
 function ensureAnalyticsRoom(roomId) {
@@ -3653,6 +3660,7 @@ wss.on('connection', async (ws, req) => {
   // stays as a fallback for the mobile app and stale cached bundles. A non-auth
   // first frame (legacy client) is replayed into the normal handler after join.
   let token = url.searchParams.get('token');
+  let deviceKey = null;
   let replayFirstFrame = null;
   if (!token) {
     const first = await new Promise((resolve) => {
@@ -3675,6 +3683,11 @@ wss.on('connection', async (ws, req) => {
       try { hello = JSON.parse(first); } catch { hello = null; }
       if (hello && hello.type === 'auth') {
         token = typeof hello.token === 'string' && hello.token ? hello.token : null;
+        // The device key is what makes an ANONYMOUS block possible: without it a
+        // guest is only an ip: key. It is the same random per-device id the
+        // client already uses for its gallery, never a name or an email, and it
+        // is optional so older clients keep working (they just fall back to IP).
+        if (typeof hello.userKey === 'string' && hello.userKey) deviceKey = sanitizeKey(hello.userKey);
       } else {
         replayFirstFrame = first; // legacy client_info etc. — process after join
       }
@@ -3682,6 +3695,21 @@ wss.on('connection', async (ws, req) => {
   }
   const identity = token ? await verifyAccessToken(token) : null;
   if (ws.readyState !== 1) return; // user disconnected during validation
+
+  // Global block: one decision from the moderation console, enforced everywhere
+  // and before any state is created. Checked against every identity this
+  // connection can be matched by (account, device key, IP) so a blocked person
+  // can't simply drop their account or open a new tab.
+  const blockHit = blockFor([
+    identity && identity.profileId ? `pb:${sanitizeKey(identity.profileId)}` : null,
+    deviceKey ? `dev:${deviceKey}` : null,
+    `ip:${String(rawClientIp(req)).replace(/[^a-zA-Z0-9:._-]/g, '')}`,
+  ]);
+  if (blockHit) {
+    ws.send(JSON.stringify({ type: 'blocked', reason: blockHit.reason || null }));
+    ws.close(1008, 'blocked');
+    return;
+  }
 
   // Re-check capacity AFTER the first-frame auth wait: the pre-wait check can
   // pass for many concurrent joiners who then all self-add, so the authoritative
@@ -3722,6 +3750,9 @@ wss.on('connection', async (ws, req) => {
     // Survives reload/extra tabs, unlike the per-socket id — used where a
     // limit or a vote must not be resettable by reconnecting.
     ip: rawClientIp(req),
+    // Sent in the auth frame by the client; the handle a moderation block uses
+    // for a guest who has no account. Null for older clients.
+    deviceKey: deviceKey || null,
   };
   room.users.set(id, user);
   room.lastActivity = Date.now();
@@ -6216,6 +6247,379 @@ app.get('/api/admin/rooms', (req, res) => {
   }));
   list.sort((a, b) => b.users - a.users || b.lastActivity - a.lastActivity || b.strokes - a.strokes);
   res.json({ rooms: list, openReports: reports.filter((r) => r.status === 'open').length });
+});
+
+// ---------------------------------------------------------------------------
+// Moderation console ("Room Radar") — the data layer for the admin pages.
+// ---------------------------------------------------------------------------
+// Why one payload instead of a request per room: at 300+ rooms a moderator must
+// sort/filter the whole estate (activity, recency, reports, chat concerns)
+// without N round-trips, so /api/admin/radar returns every room's row in one
+// admin-guarded response and the console sorts client-side. Per-room chat
+// digests come from the durable audit logs via chatTail(), which is cached by
+// size+mtime, so a poll costs one stat per room rather than a read.
+//
+// This block is read-only except the two explicit POSTs (block/unblock, gallery
+// remove), which are the only writes a moderator can make from here. Nothing
+// auto-acts: the digest labels a room "worth a look", it never hides or bans.
+
+const RADAR_ROOM_CAP = 1200; // sanity bound; a real estate is far smaller
+
+// Per-room moderation row. `digest` costs a stat (cached) per room per poll.
+function radarRoom(id, room) {
+  const now = Date.now();
+  return {
+    id,
+    title: room.title || null,
+    audience: room.audience || null,
+    listed: room.listed !== false,
+    users: room.users.size,
+    strokes: room.history.length,
+    chats: Array.isArray(room.chat) ? room.chat.length : 0,
+    lastActivity: room.lastActivity || 0,
+    createdAt: room.createdAt || 0,
+    thumbAt: Math.round(thumbBakedAt(room)) || 0,
+    hiddenOps: room.hiddenOpIds ? room.hiddenOpIds.size : 0,
+    modActions: Array.isArray(room.modLog) ? room.modLog.length : 0,
+    flagged: Array.isArray(room.flags) ? room.flags.length : 0,
+    host: room.hostId ? true : false,
+    animation: !!room.animationEnabled,
+    expiresInMs: room.users.size > 0 || FEATURED_CODES.has(id)
+      ? null
+      : Math.max(0, allowedIdleMs(room) - (now - (room.lastActivity || now))),
+    featured: FEATURED_CODES.has(id),
+    reports: summarizeReports(reports, id),
+    chat: digestChat(chatTail(chatLogFile(id))),
+  };
+}
+
+app.get('/api/admin/radar', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const rows = [];
+  rooms.forEach((room, id) => {
+    if (rows.length >= RADAR_ROOM_CAP) return;
+    rows.push(radarRoom(id, room));
+  });
+  const openReports = reports.filter((r) => r.status === 'open');
+  res.json({
+    rooms: rows,
+    totals: {
+      rooms: rows.length,
+      occupied: rows.filter((r) => r.users > 0).length,
+      withPeople: rows.filter((r) => r.users > 0).length,
+      withOpenReports: rows.filter((r) => r.reports.open > 0).length,
+      urgentReports: rows.filter((r) => r.reports.urgent > 0).length,
+      needsReview: rows.filter((r) => r.chat.needsReview || r.reports.open > 0).length,
+      openReports: openReports.length,
+    },
+    blocked: [...blockedKeys.keys()],
+    ts: Date.now(),
+  });
+});
+
+// One room's chat, summarised for a moderator: the digest plus the actual
+// flagged lines. `llm` stays null unless MOD_SYNOPSIS_URL is configured — see
+// chatSynopsis() for why the deterministic layer ships first.
+app.get('/api/admin/rooms/:id/chat/summary', async (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.id).toUpperCase().replace(/[^A-Z0-9_-]/gi, '').slice(0, 32);
+  const digest = digestChat(chatTail(chatLogFile(id)));
+  const live = rooms.get(id);
+  const llm = await chatSynopsis(id, digest);
+  res.json({
+    room: id,
+    title: (live && live.title) || null,
+    users: live ? live.users.size : 0,
+    digest,
+    llm,
+    summary: deterministicSummary(digest),
+  });
+});
+
+// A one-line, human-readable verdict for the room, built from the digest alone.
+// Kept next to the digest so the console and any future alerting agree.
+function deterministicSummary(digest) {
+  if (!digest || !digest.lines) return 'No chat recorded yet.';
+  const bits = [`${digest.lines} messages`];
+  if (digest.blocked) bits.push(`${digest.blocked} blocked by the filter (${digest.severe} severe)`);
+  if (digest.contact) bits.push(`${digest.contact} contact-sharing`);
+  if (digest.concern) bits.push(`${digest.concern} concern phrases`);
+  if (digest.doodles) bits.push(`${digest.doodles} doodle messages`);
+  if (digest.terms.length) bits.push(`top terms: ${digest.terms.map((t) => `${t.term}×${t.count}`).join(', ')}`);
+  if (!digest.blocked && !digest.contact && !digest.concern) bits.push('nothing flagged');
+  return bits.join(' · ');
+}
+
+// OPTIONAL LLM synopsis. Off unless the operator configures a URL, because the
+// deterministic digest already answers "which rooms need me" for free, and a
+// model call per room would put a paid dependency (and a copy of kids' chat) in
+// the moderation path. Set MOD_SYNOPSIS_URL (and MOD_SYNOPSIS_KEY if the
+// endpoint needs a bearer token) to read prose over the digest instead.
+async function chatSynopsis(roomId, digest) {
+  const url = process.env.MOD_SYNOPSIS_URL;
+  if (!url || !digest.lines) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const resp = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.MOD_SYNOPSIS_KEY ? { Authorization: `Bearer ${process.env.MOD_SYNOPSIS_KEY}` } : {}),
+      },
+      // Only the flag data and the already-clipped flagged lines leave the
+      // building — never the whole room log.
+      body: JSON.stringify({
+        room: roomId,
+        messages: digest.lines,
+        blocked: digest.blocked,
+        severe: digest.severe,
+        contact: digest.contact,
+        concern: digest.concern,
+        terms: digest.terms,
+        flagged: digest.flagged,
+      }),
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return { error: `upstream ${resp.status}` };
+    const data = await resp.json().catch(() => null);
+    const text = typeof data?.summary === 'string' ? data.summary : (typeof data?.text === 'string' ? data.text : null);
+    return text ? { summary: text.slice(0, 1200), model: data.model || null } : { error: 'no summary field' };
+  } catch (err) {
+    return { error: String(err && err.message ? err.message : err).slice(0, 120) };
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Global block list — one defacer, every room.
+// ---------------------------------------------------------------------------
+// A host kick (room.kickedProfiles) is per-room and in-memory: it stops someone
+// in THAT room for 15 minutes. A person touring every room to draw penises
+// needs the opposite: one decision that travels everywhere and survives a
+// restart. Keyed the same way analytics keys users, so the console and the
+// enforcement path can never disagree about who someone is:
+//   pb:<profileId>  signed-in account (reliable)
+//   <deviceKey>     anonymous device key, when the client sends one in auth
+//   ip:<address>    last resort — coarse, can catch a shared school NAT
+const BLOCKED_FILE = join(DATA_DIR, '.blocked.json');
+const blockedKeys = new Map();
+try {
+  const parsed = JSON.parse(readFileSync(BLOCKED_FILE, 'utf8'));
+  for (const entry of Array.isArray(parsed) ? parsed : []) {
+    if (entry && entry.key) blockedKeys.set(String(entry.key), { ts: entry.ts || Date.now(), reason: entry.reason || null, by: entry.by || null });
+  }
+} catch { /* no block list yet */ }
+function persistBlocked() {
+  try {
+    writeFileSync(BLOCKED_FILE, JSON.stringify([...blockedKeys.entries()].map(([key, meta]) => ({ key, ...meta }))));
+  } catch { /* best effort, same as reports */ }
+}
+// Any of a connection's identities being blocked is enough.
+function blockFor(keys) {
+  for (const key of keys) {
+    if (!key) continue;
+    const hit = blockedKeys.get(key);
+    if (hit) return { key, ...hit };
+  }
+  return null;
+}
+
+// Cross-room activity: the "who is touring the site" view. Every number comes
+// from analytics (rooms visited, clears, strokes, sessions), and the risk band
+// comes from console.js so the console can't invent its own thresholds.
+app.get('/api/admin/users-index', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+  const query = String(req.query.q || '').trim().toLowerCase().slice(0, 40);
+  const byUser = new Map();
+  for (const s of analytics.sessions) {
+    if (!s || !s.userKey) continue;
+    if (!byUser.has(s.userKey)) byUser.set(s.userKey, []);
+    byUser.get(s.userKey).push(s);
+  }
+  const rows = [];
+  for (const [userKey, user] of Object.entries(analytics.users)) {
+    const sessions = byUser.get(userKey) || [];
+    const blocked = blockedKeys.has(userKey);
+    const risk = userRisk({ ...user, blocked }, sessions);
+    const label = user.signedIn && user.profileId
+      ? `Account ${String(user.profileId).slice(0, 8)}`
+      : (user.displayName || (userKey.startsWith('dev:') ? `Device ${userKey.slice(4, 12)}` : 'Anonymous guest'));
+    const keyKind = userKey.startsWith('pb:') ? 'account' : (userKey.startsWith('dev:') ? 'device' : 'session');
+    rows.push({
+      userKey,
+      keyKind,
+      label,
+      signedIn: !!user.signedIn,
+      blocked,
+      blockReason: blocked ? (blockedKeys.get(userKey) || {}).reason || null : null,
+      risk: risk.score,
+      band: riskBand(risk.score),
+      reasons: risk.reasons,
+      distinctRooms: risk.distinctRooms,
+      rooms: Object.entries(user.rooms || {}).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([room, visits]) => ({ room, visits })),
+      roomsRecent: risk.roomsRecent,
+      sessions: Number(user.sessions) || 0,
+      activeSessions: Number(user.activeSessions) || 0,
+      totalDurationSec: Number(user.totalDurationSec) || 0,
+      strokes: Number(user.strokes) || 0,
+      drawOps: Number(user.drawOps) || 0,
+      clears: Number(user.clears) || 0,
+      chats: Number(user.chats) || 0,
+      gallerySaves: Number(user.gallerySaves) || 0,
+      lastRoom: user.lastRoom || null,
+      firstSeen: user.firstSeen || 0,
+      lastSeen: user.lastSeen || 0,
+      recentSessions: sessions
+        .slice()
+        .sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0))
+        .slice(0, 12)
+        .map((s) => ({ room: s.room, joinedAt: s.joinedAt || 0, durationSec: s.durationSec || 0, active: !!s.active, strokes: s.strokes || 0, chats: s.chats || 0 })),
+    });
+  }
+  const filtered = query
+    ? rows.filter((r) => `${r.label} ${r.userKey} ${r.lastRoom || ''}`.toLowerCase().includes(query))
+    : rows;
+  filtered.sort((a, b) => b.risk - a.risk || b.lastSeen - a.lastSeen);
+  res.json({
+    users: filtered.slice(0, limit),
+    totals: {
+      users: rows.length,
+      blocked: rows.filter((r) => r.blocked).length,
+      high: rows.filter((r) => r.band === 'high').length,
+      watch: rows.filter((r) => r.band === 'watch').length,
+      shown: Math.min(limit, filtered.length),
+    },
+    ts: Date.now(),
+  });
+});
+
+app.post('/api/admin/users/:key/block', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const key = sanitizeBlockKey(req.params.key);
+  if (!key) return res.status(400).json({ error: 'bad key' });
+  const reason = String((req.body && req.body.reason) || '').slice(0, 200) || null;
+  blockedKeys.set(key, { ts: Date.now(), reason, by: adminLabel(req) });
+  persistBlocked();
+  // Close any live sockets this block applies to, so the block is effective now
+  // and not only on the next join. An anonymous socket matches on its device
+  // key (when it sent one) or its IP.
+  let closed = 0;
+  for (const room of rooms.values()) {
+    for (const u of room.users.values()) {
+      const keys = userBlockKeys(u);
+      if (!keys.includes(key)) continue;
+      try {
+        if (u.ws.readyState === 1) {
+          u.ws.send(JSON.stringify({ type: 'blocked' }));
+          u.ws.close(1008, 'blocked');
+        }
+        closed += 1;
+      } catch { /* already gone */ }
+    }
+  }
+  res.json({ ok: true, key, closed });
+});
+
+app.post('/api/admin/users/:key/unblock', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const key = sanitizeBlockKey(req.params.key);
+  const existed = blockedKeys.delete(key);
+  if (existed) persistBlocked();
+  res.json({ ok: true, key, existed });
+});
+
+// Every identity key a connection can be matched by. Signed-in users match
+// their account; anonymous ones match their device key (if the client sent one)
+// and their IP — which is why the console shows which key a block landed on.
+function userBlockKeys(user) {
+  const keys = [];
+  if (user && user.profileId) keys.push(`pb:${sanitizeKey(user.profileId)}`);
+  if (user && user.deviceKey) keys.push(`dev:${sanitizeKey(user.deviceKey)}`);
+  if (user && user.ip) keys.push(`ip:${String(user.ip).replace(/[^a-zA-Z0-9:._-]/g, '')}`);
+  return keys.filter(Boolean);
+}
+
+// Block keys are prefixed (pb:/dev:/ip:), so the generic sanitizeKey — which
+// strips ':' — would silently rewrite `dev:abc` into `devabc` and the block
+// would match nothing. Keys are therefore normalised with their prefix intact.
+function sanitizeBlockKey(raw) {
+  const str = String(raw || '');
+  const prefix = /^(pb|dev|ip):/.exec(str);
+  const body = str.replace(/^(pb|dev|ip):/, '').replace(/[^a-zA-Z0-9:._-]/g, '').slice(0, 96);
+  return prefix ? `${prefix[1]}:${body}` : body;
+}
+
+function adminLabel(req) {
+  // Who pressed the button: the admin key's own label if the operator set one,
+  // else a stable short fingerprint of the key so actions are attributable.
+  return `admin:${createHash('sha256').update(String(req.get('x-admin-key') || '')).digest('hex').slice(0, 6)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Gallery inspection (including anonymous saves).
+// ---------------------------------------------------------------------------
+// Saves live on disk per owner key (see userArtFile): `pb_<profileId>.json` for
+// accounts, `<deviceKey>.json` for anonymous devices. The analytics feed only
+// records that a save happened; a moderator needs to SEE the picture, so this
+// walks the artwork directory and serves thumbs, with the anonymous owners
+// clearly marked.
+app.get('/api/admin/gallery', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  let files = [];
+  try { files = readdirSync(ARTWORK_DIR).filter((f) => f.endsWith('.json')); } catch { files = []; }
+  const owners = [];
+  for (const file of files) {
+    const key = file.slice(0, -5);
+    const items = loadUserArt(key);
+    if (!items.length) continue;
+    owners.push({
+      ownerKey: key,
+      signedIn: key.startsWith('pb_'),
+      account: key.startsWith('pb_') ? key.slice(3, 11) : null,
+      count: items.length,
+      newest: items.reduce((max, a) => Math.max(max, Number(a.createdAt) || 0), 0),
+      oldest: items.reduce((min, a) => Math.min(min || Infinity, Number(a.createdAt) || Infinity), Infinity) || 0,
+      items: items.slice(0, 12).map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt, hasThumb: !!a.thumb })),
+      itemsShown: Math.min(12, items.length),
+    });
+  }
+  owners.sort((a, b) => b.newest - a.newest);
+  res.json({
+    owners,
+    totals: {
+      owners: owners.length,
+      anonymousOwners: owners.filter((o) => !o.signedIn).length,
+      accountOwners: owners.filter((o) => o.signedIn).length,
+      artworks: owners.reduce((sum, o) => sum + o.count, 0),
+    },
+    // The analytics feed's own view of saves, so the console can show the
+    // account/anonymous split over time next to the actual files.
+    recent: (analytics.gallerySaves || []).slice(0, 60),
+    caps: { savesShownPerOwner: 12 },
+    ts: Date.now(),
+  });
+});
+
+// One owner's full gallery, with images, for review.
+app.get('/api/admin/gallery/:owner', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const key = sanitizeKey(req.params.owner);
+  const items = loadUserArt(key).map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt, thumb: a.thumb || null, image: a.image || null }));
+  res.json({ ownerKey: key, signedIn: key.startsWith('pb_'), items });
+});
+
+app.post('/api/admin/gallery/:owner/:id/remove', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const key = sanitizeKey(req.params.owner);
+  const id = String(req.params.id).slice(0, 64);
+  const items = loadUserArt(key);
+  const next = items.filter((a) => a.id !== id);
+  if (next.length === items.length) return res.status(404).json({ error: 'not found' });
+  saveUserArt(key, next);
+  res.json({ ok: true, ownerKey: key, removed: id, remaining: next.length });
 });
 
 // A room's current thumbnail (see sweepRoomThumbs). 404 until one is baked.
