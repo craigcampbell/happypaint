@@ -108,7 +108,7 @@ Replaced the "Demo Drops" / "premiumPreview" placeholders with a real model.
 ## Reliability & Infra hardening (this session)  🟩
 - 🟩 **Mobile input → react-native-gesture-handler (v2.31.2).** Replaced PanResponder with `Gesture.Pan()` (UI-thread point fidelity) + `Gesture.Tap()` for fill/text; `maxPointers(1)` palm/multitouch rejection; root wrapped in `GestureHandlerRootView`. *(Future: UI-thread worklet rendering needs react-native-reanimated.)*
 - 🟩 **Web gallery + Paint Space → IndexedDB.** Migrated off localStorage (same quota/silent-drop data-loss class as W3) via shared `idb.js` (DB v2 `kv` store); one-time legacy migration; honest failure status; localStorage fallback in private mode.
-- 🟩 **DigitalOcean deploy config.** `.do/app.yaml` (App Platform static site, `catchall_document: index.html`), `deploy/nginx.conf` (Droplet SPA fallback + asset caching + security headers), `DEPLOY.md`. Fixes SPA refresh-404 for `/studio`, `/join/:code`, `/admin`.
+- 🟩 **DigitalOcean deploy target.** Production stack (app+pocketbase+cloudflared) on a DO Droplet, driven from this machine via the DigitalOcean MCP server (`hermes mcp add digitalocean`); routine releases over SSH via `scripts/deploy-remote.sh` (build→swap→verify, neighbour-proof). Old static-era `.do/app.yaml` + `deploy/nginx.conf` removed. See DEPLOY.md.
 - 🟥 *Remaining storage note:* only `studio-pass:v1` (a tiny boolean flag) still uses localStorage — not a quota risk.
 
 ---

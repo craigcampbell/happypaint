@@ -87,4 +87,4 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
 ## Docs index
 `ARCHITECTURE.md` (system) · `AGENTS.md` (this) · `ROADMAP.md` (vision/status) ·
 `POCKETBASE_SETUP.md` (accounts + tunnel) · `MOVING.md` (portability) ·
-`RUNNING.md` (operate) · `DEPLOY.md` (legacy/DO notes).
+`RUNNING.md` (operate) · `DEPLOY.md` (DigitalOcean droplet via the DO MCP).

@@ -63,3 +63,4 @@ captures/
 loop-scratch/
 output/
 .audio/
+.deploy.json
