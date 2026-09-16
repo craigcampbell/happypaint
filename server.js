@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameS
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { gzip } from 'zlib';
-import { verifyAccessToken } from './server/pocketbaseAuth.js';
+import { verifyAccessToken, pocketbaseConfigured } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
@@ -83,6 +83,13 @@ const MAX_SPECTATORS = Number(process.env.MAX_SPECTATORS || 40); // read-only ho
 const MAX_MOD_WATCHERS = Number(process.env.MAX_MOD_WATCHERS || 4);
 const MOD_WATCH_AUTH_MS = 5_000;
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
+// Are accounts usable on this deployment? Private rooms are account-only (see
+// the WS join gate), but that rule must NOT apply where nobody can sign in: the
+// app has to keep working fully with the cloud unset, which is the repo's golden
+// rule. The test is the SERVER's own view of PocketBase (PB_URL), not the
+// browser's VITE_PB_URL — if the server can't verify a token, requiring an
+// account would lock a room nobody could open.
+const ACCOUNTS_CONFIGURED = pocketbaseConfigured();
 const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
 const WATCH_INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS || 8000); // min ms between watcher samples
 const WATCH_MAX_DIM = Number(process.env.WATCH_MAX_DIM || 256); // longest snapshot edge the watcher downscales to
@@ -3708,6 +3715,20 @@ wss.on('connection', async (ws, req) => {
   if (blockHit) {
     ws.send(JSON.stringify({ type: 'blocked', reason: blockHit.reason || null }));
     ws.close(1008, 'blocked');
+    return;
+  }
+
+  // Private (invite-only) rooms require a registered account when this deploy
+  // has accounts configured. The door is the only enforceable point: the studio
+  // mints a private room by generating a code client-side and navigating to
+  // /join/<CODE> (App.jsx createPrivateRoom), so there is no creation call to
+  // gate. Requiring an account to ENTER also gives moderation a durable handle
+  // (profileId) on an invite-only room, which a guest code cannot.
+  // Where accounts are not configured there is nothing to sign in to, so the
+  // rule is skipped and private rooms keep working anonymously.
+  if (room.audience === 'friends' && !identity && ACCOUNTS_CONFIGURED) {
+    ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience }));
+    ws.close(1008, 'signin required');
     return;
   }
 
@@ -7380,8 +7401,16 @@ app.post('/api/rooms', async (req, res) => {
   }
   const token = bearerToken(req);
   const identity = token ? await verifyAccessToken(token) : null;
-  // A public room needs a grown-up owner who can moderate it.
-  if (audience === 'kid_safe' && !identity) {
+  // A public room needs a grown-up owner who can moderate it — but only where
+  // accounts exist at all (see ACCOUNTS_CONFIGURED): a self-hosted instance with
+  // no PocketBase must still let someone make a public room anonymously, or the
+  // golden rule is broken and the 401 is unanswerable.
+  if (audience === 'kid_safe' && !identity && ACCOUNTS_CONFIGURED) {
+    return res.status(401).json({ error: 'signin_required' });
+  }
+  // Same rule as the join gate, enforced at the API for clients that create
+  // private rooms through it rather than by minting a code client-side.
+  if (audience === 'friends' && !identity && ACCOUNTS_CONFIGURED) {
     return res.status(401).json({ error: 'signin_required' });
   }
   const rlKey = (identity && identity.profileId) || req.ip || 'anon';

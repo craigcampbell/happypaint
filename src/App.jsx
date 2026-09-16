@@ -1065,6 +1065,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [showHostPanel, setShowHostPanel] = useState(false);
   const [kicked, setKicked] = useState(false);
   const [blockedByMod, setBlockedByMod] = useState(false); // moderation console blocked this person everywhere
+  const [signinGate, setSigninGate] = useState(null); // server says this room needs a real account
   const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
   const [roomBlocked, setRoomBlocked] = useState(false); // server refused this room
   // Join curtain: how far this room has got hooking up, as milestones rather
@@ -7474,6 +7475,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           mpRef.current?.disconnect?.();
           setBlockedByMod(true);
           break;
+        case "signin_required":
+          // Invite-only rooms are account-only (the door is the only enforceable
+          // point — the studio mints a private room client-side). Tear the socket
+          // down like a kick so we don't hammer the server, then explain WHY and
+          // give the kid a way forward: sign up, or go draw in a public room.
+          mpRef.current?.disconnect?.();
+          setSigninGate({ reason: data.reason || null, audience: data.audience || null });
+          break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
           // state — local drafts never auto-restore over it. `frames` rides
@@ -8451,8 +8460,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // A room that refused us has its own full-screen explanation — never leave a
   // loading bar painting hopefully on top of it.
   useEffect(() => {
-    if (kicked || blockedByMod || roomFull || roomBlocked) setJoinCurtain(false);
-  }, [kicked, blockedByMod, roomFull, roomBlocked]);
+    if (kicked || blockedByMod || signinGate || roomFull || roomBlocked) setJoinCurtain(false);
+  }, [kicked, blockedByMod, signinGate, roomFull, roomBlocked]);
 
   // Chat with locally-hidden painters filtered out (see toggleHiddenPainter).
   const visibleChat = useMemo(
@@ -11759,6 +11768,37 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <div className="account-actions">
               <button type="button" className="primary-action" onClick={() => { window.location.href = "/"; }}>
                 Back to home
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {signinGate ? (
+        // A private room needed a real account. Never a dead end: the three exits
+        // are sign up, log in, or keep drawing in a public room — and under-13s
+        // get the grown-up route rather than a wall, because a kid that young
+        // can't create an account themselves.
+        <div className="modal-backdrop" role="presentation">
+          <section className="studio-modal" role="dialog" aria-modal="true">
+            <h2>Private rooms need a free account</h2>
+            <p className="account-note">
+              Invite-only rooms are for a crew you know, so we ask for an account before you
+              go in — that way a room always has someone we can reach if something goes wrong.
+              You never need an account to draw in the public rooms.
+            </p>
+            <p className="account-note">
+              Under 13? Ask a grown-up to set up the room with you.
+            </p>
+            <div className="account-actions">
+              <button type="button" className="primary-action" onClick={() => { window.location.href = "/signup"; }}>
+                Sign up free
+              </button>
+              <button type="button" onClick={() => { window.location.href = "/signup"; }}>
+                I already have an account
+              </button>
+              <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
+                Keep drawing in the open studio
               </button>
             </div>
           </section>

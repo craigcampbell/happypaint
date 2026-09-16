@@ -20,7 +20,14 @@ try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY },
+  // Accounts deliberately UNCONFIGURED for this suite. server.js loads the
+  // repo-root .env, which sets PB_URL, and with accounts configured a guest is
+  // refused entry to a private ('friends') room — that is the intended product
+  // rule, but it would stop this suite's plain `kid` client from entering
+  // PRIVSPEC to set up its spectator-lockdown case. This suite is about
+  // moderation, not auth, so it pins the auth-independent deployment shape; the
+  // account gate itself is covered by scripts/private-room-auth-verify.mjs.
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY, PB_URL: "", POCKETBASE_URL: "" },
   stdio: "pipe",
 });
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
