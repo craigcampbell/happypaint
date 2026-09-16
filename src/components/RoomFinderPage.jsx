@@ -56,6 +56,25 @@ export default function RoomFinderPage({ onNavigate }) {
               onClick={() => onNavigate(`/join/${room.code}`)}
             >
               <span className="open-room-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
+              <span
+                className="open-room-code"
+                style={{
+                  display: "inline-block",
+                  padding: "3px 10px",
+                  border: "2px solid #2d6cdf",
+                  borderRadius: "10px",
+                  background: "#eef4ff",
+                  color: "#2d6cdf",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  fontWeight: 900,
+                  fontSize: "1.15rem",
+                  letterSpacing: "0.08em",
+                  lineHeight: 1.3,
+                  alignSelf: "flex-start",
+                }}
+              >
+                {room.code}
+              </span>
               <span className="open-room-title">{room.title || `Room ${room.code}`}</span>
               {room.prompt ? <span className="open-room-prompt">“{room.prompt}”</span> : null}
               <span className="open-room-meta">
