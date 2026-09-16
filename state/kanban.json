@@ -229,39 +229,7 @@
     ]
    }
   ],
-  "in_progress": [
-   {
-    "card_id": "CARD-015",
-    "title": "PHASE 1 of CARD-012: public watch page at /live/<CODE> (shareable, read-only, no admin key)",
-    "description": "A shareable, addressable public watch URL \u2014 the thing a kid can send a friend ('come watch me at /live/MAIN'). It reuses the ALREADY-SHIPPED read-only spectator socket verbatim (server.js:3419-3471, /ws?room=CODE&spectate=1 \u2014 the same socket the homepage preview and Storyboard previews ride): no new WS message types, no admin key, no chat input, no draw tools. Behind it the server already enforces the owner's entire moderation stance: kid_safe + listed rooms only (private/friends rooms refused with room_blocked/not_watchable), MAX_SPECTATORS=40 per room, every inbound frame from a spectator ignored, headcount-only roster (never names). New work is thin and additive: PublicWatch.jsx renders the live canvas + a read-only banter strip (same allowlist the homepage already shows) + an honest empty state when nobody is drawing + a 'Join and draw \u2192' CTA to /join/<CODE>, plus a client-only random animal alias ('watching as \ud83e\udd8a Quiet Fox 42') so no sign-in or real name is ever requested. The admin glass room at /watch/<CODE> is NOT touched: it stays key-gated exactly as it is, which is what keeps the hide/restore moderation path intact. Droppable sub-parts if the slice over-runs: the /rooms 'Watch live' affordance and the one-line cold-start room materialization.",
-    "impact": 9,
-    "surprise": 7,
-    "effort": 2,
-    "score": 31.5,
-    "gate": "PASS: additive route + thin component over an existing, already-safety-reviewed socket; reversible (delete the route + component and /watch is untouched); no auth/secrets/payments/migrations/CI; screenshot-verifiable; effort 2",
-    "source": "cycle-5 slice of CARD-012 (owner-unblocked 2026-09-16)",
-    "phase_of": "CARD-012",
-    "phase": 1,
-    "selected_at": "2026-09-16",
-    "cycle": 5,
-    "status": "selected_for_cycle_5",
-    "files": [
-     "src/components/PublicWatch.jsx (new \u2014 lazy-loaded, wraps LiveRoomCanvas spectator mode)",
-     "src/Router.jsx (/live/<CODE> branch -> PublicWatch)",
-     "src/components/RoomFinderPage.jsx ('Watch live' link only on cards that already show people present)",
-     "server.js (one line: materialize FEATURED rooms in the spectate branch so /live/MAIN works on a cold server, mirroring what /api/rooms/public already does)"
-    ],
-    "acceptance": [
-     "Two-client proof: with a peer drawing in MAIN, /live/MAIN shows that peer's strokes live (screenshot at 375px and at 820px)",
-     "Read-only by construction: the page renders no chat input, no draw tools, no admin key field, and a spectator's outbound frame is ignored by the server (socket assertion)",
-     "Private/unlisted room: /live/<friends-code> shows the honest 'not watchable' state and never the canvas",
-     "Nobody drawing: an honest empty state with a path to start it, not a blank canvas",
-     "Watcher identity is a client-only animal alias: no sign-in, nothing persisted, no real names requested",
-     "/watch/<CODE> is unchanged: still demands the admin key and still refuses without it (hide/restore path intact)",
-     "No horizontal overflow at 375px (scrollWidth == innerWidth); npm run lint + npm run build clean; node --check server.js"
-    ]
-   }
-  ],
+  "in_progress": [],
   "done": [
    {
     "card_id": "CARD-001",
@@ -336,6 +304,39 @@
      "lint + build clean (verified)"
     ],
     "verification_note": "Verified by the orchestrator itself (sub-agents rate-limited on glm-5.3, HTTP 429). Same agent wrote and checked the code -> weaker than the S4/S5/S6 split; flag for a second pass when sub-agents recover."
+   },
+   {
+    "card_id": "CARD-015",
+    "title": "PHASE 1 of CARD-012: public watch page at /live/<CODE> (shareable, read-only, no admin key)",
+    "description": "A shareable, addressable public watch URL \u2014 the thing a kid can send a friend ('come watch me at /live/MAIN'). It reuses the ALREADY-SHIPPED read-only spectator socket verbatim (server.js:3419-3471, /ws?room=CODE&spectate=1 \u2014 the same socket the homepage preview and Storyboard previews ride): no new WS message types, no admin key, no chat input, no draw tools. Behind it the server already enforces the owner's entire moderation stance: kid_safe + listed rooms only (private/friends rooms refused with room_blocked/not_watchable), MAX_SPECTATORS=40 per room, every inbound frame from a spectator ignored, headcount-only roster (never names). New work is thin and additive: PublicWatch.jsx renders the live canvas + a read-only banter strip (same allowlist the homepage already shows) + an honest empty state when nobody is drawing + a 'Join and draw \u2192' CTA to /join/<CODE>, plus a client-only random animal alias ('watching as \ud83e\udd8a Quiet Fox 42') so no sign-in or real name is ever requested. The admin glass room at /watch/<CODE> is NOT touched: it stays key-gated exactly as it is, which is what keeps the hide/restore moderation path intact. Droppable sub-parts if the slice over-runs: the /rooms 'Watch live' affordance and the one-line cold-start room materialization.",
+    "impact": 9,
+    "surprise": 7,
+    "effort": 2,
+    "score": 31.5,
+    "gate": "PASS: additive route + thin component over an existing, already-safety-reviewed socket; reversible (delete the route + component and /watch is untouched); no auth/secrets/payments/migrations/CI; screenshot-verifiable; effort 2",
+    "source": "cycle-5 slice of CARD-012 (owner-unblocked 2026-09-16)",
+    "phase_of": "CARD-012",
+    "phase": 1,
+    "selected_at": "2026-09-16",
+    "cycle": 5,
+    "status": "done",
+    "files": [
+     "src/components/PublicWatch.jsx (new \u2014 lazy-loaded, wraps LiveRoomCanvas spectator mode)",
+     "src/Router.jsx (/live/<CODE> branch -> PublicWatch)",
+     "src/components/RoomFinderPage.jsx ('Watch live' link only on cards that already show people present)",
+     "server.js (one line: materialize FEATURED rooms in the spectate branch so /live/MAIN works on a cold server, mirroring what /api/rooms/public already does)"
+    ],
+    "acceptance": [
+     "Two-client proof: with a peer drawing in MAIN, /live/MAIN shows that peer's strokes live (screenshot at 375px and at 820px)",
+     "Read-only by construction: the page renders no chat input, no draw tools, no admin key field, and a spectator's outbound frame is ignored by the server (socket assertion)",
+     "Private/unlisted room: /live/<friends-code> shows the honest 'not watchable' state and never the canvas",
+     "Nobody drawing: an honest empty state with a path to start it, not a blank canvas",
+     "Watcher identity is a client-only animal alias: no sign-in, nothing persisted, no real names requested",
+     "/watch/<CODE> is unchanged: still demands the admin key and still refuses without it (hide/restore path intact)",
+     "No horizontal overflow at 375px (scrollWidth == innerWidth); npm run lint + npm run build clean; node --check server.js"
+    ],
+    "completed_cycle": 5,
+    "outcome": "shipped as PublicWatch.jsx + /live route; /rooms pill reverted after S6 reject -> CARD-019; verified accept on second round"
    }
   ],
   "rejected": []
