@@ -1,10 +1,10 @@
 {
- "cycle": 2,
+ "cycle": 3,
  "phase": "capture",
  "budget": {
   "max_cycles": 3,
   "max_patches_per_day": 5,
-  "patches_today": 1
+  "patches_today": 2
  },
  "config_resolved_from_placeholders": {
   "port_spec": "spec said localhost:3000; this app's dev port is 5173 (vite)",
