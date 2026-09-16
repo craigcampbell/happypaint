@@ -6,12 +6,12 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
 ## Family subscriptions
 
 1. In Stripe, create one recurring product named **Drawesome Family** with:
-   - monthly price: **$4.99 USD**
-   - yearly price: **$39 USD**
+   - monthly price: **$1.99 USD**
+   - yearly price: **$15 USD**
 2. Copy the `prod_...` id to `STRIPE_PRODUCT_FAMILY` and the two `price_...`
    ids to `STRIPE_PRICE_FAMILY_MONTHLY` and
    `STRIPE_PRICE_FAMILY_YEARLY`. The server verifies that both prices are
-   active, USD, exactly 499/3900 cents, monthly/yearly, and belong to that
+   active, USD, exactly 199/1500 cents, monthly/yearly, and belong to that
    product before checkout is enabled.
 3. Put a restricted production secret in `STRIPE_SECRET_KEY`. It needs only the
    permissions used here: read Prices; read/write Customers, Checkout Sessions,
@@ -87,6 +87,10 @@ Set their full unit paths in `VITE_GAM_AD_UNIT_CHAT` and
 child-directed, under-age-of-consent, non-personalized, and restricted-data-
 processing. Empty unit paths mean the GPT script is never requested.
 
+Also set `GAM_ADS_TXT_PUBLISHER_ID` (the numeric Ad Manager network id) so the
+server serves `google.com, <id>, DIRECT, f08c47fec0942fa0` at `/ads.txt`.
+Unset, `/ads.txt` returns 404 and no inventory is claimed on the domain.
+
 Interstitials are prefetched but can display only at natural breaks after at
 least ten minutes: a save, PNG export, or completed Draw & Guess round. The app
 also caps them at three per hour; Google applies its own fill and frequency
@@ -105,3 +109,6 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
   past-due grace boundary, cancellation at period end, and webhook retries.
 - With Google test inventory: open chat and confirm the sponsor slot; shorten
   `VITE_AD_BREAK_MINUTES` only in a local build to exercise natural breaks.
+- `node scripts/price-ads-verify.mjs` — isolated boot that asserts the served
+  Family prices, the `/ads.txt` 404-when-unset / GAM-line-when-set gate, and
+  that no stale price leaks into the `/family` HTML.

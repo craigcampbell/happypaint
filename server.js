@@ -8138,7 +8138,7 @@ const PAGE_META = {
     description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
   },
   '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
-  '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $4.99 monthly or $39 yearly.' },
+  '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly.' },
   '/faq': {
     title: 'Safety & FAQ — Drawesome',
     description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',
@@ -8245,6 +8245,15 @@ app.get('/robots.txt', (_req, res) => {
   res.type('text/plain').send(
     `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /join/\nDisallow: /watch/\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,
   );
+});
+
+// ads.txt: authorized digital seller for Google Ad Manager. Env-driven so the
+// anonymous-first rule holds — unset GAM_ADS_TXT_PUBLISHER_ID means we serve a
+// 404 and no ad inventory is claimed on the domain.
+const GAM_ADS_TXT_PUBLISHER_ID = String(process.env.GAM_ADS_TXT_PUBLISHER_ID || '').trim();
+app.get('/ads.txt', (_req, res) => {
+  if (!GAM_ADS_TXT_PUBLISHER_ID) return res.status(404).type('text/plain').send('Not found');
+  res.type('text/plain').send(`google.com, ${GAM_ADS_TXT_PUBLISHER_ID}, DIRECT, f08c47fec0942fa0\n`);
 });
 
 // Sitemap: the static pages plus the wall's newest posts (each has its own OG

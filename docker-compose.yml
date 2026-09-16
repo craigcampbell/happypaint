@@ -63,6 +63,9 @@ services:
       - STRIPE_PAST_DUE_GRACE_DAYS=${STRIPE_PAST_DUE_GRACE_DAYS:-3}
       - STRIPE_PAST_DUE_GRACE_HOURS=${STRIPE_PAST_DUE_GRACE_HOURS:-}
       - FAMILY_TERMS_VERSION=${FAMILY_TERMS_VERSION:-2026-09-04}
+      # Ad Manager publisher id for /ads.txt (the numeric GAM network id).
+      # Empty = /ads.txt serves 404 and no inventory is claimed.
+      - GAM_ADS_TXT_PUBLISHER_ID=${GAM_ADS_TXT_PUBLISHER_ID:-}
     ports:
       - "127.0.0.1:8787:8787"
     volumes:

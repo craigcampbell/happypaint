@@ -110,7 +110,7 @@ export default function FamilyPage({ onNavigate }) {
 
   const configuredForPlan = Boolean(isCloudConfigured && config?.configured && config?.plans?.[interval]);
   const [priceAmount, priceUnit] = String(
-    config?.display?.[interval] || (interval === "yearly" ? "$39/year" : "$4.99/month"),
+    config?.display?.[interval] || (interval === "yearly" ? "$15/year" : "$1.99/month"),
   ).split("/");
   const yearlySavings = Number(config?.yearlySavingsPercent);
 

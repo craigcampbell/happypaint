@@ -23,9 +23,10 @@ const FAMILY_EVENT_TYPES = new Set([
   'invoice.payment_failed',
 ]);
 const EXPECTED_PRICES = {
-  monthly: { amount: 499, interval: 'month' },
-  yearly: { amount: 3900, interval: 'year' },
+  monthly: { amount: 199, interval: 'month' },
+  yearly: { amount: 1500, interval: 'year' },
 };
+export { EXPECTED_PRICES };
 
 function cleanOrigin(value) {
   try {
@@ -582,8 +583,8 @@ export function createBilling({
       res.json({
         configured,
         plans: { monthly: configured, yearly: configured },
-        display: { monthly: '$4.99/month', yearly: '$39/year' },
-        yearlySavingsPercent: 35,
+        display: { monthly: '$1.99/month', yearly: '$15/year' },
+        yearlySavingsPercent: 37,
         termsVersion,
       });
     });
@@ -650,7 +651,7 @@ export function createBilling({
 
           const idempotencyKey = pending?.priceId === price && pending?.idempotencyKey
             ? pending.idempotencyKey
-            : `drawesome-family-checkout-v1-${randomUUID()}`;
+            : `drawesome-family-checkout-v2-${randomUUID()}`;
           commit((draft) => {
             const previous = draft.records[profileId] || {};
             draft.records[profileId] = {

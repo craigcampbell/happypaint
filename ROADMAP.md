@@ -31,8 +31,8 @@ same backend later.
   studio search modal (search/preview/add); one-sheet-per-room with wipe-on-change;
   "Today's theme" (admin → holiday → daily rotation). Plus admin custom uploads.
 - **Play-money "drops"**: earn by painting, spend on cosmetics; real-money OFF.
-- **Monetization foundation**: adult-owned Drawesome Family ($4.99/month or
-  $39/year) with Stripe-hosted checkout/portal, owner-level ad-free rooms that
+- **Monetization foundation**: adult-owned Drawesome Family ($1.99/month or
+  $15/year) with Stripe-hosted checkout/portal, owner-level ad-free rooms that
   include anonymous invitees, child-treated chat display inventory, and manual
   interstitials triggered only at saves/exports/game-round breaks. All rails are
   env-gated; Family prices are verified against Stripe, webhook state is

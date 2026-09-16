@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBilling } from '../server/billing.js';
+import { createBilling, EXPECTED_PRICES } from '../server/billing.js';
 
 const originalEnv = { ...process.env };
 const dataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-hardening-'));
@@ -72,7 +72,7 @@ function makeStripe({ badCatalog = false, badPortal = false } = {}) {
           id,
           active: true,
           currency: 'usd',
-          unit_amount: badCatalog ? 1 : (monthly ? 499 : 3900),
+          unit_amount: badCatalog ? 1 : (monthly ? 199 : 1500),
           recurring: { interval: monthly ? 'month' : 'year' },
           product: { id: 'prod_family', active: true },
         };
@@ -255,7 +255,7 @@ try {
   assert.deepEqual(lastCheckoutParams.subscription_data.billing_mode, { type: 'flexible' });
   assert.match(lastCheckoutParams.success_url, /\{CHECKOUT_SESSION_ID\}/);
   assert.equal(lastCheckoutParams.allow_promotion_codes, false);
-  assert.match(lastCheckoutOptions.idempotencyKey, /^drawesome-family-checkout-v1-/);
+  assert.match(lastCheckoutOptions.idempotencyKey, /^drawesome-family-checkout-v2-/);
 
   const changedPlan = await postJson(appOrigin, '/api/billing/checkout', 'parent_profile', {
     interval: 'yearly', adultConfirmed: true, termsVersion: 'test-terms-v1',
@@ -418,6 +418,23 @@ try {
   badPortalServer = unsafePortal.httpServer;
   const badPortalConfig = await fetch(`${unsafePortal.origin}/api/billing/config`).then((res) => res.json());
   assert.equal(badPortalConfig.configured, false, 'unsafe portal cancellation settings fail checkout closed');
+
+  // Price-drift guard: the display strings the server serves and the client
+  // fallbacks must both match EXPECTED_PRICES in server/billing.js, and no
+  // stale price literal may survive in the surfaces buyers see.
+  assert.equal(config.display.monthly, `$${EXPECTED_PRICES.monthly.amount / 100}/month`);
+  assert.equal(config.display.yearly, `$${EXPECTED_PRICES.yearly.amount / 100}/year`);
+  assert.ok(config.yearlySavingsPercent >= 25, 'yearly must stay meaningfully cheaper than 12x monthly');
+  const familyPageSrc = await readFile(new URL('../src/components/FamilyPage.jsx', import.meta.url), 'utf8');
+  const serverSrc = await readFile(new URL('../server.js', import.meta.url), 'utf8');
+  for (const key of ['monthly', 'yearly']) {
+    const literal = `$${EXPECTED_PRICES[key].amount / 100}/${key === 'monthly' ? 'month' : 'year'}`;
+    assert.ok(familyPageSrc.includes(literal), `FamilyPage fallback must say ${literal}`);
+  }
+  for (const stale of ['$4.99', '$39/', '$39 ', '499', '3900']) {
+    assert.ok(!familyPageSrc.includes(stale), `stale price ${stale} must not survive in FamilyPage.jsx`);
+    assert.ok(!serverSrc.includes(`$${stale}`), `stale price $${stale} must not survive in server copy`);
+  }
 
   console.log('billing hardening integration: ok');
 } finally {
