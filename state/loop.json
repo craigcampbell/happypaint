@@ -1,0 +1,34 @@
+{
+ "cycle": 1,
+ "phase": "implement",
+ "budget": {
+  "max_cycles": 3,
+  "max_patches_per_day": 5,
+  "patches_today": 0
+ },
+ "config_resolved_from_placeholders": {
+  "port_spec": "spec said localhost:3000; this app's dev port is 5173 (vite)",
+  "N": 3,
+  "M": 5,
+  "iteration_branch": "loop/social-growth",
+  "base_branch": "codex/youth-design-refresh"
+ },
+ "routes": [
+  "/",
+  "/rooms",
+  "/wall",
+  "/join/MAIN",
+  "/join/DINOS",
+  "/watch/MAIN",
+  "/about",
+  "/faq",
+  "/safety",
+  "/parents",
+  "/signup"
+ ],
+ "app": {
+  "base": "http://localhost:8943",
+  "server_pid_note": "spawned via execute_code kernel (terminal background kills node on this host)",
+  "data_dir": "%LOCALAPPDATA%/Temp/loop-data"
+ }
+}

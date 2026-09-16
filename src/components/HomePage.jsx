@@ -280,14 +280,11 @@ export default function HomePage({ onNavigate }) {
     onNavigate(href);
   };
 
-  // Fresh 6-char code from an unambiguous alphabet (no I/O/0/1) — joining a
-  // code that doesn't exist yet is how private rooms get created.
-  const startRoom = () => {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let c = "";
-    for (let i = 0; i < 6; i += 1) c += alphabet[Math.floor(Math.random() * alphabet.length)];
-    join(c);
-  };
+  // The generic "start drawing" entries land in the shared MAIN room (the
+  // commons) so first-time visitors paint together instead of alone. A private
+  // room is still one custom code away: joining any unused code via the form
+  // below is how private rooms get created.
+  const startRoom = () => join("MAIN");
 
   const goByCode = (event) => {
     event.preventDefault();

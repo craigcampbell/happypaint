@@ -7,12 +7,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import BrandMark from "./BrandMark";
 import { getSession, isCloudConfigured, onAuthStateChange, sessionLabel } from "../utils/auth";
-import { createInviteCode } from "../utils/social";
 
 export default function SiteNav({ onNavigate, current }) {
   const [session, setSession] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [freshRoom] = useState(createInviteCode);
   const headerRef = useRef(null);
   const toggleRef = useRef(null);
   const menuId = useId();
@@ -98,7 +96,9 @@ export default function SiteNav({ onNavigate, current }) {
       </nav>
 
       <div className="site-nav-actions">
-        <a href={`/join/${freshRoom}`} className="site-nav-paint primary-action" onClick={(event) => follow(event, `/join/${freshRoom}`)}>
+        {/* The generic "Draw now" entry lands in the shared MAIN room (the
+            commons); a private room is still one custom code away. */}
+        <a href="/join/MAIN" className="site-nav-paint primary-action" onClick={(event) => follow(event, "/join/MAIN")}>
           <span className="site-nav-paint-dot" aria-hidden="true" />
           Draw now
         </a>

@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "created_at": "2026-09-15",
+  "cycle": 1,
+  "cycle_budget": { "auto_patches_per_day": 5, "cycle_of": 3 },
+  "mission": "Get people drawing together, finding friends, sharing artwork; kids-to-young-adults on tablets.",
+  "gate_rules": {
+    "auto_apply": ["reversible", "no auth/payments/secrets/migrations/CI", "verifiable by screenshot or existing tests", "effort <= 2"],
+    "escalation": "Anything else goes to human_review with a note; rejected cards stay rejected unless NEW evidence appears."
+  },
+  "columns": {
+    "backlog": [
+      {
+        "card_id": "CARD-008",
+        "title": "Occupancy truth: live painter counts on /rooms cards + home",
+        "description": "Show real-time painter occupancy on every room card (/rooms, home hero, marketing strip) so 'Be the first!' lies disappear. Server already tracks users per room; surface it live.",
+        "impact": 8,
+        "surprise": 5,
+        "effort": 3,
+        "score": 13.3,
+        "gate": "OVER EFFORT GATE (3 > 2); touches WS protocol + multiple pages",
+        "source": "S3 #7"
+      },
+      {
+        "card_id": "CARD-009",
+        "title": "Founding Artist empty-wall inversion",
+        "description": "Make /wall's empty state an invitation: 'Be the Founding Artist' with a direct path to draw something destined for the wall. Includes redesign of the dead 2/3 whitespace S2 found.",
+        "impact": 6,
+        "surprise": 4,
+        "effort": 3,
+        "score": 8,
+        "gate": "OVER EFFORT GATE (3 > 2); copy + layout redesign",
+        "source": "S3 #11"
+      },
+      {
+        "card_id": "CARD-010",
+        "title": "Timelapse replay on wall",
+        "description": "Replay how a wall piece was drawn, stroke by stroke, from the existing op-log series (src/utils/replay.js).",
+        "impact": 8,
+        "surprise": 5,
+        "effort": 4,
+        "score": 10,
+        "gate": "OVER EFFORT GATE (4 > 2); playback UI + data plumbing",
+        "source": "S3 #10"
+      }
+    ],
+    "ready": [
+      {
+        "card_id": "CARD-001",
+        "title": "Commons routing: first 'Draw now' click lands everyone in MAIN (Open Studio)",
+        "description": "Today HomePage.startRoom mints a random 6-char room per click and SiteNav 'Draw now' links to a random /join/{code}, so first-time visitors each land alone in an empty private room (S2: '0 drawing now', 'Be the first!'). Phase 1 (this card): first-time/anonymous-primary entry points route to /join/MAIN — the already-existing shared room — so strangers land on the SAME canvas and can actually meet. Phase 2 (superset, ex-S3 #6 'full inversion'): route to the most lived-in room once occupancy data exists. Pure routing change: verified startRoom at HomePage.jsx:285 and SiteNav.jsx:101.",
+        "impact": 8,
+        "surprise": 5,
+        "effort": 1,
+        "score": 40,
+        "gate": "PASS: reversible (restore random code), no auth/payment/migration/CI, screenshot-verifiable (two sessions both land on room MAIN), effort 1",
+        "source": "S3 #1 + #6 (merged: #6 is the phased superset of #1)"
+      },
+      {
+        "card_id": "CARD-002",
+        "title": "Print the room code ON the /rooms card in big kid-readable type",
+        "description": "Room codes are currently hidden behind clicks; kids can't tell a friend the code aloud. Render the code in large unambiguous type directly on each /rooms card.",
+        "impact": 6,
+        "surprise": 6,
+        "effort": 1,
+        "score": 36,
+        "gate": "PASS: reversible render-only change in RoomFinderPage.jsx, screenshot-verifiable, effort 1",
+        "source": "S3 #2"
+      },
+      {
+        "card_id": "CARD-003",
+        "title": "Onboarding panel step 4: 'make it together' using existing overlay",
+        "description": "Add a final onboarding step that teaches inviting/joining friends, reusing the existing overlay component pattern.",
+        "impact": 6,
+        "surprise": 5,
+        "effort": 1,
+        "score": 30,
+        "gate": "PASS: additive UI, reversible, screenshot-verifiable, effort 1",
+        "source": "S3 #3"
+      },
+      {
+        "card_id": "CARD-004",
+        "title": "Wall-to-room stub: rooms-behind-pins strip on /wall + wall strip on /rooms",
+        "description": "Hand-built static cross-links connecting wall pins to the rooms that made them and vice versa; makes the social graph between surfaces visible. Static links only.",
+        "impact": 6,
+        "surprise": 5,
+        "effort": 1,
+        "score": 30,
+        "gate": "PASS: static reversible links, screenshot-verifiable, effort 1. Sequence AFTER CARD-001 so linked rooms aren't all empty.",
+        "source": "S3 #4"
+      },
+      {
+        "card_id": "CARD-005",
+        "title": "Doomsday nudge: countdown toast gains 'Pin to Wall' at T-2h",
+        "description": "The unexplained 'Fresh canvas in 2d 23h' badge S2 found becomes a call-to-action: when a room's reset is <2h away, its toast offers Pin-to-Wall so artwork is saved socially.",
+        "impact": 7,
+        "surprise": 5,
+        "effort": 2,
+        "score": 17.5,
+        "gate": "PASS with caution: reversible UI, no auth/payment/migration/CI, screenshot-verifiable; verify pin flow needs no account",
+        "source": "S3 #5"
+      },
+      {
+        "card_id": "CARD-006",
+        "title": "Wall dead-cue fix: hide 'Search 0 drawings...' and sort tabs when wall is empty",
+        "description": "S2: over zero items the wall still shows an enabled search box and sort tabs — dead cues implying missing content. Hide them in the empty state; also fix wall subtitle referencing a 'Wall' button not on that page.",
+        "impact": 4,
+        "surprise": 4,
+        "effort": 1,
+        "score": 16,
+        "gate": "PASS: reversible conditional render in WallPage.jsx, screenshot-verifiable, effort 1",
+        "source": "S2 finding"
+      },
+      {
+        "card_id": "CARD-007",
+        "title": "Signup: keep 'Keep drawing as a guest →' visible without scrolling on phone",
+        "description": "S2: on a 375px phone the guest escape hatch crops below the fold, making signup feel mandatory — violates the anonymous-first golden rule's spirit. Reorder/compact so the escape hatch is above the fold.",
+        "impact": 5,
+        "surprise": 3,
+        "effort": 1,
+        "score": 15,
+        "gate": "PASS: reversible layout change in SignupPage.jsx, screenshot-verifiable at 375px, effort 1",
+        "source": "S2 finding"
+      }
+    ],
+    "in_progress": [
+      {
+        "card_id": "CARD-001",
+        "status_note": "SELECTED for cycle 1 (see selection below). Auto-apply gate passed: reversible, no auth/payment/migration/CI, screenshot-verifiable, effort 1.",
+        "selected_at": "2026-09-15",
+        "cycle": 1
+      }
+    ],
+    "done": [],
+    "rejected": []
+  },
+  "human_review": [
+    {
+      "card_id": "CARD-011",
+      "title": "Twitch-pattern counted watchers + emotes",
+      "description": "Show spectator counts and let watchers emote — the biggest 'attract watchers' lever (impact 9) but effort 5, new WS message types, and a moderation surface for a kids-to-young-adults audience.",
+      "impact": 9,
+      "surprise": 6,
+      "effort": 5,
+      "score": 10.8,
+      "gate": "FAILS: effort 5 > 2; new realtime protocol + emoji-moderation surface on a minors-heavy app",
+      "review_note": "Needs human call on moderation policy (emote set, rate limits) and protocol budget before any build.",
+      "source": "S3 #8"
+    },
+    {
+      "card_id": "CARD-012",
+      "title": "Public spectate without admin key (/watch open to all)",
+      "description": "Currently /watch is admin-key gated; zero public spectator surface (S2). Opening it is high impact for 'attract watchers' but changes who can see kids' live drawing sessions.",
+      "impact": 9,
+        "surprise": 7,
+      "effort": 5,
+      "score": 12.6,
+      "gate": "FAILS: effort 5 > 2; safety/moderation surface (minors live on camera-equivalent), potential privacy policy implications",
+      "review_note": "Owner must decide: opt-in per room? guardians? This is a product/safety decision, not an auto-apply patch.",
+      "source": "S3 #9"
+    }
+  ],
+  "selection": {
+    "cycle": 1,
+    "selected_card_id": "CARD-001",
+    "rationale": "Highest score (40) of all gate-passing cards, and it attacks the single root cause S2 found everywhere: every entry point mints a lonely empty room, so nobody ever meets anybody. Verified in code (HomePage.jsx startRoom mints a random code; SiteNav 'Draw now' links to /join/{random}; MAIN room already exists and is the App.jsx default). Pure routing change: reversible, no auth/payment/migration/CI, no new storage keys, screenshot-provable with two sessions both landing on room MAIN. Also the safest first datum for the cycle-2 decision on the full lived-in-commons inversion (S3 #6).",
+    "deferred_to_later_cycles": ["CARD-002", "CARD-003", "CARD-004", "CARD-006", "CARD-007"],
+    "budget_note": "5 auto-patches/day available; deliberately selecting ONE card for cycle 1 to keep verification tight. Remaining effort-1 cards queued for cycles 2-3."
+  }
+}
