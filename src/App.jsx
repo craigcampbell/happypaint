@@ -42,6 +42,7 @@ import {
   compositeFrameToCanvas,
   createColdFrame,
   createFrame,
+  layersFromMeta,
 } from "./utils/frames";
 import {
   HYDRATED_RADIUS,
@@ -55,7 +56,7 @@ import {
 } from "./utils/frameRasters";
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
-import { replayFrameOnto } from "./utils/opReplay";
+import { replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
 import { replayInSlices } from "./utils/replayQueue";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
@@ -619,6 +620,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // instead of running synchronously on every slider tick.
   const opacityRafRef = useRef(0);
   const opacityDragActiveRef = useRef(false);
+  // Opacity is the one layer property a drag fires continuously: the shared
+  // layer_patch is debounced (and flushed on release) so the room isn't flooded.
+  const opacitySharedTimerRef = useRef(0);
+  const opacitySharedLayerRef = useRef(null);
+  // Is the realtime socket up? Layer structure mutations are the SERVER's call
+  // while it is; a dead socket falls back to local-only edits (see layersAreShared).
+  const mpConnectedRef = useRef(false);
+  // Late-bound repaint: the layer reconciliation runs BEFORE renderDisplay is
+  // declared, and naming it in a dependency array up there would be a
+  // temporal-dead-zone error at render time. The effect right after
+  // renderDisplay's definition keeps this pointing at the current one.
+  const renderDisplayRef = useRef(() => {});
 
   // GIF encode worker (W7). Lazily created; null if Workers are unavailable, in
   // which case GIF export falls back to encoding synchronously on the main
@@ -1279,11 +1292,73 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [commitLayersToFrame, pruneOnionCache, renderFrameThumbnail],
   );
 
+  // Snap ONE frame's live layer stack to the server's canonical list. Pixels are
+  // preserved for every layer whose id survives; a local layer the server doesn't
+  // know about is RE-KEYED onto the matching slot when that slot is otherwise
+  // free (that is what carries a restored local draft's pixels into a room's
+  // stack) and dropped otherwise; a new id gets a blank canvas. `sync` repaints
+  // and refreshes the panel now — a bulk frame reconcile defers to one final sync.
+  const reconcileFrameLayers = useCallback((frame, serverLayers, sync = true) => {
+    if (!frame || !Array.isArray(serverLayers) || serverLayers.length === 0) {
+      return false;
+    }
+    const existing = Array.isArray(frame.layers) ? frame.layers : null;
+    if (!existing) {
+      frame.layerMeta = serverLayers; // cold cel: built from this meta on hydrate
+      return false;
+    }
+    const byId = new Map(existing.map((layer) => [layer.id, layer]));
+    const claimed = new Set();
+    let changed = false;
+    const next = serverLayers.map((meta, index) => {
+      let layer = byId.get(meta.id) || null;
+      if (layer) {
+        claimed.add(meta.id);
+      } else {
+        const candidate = existing[index];
+        if (candidate && !claimed.has(candidate.id) && !serverLayers.some((item) => item.id === candidate.id)) {
+          claimed.add(candidate.id);
+          layer = candidate;
+          layer.id = meta.id; // adopt the canonical id, keep the pixels
+        }
+      }
+      if (!layer) {
+        layer = createLayer({ name: meta.name, width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+        layer.id = meta.id;
+        changed = true;
+      }
+      if (layer.name !== meta.name) { layer.name = meta.name; changed = true; }
+      if (layer.visible !== meta.visible) { layer.visible = meta.visible; changed = true; }
+      if (layer.opacity !== meta.opacity) { layer.opacity = meta.opacity; changed = true; }
+      if (layer.locked !== meta.locked) { layer.locked = meta.locked; changed = true; }
+      return layer;
+    });
+    if (existing.length !== next.length || existing.some((layer, i) => layer !== next[i])) {
+      changed = true;
+    }
+    frame.layers = next;
+    frame.layerMeta = serverLayers;
+    if (!next.some((layer) => layer.id === frame.activeLayerId)) {
+      frame.activeLayerId = next[next.length - 1].id;
+    }
+    if (!sync) {
+      return changed;
+    }
+    if (framesRef.current[activeFrameIndexRef.current] === frame) {
+      layersRef.current = next;
+      activeLayerIdRef.current = frame.activeLayerId;
+      renderDisplayRef.current();
+      syncLayerState();
+    }
+    return true;
+  }, [syncLayerState]);
+
   // Snap the local frame list to the server's authoritative metadata (ids,
   // order, durations) — the Google-Docs invariant: everyone runs the same
   // flipbook. Canvases are preserved for frames whose id survives (reconnects
   // keep pixels; the history replay right after repaints them anyway); frames
   // the server dropped disappear, new ones arrive blank until replayed into.
+  // Each frame's LAYER STACK arrives the same way and is reconciled per frame.
   const reconcileFrames = useCallback(
     (serverFrames) => {
       if (!Array.isArray(serverFrames) || serverFrames.length === 0) {
@@ -1292,22 +1367,31 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       commitLayersToFrame();
       const currentById = new Map(framesRef.current.map((frame) => [frame.id, frame]));
       const activeId = framesRef.current[activeFrameIndexRef.current]?.id;
+      let layersChanged = false;
       const next = serverFrames.map((meta) => {
         const existing = currentById.get(meta.id);
         if (existing) {
           existing.durationMs = meta.durationMs;
+          if (Array.isArray(meta.layers) && meta.layers.length) {
+            if (existing.layers) {
+              if (reconcileFrameLayers(existing, meta.layers, false)) layersChanged = true;
+            } else {
+              existing.layerMeta = meta.layers; // cold cel — hydrate builds from it
+            }
+          }
           return existing;
         }
         if (roomAnimationRef.current) {
           // Server-synced flipbook: frames arrive COLD (ops + raster, no
           // canvases). The window around the active frame is allocated below
           // and the history replay that follows paints into it.
-          return createColdFrame(meta.id, meta.durationMs);
+          return createColdFrame(meta.id, meta.durationMs, meta.layers);
         }
-        const frame = createFrame({ layers: createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: meta.durationMs });
+        const frame = createFrame({ layers: layersFromMeta(meta.layers, CANVAS_WIDTH, CANVAS_HEIGHT), durationMs: meta.durationMs });
         frame.id = meta.id; // server ids are canonical
         return frame;
       });
+      const previousLayers = layersRef.current;
       framesRef.current = next;
       const keptIndex = next.findIndex((frame) => frame.id === activeId);
       activeFrameIndexRef.current = keptIndex >= 0 ? keptIndex : Math.max(0, Math.min(activeFrameIndexRef.current, next.length - 1));
@@ -1321,8 +1405,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       layersRef.current = active.layers;
       activeLayerIdRef.current = active.activeLayerId;
       syncFrameState();
+      // The panel's React state must follow the live stack whenever the ACTIVE
+      // frame's layer array is new (a fresh join, a re-keyed stack, or a layer
+      // list that changed shape) — syncFrameState only refreshes the film strip.
+      if (layersChanged || previousLayers !== active.layers) {
+        syncLayerState();
+        renderDisplayRef.current();
+      }
     },
-    [commitLayersToFrame, syncFrameState],
+    [commitLayersToFrame, reconcileFrameLayers, syncFrameState, syncLayerState],
   );
 
   // Queue a frame's thumbnail regen for idle time. Dirty ids are tracked per
@@ -1911,6 +2002,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     blitToDisplay();
   }, [blitToDisplay, drawSheet, paintOnionSkin, paintRemoteStrokeOverlays]);
 
+  // Keep the late-bound repaint pointer current (see renderDisplayRef).
+  useEffect(() => {
+    renderDisplayRef.current = renderDisplay;
+  }, [renderDisplay]);
+
   // Drop the cached below/above composites so the next stroke rebuilds them.
   const invalidateCompositeCache = useCallback(() => {
     compositeCacheValidRef.current = false;
@@ -2474,6 +2570,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     setTextSize(draftSettings.textSize || 64);
   }, []);
 
+  // A locally-created document (draft / gallery / remix / template / saved art)
+  // must keep the ROOM's frame identity: ops and layer messages resolve by frame
+  // id, so a freshly minted local id would leave this client deaf to its own
+  // room's layer structure (its layer patches would find no frame to apply to).
+  // Animation rooms bail out of these paths entirely.
+  const adoptRoomFrameId = useCallback((frame) => {
+    const sharedId = framesRef.current[0]?.id;
+    if (frame && sharedId) {
+      frame.id = sharedId;
+    }
+    return frame;
+  }, []);
+
   // Rebuild the live layer stack from saved draft layer data.
   const restoreLayersFromDraft = useCallback(
     async (draftLayers) => {
@@ -2515,7 +2624,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
 
       // Drafts restore as a single frame holding the saved layer stack.
-      const frame = createFrame({ layers: rebuilt });
+      const frame = adoptRoomFrameId(createFrame({ layers: rebuilt }));
       framesRef.current = [frame];
       activeFrameIndexRef.current = 0;
       layersRef.current = frame.layers;
@@ -2524,7 +2633,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       syncFrameState({ regenerateIds: "all" });
     },
-    [renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // Load the saved draft from IndexedDB; if none exists there but a legacy
@@ -2907,7 +3016,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         pushHistory("full");
         const layer = createLayer({ name: "Saved art", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        const frame = createFrame({ layers: [layer] });
+        const frame = adoptRoomFrameId(createFrame({ layers: [layer] }));
         framesRef.current = [frame];
         activeFrameIndexRef.current = 0;
         layersRef.current = frame.layers;
@@ -2922,7 +3031,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         showToast("Couldn't open that drawing");
       }
     },
-    [markChanged, pushHistory, renderDisplay, showToast, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, markChanged, pushHistory, renderDisplay, showToast, syncFrameState, syncLayerState],
   );
 
   const deleteDrawing = useCallback(
@@ -3020,7 +3129,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (image) {
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       }
-      const frame = createFrame({ layers: [layer] });
+      const frame = adoptRoomFrameId(createFrame({ layers: [layer] }));
       framesRef.current = [frame];
       activeFrameIndexRef.current = 0;
       layersRef.current = frame.layers;
@@ -3030,7 +3139,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncFrameState();
       markChanged("Artwork restored");
     },
-    [markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   const chooseBrush = useCallback(
@@ -4221,6 +4330,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setStatus("Loading this frame…"); // its ops are still replaying in
       return;
     }
+    // A LOCKED layer refuses local ink (the server drops it too — belt and
+    // braces for a stale/hacked client). Tell the artist why nothing happens.
+    const activeLayer = layersRef.current.find((layer) => layer.id === activeLayerIdRef.current);
+    if (activeLayer?.locked && !isRoomHostRef.current) {
+      setStatus("This layer is locked — ask the host to unlock it");
+      showToast("🔒 This layer is locked");
+      return;
+    }
     // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
     // slides off-canvas or a system gesture interrupts. Without this, a lost
@@ -4586,6 +4703,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [syncLayerState],
   );
 
+  // Layer STRUCTURE is room state now: the server mints ids, applies the change
+  // and echoes the canonical list (see the layer_* echo handlers). These senders
+  // are the only writers — a dead socket falls back to the old local-only edit so
+  // the studio never feels frozen, and the next join history reconciles the stack
+  // with the server's.
+  const layersAreShared = useCallback(() => Boolean(mpConnectedRef.current && mpRef.current?.sendLayerAdd), []);
+  // The frame a layer mutation targets: the active cel in an animation room, else
+  // the room's single shared frame (the server's frames[0]).
+  const layerMutationFrameId = useCallback(
+    () => (roomAnimationRef.current ? framesRef.current[activeFrameIndexRef.current]?.id || null : null),
+    [],
+  );
+
   const handleAddLayer = useCallback(() => {
     const maxLayers = roomAnimationRef.current ? ANIM_MAX_LAYERS : MAX_LAYERS;
     if (layersRef.current.length >= maxLayers) {
@@ -4596,6 +4726,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       );
       return;
     }
+    if (layersAreShared()) {
+      mpRef.current.sendLayerAdd(layerMutationFrameId(), activeLayerIdRef.current || null);
+      markChanged("Layer added"); // the echo applies it for everyone, us included
+      return;
+    }
     pushHistory("full");
     const layer = createLayer({ name: `Layer ${layersRef.current.length + 1}`, width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
     layersRef.current = [...layersRef.current, layer];
@@ -4604,15 +4739,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     syncLayerState();
     recordReplay(true);
     markChanged("Layer added");
-  }, [markChanged, pushHistory, recordReplay, renderDisplay, syncLayerState]);
+  }, [layerMutationFrameId, layersAreShared, markChanged, pushHistory, recordReplay, renderDisplay, syncLayerState]);
 
   const handleDeleteLayer = useCallback(
     (id) => {
       if (layersRef.current.length <= 1) {
         return;
       }
-      pushHistory("full");
       const index = layersRef.current.findIndex((layer) => layer.id === id);
+      // The bottom layer is load-bearing (goo/smudge and the wet-mix mirror read
+      // layer 0, and legacy untagged ops live there) — the server refuses it too.
+      if (index <= 0) {
+        setStatus("The bottom layer can't be deleted");
+        return;
+      }
+      if (layersAreShared()) {
+        mpRef.current.sendLayerDel(layerMutationFrameId(), id);
+        markChanged("Layer deleted");
+        return;
+      }
+      pushHistory("full");
       layersRef.current = layersRef.current.filter((layer) => layer.id !== id);
       if (activeLayerIdRef.current === id) {
         const fallback = layersRef.current[Math.max(0, index - 1)] || layersRef.current[0];
@@ -4624,7 +4770,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       recordReplay(true);
       markChanged("Layer deleted");
     },
-    [markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, syncLayerState],
   );
 
   const handleDuplicateLayer = useCallback(
@@ -4641,6 +4787,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const index = layersRef.current.findIndex((layer) => layer.id === id);
       const source = layersRef.current[index];
       if (!source) {
+        return;
+      }
+      if (layersAreShared()) {
+        // The server adds the layer and copies the source's ops under fresh ids
+        // (so a rejoin replays the copy); we clone the canvas locally.
+        mpRef.current.sendLayerDup(layerMutationFrameId(), id);
+        markChanged("Layer duplicated");
         return;
       }
       pushHistory("full");
@@ -4661,7 +4814,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       markChanged("Layer duplicated");
     },
-    [markChanged, pushHistory, renderDisplay, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, pushHistory, renderDisplay, syncLayerState],
   );
 
   // Merge a layer down onto the one below it (respecting opacity), then remove it.
@@ -4669,6 +4822,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     (id) => {
       const index = layersRef.current.findIndex((layer) => layer.id === id);
       if (index <= 0) {
+        return;
+      }
+      if (layersAreShared()) {
+        // The server re-tags the layer's ops onto the one below and removes it,
+        // then everyone rebuilds from the ops (the ink moves between canvases).
+        mpRef.current.sendLayerMerge(layerMutationFrameId(), id);
+        markChanged("Merged down");
         return;
       }
       pushHistory("full");
@@ -4686,7 +4846,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       markChanged("Merged down");
     },
-    [markChanged, pushHistory, renderDisplay, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, pushHistory, renderDisplay, syncLayerState],
   );
 
   // Flatten every layer onto a single layer 0 (respecting visibility + opacity)
@@ -4729,6 +4889,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (index < 0 || target < 0 || target >= layersRef.current.length) {
         return;
       }
+      if (layersAreShared()) {
+        mpRef.current.sendLayerMove(layerMutationFrameId(), id, target);
+        markChanged("Layer reordered");
+        return;
+      }
       pushHistory("full");
       const next = layersRef.current.slice();
       const [moved] = next.splice(index, 1);
@@ -4739,7 +4904,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       refreshActiveThumbnail(); // composite order changed — stamp + thumb (idle)
       markChanged("Layer reordered");
     },
-    [markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, syncLayerState],
   );
 
   const handleMoveUp = useCallback((id) => moveLayer(id, 1), [moveLayer]);
@@ -4751,13 +4916,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!layer) {
         return;
       }
+      if (layersAreShared()) {
+        mpRef.current.sendLayerPatch(layerMutationFrameId(), id, { visible: !layer.visible });
+        markChanged(layer.visible ? "Layer hidden" : "Layer shown");
+        return;
+      }
       layer.visible = !layer.visible;
       renderDisplay();
       syncLayerState();
       refreshActiveThumbnail(); // composite changed — stamp + thumb (idle)
       markChanged(layer.visible ? "Layer shown" : "Layer hidden");
     },
-    [markChanged, refreshActiveThumbnail, renderDisplay, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, refreshActiveThumbnail, renderDisplay, syncLayerState],
   );
 
   const handleToggleLock = useCallback(
@@ -4766,11 +4936,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!layer) {
         return;
       }
+      if (layersAreShared()) {
+        mpRef.current.sendLayerPatch(layerMutationFrameId(), id, { locked: !layer.locked });
+        markChanged(layer.locked ? "Layer unlocked" : "Layer locked");
+        return;
+      }
       layer.locked = !layer.locked;
       syncLayerState();
       markChanged(layer.locked ? "Layer locked" : "Layer unlocked");
     },
-    [markChanged, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, syncLayerState],
   );
 
   // Take the single undo snapshot for an opacity drag (W13). Called on the
@@ -4786,13 +4961,22 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleOpacityDragEnd = useCallback(() => {
     opacityDragActiveRef.current = false;
+    // Flush the debounced shared patch (the drag is over — send it now).
+    if (opacitySharedTimerRef.current) {
+      window.clearTimeout(opacitySharedTimerRef.current);
+      opacitySharedTimerRef.current = 0;
+      const pending = layersRef.current.find((item) => item.id === opacitySharedLayerRef.current);
+      if (pending && layersAreShared()) {
+        mpRef.current.sendLayerPatch(layerMutationFrameId(), pending.id, { opacity: pending.opacity });
+      }
+    }
     // Flush any pending throttled recomposite so the final opacity is shown.
     if (opacityRafRef.current) {
       window.cancelAnimationFrame(opacityRafRef.current);
       opacityRafRef.current = 0;
     }
     renderDisplay();
-  }, [renderDisplay]);
+  }, [layerMutationFrameId, layersAreShared, renderDisplay]);
 
   const handleOpacityChange = useCallback(
     (id, opacity) => {
@@ -4811,6 +4995,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       refreshActiveThumbnail(); // stamp bump is O(1); thumb regen coalesces at idle
       dirtyRef.current = true;
+      // Shared stack: one layer_patch per drag, debounced (flushed on release).
+      if (layersAreShared()) {
+        opacitySharedLayerRef.current = id;
+        if (opacitySharedTimerRef.current) {
+          window.clearTimeout(opacitySharedTimerRef.current);
+        }
+        opacitySharedTimerRef.current = window.setTimeout(() => {
+          opacitySharedTimerRef.current = 0;
+          const pending = layersRef.current.find((item) => item.id === opacitySharedLayerRef.current);
+          if (pending && layersAreShared()) {
+            mpRef.current.sendLayerPatch(layerMutationFrameId(), pending.id, { opacity: pending.opacity });
+          }
+        }, 350);
+      }
       if (!opacityRafRef.current) {
         opacityRafRef.current = window.requestAnimationFrame(() => {
           opacityRafRef.current = 0;
@@ -4818,7 +5016,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         });
       }
     },
-    [handleOpacityDragStart, refreshActiveThumbnail, renderDisplay, syncLayerState],
+    [handleOpacityDragStart, layerMutationFrameId, layersAreShared, refreshActiveThumbnail, renderDisplay, syncLayerState],
   );
 
   const handleRenameLayer = useCallback(
@@ -4829,12 +5027,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       const name = window.prompt("Rename layer:", layer.name);
       if (name && name.trim()) {
+        if (layersAreShared()) {
+          mpRef.current.sendLayerPatch(layerMutationFrameId(), id, { name: name.trim() });
+          markChanged("Layer renamed");
+          return;
+        }
         layer.name = name.trim();
         syncLayerState();
         markChanged("Layer renamed");
       }
     },
-    [markChanged, syncLayerState],
+    [layerMutationFrameId, layersAreShared, markChanged, syncLayerState],
   );
 
   // ---- Frame (Tiny Animation Loops) actions ----
@@ -4935,7 +5138,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return Promise.resolve();
     }
     const gen = (frame.hydrateGen = (frame.hydrateGen || 0) + 1);
-    const job = replayFrameOnto(layers[0].canvas, ops, CANVAS_WIDTH, CANVAS_HEIGHT)
+    // Each op replays into the layer it belongs to (op.layerId), so a cold cel
+    // comes back with its real stack — not everything piled onto layer 0.
+    const layerIndex = new Map(layers.map((layer, index) => [layer.id, index]));
+    const targetFor = (op) => layers[layerIndex.has(op.layerId) ? layerIndex.get(op.layerId) : 0].canvas.getContext("2d");
+    const job = replayFrameOnto(layers[0].canvas, ops, CANVAS_WIDTH, CANVAS_HEIGHT, targetFor)
       .catch(() => {})
       .then(() => {
         if (frame.hydrateGen !== gen || frame.layers !== layers) return;
@@ -5711,6 +5918,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         list.push(op);
         opsByFrame.set(frameId, list);
       }
+      // Every frame's shared layer stack rides the film data, so a page renders
+      // the layers in order at their opacity (hidden layers stay hidden).
+      const layersByFrame = new Map();
+      for (const scene of film.scenes || []) {
+        for (const frame of scene.frames || []) {
+          if (frame?.id) layersByFrame.set(frame.id, frame.layers || null);
+        }
+      }
+      const layerScratch = [];
       const world = document.createElement("canvas");
       world.width = CANVAS_WIDTH;
       world.height = CANVAS_HEIGHT;
@@ -5718,7 +5934,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       for (const page of storybook.pages) {
         const scene = (film.scenes || []).find((item) => item.id === page.sceneId);
         const frameId = scene?.frames?.[0]?.id;
-        await replayFrameOnto(world, frameId ? (opsByFrame.get(frameId) || []) : []);
+        await replayFrameComposite(
+          world,
+          frameId ? layersByFrame.get(frameId) : null,
+          frameId ? (opsByFrame.get(frameId) || []) : [],
+          CANVAS_WIDTH,
+          CANVAS_HEIGHT,
+          layerScratch,
+        );
         const output = document.createElement("canvas");
         output.width = 1200;
         output.height = 750;
@@ -5810,8 +6033,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           list.push(op);
           opsByFrame.set(frameId, list);
         }
+        const layersByFrame = new Map();
+        for (const scene of film.scenes || []) {
+          for (const frame of scene.frames || []) {
+            if (frame?.id) layersByFrame.set(frame.id, frame.layers || null);
+          }
+        }
         for (const shot of buildFilmPlan(film.scenes || [])) {
-          plan.push({ ...shot, ops: opsByFrame.get(shot.frameId) || [] });
+          plan.push({
+            ...shot,
+            ops: opsByFrame.get(shot.frameId) || [],
+            layers: layersByFrame.get(shot.frameId) || null,
+          });
         }
       }
       if (plan.length === 0) {
@@ -5822,6 +6055,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const world = document.createElement("canvas");
       world.width = CANVAS_WIDTH;
       world.height = CANVAS_HEIGHT;
+      const layerScratch = []; // per-layer canvases, reused across shots
       let lastReplayedFrameId = null;
       let productionAudio = null;
       if (productionSound) {
@@ -5844,7 +6078,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // Loops replay the same frame many times: skip the offline replay
           // when the world canvas already holds this frame.
           if (lastReplayedFrameId !== shot?.frameId) {
-            await replayFrameOnto(world, shot?.ops || []);
+            await replayFrameComposite(world, shot?.layers || null, shot?.ops || [], CANVAS_WIDTH, CANVAS_HEIGHT, layerScratch);
             lastReplayedFrameId = shot?.frameId;
           }
           await renderPaper(context, { width, height, textureId: selectedTexture });
@@ -6181,7 +6415,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // Snapshot is downscaled; draw it scaled up to the full art canvas.
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       }
-      const frame = createFrame({ layers: [layer] });
+      const frame = adoptRoomFrameId(createFrame({ layers: [layer] }));
       framesRef.current = [frame];
       activeFrameIndexRef.current = 0;
       layersRef.current = frame.layers;
@@ -6192,7 +6426,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setShowReplay(false);
       markChanged("Remixed from replay");
     },
-    [markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // ---- AI Assist handlers (local helpers; consent-gated) ----
@@ -6415,7 +6649,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
         }
         // Reset to a single frame holding just the template artwork.
-        const frame = createFrame({ layers: [layer] });
+        const frame = adoptRoomFrameId(createFrame({ layers: [layer] }));
         framesRef.current = [frame];
         activeFrameIndexRef.current = 0;
         layersRef.current = frame.layers;
@@ -6492,7 +6726,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         setShowPaintSpace(false);
       }
     },
-    [getActiveLayer, handleApplyBrushRecipe, invalidateMixPrefetch, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, getActiveLayer, handleApplyBrushRecipe, invalidateMixPrefetch, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // ---- Initialization ----
@@ -6715,16 +6949,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [showToast],
   );
 
-  // Remote ops land on the frame they were DRAWN on (op.frameId; untagged =
-  // first frame). In non-animation rooms there's only one frame, so this is
-  // the classic shared-mural behavior; in animation rooms every frame is
-  // shared state and two people can ink different cels simultaneously.
-  const frameBaseCtx = useCallback((frame) => {
-    const layer = frame?.layers?.[0];
-    return layer ? layer.canvas.getContext("2d") : null;
+  // Remote ops land on the frame AND LAYER they were drawn on (op.frameId +
+  // op.layerId; an untagged op = the first frame's bottom layer, where every
+  // legacy stroke has always gone). In animation rooms every frame is shared
+  // state, and now so is every layer: two people can ink different cels — or
+  // different layers of the same cel — simultaneously.
+  const frameLayerTarget = useCallback((frame, layerId) => {
+    const layers = frame?.layers;
+    if (!layers || !layers.length) {
+      return null;
+    }
+    if (layerId == null) {
+      return layers[0];
+    }
+    return layers.find((layer) => layer.id === layerId) || layers[0];
   }, []);
 
-  // Land a remote in-progress stroke on ITS frame's base layer ONCE at its
+  // Land a remote in-progress stroke on ITS frame's layer ONCE at its
   // stroke opacity (#62) and forget it — including its last-point entry, which
   // previously leaked one point per stroke forever.
   const commitRemoteStroke = useCallback(
@@ -6735,16 +6976,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const frame = entry.frameId
           ? framesRef.current.find((item) => item.id === entry.frameId) || null
           : framesRef.current[0] || null;
-        const ctx = frameBaseCtx(frame);
+        const layer = frameLayerTarget(frame, entry.layerId);
+        const ctx = layer ? layer.canvas.getContext("2d") : null;
         if (ctx && entry.buf.has()) {
           // Stage-2/3: flush the dab renderer + run the commit passes (wet
           // edge / impasto / paper grain), then the single opacity-stamped
           // commit (legacy strokes: no-op).
           prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
           entry.buf.commit(ctx, entry.opacity);
-          // The wet-mix mirror only tracks the frame on screen.
+          // The wet-mix mirror only tracks the bottom layer of the frame on screen.
           if (frame && isActiveFrame(frame)) {
-            markMixDirty(frame.layers[0], entry.buf.bounds());
+            markMixDirty(layer, entry.buf.bounds());
           }
           touchFrame(entry.frameId); // that cel's proxy/thumb are stale
         }
@@ -6753,7 +6995,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       remoteStrokesRef.current.delete(strokeId);
       remoteStrokeLastRef.current.delete(strokeId);
     },
-    [frameBaseCtx, isActiveFrame, markMixDirty, touchFrame],
+    [frameLayerTarget, isActiveFrame, markMixDirty, touchFrame],
   );
 
   // Idle sweep: while any remote stroke is open, check every 2s and commit
@@ -6807,10 +7049,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const frame = op.frameId
         ? framesRef.current.find((item) => item.id === op.frameId) || null
         : framesRef.current[0] || null;
-      const ctx = frameBaseCtx(frame);
-      if (!frame || !ctx) {
+      // The op's LAYER: the one it names, else the bottom layer (legacy ops).
+      const targetLayer = frameLayerTarget(frame, op.layerId);
+      if (!frame || !targetLayer) {
         return;
       }
+      const ctx = targetLayer.canvas.getContext("2d");
       if (op.kind === "draw") {
         const strokes = remoteStrokesRef.current;
         let entry = strokes.get(op.strokeId);
@@ -6869,7 +7113,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             drawBrushSegment(ctx, last || point, point, settings);
             last = point;
           }
-          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+          invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
           touchFrame(frame.id); // pixels landed directly — proxy/thumb are stale
           if (op.end) {
             lastMap.delete(op.strokeId);
@@ -6904,6 +7148,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 renderer: null,
                 fx: null,
                 frameId: frame.id,
+                layerId: targetLayer.id,
                 smudge: makeSmudgeRenderer(settings, ctx.canvas),
               };
               strokes.set(op.strokeId, entry);
@@ -6913,7 +7158,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             for (const point of op.points || []) {
               entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
             }
-            invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+            invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
             touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
             if (op.end) {
               commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
@@ -6943,6 +7188,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             settings,
             lastTouch: 0,
             frameId: frame.id, // the stroke's home frame — commit + overlays use it
+            layerId: targetLayer.id, // and its home layer, so the commit lands there
           };
           strokes.set(op.strokeId, entry);
           ensureRemoteSweep();
@@ -6960,7 +7206,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               prepareStrokeCommit(entry.buf, entry.renderer, entry.fx, false);
               entry.buf.commit(ctx, entry.opacity);
               if (isActiveFrame(frame)) {
-                markMixDirty(frame.layers[0], entry.buf.bounds());
+                markMixDirty(targetLayer, entry.buf.bounds());
               }
               touchFrame(frame.id); // chunk banked into the layer early
               entry.buf.reset();
@@ -6979,7 +7225,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
             last = point;
           }
-          invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+          invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
           touchFrame(frame.id); // over-cap legacy path draws the layer directly
         }
         if (op.end) {
@@ -6989,11 +7235,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
       } else if (op.kind === "shape") {
         drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
-        invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+        invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
         touchFrame(frame.id);
       } else if (op.kind === "text") {
         drawText(ctx, op.point, op.text, op.opts || {});
-        invalidateMixPrefetch(frame.layers[0]); // direct, unmarked layer-0 write
+        invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
         const image = new Image();
@@ -7009,7 +7255,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ctx.drawImage(image, op.x, op.y, op.w, op.h);
             touchFrame(frame.id);
             if (isActiveFrame(frame)) {
-              markMixDirty(frame.layers[0], { x0: op.x, y0: op.y, w: op.w, h: op.h });
+              markMixDirty(targetLayer, { x0: op.x, y0: op.y, w: op.w, h: op.h });
               renderDisplay();
             }
             resolve();
@@ -7021,7 +7267,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return settled;
       }
     },
-    [commitRemoteStroke, ensureRemoteSweep, frameBaseCtx, invalidateMixPrefetch, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
+    [commitRemoteStroke, ensureRemoteSweep, frameLayerTarget, invalidateMixPrefetch, isActiveFrame, markMixDirty, renderDisplay, sampleMix, scheduleRemoteRender, touchFrame],
   );
 
   useEffect(() => {
@@ -7688,8 +7934,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           commitLayersToFrame();
           const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
           // New frames arrive COLD (no canvases); the actor lands on it below and
-          // activateFrame hydrates it (instant — nothing to replay yet).
-          const frame = createColdFrame(data.frame.id, data.frame.durationMs || DEFAULT_FRAME_DURATION);
+          // activateFrame hydrates it (instant — nothing to replay yet). The
+          // frame's shared LAYER list rides along: without it the cold cel would
+          // build a default stack with LOCAL ids, and every op drawn on it would
+          // name a layer the room has never heard of (dropped server-side).
+          const frame = createColdFrame(data.frame.id, data.frame.durationMs || DEFAULT_FRAME_DURATION, data.frame.layers);
           if (data.duplicateOf) {
             // The server copied the ops under fresh ids; mirror the copy so the
             // duplicate can re-hydrate / re-raster on its own. A hydrated
@@ -7702,7 +7951,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               frame.rasterCount = source.raster ? frame.ops.length : -1;
               if (source.layers) {
                 allocateFrameLayers(frame);
-                frame.layers[0].canvas.getContext("2d").drawImage(compositeFrameToCanvas(source, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }), 0, 0);
+                // Clone each layer's pixels into the matching layer (the server
+                // copied the layer list), not the flattened composite.
+                frame.layers.forEach((layer, index) => {
+                  const from = source.layers[index];
+                  if (from) {
+                    layer.canvas.getContext("2d").drawImage(from.canvas, 0, 0);
+                  }
+                });
               }
             }
           }
@@ -7777,6 +8033,71 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (!durFrame) break; // another scene's frame — meta update only
           durFrame.durationMs = data.durationMs;
           setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
+          break;
+        }
+        case "layer_denied":
+          setStatus(data.reason || "Can't change layers here");
+          showToast(data.reason || "Can't change layers here");
+          break;
+        // ---- Shared layer structure -------------------------------------------
+        // Every layer mutation is the SERVER's call: it mints the ids, applies the
+        // change and echoes the canonical list for that frame to everyone
+        // (including the sender). We adopt it exactly — pixels survive by id, a
+        // local layer the server re-keyed keeps its canvas, a new id starts blank
+        // (its ops replay in), a deleted id's ops the server purged are dropped.
+        case "layer_add":
+        case "layer_del":
+        case "layer_move":
+        case "layer_patch":
+        case "layer_dup":
+        case "layer_merge":
+        case "layer_flatten": {
+          const frame = data.frameId
+            ? framesRef.current.find((item) => item.id === data.frameId) || null
+            : framesRef.current[0] || null;
+          if (!frame || !Array.isArray(data.layers)) break;
+          const sourceCanvas =
+            data.type === "layer_dup"
+              ? frame.layers?.find((layer) => layer.id === data.sourceLayerId)?.canvas || null
+              : null;
+          if (Array.isArray(data.removedOpIds) && data.removedOpIds.length) {
+            const gone = new Set(data.removedOpIds);
+            frame.ops = (frame.ops || []).filter((op) => !gone.has(op.opId));
+          }
+          if (data.type === "layer_del") {
+            // Open remote strokes on the dead layer have nowhere to land — drop
+            // their buffers rather than let them commit onto the bottom layer.
+            for (const [strokeId, entry] of remoteStrokesRef.current) {
+              if (entry.layerId === data.layerId) {
+                entry.buf?.dispose();
+                remoteStrokesRef.current.delete(strokeId);
+              }
+            }
+          }
+          reconcileFrameLayers(frame, data.layers, true);
+          if (sourceCanvas) {
+            // The duplicate's pixels: the ops the server copied are for whoever
+            // joins next; live clients clone the canvas (deterministic engine).
+            const copy = frame.layers?.find((layer) => layer.id === data.layerId);
+            if (copy) {
+              const copyCtx = copy.canvas.getContext("2d");
+              copyCtx.save();
+              copyCtx.setTransform(1, 0, 0, 1, 0, 0);
+              copyCtx.clearRect(0, 0, copy.canvas.width, copy.canvas.height);
+              copyCtx.drawImage(sourceCanvas, 0, 0);
+              copyCtx.restore();
+            }
+          }
+          if ((data.type === "layer_add" || data.type === "layer_dup") && data.byUserId === myUserIdRef.current && data.layerId) {
+            // The actor lands on the layer they just made (like a new frame).
+            activeLayerIdRef.current = data.layerId;
+            frame.activeLayerId = data.layerId;
+            syncLayerState();
+          }
+          if (isActiveFrame(frame)) {
+            renderDisplay();
+            refreshActiveThumbnail();
+          }
           break;
         }
         case "frame_full":
@@ -7983,14 +8304,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           showToast(data.wet ? "💧 Wet canvas ON — paints mix and smear!" : "☀️ Canvas dried — paints stay put.");
           break;
         case "brush_mode_state":
-          // The room's palette flipped. Palette-only — no op carries the mode,
-          // so nothing repaints; snap the selected brush into the new set if it
-          // fell out, and force wet at pen-down while in fun mode.
+          // The room's palette flipped. Palette-only in ops — no op carries the
+          // mode, so nothing repaints. BUT fun mode is single-layer by contract
+          // (goo/smudge read layer 0), so the server collapses the stack and
+          // sends the new layer lists along: adopt them.
           roomBrushModeRef.current = data.brushMode === "fun" ? "fun" : "realistic";
           setRoomBrushMode(roomBrushModeRef.current);
           if (roomBrushModeRef.current === "fun") {
             setSelectedBrush((prev) => (FUN_BRUSHES.has(prev) ? prev : "paint"));
           }
+          if (Array.isArray(data.frames) && data.frames.length) reconcileFrames(data.frames);
           showToast(roomBrushModeRef.current === "fun" ? "🖐️ Fun paint mode — bold, wet brushes!" : "🎨 Realistic brushes — the full set.");
           break;
         case "vote_open":
@@ -8094,7 +8417,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrameLayers, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, syncLayerState, touchFrame],
   );
 
   // Deferred messages drain by re-entering handleMpMessage, so it needs a
@@ -8109,6 +8432,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // hydrate the canvas still have to land (steps 2 and 3, in handleMpMessage).
   useEffect(() => {
     if (mp.connected) setJoinStep((step) => Math.max(step, 1));
+  }, [mp.connected]);
+
+  // Layer structure mutations ride the server while the socket is up.
+  useEffect(() => {
+    mpConnectedRef.current = mp.connected;
   }, [mp.connected]);
 
   // A room that refused us has its own full-screen explanation — never leave a
@@ -8208,6 +8536,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const relayOp = useCallback((op) => {
     const ph = phoneRef.current;
     if (ph && (ph.phase === "starting" || ph.phase === "drawing" || ph.phase === "guessing")) return;
+    // Every op records the LAYER it was drawn on. That single field is what lets
+    // a reload, a rejoin and a collaborator rebuild the same stack: the layer
+    // structure is shared room state and the pixels are rebuilt from the ops
+    // tagged with each layer's id. Untagged callers (plugins, legacy paths) get
+    // the active layer, exactly like the studio's own strokes.
+    if (op && !op.layerId && activeLayerIdRef.current) {
+      op.layerId = activeLayerIdRef.current;
+    }
     coldFramesRef.current?.noteFrameOp(op); // the frame's own op list (re-hydration source)
     mp.sendOp(op);
     // mp.sendOp is a stable useCallback; the plugin over-broadly wants `mp`.
@@ -8248,6 +8584,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendFrameDel: mp.sendFrameDel,
       sendFrameMove: mp.sendFrameMove,
       sendFrameDuration: mp.sendFrameDuration,
+      // Shared layer structure (the server owns the stack; these only ask).
+      sendLayerAdd: mp.sendLayerAdd,
+      sendLayerDel: mp.sendLayerDel,
+      sendLayerMove: mp.sendLayerMove,
+      sendLayerPatch: mp.sendLayerPatch,
+      sendLayerDup: mp.sendLayerDup,
+      sendLayerMerge: mp.sendLayerMerge,
+      sendLayerFlatten: mp.sendLayerFlatten,
       sendSceneFetch: mp.sendSceneFetch,
       sendSceneAdd: mp.sendSceneAdd,
       sendSceneDel: mp.sendSceneDel,
@@ -8268,7 +8612,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled

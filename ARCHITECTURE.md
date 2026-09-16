@@ -66,9 +66,16 @@ nothing breaks when unconfigured. This is the single most important invariant.
 
 ## Realtime model — one shared canvas
 
-The defining design choice: **everyone draws onto the same layer**
-(`layersRef.current[0]`). There is no per-user overlay. The server is an
-op-agnostic relay + store:
+The defining design choice: **one shared canvas** - everyone paints the same
+document, and the LAYER a stroke belongs to is shared state. Every op carries
+`op.layerId`; each frame owns an ordered layer stack (id, name, visibility,
+opacity, lock) that the SERVER mints and owns, echoing it to every client exactly
+like the `frame_*` mutations. Pixels are never uploaded: a client rebuilds each
+layer by replaying the ops tagged with its id, which is what makes a reload, a
+rejoin and a collaborator agree 1:1. There is no per-user overlay. Migration is
+implicit - a room written before this has no layer list, so it materializes one
+base layer (`L0`) and its untagged ops land there exactly as they always did.
+The server is an op-agnostic relay + store:
 
 - Clients send `{type:'op', op:{kind, ...}}`; the server tags it with the author,
   appends to a capped per-room history (`MAX_HISTORY` 20000 for private rooms,
@@ -219,10 +226,14 @@ for any feature: the lab's timing tables are the budget.
 **Known divergences** (local vs remote / replay; bounded, documented, and
 pinned by goldens where noted rather than fixed):
 
-- Ops carry no layer, so a remote / replay consumer commits every stroke to
-  layer 0 while the studio commits to the active layer — a pre-existing class,
-  widened by multiply: a multiply stroke on a layer ≥ 1 multiplies over
-  different pixels locally than remotely.
+- Wet / smudge / goo renderers sample and displace LAYER 0 directly (the 1/8-scale
+  `mixMap` mirror is layer-0 only), so those brushes stay layer-0-only and a room
+  in `fun` mode is collapsed to a single layer by the server. Source-over
+  brushes on a layer above 0 now replay on that same layer everywhere, so the old
+  "multiplies over different pixels remotely" class is gone.
+- A stroke with no end marker (a legacy client, one cut off by a wipe) commits
+  into layer 0 of its frame whichever layer it was tagged with - the edge the
+  flat consumer always had.
 - Remote / replay consumers cap concurrent buffered strokes at 4
   (`MAX_STROKE_BUFFERS` / `REMOTE_BUFFER_CAP`); a symmetry stroke with ≥ 5
   copies keeps every copy buffered locally but replays copies 5+ on the legacy

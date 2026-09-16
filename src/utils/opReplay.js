@@ -34,8 +34,12 @@ export const MAX_STROKE_BUFFERS = 4;
 // in-progress buffers; `deferred` queues v3 stamp strokes until tips load.
 // `docW`/`docH` are the document's WORLD bounds (symmetry axes + mix map) —
 // callers replaying a smaller document can supply its own dimensions.
-export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW = CANVAS_WIDTH, docH = CANVAS_HEIGHT) {
+export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW = CANVAS_WIDTH, docH = CANVAS_HEIGHT, targetFor = null) {
   if (!op) return;
+  // Per-layer routing: `targetFor(op)` names the canvas this op's ink belongs to
+  // (the shared layer stack). Absent = every op lands on `ctx` (the flat
+  // consumer: a film export, a thumbnail raster, or a single-layer document).
+  const dest = targetFor ? (targetFor(op) || ctx) : ctx;
   if (op.kind === "draw") {
     let entry = strokes.get(op.strokeId);
     const settings = op.settings || entry?.settings || {};
@@ -58,6 +62,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
         deferred,
         docW,
         docH,
+        targetFor,
       ));
       return;
     }
@@ -80,7 +85,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
           const readyQueue = deferred.get(op.strokeId);
           deferred.delete(op.strokeId);
           if (!ok || !readyQueue) return;
-          for (const queuedOp of readyQueue.ops) applyOp(ctx, queuedOp, lastMap, strokes, onImage, mix, deferred, docW, docH);
+          for (const queuedOp of readyQueue.ops) applyOp(ctx, queuedOp, lastMap, strokes, onImage, mix, deferred, docW, docH, targetFor);
           onImage?.();
         });
       }
@@ -90,7 +95,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
     if (settings.brush === "eraser") {
       // Eraser keeps cutting the paper directly (destination-out can't buffer).
       for (const point of op.points || []) {
-        drawBrushSegment(ctx, last || point, point, settings);
+        drawBrushSegment(dest, last || point, point, settings);
         last = point;
       }
       if (op.end) lastMap.delete(op.strokeId);
@@ -107,11 +112,11 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
       // remote branches, through the same normalizer.
       let smudgeEntry = strokes.get(op.strokeId);
       if (!smudgeEntry) {
-        smudgeEntry = { buf: null, lastTouch: 0, smudge: makeSmudgeRenderer(settings, ctx.canvas) };
+        smudgeEntry = { buf: null, lastTouch: 0, smudge: makeSmudgeRenderer(settings, dest.canvas) };
         strokes.set(op.strokeId, smudgeEntry);
       }
       smudgeEntry.lastTouch = Date.now();
-      for (const point of op.points || []) smudgeEntry.smudge.addPoints(ctx, [point]);
+      for (const point of op.points || []) smudgeEntry.smudge.addPoints(dest, [point]);
       if (op.end) {
         strokes.delete(op.strokeId);
         lastMap.delete(op.strokeId);
@@ -126,7 +131,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
       // remote branches use, so nothing about a stroke is decided differently
       // here. Past the buffer cap (buffered: false) it is the legacy direct
       // per-segment fallback; null = a v3 op whose inline dab can't render.
-      const core = makeStrokeEntryCore(settings, mix.sample, { buffered: buffered < MAX_STROKE_BUFFERS, smudgeSource: ctx.canvas });
+      const core = makeStrokeEntryCore(settings, mix.sample, { buffered: buffered < MAX_STROKE_BUFFERS, smudgeSource: dest.canvas });
       if (!core) return;
       entry = { ...core, settings, lastTouch: 0 };
       strokes.set(op.strokeId, entry);
@@ -142,7 +147,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
           // restart (no end()) and restarts the renderer's ink bbox with the
           // buffer.
           prepareStrokeCommit(entry.buf, entry.renderer, entry.fx, false);
-          entry.buf.commit(ctx, entry.opacity);
+          entry.buf.commit(dest, entry.opacity);
           mix.markDirty(entry.buf.bounds());
           entry.buf.reset();
           entry.buf.ensure(point.x, point.y, entry.pad);
@@ -158,7 +163,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
     } else if (!entry.skip) {
       // (entry.skip = an over-cap v3 smudge: consistently dropped, no direct fallback)
       for (const point of op.points || []) {
-        drawBrushSegment(ctx, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
+        drawBrushSegment(dest, last || point, point, settings, seeded ? pointRand(settings.seed, point.x, point.y) : Math.random);
         last = point;
       }
     }
@@ -167,7 +172,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
         // Flush the dab renderer + run the commit passes (wet edge / impasto
         // / grain), then the single opacity-stamped commit (legacy: no-op).
         prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
-        entry.buf.commit(ctx, entry.opacity);
+        entry.buf.commit(dest, entry.opacity);
         mix.markDirty(entry.buf.bounds()); // paper changed under the wet-mix mirror
         entry.buf.dispose();
       }
@@ -177,13 +182,13 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
       lastMap.set(op.strokeId, last);
     }
   } else if (op.kind === "shape") {
-    drawShape(ctx, op.tool, op.start, op.end, op.opts || {});
+    drawShape(dest, op.tool, op.start, op.end, op.opts || {});
   } else if (op.kind === "text") {
-    drawText(ctx, op.point, op.text, op.opts || {});
+    drawText(dest, op.point, op.text, op.opts || {});
   } else if (op.kind === "image" && op.dataUrl) {
     const img = new Image();
     img.onload = () => {
-      ctx.drawImage(img, op.x, op.y, op.w, op.h);
+      dest.drawImage(img, op.x, op.y, op.w, op.h);
       mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
       onImage?.();
     };
@@ -199,7 +204,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // caller-owned and reusable so a 500-frame film never stacks allocations.
 // `docW`/`docH` default to the canvas's own size; callers using a scaled target
 // can explicitly preserve the source world's symmetry axes and mix map.
-export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = canvas.height) {
+export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = canvas.height, targetFor = null) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = "source-over";
@@ -236,7 +241,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
       }
       continue;
     }
-    applyOp(ctx, op, lastMap, strokes, null, mix, deferred, docW, docH);
+    applyOp(ctx, op, lastMap, strokes, null, mix, deferred, docW, docH, targetFor);
   }
   // Stamp-brush strokes may be parked until their tips load; wait them out.
   const deadline = Date.now() + 10000;
@@ -253,4 +258,54 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
     strokes.delete(id);
   }
   return canvas;
+}
+
+// Offline LAYERED frame renderer (film/storybook export, cold-cel hydration):
+// replay each op into the canvas of the layer it belongs to, then composite the
+// visible layers in order at their opacity onto `target`. `scratch` is a
+// reusable array of per-layer canvases so a 500-frame export doesn't allocate a
+// stack per frame. A document with a single layer takes the flat path, so
+// single-layer rooms render byte-identically to before.
+//
+// Caveat: a stroke with no end marker (legacy) commits into layer 0 whichever
+// layer it was tagged with — the same "no end op" edge the flat consumer has.
+export async function replayFrameComposite(target, layersMeta, ops, docW = target.width, docH = target.height, scratch = []) {
+  const metas = Array.isArray(layersMeta) && layersMeta.length ? layersMeta : null;
+  if (!metas || metas.length <= 1) {
+    await replayFrameOnto(target, ops, docW, docH);
+    return target;
+  }
+  const indexOfLayer = new Map();
+  metas.forEach((meta, i) => {
+    if (!scratch[i] || scratch[i].width !== docW || scratch[i].height !== docH) {
+      const canvas = document.createElement("canvas");
+      canvas.width = docW;
+      canvas.height = docH;
+      scratch[i] = canvas;
+    }
+    const layerCtx = scratch[i].getContext("2d");
+    layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+    layerCtx.globalCompositeOperation = "source-over";
+    layerCtx.globalAlpha = 1;
+    layerCtx.clearRect(0, 0, docW, docH);
+    indexOfLayer.set(meta.id, i);
+  });
+  // An op naming a layer the metadata no longer has (a raced delete) lands on
+  // layer 0 — the same rule the live client uses.
+  const targetFor = (op) => scratch[indexOfLayer.has(op.layerId) ? indexOfLayer.get(op.layerId) : 0].getContext("2d");
+  await replayFrameOnto(scratch[0], ops, docW, docH, targetFor);
+
+  const context = target.getContext("2d");
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = 1;
+  context.clearRect(0, 0, target.width, target.height);
+  for (let i = 0; i < metas.length; i += 1) {
+    const meta = metas[i];
+    if (meta.visible === false || !(Number(meta.opacity) > 0)) continue;
+    context.globalAlpha = typeof meta.opacity === "number" ? Math.max(0, Math.min(1, meta.opacity)) : 1;
+    context.drawImage(scratch[i], 0, 0, target.width, target.height);
+  }
+  context.globalAlpha = 1;
+  return target;
 }

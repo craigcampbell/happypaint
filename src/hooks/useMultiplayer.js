@@ -305,6 +305,26 @@ export function useMultiplayer(roomId, onMessage, token) {
   const sendSceneDel = useCallback((sceneId) => send({ type: "scene_del", sceneId }), [send]);
   // Scene timing: loop count + camera move (host-only, server-enforced).
   const sendSceneSet = useCallback((sceneId, patch) => send({ type: "scene_set", sceneId, ...patch }), [send]);
+  const sendLayerPatch = useCallback(
+    (frameId, layerId, patch) => send({ type: "layer_patch", frameId: frameId || null, layerId, patch }),
+    [send],
+  );
+  const sendLayerAdd = useCallback(
+    (frameId, afterLayerId, name) =>
+      send({ type: "layer_add", frameId: frameId || null, afterLayerId: afterLayerId || null, ...(name ? { name } : {}) }),
+    [send],
+  );
+  const sendLayerDel = useCallback((frameId, layerId) => send({ type: "layer_del", frameId: frameId || null, layerId }), [send]);
+  const sendLayerMove = useCallback(
+    (frameId, layerId, toIndex) => send({ type: "layer_move", frameId: frameId || null, layerId, toIndex }),
+    [send],
+  );
+  // Duplicate (copy the layer's ops under fresh ids) and merge (re-tag onto the
+  // layer below, then remove). Both are the SERVER's call — the pixels are the
+  // ops' doing, so only the server can make them shared.
+  const sendLayerDup = useCallback((frameId, layerId) => send({ type: "layer_dup", frameId: frameId || null, layerId }), [send]);
+  const sendLayerMerge = useCallback((frameId, layerId) => send({ type: "layer_merge", frameId: frameId || null, layerId }), [send]);
+  const sendLayerFlatten = useCallback((frameId) => send({ type: "layer_flatten", frameId: frameId || null }), [send]);
   // Film soundtrack: a dataURL to set, null to remove (host/member gate server-side).
   const sendSoundtrack = useCallback((audio, name, durationMs) => send({ type: "set_soundtrack", audio, name: name || null, durationMs: durationMs || 0 }), [send]);
   // Productions: tie segment rooms into one film (host-only, server-enforced).
@@ -373,6 +393,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
     sendWipeKeep, sendForkPrivate,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
+    sendLayerAdd, sendLayerDel, sendLayerMove, sendLayerPatch, sendLayerDup, sendLayerMerge, sendLayerFlatten,
     sendSceneFetch, sendSceneAdd, sendSceneDel, sendSceneSet, sendSoundtrack,
     sendProductionCreate, sendProductionAddSegment, sendProductionRename,
     sendFramePresence, sendBeacon, sendCheer,

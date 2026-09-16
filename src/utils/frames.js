@@ -74,15 +74,35 @@ export function compositeFrameToCanvas(frame, {
 }
 
 // A frame shell for a server-synced animation room: no canvases until it is
-// hydrated, just its identity, timing and (soon) its ops + raster.
-export function createColdFrame(id, durationMs = DEFAULT_FRAME_DURATION) {
-  return { id, durationMs, layers: null, activeLayerId: null, ops: [], raster: null, rasterCount: -1, hydrating: null };
+// hydrated, just its identity, timing and (soon) its ops + raster. `layerMeta`
+// is the server's canonical layer list — the stack is built from it when the
+// cel hydrates, so every client materializes the SAME layers (ids included).
+export function createColdFrame(id, durationMs = DEFAULT_FRAME_DURATION, layerMeta = null) {
+  return { id, durationMs, layers: null, activeLayerId: null, layerMeta: layerMeta || null, ops: [], raster: null, rasterCount: -1, hydrating: null };
+}
+
+// Build a live layer stack from the server's layer meta (order preserved, ids
+// adopted). Pixels start blank — the frame's ops replay into them.
+export function layersFromMeta(meta, width = CANVAS_WIDTH, height = CANVAS_HEIGHT) {
+  if (!Array.isArray(meta) || meta.length === 0) return createDefaultLayers(width, height);
+  return meta.map((item) => {
+    const layer = createLayer({
+      name: item?.name || "Layer",
+      visible: item?.visible !== false,
+      opacity: typeof item?.opacity === "number" ? item.opacity : 1,
+      locked: Boolean(item?.locked),
+      width,
+      height,
+    });
+    if (item?.id) layer.id = item.id; // the server's id is canonical
+    return layer;
+  });
 }
 
 // Give a cold frame blank live canvases (its ops replay into them next).
 export function allocateFrameLayers(frame) {
   if (!frame || frame.layers) return frame;
-  const layers = createDefaultLayers(CANVAS_WIDTH, CANVAS_HEIGHT);
+  const layers = layersFromMeta(frame.layerMeta, CANVAS_WIDTH, CANVAS_HEIGHT);
   frame.layers = layers;
   frame.activeLayerId = layers[layers.length - 1].id;
   return frame;

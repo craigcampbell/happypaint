@@ -1157,6 +1157,10 @@ function invalidateRoomSnapshot(room) {
 // for a refresh once enough ops have accumulated past the baked-in opId.
 function snapshotDue(room) {
   if (room.animationEnabled || (room.frames && room.frames.length > 1)) return false;
+  // A baked PNG is FLAT: it cannot say which layer a stroke belonged to, so a
+  // multi-layer room must rebuild from its op stream instead (joiners replay
+  // it through the same layer routing everyone else uses).
+  if (roomHasLayers(room)) return false;
   if (!room.history || room.history.length <= SNAPSHOT_MIN_OPS) return false;
   if (!room.snapshotOpId) return true;
   const lastOpId = room.history.length ? (room.history[room.history.length - 1].opId || 0) : 0;
@@ -1164,7 +1168,11 @@ function snapshotDue(room) {
 }
 // Snapshot-capable rooms only: a single-frame, non-animation room.
 function roomCanSnapshot(room) {
-  return CLIENT_SNAPSHOTS_ENABLED && !room.animationEnabled && (!room.frames || room.frames.length <= 1);
+  return CLIENT_SNAPSHOTS_ENABLED && !room.animationEnabled && (!room.frames || room.frames.length <= 1) && !roomHasLayers(room);
+}
+// Does any frame carry more than its base layer?
+function roomHasLayers(room) {
+  return (room.frames || []).some((f) => Array.isArray(f.layers) && f.layers.length > 1);
 }
 
 // ---- Chat persistence -----------------------------------------------------
@@ -1564,7 +1572,142 @@ function sceneRuntimeMs(room, scene) {
   return framesOfScene(room, scene.id).reduce((sum, f) => sum + (f.durationMs || 120), 0) * clampLoops(scene.loops);
 }
 
-function sanitizeFrames(list) {
+// ---- Shared layer stacks ---------------------------------------------------
+// Layer STRUCTURE is room state (order, name, visibility, opacity, lock) and
+// every op records the layer it was drawn on (op.layerId). Pixels never travel:
+// a client rebuilds a layer by replaying that layer's ops in server order, which
+// is what makes a reload, a rejoin and a collaborator all agree on the stack.
+//
+// Each layer is a full-size canvas in EVERY client, so the cap is a memory
+// contract as much as a moderation one — animation frames multiply frames x
+// layers, hence the smaller animation cap (matches the client's MAX_LAYERS /
+// ANIM_MAX_LAYERS in src/App.jsx).
+const MAX_ROOM_LAYERS = Number(process.env.MAX_ROOM_LAYERS || 6);
+const MAX_ROOM_LAYERS_ANIM = Number(process.env.MAX_ROOM_LAYERS_ANIM || 3);
+const LAYER_NAME_MAX = 40;
+const LAYER_ID_MAX = 24;
+// The base layer a legacy room's untagged ops already live on.
+const BASE_LAYER_ID = 'L0';
+
+function clampOpacity(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0, Math.min(1, n));
+}
+
+// Layer meta in, layer meta out: ids are server-minted (so every client agrees
+// on them), names bounded, order preserved, duplicates dropped, capped.
+function sanitizeLayers(list, cap = MAX_ROOM_LAYERS) {
+  if (!Array.isArray(list)) return null;
+  const seen = new Set();
+  const layers = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    const id = typeof raw.id === 'string' ? raw.id.slice(0, LAYER_ID_MAX) : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    layers.push({
+      id,
+      name: typeof raw.name === 'string' && raw.name.trim()
+        ? raw.name.trim().slice(0, LAYER_NAME_MAX)
+        : `Layer ${layers.length + 1}`,
+      visible: raw.visible !== false,
+      opacity: clampOpacity(raw.opacity),
+      locked: !!raw.locked,
+    });
+    if (layers.length >= cap) break;
+  }
+  return layers.length ? layers : null;
+}
+
+// Every frame always owns at least one layer, so "no layer list" — every room
+// written before shared layers existed — is not a special case anywhere
+// downstream: its ops are untagged and land on layers[0], exactly where they
+// went before.
+function defaultLayers() {
+  return [{ id: BASE_LAYER_ID, name: 'Canvas', visible: true, opacity: 1, locked: false }];
+}
+
+function layerCapFor(room) {
+  return room.animationEnabled ? MAX_ROOM_LAYERS_ANIM : MAX_ROOM_LAYERS;
+}
+
+// Frame + layer ids share the room's op counter (frame ids already did), so an
+// id is unique and monotonic regardless of which one minted it.
+function mintLayerId(room) {
+  room.opSeq = (room.opSeq || 0) + 1;
+  return `L${room.opSeq}`;
+}
+
+// Same power model as set_wet / set_symmetry: hosts only in public rooms, any
+// member in a private one, and never while a host has the room locked.
+function canEditLayers(room, user) {
+  if (!user) return false;
+  if (room.locked && !isHost(room, user)) return false;
+  if (room.audience === 'kid_safe' && !isHost(room, user)) return false;
+  // Fun mode (goo/smudge) is single-layer by contract: its renderers sample and
+  // displace layer 0 directly, so a second layer would read the wrong pixels.
+  if (room.brushMode === 'fun') return false;
+  return true;
+}
+
+// The frame a layer message targets. frameId omitted = the room's first frame,
+// matching how untagged ops resolve.
+function layerTargetFrame(room, frameId) {
+  if (!room || !Array.isArray(room.frames) || !room.frames.length) return null;
+  if (frameId == null) return room.frames[0];
+  const id = String(frameId).slice(0, LAYER_ID_MAX);
+  return room.frames.find((f) => f.id === id) || null;
+}
+
+// The layer a frame's ops land on: the named one, else the base. A named layer
+// that no longer exists (raced a delete) falls back to the base only for
+// REPLAY; the live op path drops it instead (see case 'op').
+function layerFor(frame, layerId) {
+  if (!frame || !Array.isArray(frame.layers) || !frame.layers.length) return null;
+  if (layerId == null) return frame.layers[0];
+  return frame.layers.find((l) => l.id === layerId) || null;
+}
+
+// An op is a host? No — but a layer is: drop drawing on a locked layer unless
+// the sender is a host. Belt to the client's braces (the canvas is disabled too).
+function canDrawOnLayer(room, user, frame, layer) {
+  if (!layer) return false;
+  if (layer.locked && !isHost(room, user)) return false;
+  return true;
+}
+
+// Collapse every other layer of a frame onto `intoId`: each dropped layer's ops
+// are re-tagged onto the target (op order preserved, so the composite is what
+// the stack showed) and the layers themselves are removed. Used by merge-down,
+// the fun-mode toggle, and anything else that must stay single-layer for the
+// layer-0-only renderers (goo / smudge / the wet-mix mirror).
+//
+// Caveat worth knowing: a re-tagged eraser op now cuts the target layer's ink
+// too, which is exactly why merge-down refuses a layer that has erased strokes
+// (see the layer_merge case) — fun mode accepts it, because its contract is one
+// layer and there is no eraser UI there.
+function collapseFrameLayers(room, frame, intoId) {
+  const into = frame.layers.find((l) => l.id === intoId);
+  if (!into) return [];
+  const dropped = frame.layers.filter((l) => l.id !== intoId).map((l) => l.id);
+  if (!dropped.length) return [];
+  const gone = new Set(dropped);
+  for (const op of room.history) {
+    if (gone.has(op.layerId) && opFrameId(room, op) === frame.id) op.layerId = intoId;
+  }
+  // A wipe's undo buffer holds ops that are not in history — re-tag them too or
+  // "bring it back" would resurrect a layer that no longer exists.
+  if (Array.isArray(room.lastCleared)) {
+    for (const op of room.lastCleared) {
+      if (gone.has(op.layerId) && opFrameId(room, op) === frame.id) op.layerId = intoId;
+    }
+  }
+  frame.layers = frame.layers.filter((l) => l.id === intoId);
+  return dropped;
+}
+
+function sanitizeFrames(list, layerCap = MAX_ROOM_LAYERS) {
   if (!Array.isArray(list)) return null;
   const frames = list
     .filter((f) => f && typeof f.id === 'string' && f.id.length <= 24)
@@ -1572,6 +1715,7 @@ function sanitizeFrames(list) {
       id: f.id,
       durationMs: clampHold(f.durationMs),
       sceneId: typeof f.sceneId === 'string' && f.sceneId.length <= 24 ? f.sceneId : null,
+      layers: sanitizeLayers(f.layers, layerCap) || defaultLayers(),
     }));
   return frames.length ? frames : null;
 }
@@ -1600,14 +1744,15 @@ function framesOfScene(room, sceneId) {
 }
 
 // Light scene metadata for pagers: ids, names, and per-frame timing (durations
-// ride along so a stitched film export knows every frame's length up front).
+// ride along so a stitched film export knows every frame's length up front,
+// and layer meta rides along so an offline export can rebuild each layer).
 function scenesMeta(room) {
   return room.scenes.map((s) => ({
     id: s.id,
     name: s.name,
     loops: clampLoops(s.loops),
     camera: CAMERA_PRESETS.has(s.camera) ? s.camera : 'none',
-    frames: framesOfScene(room, s.id).map((f) => ({ id: f.id, durationMs: f.durationMs })),
+    frames: framesOfScene(room, s.id).map((f) => ({ id: f.id, durationMs: f.durationMs, layers: f.layers })),
   }));
 }
 
@@ -1798,6 +1943,9 @@ function getRoom(roomId) {
     // via POST /api/rooms persists its audience, which wins here.
     const audience = saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
     const listed = saved.listed != null ? saved.listed : audience === 'kid_safe';
+    // Which frame/scene layer caps apply. Public rooms can never opt into the
+    // film strip, so the animation cap only ever applies to a private room.
+    const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
     // Public rooms carry a lower cap than the global file cap — apply it on load
     // too, so a file written under the old cap doesn't reload oversized.
     const loadCap = audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
@@ -1818,6 +1966,14 @@ function getRoom(roomId) {
     for (const s of Array.isArray(saved.scenes) ? saved.scenes : []) {
       const m = /^s(\d+)$/.exec((s && s.id) || '');
       if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
+    }
+    // Layer ids mint from the same counter (`L<opSeq>`) and outlive ops the same
+    // way — a restart must not hand out an id a live frame already uses.
+    for (const f of Array.isArray(saved.frames) ? saved.frames : []) {
+      for (const l of Array.isArray(f && f.layers) ? f.layers : []) {
+        const m = /^L(\d+)$/.exec((l && l.id) || '');
+        if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
+      }
     }
     const fresh = trackHistory({
       code: roomId,
@@ -1891,10 +2047,13 @@ function getRoom(roomId) {
       // Shared-animation state. Every room carries a frames list (legacy
       // untagged ops live on frames[0]) grouped into scenes; only
       // animation-enabled rooms may grow either. Public rooms can NEVER opt
-      // in — only FLIPBOOK ships the strip.
-      frames: sanitizeFrames(saved.frames) || [{ id: 'f0', durationMs: 120, sceneId: null }],
+      // in — only FLIPBOOK ships the strip. Every frame also carries its own
+      // shared layer stack; a room written before shared layers materializes
+      // the single layer its ops already lived on.
+      frames: sanitizeFrames(saved.frames, animEnabled ? MAX_ROOM_LAYERS_ANIM : MAX_ROOM_LAYERS)
+        || [{ id: 'f0', durationMs: 120, sceneId: null, layers: defaultLayers() }],
       scenes: sanitizeScenes(saved.scenes) || [{ id: 's0', name: 'Scene 1' }],
-      animationEnabled: ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation),
+      animationEnabled: animEnabled,
       // Finger-paint mode: smudge allowed despite kid_safe, chat disabled,
       // wet canvas on. Only the featured FINGERS room carries it.
       fingerPaint: FINGER_PAINT_CODES.has(roomId),
@@ -1949,7 +2108,7 @@ function enableStorybookRoom(room) {
     const sceneId = `s${room.opSeq}`;
     room.scenes.push({ id: sceneId, name: `Page ${room.scenes.length + 1}` });
     room.opSeq += 1;
-    room.frames.push({ id: `f${room.opSeq}`, durationMs: 120, sceneId });
+    room.frames.push({ id: `f${room.opSeq}`, durationMs: 120, sceneId, layers: defaultLayers() });
   }
   if (!room.storybook?.enabled || !Array.isArray(room.storybook.pages)) {
     room.storybook = defaultStorybook(room.scenes.slice(0, 4));
@@ -2317,7 +2476,7 @@ function ensureRoomFresh(roomId) {
   // pinned at the cap would hand the next kids a blank film strip they can't
   // grow. Reset the structure the way a fresh room starts.
   if (room.animationEnabled) {
-    room.frames = [{ id: 'f0', durationMs: 120, sceneId: 's0' }];
+    room.frames = [{ id: 'f0', durationMs: 120, sceneId: 's0', layers: defaultLayers() }];
     room.scenes = [{ id: 's0', name: 'Scene 1' }];
   }
   recountFrameOps(room);
@@ -3852,6 +4011,19 @@ wss.on('connection', async (ws, req) => {
           const targetPage = room.storybook.pages.find((item) => item.sceneId === targetFrame?.sceneId);
           if (targetPage?.locked && !isHost(room, user)) break;
         }
+        // Shared layers: an op records the layer it was drawn on. A layer that no
+        // longer exists (a stale client racing a delete) is dropped rather than
+        // re-homed onto layer 0, which would resurrect deleted ink. The ONE
+        // exception is a frame with a single layer: there is nothing ambiguous
+        // about where the ink belongs, so a racing client's stroke still lands
+        // (that is exactly what the untagged path did before layers existed).
+        if (data.op.layerId != null) {
+          const targetFrame = layerTargetFrame(room, frameId);
+          let layer = targetFrame ? layerFor(targetFrame, String(data.op.layerId).slice(0, LAYER_ID_MAX)) : null;
+          if (!layer && targetFrame?.layers?.length === 1) layer = targetFrame.layers[0];
+          if (!layer || !canDrawOnLayer(room, user, targetFrame, layer)) break;
+          data.op = { ...data.op, layerId: layer.id };
+        }
         // Multi-frame rooms (animation on, or a preserved flipbook with the
         // toggle off) live under per-frame caps — the global FIFO trim would
         // silently rot early frames, so it only applies to single-frame rooms.
@@ -4336,7 +4508,29 @@ wss.on('connection', async (ws, req) => {
         // any op, so toggling it never repaints history.
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
         room.brushMode = data.brushMode === 'fun' ? 'fun' : 'realistic';
-        broadcast(roomId, { type: 'brush_mode_state', brushMode: room.brushMode });
+        // Fun mode's renderers (goo / smudge) read and displace LAYER 0, so the
+        // room has to BE single-layer: collapse every frame's stack onto its base
+        // layer (op order preserved), then make everyone repaint.
+        let collapsed = false;
+        if (room.brushMode === 'fun') {
+          for (const frame of room.frames) {
+            if (Array.isArray(frame.layers) && frame.layers.length > 1) {
+              collapseFrameLayers(room, frame, frame.layers[0].id);
+              frame.layers[0].visible = true;
+              frame.layers[0].opacity = 1;
+              collapsed = true;
+            }
+          }
+          if (collapsed) {
+            recountFrameOps(room);
+            room.hiddenGen = (room.hiddenGen || 0) + 1;
+            invalidateRoomSnapshot(room);
+            broadcast(roomId, room.animationEnabled
+              ? { type: 'resync' }
+              : { type: 'history', ops: visibleHistory(room), frames: room.frames });
+          }
+        }
+        broadcast(roomId, { type: 'brush_mode_state', brushMode: room.brushMode, frames: room.frames });
         persistRoom(roomId);
         break;
       }
@@ -4695,7 +4889,7 @@ wss.on('connection', async (ws, req) => {
           break;
         }
         const scene = { id: `s${(room.opSeq = (room.opSeq || 0) + 1)}`, name: `Scene ${room.scenes.length + 1}`, loops: 1, camera: 'none' };
-        const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId: scene.id };
+        const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId: scene.id, layers: defaultLayers() };
         room.scenes.push(scene);
         room.frames.push(firstFrame); // scene blocks stay contiguous: appended at the end
         room.frameOpCounts.set(firstFrame.id, 0);
@@ -4777,7 +4971,7 @@ wss.on('connection', async (ws, req) => {
           ws.send(JSON.stringify({ type: 'frame_denied', reason: `Scenes are capped at ${maxFrames} frames — add a new scene!` }));
           break;
         }
-        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId };
+        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId, layers: dupFrame ? dupFrame.layers.map((l) => ({ ...l })) : defaultLayers() };
         // Duplicate: copy the source frame's visible ops under fresh opIds so
         // rejoiners replay the copy identically (the engine is deterministic —
         // same ops, same seeds, same pixels). Clients clone pixels locally.
@@ -4895,6 +5089,207 @@ wss.on('connection', async (ws, req) => {
         if (!target) break;
         target.durationMs = clampHold(data.durationMs);
         broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, sceneId: target.sceneId, scenes: scenesMeta(room), byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+
+      // ---- Shared layer stack -----------------------------------------------
+      // Layer STRUCTURE is room state (order, name, visibility, opacity, lock);
+      // the pixels never travel — every client rebuilds a layer by replaying the
+      // ops tagged with its id (see case 'op'). The server mints the ids and
+      // echoes the CANONICAL list to everyone including the sender, so every
+      // client converges in server order exactly like the frame_* mutations
+      // above. These work in EVERY room (single-layer rooms only ever see one
+      // layer), not just animation ones.
+      case 'layer_add': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        const cap = layerCapFor(room);
+        if (target.layers.length >= cap) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: `This canvas keeps ${cap} layers` }));
+          break;
+        }
+        const afterId = data.afterLayerId != null ? String(data.afterLayerId).slice(0, LAYER_ID_MAX) : null;
+        const layer = {
+          id: mintLayerId(room),
+          name: typeof data.name === 'string' && data.name.trim()
+            ? data.name.trim().slice(0, LAYER_NAME_MAX)
+            : `Layer ${target.layers.length + 1}`,
+          visible: true,
+          opacity: 1,
+          locked: false,
+        };
+        const at = afterId ? target.layers.findIndex((l) => l.id === afterId) : -1;
+        if (at >= 0) target.layers.splice(at + 1, 0, layer);
+        else target.layers.push(layer); // append = the new top layer
+        invalidateRoomSnapshot(room);
+        broadcast(roomId, { type: 'layer_add', frameId: target.id, layerId: layer.id, layers: target.layers, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_del': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        if (target.layers.length <= 1) break; // a frame always keeps one layer
+        const delId = String(data.layerId || '').slice(0, LAYER_ID_MAX);
+        if (!target.layers.some((l) => l.id === delId)) break;
+        // The BASE layer is load-bearing: the wet-mix mirror, goo/smudge and the
+        // fun-mode contract all read layer 0, and it is where legacy untagged ops
+        // live. It can be renamed/reordered, never removed.
+        if (target.layers[0].id === delId) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'The bottom layer can’t be deleted' }));
+          break;
+        }
+        // A deleted layer takes its ops with it: leaving them behind would
+        // resurrect the layer's ink on the base layer at the next replay.
+        const removeIds = new Set(
+          room.history.filter((op) => op.layerId === delId && opFrameId(room, op) === target.id).map((op) => op.opId),
+        );
+        if (removeIds.size) {
+          room.history = room.history.filter((op) => !removeIds.has(op.opId));
+          room.hiddenGen = (room.hiddenGen || 0) + 1; // join cache is stale
+          recountFrameOps(room);
+        }
+        target.layers = target.layers.filter((l) => l.id !== delId);
+        invalidateRoomSnapshot(room);
+        broadcast(roomId, { type: 'layer_del', frameId: target.id, layerId: delId, layers: target.layers, removedOpIds: [...removeIds], byUserId: id });
+        // Cold frames on other clients hold a stale op list; make them refetch.
+        if (room.animationEnabled) broadcast(roomId, { type: 'resync' });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_move': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        const moveId = String(data.layerId || '').slice(0, LAYER_ID_MAX);
+        const from = target.layers.findIndex((l) => l.id === moveId);
+        if (from < 0) break;
+        const to = Math.max(0, Math.min(target.layers.length - 1, Math.round(Number(data.toIndex)) || 0));
+        if (from === to) break;
+        const [moved] = target.layers.splice(from, 1);
+        target.layers.splice(to, 0, moved);
+        broadcast(roomId, { type: 'layer_move', frameId: target.id, layerId: moveId, layers: target.layers, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_patch': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        const patchId = String(data.layerId || '').slice(0, LAYER_ID_MAX);
+        const patched = target.layers.find((l) => l.id === patchId);
+        if (!patched) break;
+        const patch = data.patch && typeof data.patch === 'object' && !Array.isArray(data.patch) ? data.patch : {};
+        if (typeof patch.name === 'string' && patch.name.trim()) patched.name = patch.name.trim().slice(0, LAYER_NAME_MAX);
+        if (typeof patch.visible === 'boolean') patched.visible = patch.visible;
+        if (patch.opacity != null) patched.opacity = clampOpacity(patch.opacity);
+        if (typeof patch.locked === 'boolean') patched.locked = patch.locked;
+        // Fun mode's renderers read and displace LAYER 0 only, so the base layer
+        // can never be hidden or faded while a room is in fun mode.
+        if (room.brushMode === 'fun' && patched.id === target.layers[0].id) {
+          patched.visible = true;
+          patched.opacity = 1;
+        }
+        invalidateRoomSnapshot(room);
+        broadcast(roomId, { type: 'layer_patch', frameId: target.id, layerId: patchId, layers: target.layers, byUserId: id });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_dup': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        const cap = layerCapFor(room);
+        if (target.layers.length >= cap) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: `This canvas keeps ${cap} layers` }));
+          break;
+        }
+        const srcId = String(data.layerId || '').slice(0, LAYER_ID_MAX);
+        const srcIndex = target.layers.findIndex((l) => l.id === srcId);
+        if (srcIndex < 0) break;
+        const src = target.layers[srcIndex];
+        const copy = { id: mintLayerId(room), name: `${src.name} copy`.slice(0, LAYER_NAME_MAX), visible: src.visible, opacity: src.opacity, locked: false };
+        // Duplicate the CONTENT the way a duplicated frame does: the source
+        // layer's visible ops are copied under fresh opIds (deterministic — same
+        // ops, same seeds, same pixels) and tagged with the new layer, so a
+        // rejoin replays the copy. Live clients clone the canvas locally.
+        const copies = visibleHistory(room)
+          .filter((op) => opFrameId(room, op) === target.id && (op.layerId || target.layers[0].id) === srcId)
+          .map((op) => ({ ...op, layerId: copy.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
+        if (room.history.length + copies.length > (room.animationEnabled ? MAX_ANIM_ROOM_OPS : historyCapFor(room))) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'This canvas is out of room to duplicate a layer' }));
+          break;
+        }
+        target.layers.splice(srcIndex + 1, 0, copy);
+        if (copies.length) {
+          room.history = room.history.concat(copies);
+          recountFrameOps(room);
+          room.hiddenGen = (room.hiddenGen || 0) + 1;
+        }
+        invalidateRoomSnapshot(room);
+        broadcast(roomId, { type: 'layer_dup', frameId: target.id, layerId: copy.id, sourceLayerId: srcId, layers: target.layers, byUserId: id });
+        // Cold frames on other clients hold a stale op list (the copies are new).
+        if (room.animationEnabled) broadcast(roomId, { type: 'resync' });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_merge': {
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        const upId = String(data.layerId || '').slice(0, LAYER_ID_MAX);
+        const upIndex = target.layers.findIndex((l) => l.id === upId);
+        if (upIndex <= 0) break; // nothing below the base layer
+        const upper = target.layers[upIndex];
+        const lower = target.layers[upIndex - 1];
+        // Merging re-tags the upper layer's ops onto the lower one. That is only
+        // the same picture when both layers composite plainly: an eraser on the
+        // upper layer would start cutting the lower layer's ink, and a layer
+        // opacity would vanish (strokes keep their own opacity).
+        const upOps = room.history.filter((op) => op.layerId === upId && opFrameId(room, op) === target.id);
+        const hasEraser = upOps.some((op) => op.kind === 'draw' && op.settings && op.settings.brush === 'eraser');
+        if (hasEraser) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'That layer has erased strokes — merging can’t be shared safely' }));
+          break;
+        }
+        if (upper.opacity !== 1 || lower.opacity !== 1 || !upper.visible || !lower.visible) {
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'Set both layers to 100% and visible before merging' }));
+          break;
+        }
+        collapseFrameLayers(room, target, lower.id);
+        invalidateRoomSnapshot(room);
+        recountFrameOps(room);
+        room.hiddenGen = (room.hiddenGen || 0) + 1;
+        broadcast(roomId, { type: 'layer_merge', frameId: target.id, layerId: upId, intoLayerId: lower.id, layers: target.layers, byUserId: id });
+        // Ink moved between canvases: every client must rebuild from the ops
+        // (the re-tagged ones now belong to the lower layer).
+        broadcast(roomId, room.animationEnabled
+          ? { type: 'resync' }
+          : { type: 'history', ops: visibleHistory(room), frames: room.frames });
+        persistRoom(roomId);
+        break;
+      }
+      case 'layer_flatten': {
+        // Fun mode (goo / smudge): its renderers sample and displace layer 0
+        // directly, so the room must be single-layer. Everything collapses onto
+        // the base layer, op order preserved.
+        if (!canEditLayers(room, user)) break;
+        const target = layerTargetFrame(room, data.frameId);
+        if (!target) break;
+        if (target.layers.length <= 1) break;
+        collapseFrameLayers(room, target, target.layers[0].id);
+        target.layers[0].visible = true;
+        target.layers[0].opacity = 1;
+        invalidateRoomSnapshot(room);
+        recountFrameOps(room);
+        room.hiddenGen = (room.hiddenGen || 0) + 1;
+        broadcast(roomId, { type: 'layer_flatten', frameId: target.id, layers: target.layers, byUserId: id });
+        broadcast(roomId, room.animationEnabled
+          ? { type: 'resync' }
+          : { type: 'history', ops: visibleHistory(room), frames: room.frames });
         persistRoom(roomId);
         break;
       }
