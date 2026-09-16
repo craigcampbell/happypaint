@@ -19,3 +19,30 @@ Answers I still need:
 3. If a public-room host wants to stop being watched without unlisting, that is CARD-018 (persisted room field, human-reviewed). Move it ahead of counted watchers (CARD-016)?
 4. CARD-014 was verified by me (sub-agents were rate-limited that cycle). Want a second independent pass on it, alongside the end-to-end regression of cycles 1-5, before PR #2 merges?
 5. Next patch window: CARD-016 (counted watchers) first, or the ready content cards CARD-003..007?
+
+## Moderation console (built + verified 2026-09-16) — decisions I made, and what still needs you
+
+Shipped: /admin/rooms (Room Radar), /admin/users, /admin/gallery, global block.
+Verified: 22/22 unit checks, real chat digest, urgent-report row tint, block closes
+live sockets + refuses rejoin, gallery thumbnails + lightbox.
+
+I decided these (reversible, tell me if wrong):
+- Block = indefinite until manually unblocked (no auto-expiry). It matches the
+  console being manual and is the safe default for a defacer.
+- Blocking a guest needed a handle, so the WS auth frame now carries the device's
+  random id (localStorage `drawesome:userkey:v1`). IP blocking exists as a fallback
+  key but the console does NOT block by IP by default — a school NAT would take out
+  a whole classroom.
+- The chat synopsis is deterministic by default; no LLM call happens until you set
+  MOD_SYNOPSIS_URL (optional MOD_SYNOPSIS_KEY). Nothing but flags and already-clipped
+  flagged lines would be sent to it.
+
+Questions:
+1. Block duration: indefinite (chosen) vs timed (e.g. 24h) vs escalating?
+2. Do you want an audit trail for moderation Actions (who blocked/hid/removed what,
+   when)? Right now blocks store `by: admin:<hash>` + reason but nothing lists them.
+3. Gallery removal is silent to the owner. Should a removed save notify them, or is
+   silence the right call for kid-safe moderation?
+4. Should /admin/* require the same key for all four pages (it does), or should
+   gallery/removal power sit behind a stronger/second key?
+5. LLM synopsis: want me to wire one to your existing provider, and if so which?
