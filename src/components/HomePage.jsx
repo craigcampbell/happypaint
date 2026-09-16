@@ -303,7 +303,7 @@ export default function HomePage({ onNavigate }) {
             <h1 id="home-title">Draw something.</h1>
             <p className="home-hero-line">Make it together.</p>
             <p className="home-sub">
-              Open a fresh canvas, then invite friends to draw with you in real time. No account or install.
+              Jump into the Open Studio — a shared canvas where everyone draws together in real time. No account or install.
             </p>
             <div className="home-hero-actions">
               <button type="button" className="primary-action home-draw-now" onClick={startRoom}>
@@ -324,19 +324,19 @@ export default function HomePage({ onNavigate }) {
             type="button"
             className="home-paper"
             onClick={startRoom}
-            aria-label="Open a blank canvas and start drawing"
+            aria-label="Jump into the shared Open Studio canvas and start drawing"
           >
             <span className="home-paper-sun" aria-hidden="true" />
             <span className="home-paper-stroke home-paper-stroke-one" aria-hidden="true" />
             <span className="home-paper-stroke home-paper-stroke-two" aria-hidden="true" />
             <BrandMark className="home-paper-mark" showName={false} />
-            <span className="home-paper-note">Your canvas is waiting.</span>
+            <span className="home-paper-note">A shared canvas is waiting.</span>
             <span className="home-paper-pencil" aria-hidden="true">✎</span>
           </button>
         </section>
 
         <p className="home-feature-line" aria-label="Things you can do in Drawesome">
-          Blank canvas <span aria-hidden="true">·</span> Coloring pages <span aria-hidden="true">·</span> Shared rooms <span aria-hidden="true">·</span> Drawing games
+          Open Studio <span aria-hidden="true">·</span> Coloring pages <span aria-hidden="true">·</span> Shared rooms <span aria-hidden="true">·</span> Drawing games
         </p>
 
         <section className="home-next" aria-labelledby="home-next-title">
@@ -348,7 +348,7 @@ export default function HomePage({ onNavigate }) {
           <div className="home-choice-grid">
             <button type="button" className="home-choice home-choice-blank" onClick={startRoom}>
               <span className="home-choice-icon" aria-hidden="true">✎</span>
-              <span><strong>Anything you want</strong><small>Start with a fresh canvas</small></span>
+              <span><strong>Anything you want</strong><small>Draw on the shared Open Studio canvas</small></span>
               <b aria-hidden="true">→</b>
             </button>
 
@@ -374,7 +374,7 @@ export default function HomePage({ onNavigate }) {
 
             <button type="button" className="home-choice home-choice-friends" onClick={startRoom}>
               <span className="home-choice-icon" aria-hidden="true">☺</span>
-              <span><strong>Something together</strong><small>Make a room and invite friends</small></span>
+              <span><strong>Something together</strong><small>Draw with friends in the Open Studio</small></span>
               <b aria-hidden="true">→</b>
             </button>
           </div>
@@ -407,12 +407,12 @@ export default function HomePage({ onNavigate }) {
               Paint on the same canvas in real time, or play a drawing game. Send a room code and everyone can jump in.
             </p>
             <ol className="home-invite-steps">
-              <li><strong>Open a room.</strong> A fresh canvas starts with just you.</li>
+              <li><strong>Jump into the Open Studio.</strong> It&rsquo;s a shared canvas — others may be drawing too.</li>
               <li><strong>Choose Invite friends.</strong> Share the room link with people you know.</li>
               <li><strong>Make something together.</strong> Everyone paints on the same canvas.</li>
             </ol>
             <div className="home-live-actions">
-              <button type="button" className="primary-action" onClick={startRoom}>Create a room</button>
+              <button type="button" className="primary-action" onClick={startRoom}>Join the Open Studio</button>
               <button type="button" onClick={() => onNavigate("/rooms")}>See live rooms</button>
             </div>
           </div>
@@ -436,17 +436,17 @@ export default function HomePage({ onNavigate }) {
                   startRoom();
                 }
               }}
-              aria-label={active ? `Join ${active.title || active.code}` : "Create a drawing room"}
+              aria-label={active ? `Join ${active.title || active.code}` : "Open the shared studio canvas"}
             >
               {activeCode && previewVisible ? (
                 <Suspense fallback={<span className="home-viewer-empty">Loading the live canvas…</span>}>
                   <LiveRoomCanvas roomCode={activeCode} onSocial={onSocial} />
                 </Suspense>
-              ) : <span className="home-viewer-empty">{activeCode ? "A shared canvas, made together" : "Start the first drawing"}</span>}
+              ) : <span className="home-viewer-empty">{activeCode ? "A shared canvas, made together" : "Come draw in the Open Studio"}</span>}
               {/* keyed by room: a carousel hop remounts the overlay clean, so a
                   late chat_history from the OLD room can never bleed across. */}
               {activeCode && previewVisible ? <HomeBanter key={activeCode} listenerRef={socialListenerRef} /> : null}
-              <span className="home-viewer-cta">{active ? "Join this canvas →" : "Create a room →"}</span>
+              <span className="home-viewer-cta">{active ? "Join this canvas →" : "Jump in →"}</span>
             </button>
             {/* One tap from reading the banter to being IN it. */}
             {active ? (

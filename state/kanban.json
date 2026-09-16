@@ -100,7 +100,7 @@
    {
     "card_id": "CARD-006",
     "title": "Wall dead-cue fix: hide 'Search 0 drawings...' and sort tabs when wall is empty",
-    "description": "S2: over zero items the wall still shows an enabled search box and sort tabs \u2014 dead cues implying missing content. Hide them in the empty state; also fix wall subtitle referencing a 'Wall' button not on that page.",
+    "description": "S2: over zero items the wall still shows an enabled search box and sort tabs — dead cues implying missing content. Hide them in the empty state; also fix wall subtitle referencing a 'Wall' button not on that page.",
     "impact": 4,
     "surprise": 4,
     "effort": 1,
@@ -110,8 +110,8 @@
    },
    {
     "card_id": "CARD-007",
-    "title": "Signup: keep 'Keep drawing as a guest \u2192' visible without scrolling on phone",
-    "description": "S2: on a 375px phone the guest escape hatch crops below the fold, making signup feel mandatory \u2014 violates the anonymous-first golden rule's spirit. Reorder/compact so the escape hatch is above the fold.",
+    "title": "Signup: keep 'Keep drawing as a guest →' visible without scrolling on phone",
+    "description": "S2: on a 375px phone the guest escape hatch crops below the fold, making signup feel mandatory — violates the anonymous-first golden rule's spirit. Reorder/compact so the escape hatch is above the fold.",
     "impact": 5,
     "surprise": 3,
     "effort": 1,
@@ -120,7 +120,21 @@
     "source": "S2 finding"
    }
   ],
-  "in_progress": [],
+  "in_progress": [
+   {
+    "card_id": "CARD-013",
+    "title": "Truth-in-copy: homepage no longer says 'a fresh canvas starts with just you' after CARD-001",
+    "description": "CARD-001 routed every startRoom entry point to /join/MAIN (public Open Studio), but homepage copy still misdescribes the behavior: HomePage.jsx:351 blank-canvas choice says 'Start with a fresh canvas' and :410 invite-steps says 'Open a room. A fresh canvas starts with just you.' Both now land a kid in a PUBLIC shared room while the copy promises solitude — a copy-behavior mismatch created by our own cycle-1 patch (flagged as follow-up risk by S5/S6). Update the strings (and audit adjacent startRoom copy: 'Make a room and invite friends', 'Create a room', hero 'Start drawing') to honestly describe landing in the shared Open Studio canvas. Copy-only JSX/string change.",
+    "impact": 6,
+    "surprise": 3,
+    "effort": 1,
+    "score": 18,
+    "gate": "PASS: copy-only string edits in HomePage.jsx, reversible, no auth/payment/migration/CI, screenshot-verifiable on home tablet+phone, effort 1",
+    "source": "Cycle-2 capture diff (6 changed frames) + S5/S6 cycle-1 follow-up risk; verified HomePage.jsx:351,410",
+    "added_cycle": 2,
+    "column": "ready"
+   }
+  ],
   "done": [
    {
     "card_id": "CARD-001",
@@ -134,7 +148,7 @@
    {
     "card_id": "CARD-001",
     "title": "Commons routing: first 'Draw now' click lands everyone in MAIN (Open Studio)",
-    "description": "Today HomePage.startRoom mints a random 6-char room per click and SiteNav 'Draw now' links to a random /join/{code}, so first-time visitors each land alone in an empty private room (S2: '0 drawing now', 'Be the first!'). Phase 1 (this card): first-time/anonymous-primary entry points route to /join/MAIN \u2014 the already-existing shared room \u2014 so strangers land on the SAME canvas and can actually meet. Phase 2 (superset, ex-S3 #6 'full inversion'): route to the most lived-in room once occupancy data exists. Pure routing change: verified startRoom at HomePage.jsx:285 and SiteNav.jsx:101.",
+    "description": "Today HomePage.startRoom mints a random 6-char room per click and SiteNav 'Draw now' links to a random /join/{code}, so first-time visitors each land alone in an empty private room (S2: '0 drawing now', 'Be the first!'). Phase 1 (this card): first-time/anonymous-primary entry points route to /join/MAIN — the already-existing shared room — so strangers land on the SAME canvas and can actually meet. Phase 2 (superset, ex-S3 #6 'full inversion'): route to the most lived-in room once occupancy data exists. Pure routing change: verified startRoom at HomePage.jsx:285 and SiteNav.jsx:101.",
     "impact": 8,
     "surprise": 5,
     "effort": 1,
@@ -152,7 +166,7 @@
   {
    "card_id": "CARD-011",
    "title": "Twitch-pattern counted watchers + emotes",
-   "description": "Show spectator counts and let watchers emote \u2014 the biggest 'attract watchers' lever (impact 9) but effort 5, new WS message types, and a moderation surface for a kids-to-young-adults audience.",
+   "description": "Show spectator counts and let watchers emote — the biggest 'attract watchers' lever (impact 9) but effort 5, new WS message types, and a moderation surface for a kids-to-young-adults audience.",
    "impact": 9,
    "surprise": 6,
    "effort": 5,
@@ -175,16 +189,17 @@
   }
  ],
  "selection": {
-  "cycle": 1,
-  "selected_card_id": "CARD-001",
-  "rationale": "Highest score (40) of all gate-passing cards, and it attacks the single root cause S2 found everywhere: every entry point mints a lonely empty room, so nobody ever meets anybody. Verified in code (HomePage.jsx startRoom mints a random code; SiteNav 'Draw now' links to /join/{random}; MAIN room already exists and is the App.jsx default). Pure routing change: reversible, no auth/payment/migration/CI, no new storage keys, screenshot-provable with two sessions both landing on room MAIN. Also the safest first datum for the cycle-2 decision on the full lived-in-commons inversion (S3 #6).",
+  "cycle": 2,
+  "selected_card_id": "CARD-013",
+  "rationale": "Cycle-1's CARD-001 changed behavior (all 'Draw now' entry points now land in the public MAIN/Open Studio room) but left homepage copy promising a private fresh canvas ('Start with a fresh canvas', 'A fresh canvas starts with just you') — the loop must keep its own change honest before stacking new ones, exactly the follow-up risk S5/S6 flagged and the cycle-2 capture confirms on both tablet and phone home frames. Copy-only, effort 1, fully gate-passing; score 18 also beats CARD-006 (16) and CARD-007 (15), and only trails CARD-002 (36)/CARD-003 (30)/CARD-004 (30), which remain queued for cycle 3. Budget: patch 2 of 5 today.",
   "deferred_to_later_cycles": [
    "CARD-002",
    "CARD-003",
    "CARD-004",
+   "CARD-005",
    "CARD-006",
    "CARD-007"
   ],
-  "budget_note": "5 auto-patches/day available; deliberately selecting ONE card for cycle 1 to keep verification tight. Remaining effort-1 cards queued for cycles 2-3."
+  "budget_note": "5 auto-patches/day; 2 used after this selection. Cycle 2 of 3. CARD-002 (36), CARD-003 (30), CARD-004 (30) top the cycle-3 queue by (impact x surprise)/effort."
  }
 }
