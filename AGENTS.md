@@ -61,7 +61,9 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
 - **No secrets in the client bundle** (only `VITE_*` public values). The server
   validates PocketBase tokens with the public anon endpoint — never the
   service-role key.
-- **Commits**: work on a feature branch (currently `big-changes`, not `main`).
+- **Commits**: `main` is the only long-lived branch (consolidated 2026-09-18; older
+  lines are kept as `archive/*` tags). Do short-lived work on a branch off `main`
+  and merge it back — don't let parallel feature branches pile up again.
   For multi-line messages, write a temp `.commitmsg.txt`, `git add` the *specific*
   files (not `-A`), `git commit -F`, then delete it (it's git-ignored). End
   messages with the `Co-Authored-By:` trailer. The user pushes; don't push for them.

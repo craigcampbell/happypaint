@@ -324,8 +324,11 @@ display, creator payouts, tips-as-cash) are **OFF and must stay off** — real m
 
 ## Storage layout
 
-All mutable server state lives under **`DATA_DIR`** (default the app dir; `/data`
-in Docker) so one volume persists everything:
+All mutable server state lives under **`DATA_DIR`** (default `.data/` inside the
+app dir — never the app dir itself, so chat logs and the admin key are not one
+careless `express.static` away from being served; a pre-existing root-level
+layout is moved across on boot. `/data` in Docker) so one volume persists
+everything:
 - `.rooms/<ID>.json` — per-room meta: owner, coHosts, locked, mutes, sheet, chat
   buffer, `opCount`/`savedAt` (the idle sweep reads these instead of parsing art).
   `.rooms/<ID>.history.json` — the op history base; `.rooms/<ID>.ops.jsonl` —

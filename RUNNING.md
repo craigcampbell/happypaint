@@ -83,6 +83,19 @@ Vite uses port 5173 and proxies `/ws` to port 8787. Avoid starting another serve
 on the production port or pointing tests at production `app_data/`. Empty
 PocketBase and billing variables leave drawing and rooms available anonymously.
 
+Security-relevant defaults (2026-09 audit — `node scripts/security-verify.mjs`):
+
+- `node server.js` listens on **127.0.0.1 only**. To test from a phone/tablet on
+  the LAN, opt in with `HOST=0.0.0.0` (the Docker image sets this itself).
+- Local data lives in `.data/` unless `DATA_DIR` is set.
+- `cf-connecting-ip` is believed only from the tunnel: `TRUSTED_PROXY_HOSTS`
+  (compose sets `cloudflared`) or, when unset, loopback/private-range peers.
+  A tunnel running on the HOST rather than in compose needs
+  `TRUSTED_PROXY_HOSTS=` (empty) in `.env`, or every visitor shares one
+  rate-limit bucket.
+- The repo `.env` sets `PB_URL`, which turns the private-room account gate on.
+  Harnesses that join private rooms as guests need `PB_URL= POCKETBASE_URL=`.
+
 ## Troubleshooting
 
 - Check Docker is running and `docker compose ps` shows the app healthy.
