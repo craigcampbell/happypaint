@@ -11,9 +11,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-const ROOT = 'C:/Users/Craig Campbell/Projects/happypaint';
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const results = { checks: [], pass: 0, fail: 0 };
 const check = (name, ok, extra = '') => {
   results.checks.push({ name, ok, extra });
@@ -122,6 +123,7 @@ check('B: signed-in private room creation works', bCreateAuth.status === 200, `s
 // ---------- cleanup ----------
 for (const s of [a, b]) { try { s.proc.kill(); } catch { /* gone */ } }
 mock.close();
+fs.mkdirSync(path.join(ROOT, 'captures'), { recursive: true });
 fs.writeFileSync(path.join(ROOT, 'captures', 'private-room-auth.json'), JSON.stringify(results, null, 1));
 console.log(`\nprivate-room-auth: ${results.pass} passed, ${results.fail} failed`);
 process.exit(results.fail ? 1 : 0);

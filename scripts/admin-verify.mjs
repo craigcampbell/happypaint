@@ -9,8 +9,9 @@ import WebSocket from "ws";
 import { spawn } from "child_process";
 import { mkdirSync, rmSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-const ROOT = "C:/Users/Craig Campbell/Projects/happypaint";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRATCH = path.join(process.env.TEMP || "/tmp", "admin-verify-data");
 const SHOTS = path.join(process.env.TEMP || "/tmp", "admin-verify");
 const PORT = 8942;
@@ -23,7 +24,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 mkdirSync(SHOTS, { recursive: true });
-const server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY: KEY }, stdio: "pipe" });
+// PB_URL/POCKETBASE_URL blanked: the repo-root .env (auto-loaded by server.js)
+// configures accounts, which would refuse this harness's guest private-room joins.
+const server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY: KEY, PB_URL: "", POCKETBASE_URL: "" }, stdio: "pipe" });
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 
 const results = [];

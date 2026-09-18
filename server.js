@@ -84,6 +84,11 @@ const MAX_SPECTATORS = Number(process.env.MAX_SPECTATORS || 40); // read-only ho
 // modwatch socket may sit unauthenticated before the server hangs up.
 const MAX_MOD_WATCHERS = Number(process.env.MAX_MOD_WATCHERS || 4);
 const MOD_WATCH_AUTH_MS = 5_000;
+// Frames a joining socket may have queued while its join is still in flight
+// (first-frame auth wait + token validation); replayed in order once the real
+// handler is attached. Anything past the budget is dropped, as it always was.
+const MAX_EARLY_FRAMES = 8;
+const MAX_EARLY_FRAME_BYTES = 64 * 1024;
 const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how long a kicked signed-in user is blocked from rejoining
 // Are accounts usable on this deployment? Private rooms are account-only (see
 // the WS join gate), but that rule must NOT apply where nobody can sign in: the
@@ -3777,25 +3782,49 @@ wss.on('connection', async (ws, req) => {
   // (token:null for guests) so the JWT never rides the URL query string, where
   // proxy/CDN access logs and browser history would capture it. A non-auth
   // first frame (legacy client) is replayed into the normal handler after join.
+  //
+  // The real message handler is only attached once the join completes, after
+  // the awaits below. The client sends {type:'auth'} and then client_info
+  // back-to-back; when both land in one TCP chunk, `ws` emits the second
+  // 'message' synchronously — before any awaiting continuation runs — so a
+  // one-shot first-frame listener would leave it with NO listener and it was
+  // silently dropped (user.deviceKey stayed null and per-person identity fell
+  // back to IP). So one early listener owns the socket for the whole pre-join
+  // window: it hands the first frame to the auth wait and queues the rest, in
+  // order, for replay through the real handler. Small and bounded — a client
+  // has no business sending more than a hello before it is joined.
+  //
   // The query-string token is no longer read at all: a JWT in a URL is a JWT in
   // every proxy / CDN access log on the way here. Every shipped client (web and
   // mobile) authenticates with the first frame.
   let token = null;
   let deviceKey = null;
-  let replayFirstFrame = null;
+  let earlyFrames = [];
+  let earlyBytes = 0;
+  let firstFrameWaiter = null;
+  const onEarlyFrame = (raw) => {
+    if (firstFrameWaiter) { firstFrameWaiter(raw); return; }
+    if (!earlyFrames) return;
+    const size = raw ? (raw.length ?? raw.byteLength ?? 0) : 0;
+    if (earlyFrames.length >= MAX_EARLY_FRAMES || earlyBytes + size > MAX_EARLY_FRAME_BYTES) return;
+    earlyFrames.push(raw);
+    earlyBytes += size;
+  };
+  ws.on('message', onEarlyFrame);
+  // Every bail-out below closes the socket; drop whatever was queued with it.
+  ws.once('close', () => { earlyFrames = null; });
   {
     const first = await new Promise((resolve) => {
       const finish = (value) => {
         clearTimeout(timer);
-        ws.off('message', onFrame);
+        firstFrameWaiter = null;
         ws.off('close', onGone);
         ws.off('error', onGone);
         resolve(value);
       };
       const timer = setTimeout(() => finish(null), 1500);
-      const onFrame = (raw) => finish(raw);
       const onGone = () => finish(null);
-      ws.on('message', onFrame);
+      firstFrameWaiter = finish;
       ws.on('close', onGone);
       ws.on('error', onGone);
     });
@@ -3809,8 +3838,11 @@ wss.on('connection', async (ws, req) => {
         // client already uses for its gallery, never a name or an email, and it
         // is optional so older clients keep working (they just fall back to IP).
         if (typeof hello.userKey === 'string' && hello.userKey) deviceKey = sanitizeKey(hello.userKey);
-      } else {
-        replayFirstFrame = first; // legacy client_info etc. — process after join
+      } else if (earlyFrames) {
+        // Legacy client_info etc. — process after join, ahead of anything that
+        // queued up behind it. It was already accepted as the first frame, so
+        // it sits outside the queue's frame/byte budget.
+        earlyFrames.unshift(first);
       }
     }
   }
@@ -5719,9 +5751,17 @@ wss.on('connection', async (ws, req) => {
     }
   });
 
-  // A legacy client's first frame (consumed by the auth wait above) wasn't an
-  // auth message — replay it through the real handler now that it's attached.
-  if (replayFirstFrame != null) ws.emit('message', replayFirstFrame);
+  // Frames that arrived during the pre-join window (a legacy client's non-auth
+  // first frame, or the client_info sent right behind the auth frame) — replay
+  // them in order through the real handler now that it's attached. Everything
+  // from the join's last await to here is synchronous, so no live frame can
+  // slip in ahead of the replayed ones.
+  ws.off('message', onEarlyFrame);
+  if (earlyFrames) {
+    const queued = earlyFrames;
+    earlyFrames = null;
+    for (const raw of queued) ws.emit('message', raw);
+  }
 
   ws.on('close', () => {
     // Accrue this user's time in the room — engagement extends the auto-close TTL.

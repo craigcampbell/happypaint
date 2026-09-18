@@ -14,9 +14,10 @@
 import { spawn } from "child_process";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { WebSocket } from "ws";
 
-const ROOT = "C:/Users/Craig Campbell/Projects/happypaint";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRATCH = path.join(process.env.TEMP || "/tmp", "wipe-verify-data");
 const PORT = 8929;
 const BASE = `http://localhost:${PORT}`;
@@ -40,8 +41,10 @@ writeFileSync(path.join(ROOM_DIR, "ZZPRIV.json"), JSON.stringify({
   wipeAt: Date.now() - 10 * 60_000, savedAt: Date.now() - 10 * 60_000,
 }));
 
+// PB_URL/POCKETBASE_URL blanked: the repo-root .env (auto-loaded by server.js)
+// configures accounts, which would refuse this harness's guest private-room joins.
 const server = spawn(process.execPath, ["server.js"], {
-  cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH }, stdio: "pipe",
+  cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, PB_URL: "", POCKETBASE_URL: "" }, stdio: "pipe",
 });
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 
