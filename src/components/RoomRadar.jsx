@@ -23,7 +23,8 @@ function timeAgo(ts) {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
-  return `${h}h ago`;
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`; // dormant rooms can be weeks idle
 }
 
 function clock(ts) {
@@ -44,6 +45,14 @@ function formatLeft(ms) {
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h`;
   return `${Math.round(h / 24)}d`;
+}
+
+function urlParam(name) {
+  try {
+    return (new URLSearchParams(window.location.search).get(name) || "").slice(0, 80);
+  } catch {
+    return "";
+  }
 }
 
 // Chat "worth a look" score: severe filter hits + contact-sharing + concern phrases.
@@ -127,11 +136,12 @@ export default function RoomRadar({ onNavigate }) {
   const [totals, setTotals] = useState(null);
   const [lastFetchAt, setLastFetchAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const [query, setQuery] = useState("");
+  // Deep links from the Users page: /admin/rooms?q=CODE&audience=other
+  const [query, setQuery] = useState(() => urlParam("q"));
   const [onlyPeople, setOnlyPeople] = useState(false);
   const [onlyReports, setOnlyReports] = useState(false);
   const [onlyReview, setOnlyReview] = useState(false);
-  const [audience, setAudience] = useState("all");
+  const [audience, setAudience] = useState(() => urlParam("audience") || "all");
   const [sort, setSort] = useState("activity");
   const [sortAsc, setSortAsc] = useState(false);
   const [selected, setSelected] = useState(null); // room id with the detail drawer open
@@ -263,12 +273,22 @@ export default function RoomRadar({ onNavigate }) {
   const visibleRooms = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = rooms.filter((room) => {
-      if (q && !String(room.id).toLowerCase().includes(q) && !String(room.title || "").toLowerCase().includes(q)) return false;
+      if (
+        q &&
+        !String(room.id).toLowerCase().includes(q) &&
+        !String(room.title || "").toLowerCase().includes(q) &&
+        !String(room.ownerKey || "").toLowerCase().includes(q) &&
+        !String(room.ownerLabel || "").toLowerCase().includes(q)
+      )
+        return false;
       if (onlyPeople && !(room.users > 0)) return false;
       if (onlyReports && !(room.reports?.open > 0)) return false;
       if (onlyReview && !(room.chat?.needsReview || room.reports?.open > 0)) return false;
       if (audience === "kid_safe" && room.audience !== "kid_safe") return false;
       if (audience === "other" && (!room.audience || room.audience === "kid_safe")) return false;
+      if (audience === "private_owned" && (room.audience === "kid_safe" || !room.ownerKey)) return false;
+      if (audience === "private_unowned" && (room.audience === "kid_safe" || room.ownerKey)) return false;
+      if (audience === "dormant" && !room.dormant) return false;
       if (audience === "listed" && room.listed === false) return false;
       if (audience === "unlisted" && room.listed !== false) return false;
       return true;
@@ -345,7 +365,27 @@ export default function RoomRadar({ onNavigate }) {
           <div className="metric">
             <span className="metric-num">{totals?.rooms ?? rooms.length}</span>
             <span className="metric-label">Rooms</span>
-            <span className="metric-sub">whole estate</span>
+            <span className="metric-sub">{totals?.dormant ? `${totals.dormant} asleep on disk` : "whole estate"}</span>
+          </div>
+          <div
+            className="metric"
+            role="button"
+            tabIndex={0}
+            title="Show only private (invite-only) rooms"
+            style={{ cursor: "pointer" }}
+            onClick={() => setAudience(audience === "other" ? "all" : "other")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setAudience(audience === "other" ? "all" : "other");
+              }
+            }}
+          >
+            <span className="metric-num">🔒 {totals?.private ?? 0}</span>
+            <span className="metric-label">Private rooms</span>
+            <span className="metric-sub">
+              {totals?.privateOwned ?? 0} account-owned · {totals?.privateUnowned ?? 0} no owner
+            </span>
           </div>
           <div className="metric">
             <span className="metric-num">{totals?.occupied ?? 0}</span>
@@ -377,7 +417,7 @@ export default function RoomRadar({ onNavigate }) {
             <input
               type="search"
               value={query}
-              placeholder="room code or title"
+              placeholder="room code, title or owner"
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
@@ -386,7 +426,10 @@ export default function RoomRadar({ onNavigate }) {
             <select value={audience} onChange={(e) => setAudience(e.target.value)}>
               <option value="all">All rooms</option>
               <option value="kid_safe">Kid-safe</option>
-              <option value="other">Other audience</option>
+              <option value="other">Private (invite-only)</option>
+              <option value="private_owned">Private · account-owned</option>
+              <option value="private_unowned">Private · no owner</option>
+              <option value="dormant">Asleep on disk</option>
               <option value="listed">Listed</option>
               <option value="unlisted">Unlisted</option>
             </select>
@@ -464,10 +507,19 @@ export default function RoomRadar({ onNavigate }) {
                     {!reports.open && chat.needsReview ? (
                       <span className="admin-badge" style={{ background: "#7c3aed" }}>chat review</span>
                     ) : null}
+                    {room.audience !== "kid_safe" ? (
+                      <span className="admin-badge" style={{ background: "#334155" }}>🔒 private</span>
+                    ) : null}
+                    {room.dormant ? (
+                      <span className="admin-badge" style={{ background: "#64748b" }} title="Saved on disk, not loaded — nobody has opened it since the last restart. Watch loads it.">
+                        💤 asleep
+                      </span>
+                    ) : null}
                     <span className="admin-muted">
                       {room.users} painting · {room.strokes} strokes · {room.chats || 0} chats · active {timeAgo(room.lastActivity)}
                       {" · "}
                       {room.audience === "kid_safe" ? "kid-safe" : room.audience || "any audience"}
+                      {room.audience !== "kid_safe" ? (room.ownerLabel ? ` · owner ${room.ownerLabel}` : " · no account owner") : ""}
                       {room.listed === false ? " · unlisted" : ""}
                       {room.featured ? " · featured" : ""}
                       {left ? ` · auto-closes in ${left}` : ""}
@@ -527,6 +579,30 @@ export default function RoomRadar({ onNavigate }) {
                 {selectedRoom.host ? " · has host" : ""}
                 {selectedRoom.animation ? " · animation" : ""}
               </span>
+              {selectedRoom.audience !== "kid_safe" ? (
+                <span className="admin-muted">
+                  🔒 private ·{" "}
+                  {selectedRoom.ownerKey ? (
+                    <>
+                      owned by{" "}
+                      <a
+                        href={`/admin/users?q=${encodeURIComponent(selectedRoom.ownerKey)}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          onNavigate(`/admin/users?q=${encodeURIComponent(selectedRoom.ownerKey)}`);
+                        }}
+                      >
+                        {selectedRoom.ownerLabel}
+                      </a>
+                    </>
+                  ) : (
+                    "no account owner (made before accounts were required)"
+                  )}
+                  {selectedRoom.keepsForMs ? ` · kept ${formatLeft(selectedRoom.keepsForMs)} after the last visit` : ""}
+                  {selectedRoom.expiresInMs != null ? ` · deletes in ${formatLeft(selectedRoom.expiresInMs)}` : ""}
+                  {selectedRoom.dormant ? " · asleep on disk (Watch loads it)" : ""}
+                </span>
+              ) : null}
               {summaryLoading ? <p className="admin-muted">Summarising chat…</p> : null}
               {summary?.summary ? <p className="admin-reason">{summary.summary}</p> : null}
               {summary?.llm?.summary ? (

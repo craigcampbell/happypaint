@@ -9,7 +9,8 @@ function timeAgo(ts) {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
-  return `${h}h ago`;
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
 function formatDuration(sec) {
@@ -21,6 +22,25 @@ function formatDuration(sec) {
   if (h < 24) return `${h}h ${m % 60}m`;
   const d = Math.floor(h / 24);
   return `${d}d ${h % 24}h`;
+}
+
+// How long until an idle room is auto-deleted (null = never / occupied).
+function formatLeft(ms) {
+  if (ms == null) return null;
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+function urlParam(name) {
+  try {
+    return (new URLSearchParams(window.location.search).get(name) || "").slice(0, 80);
+  } catch {
+    return "";
+  }
 }
 
 function formatCount(value) {
@@ -43,6 +63,9 @@ const SORTERS = {
   clears: (a, b) => (b.clears || 0) - (a.clears || 0),
   chats: (a, b) => (b.chats || 0) - (a.chats || 0),
   lastSeen: (a, b) => (b.lastSeen || 0) - (a.lastSeen || 0),
+  privateRooms: (a, b) =>
+    (b.privateRooms || []).filter((r) => r.owned).length - (a.privateRooms || []).filter((r) => r.owned).length ||
+    (b.privateRooms || []).length - (a.privateRooms || []).length,
   sessions: (a, b) => (b.sessions || 0) - (a.sessions || 0),
 };
 
@@ -70,10 +93,13 @@ export default function AdminUsers({ onNavigate }) {
   const [users, setUsers] = useState([]);
   const [totals, setTotals] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(0);
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  // Deep link from the Room Radar "owned by" link: /admin/users?q=pb:<profileId>
+  const [query, setQuery] = useState(() => urlParam("q"));
+  const [debouncedQuery, setDebouncedQuery] = useState(() => urlParam("q"));
+  const [onlyPrivate, setOnlyPrivate] = useState(false);
   const [sortKey, setSortKey] = useState("risk");
-  const [expanded, setExpanded] = useState(() => new Set());
+  // A deep-linked user opens with their details (and private rooms) showing.
+  const [expanded, setExpanded] = useState(() => (urlParam("q").startsWith("pb:") ? new Set([urlParam("q")]) : new Set()));
   // Inline block confirm: { [userKey]: { open, reason, busy, notice } }
   const [blockUi, setBlockUi] = useState({});
 
@@ -161,8 +187,9 @@ export default function AdminUsers({ onNavigate }) {
 
   const sortedUsers = useMemo(() => {
     const sorter = SORTERS[sortKey] || SORTERS.risk;
-    return [...users].sort(sorter);
-  }, [users, sortKey]);
+    const pool = onlyPrivate ? users.filter((u) => (u.privateRooms || []).length > 0) : users;
+    return [...pool].sort(sorter);
+  }, [users, sortKey, onlyPrivate]);
 
   const toggleExpanded = (userKey) => {
     setExpanded((prev) => {
@@ -317,6 +344,24 @@ export default function AdminUsers({ onNavigate }) {
               <span className="metric-label">Blocked</span>
               <span className="metric-sub">all rooms at once</span>
             </div>
+            <div
+              className="metric"
+              role="button"
+              tabIndex={0}
+              style={{ cursor: "pointer" }}
+              title="Open Room Radar filtered to private rooms"
+              onClick={() => onNavigate("/admin/rooms?audience=other")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onNavigate("/admin/rooms?audience=other");
+                }
+              }}
+            >
+              <span className="metric-num">🔒 {formatCount(totals.privateRooms)}</span>
+              <span className="metric-label">Private rooms</span>
+              <span className="metric-sub">{formatCount(totals.privateRoomOwners)} owning accounts · open radar →</span>
+            </div>
           </div>
         ) : null}
 
@@ -326,9 +371,13 @@ export default function AdminUsers({ onNavigate }) {
             <input
               type="search"
               value={query}
-              placeholder="name, key or last room"
+              placeholder="name, key, last room or private room code"
               onChange={(e) => setQuery(e.target.value)}
             />
+          </label>
+          <label className="admin-check">
+            <input type="checkbox" checked={onlyPrivate} onChange={(e) => setOnlyPrivate(e.target.checked)} />
+            With private rooms only
           </label>
         </div>
 
@@ -339,7 +388,9 @@ export default function AdminUsers({ onNavigate }) {
             <div className="admin-table-row admin-table-head">
               <span>User</span>
               <span>{headerCell("risk", "Risk")}</span>
-              <span>{headerCell("distinctRooms", "Rooms")}</span>
+              <span>
+                {headerCell("distinctRooms", "Rooms")} · {headerCell("privateRooms", "🔒")}
+              </span>
               <span>{headerCell("clears", "Clears")}</span>
               <span>Strokes</span>
               <span>{headerCell("chats", "Chats")}</span>
@@ -377,7 +428,12 @@ export default function AdminUsers({ onNavigate }) {
                     </span>
                     <span>
                       {formatCount(user.distinctRooms)}
-                      <small>{(user.roomsRecent || []).length} recent</small>
+                      <small>
+                        {(user.roomsRecent || []).length} recent
+                        {(user.privateRooms || []).length
+                          ? ` · 🔒 ${user.privateRooms.length} private${user.privateRooms.some((r) => r.owned) ? ` (${user.privateRooms.filter((r) => r.owned).length} owned)` : ""}`
+                          : ""}
+                      </small>
                     </span>
                     <span>{formatCount(user.clears)}</span>
                     <span>{formatCount(user.strokes)}</span>
@@ -463,6 +519,47 @@ export default function AdminUsers({ onNavigate }) {
                             </ul>
                           ) : (
                             <p className="admin-muted">No risk signals recorded.</p>
+                          )}
+
+                          <h3>
+                            🔒 Private rooms{" "}
+                            <span className="admin-muted">
+                              (invite-only rooms this {user.keyKind === "account" ? "account owns or has" : "person has"} been inside, that still exist)
+                            </span>
+                          </h3>
+                          {Array.isArray(user.privateRooms) && user.privateRooms.length ? (
+                            <div className="admin-mini-list" style={{ marginBottom: 10 }}>
+                              {user.privateRooms.map((room) => {
+                                const left = formatLeft(room.expiresInMs);
+                                return (
+                                  <div key={room.room}>
+                                    <strong>
+                                      {room.room}
+                                      {room.title ? ` — ${room.title}` : ""}
+                                      {room.owned ? " · OWNER" : room.hasOwner ? " · guest of another account" : " · no account owner"}
+                                      {room.users > 0 ? ` · ${room.users} in it now` : ""}
+                                    </strong>
+                                    <span>
+                                      {formatCount(room.strokes)} strokes · {formatCount(room.visits)} visits · active {timeAgo(room.lastActivity)}
+                                      {left ? ` · auto-deletes in ${left}` : ""}
+                                      {room.dormant ? " · asleep on disk" : ""}
+                                    </span>
+                                    <span className="admin-actions">
+                                      <button type="button" onClick={() => onNavigate(`/watch/${room.room}`)}>
+                                        🕵️ Watch
+                                      </button>
+                                      <button type="button" onClick={() => onNavigate(`/admin/rooms?q=${encodeURIComponent(room.room)}`)}>
+                                        Radar
+                                      </button>
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="admin-muted" style={{ margin: "4px 0 10px" }}>
+                              None — no surviving private room is tied to this {user.keyKind === "account" ? "account" : "person"}.
+                            </p>
                           )}
 
                           <h3>Rooms visited <span className="admin-muted">({formatCount(user.distinctRooms)} distinct)</span></h3>

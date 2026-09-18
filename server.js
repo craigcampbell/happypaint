@@ -119,6 +119,15 @@ const AUTO_CLOSE_MAX_MS = Number(process.env.AUTO_CLOSE_MAX_MS || 30 * 24 * 60 *
 const AUTO_CLOSE_PER_OP_MS = Number(process.env.AUTO_CLOSE_PER_OP_MS || 20 * 1000); // +20s of life per op drawn
 const AUTO_CLOSE_PER_USER_SEC_MS = Number(process.env.AUTO_CLOSE_PER_USER_SEC_MS || 2000); // +2s of life per user-second
 const AUTO_CLOSE_SWEEP_MS = Number(process.env.AUTO_CLOSE_SWEEP_MS || 30 * 60 * 1000); // sweep cadence
+// A private room OWNED by an account is that person's saved work, not a
+// throwaway code: now that private rooms require an account, the 12h floor
+// above would delete a signed-in kid's room overnight. Owned rooms get a
+// month of idle time (every visit resets the clock) and the same op/engagement
+// bonus on top, capped — bounded on purpose, so nobody's drawings are kept
+// forever by accident. Unowned rooms (guest-era, or a deploy without accounts)
+// keep the short scale above.
+const AUTO_CLOSE_OWNED_BASE_MS = Number(process.env.AUTO_CLOSE_OWNED_BASE_MS || 30 * 24 * 60 * 60 * 1000); // 30d idle floor
+const AUTO_CLOSE_OWNED_MAX_MS = Number(process.env.AUTO_CLOSE_OWNED_MAX_MS || 90 * 24 * 60 * 60 * 1000); // 90d ceiling
 
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
 // lives under one directory so a single Docker volume persists everything. Defaults
@@ -1300,6 +1309,11 @@ function loadRoom(roomId) {
       soundtrack: sanitizeSoundtrack(data.soundtrack),
       // Server-side capability secrets for cross-room @mention watching.
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
+      // Bookkeeping for retention + the admin console: a room loaded from disk
+      // keeps its real idle clock instead of looking brand new after a restart.
+      fromDisk: true,
+      createdAt: Number(data.createdAt) || 0,
+      lastSaved: roomLastSavedMs(roomId, data),
     };
   } catch {
     return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [] };
@@ -1399,6 +1413,7 @@ async function saveRoomNow(roomId) {
         // this file never leaves the host, and keys never appear in any API.
         mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
         opCount: room.history.length, // the idle sweep sizes a room's TTL by this
+        createdAt: room.createdAt || 0,
         savedAt: Date.now(),
       }));
     }
@@ -2087,7 +2102,12 @@ function getRoom(roomId) {
       // Which multi-room production (film) this room is a segment of, if any.
       productionId: saved.productionId || null,
       lastClearedFrameId: null, // which frame the in-memory undo-clear backup belongs to
-      lastActivity: Date.now(),
+      // A room coming back from disk resumes its REAL idle clock (a join bumps
+      // it to now anyway). Stamping "now" here meant every restart, film fetch
+      // or moderator look silently extended a dead room's life.
+      fromDisk: !!saved.fromDisk,
+      createdAt: saved.fromDisk ? (saved.createdAt || 0) : Date.now(),
+      lastActivity: (saved.fromDisk && saved.lastSaved) || Date.now(),
     });
     rooms.set(roomId, fresh);
     const created = fresh;
@@ -2260,12 +2280,23 @@ async function sendHistoryCatchUp(ws, room, variant) {
 // Allowed idle time before an EMPTY room is auto-closed. Scales with complexity
 // (op count) and engagement (cumulative user-seconds), capped — so a rich, busy
 // mural lingers much longer than a quick scribble. Works on a live room or a
-// plain {history,userSeconds} read from disk.
+// plain {history,userSeconds,ownerProfileId} read from disk. An account-owned
+// room runs on the longer owned scale (see AUTO_CLOSE_OWNED_BASE_MS).
 function allowedIdleMs(room) {
   const ops = Number.isFinite(room.opCount) ? room.opCount : (Array.isArray(room.history) ? room.history.length : 0);
   const userSeconds = room.userSeconds || 0;
   const bonus = ops * AUTO_CLOSE_PER_OP_MS + userSeconds * AUTO_CLOSE_PER_USER_SEC_MS;
+  if (room.ownerProfileId) {
+    return Math.min(Math.max(AUTO_CLOSE_OWNED_MAX_MS, AUTO_CLOSE_MAX_MS), AUTO_CLOSE_OWNED_BASE_MS + bonus);
+  }
   return Math.min(AUTO_CLOSE_MAX_MS, AUTO_CLOSE_BASE_MS + bonus);
+}
+// A room file's real "last saved" moment. Ops appended after the last meta
+// write live in the log, so its mtime can be newer than the meta's savedAt.
+function roomLastSavedMs(roomId, data) {
+  let lastSaved = Number(data && data.savedAt) || 0;
+  try { lastSaved = Math.max(lastSaved, statSync(opLogFile(roomId)).mtimeMs); } catch { /* no log */ }
+  return lastSaved;
 }
 
 // Tear a room down: disconnect anyone in it, drop it from memory, delete its file.
@@ -2323,6 +2354,7 @@ function autoCloseSweep() {
   const now = Date.now();
   rooms.forEach((room, id) => {
     if (FEATURED_CODES.has(id) || room.users.size > 0) return;
+    if (room.mods && room.mods.size > 0) return; // a moderator is looking at it right now
     // Production segments are chapters of someone's FILM — an idle Part 3
     // getting reaped would put a hole in the movie. They outlive the sweep,
     // but only while the film still exists: an orphaned segment (manifest lost)
@@ -2344,11 +2376,8 @@ function autoCloseSweep() {
       // legacy file with the history still inline costs a big parse here.
       const data = JSON.parse(readFileSync(path, 'utf8'));
       if (data.productionId && getProduction(data.productionId)) continue; // only live films are exempt
-      // Ops appended after the last meta write live in the log — its mtime is
-      // the room's real "last saved" moment.
-      let lastSaved = Number(data.savedAt) || 0;
-      try { lastSaved = Math.max(lastSaved, statSync(opLogFile(id)).mtimeMs); } catch { /* no log */ }
-      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0 };
+      const lastSaved = roomLastSavedMs(id, data);
+      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null };
       if (now - lastSaved > allowedIdleMs(pseudo)) {
         unlinkSync(path);
         try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
@@ -2363,6 +2392,30 @@ if (AUTO_CLOSE_ENABLED) {
   const sweepTimer = setInterval(autoCloseSweep, AUTO_CLOSE_SWEEP_MS);
   if (sweepTimer.unref) sweepTimer.unref();
 }
+
+// Phantom rooms: the socket handler has to materialize a room before it can
+// read its audience, so a guest refused at a private room's door (or anyone
+// probing codes) leaves an empty room behind that nobody ever entered. They are
+// tiny, but they would sit in memory for the 12h idle floor and bury the real
+// private rooms in the admin console. Reap the ones that are provably nothing:
+// never joined, nothing drawn or said, nothing on disk, nothing being saved.
+const PHANTOM_ROOM_GRACE_MS = Number(process.env.PHANTOM_ROOM_GRACE_MS || 5 * 60 * 1000);
+function isPhantomRoom(room, id) {
+  return !room.everJoined && !room.fromDisk && !FEATURED_CODES.has(id)
+    && room.users.size === 0 && room.history.length === 0 && !(room.chat && room.chat.length)
+    && !room.ownerProfileId && !room.productionId
+    && !(room.spectators && room.spectators.size) && !(room.mods && room.mods.size)
+    && !persistTimers.has(id) && !persistInFlight.has(id) && !existsSync(roomFile(id));
+}
+function sweepPhantomRooms() {
+  const now = Date.now();
+  rooms.forEach((room, id) => {
+    if (now - (room.createdAt || now) < PHANTOM_ROOM_GRACE_MS) return;
+    if (isPhantomRoom(room, id)) closeRoom(id, 'inactive');
+  });
+}
+const phantomTimer = setInterval(sweepPhantomRooms, Math.min(60_000, Math.max(1000, PHANTOM_ROOM_GRACE_MS)));
+if (phantomTimer.unref) phantomTimer.unref();
 
 // ---- Daily Challenge rollover ----------------------------------------------
 // The DAILY room's canvas belongs to ONE challenge date, stamped on the room
@@ -3519,9 +3572,13 @@ wss.on('connection', async (ws, req) => {
         // The key is short, so guessing has to cost something even over a socket.
         if (!rateOk(`modauth:${rawClientIp(req)}`, 8, 60_000)) return deny('rate_limited');
         if (typeof data.key !== 'string' || !adminKeyMatches(data.key)) return deny('bad_key');
-        // Watch rooms that EXIST: a probe must never lazily materialize one, and
-        // there is nothing to moderate in a room nobody is in.
-        const live = rooms.get(roomId);
+        // Watch rooms that EXIST: a probe must never lazily materialize one. The
+        // key has already checked out here, so a DORMANT room (saved on disk, not
+        // in memory — every private room after a restart) is loaded for the
+        // moderator: what was drawn in an empty private room is exactly what
+        // /admin's private-room list exists to inspect. Loading keeps the room's
+        // real idle clock (getRoom), so looking never extends its life.
+        const live = rooms.get(roomId) || (existsSync(roomFile(roomId)) ? getRoom(roomId) : null);
         if (!live) return deny('no_room');
         if (live.mods.size >= MAX_MOD_WATCHERS) return deny('too_many');
         clearTimeout(authTimer);
@@ -3702,6 +3759,13 @@ wss.on('connection', async (ws, req) => {
   }
   const identity = token ? await verifyAccessToken(token) : null;
   if (ws.readyState !== 1) return; // user disconnected during validation
+  // The room object was fetched BEFORE the awaits above. If it was reaped in
+  // between (sweepPhantomRooms / auto-close), joining the stale object would
+  // build a room nobody else can reach — bounce; the client reconnects.
+  if (rooms.get(roomId) !== room) {
+    ws.close(1013, 'try again');
+    return;
+  }
 
   // Global block: one decision from the moderation console, enforced everywhere
   // and before any state is created. Checked against every identity this
@@ -3777,6 +3841,7 @@ wss.on('connection', async (ws, req) => {
   };
   room.users.set(id, user);
   room.lastActivity = Date.now();
+  room.everJoined = true; // no longer a phantom (see sweepPhantomRooms)
   notePeak();
   analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
@@ -6286,13 +6351,107 @@ app.get('/api/admin/rooms', (req, res) => {
 
 const RADAR_ROOM_CAP = 1200; // sanity bound; a real estate is far smaller
 
+// Who owns a room, in the same vocabulary the Users page uses: the analytics /
+// block key (pb:<profileId>) plus the label that page shows for the account.
+// Never a name or an email — the server does not hold those.
+function roomOwnerInfo(ownerProfileId) {
+  if (!ownerProfileId) return { ownerKey: null, ownerLabel: null };
+  const pid = String(ownerProfileId);
+  return { ownerKey: `pb:${pid}`, ownerLabel: `Account ${pid.slice(0, 8)}` };
+}
+
+// Rooms saved on disk but not in memory. After a restart that is EVERY private
+// room nobody has re-entered yet, so an admin view built on `rooms` alone shows
+// almost none of them. One small meta read per room, cached by mtime — a poll
+// costs a readdir plus a stat per dormant room.
+const dormantMetaCache = new Map(); // id -> { mtimeMs, meta }
+function dormantRoomMetas() {
+  let files = [];
+  try { files = readdirSync(ROOM_DIR).filter((f) => f.endsWith('.json') && !f.endsWith('.history.json')); } catch { return []; }
+  const seen = new Set();
+  const out = [];
+  for (const f of files) {
+    const id = f.slice(0, -5);
+    if (rooms.has(id)) continue;
+    seen.add(id);
+    try {
+      const path = join(ROOM_DIR, f);
+      const mtimeMs = statSync(path).mtimeMs;
+      let hit = dormantMetaCache.get(id);
+      if (!hit || hit.mtimeMs !== mtimeMs) {
+        const data = JSON.parse(readFileSync(path, 'utf8'));
+        hit = {
+          mtimeMs,
+          meta: {
+            title: typeof data.title === 'string' ? data.title : null,
+            // Same default getRoom applies: an undecided audience is private.
+            audience: typeof data.audience === 'string' ? data.audience : (id === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends'),
+            listed: typeof data.listed === 'boolean' ? data.listed : null,
+            ownerProfileId: data.ownerProfileId || null,
+            opCount: Number.isFinite(data.opCount) ? data.opCount : (Array.isArray(data.history) ? data.history.length : 0),
+            userSeconds: Number(data.userSeconds) || 0,
+            chats: Array.isArray(data.chat) ? data.chat.length : 0,
+            hiddenOps: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds.length : 0,
+            animation: !!data.animation,
+            productionId: typeof data.productionId === 'string' ? data.productionId : null,
+            createdAt: Number(data.createdAt) || 0,
+            savedAt: Number(data.savedAt) || 0,
+          },
+        };
+        dormantMetaCache.set(id, hit);
+      }
+      out.push({ id, ...hit.meta });
+    } catch { /* unreadable / mid-write — it shows up on the next poll */ }
+  }
+  for (const id of [...dormantMetaCache.keys()]) if (!seen.has(id)) dormantMetaCache.delete(id);
+  return out;
+}
+
+// A dormant room's radar row: same shape as a live one, so the console sorts
+// and filters the two together.
+function radarDormantRoom(meta) {
+  const now = Date.now();
+  const id = meta.id;
+  const lastSaved = roomLastSavedMs(id, meta);
+  const keptByFilm = !!(meta.productionId && getProduction(meta.productionId));
+  let thumbAt = 0;
+  try { thumbAt = Math.round(statSync(thumbFile(id)).mtimeMs) || 0; } catch { /* never baked */ }
+  return {
+    id,
+    dormant: true,
+    title: meta.title,
+    audience: meta.audience,
+    listed: meta.listed != null ? meta.listed : meta.audience === 'kid_safe',
+    ...roomOwnerInfo(meta.ownerProfileId),
+    users: 0,
+    strokes: meta.opCount,
+    chats: meta.chats,
+    lastActivity: lastSaved,
+    createdAt: meta.createdAt,
+    thumbAt,
+    hiddenOps: meta.hiddenOps,
+    modActions: 0,
+    flagged: 0,
+    host: !!meta.ownerProfileId,
+    animation: meta.animation,
+    expiresInMs: FEATURED_CODES.has(id) || keptByFilm ? null : Math.max(0, allowedIdleMs(meta) - (now - lastSaved)),
+    keepsForMs: allowedIdleMs(meta),
+    featured: FEATURED_CODES.has(id),
+    reports: summarizeReports(reports, id),
+    chat: digestChat(chatTail(chatLogFile(id))),
+  };
+}
+
 // Per-room moderation row. `digest` costs a stat (cached) per room per poll.
 function radarRoom(id, room) {
   const now = Date.now();
   return {
     id,
+    dormant: false,
     title: room.title || null,
     audience: room.audience || null,
+    ...roomOwnerInfo(room.ownerProfileId),
+    keepsForMs: allowedIdleMs(room),
     listed: room.listed !== false,
     users: room.users.size,
     strokes: room.history.length,
@@ -6303,7 +6462,7 @@ function radarRoom(id, room) {
     hiddenOps: room.hiddenOpIds ? room.hiddenOpIds.size : 0,
     modActions: Array.isArray(room.modLog) ? room.modLog.length : 0,
     flagged: Array.isArray(room.flags) ? room.flags.length : 0,
-    host: room.hostId ? true : false,
+    host: !!(room.ownerProfileId || room.hostUserId),
     animation: !!room.animationEnabled,
     expiresInMs: room.users.size > 0 || FEATURED_CODES.has(id)
       ? null
@@ -6319,13 +6478,24 @@ app.get('/api/admin/radar', (req, res) => {
   const rows = [];
   rooms.forEach((room, id) => {
     if (rows.length >= RADAR_ROOM_CAP) return;
+    // A refused guest's empty shell is not a room anyone has (see isPhantomRoom).
+    if (isPhantomRoom(room, id)) return;
     rows.push(radarRoom(id, room));
   });
+  for (const meta of dormantRoomMetas()) {
+    if (rows.length >= RADAR_ROOM_CAP) break;
+    rows.push(radarDormantRoom(meta));
+  }
   const openReports = reports.filter((r) => r.status === 'open');
+  const isPrivate = (r) => r.audience !== 'kid_safe';
   res.json({
     rooms: rows,
     totals: {
       rooms: rows.length,
+      dormant: rows.filter((r) => r.dormant).length,
+      private: rows.filter(isPrivate).length,
+      privateOwned: rows.filter((r) => isPrivate(r) && r.ownerKey).length,
+      privateUnowned: rows.filter((r) => isPrivate(r) && !r.ownerKey).length,
       occupied: rows.filter((r) => r.users > 0).length,
       withPeople: rows.filter((r) => r.users > 0).length,
       withOpenReports: rows.filter((r) => r.reports.open > 0).length,
@@ -6460,6 +6630,66 @@ app.get('/api/admin/users-index', (req, res) => {
     if (!byUser.has(s.userKey)) byUser.set(s.userKey, []);
     byUser.get(s.userKey).push(s);
   }
+  // Every private room that still exists (live or dormant on disk), so each
+  // person's row can answer "which invite-only rooms is this account behind?"
+  // — the rooms no public lobby, spectator or auto-moderator ever sees.
+  const privateIndex = new Map(); // roomId -> { title, ownerProfileId, dormant, users, strokes, lastActivity, expiresInMs }
+  const nowTs = Date.now();
+  rooms.forEach((room, id) => {
+    if (room.audience === 'kid_safe' || isPhantomRoom(room, id)) return;
+    privateIndex.set(id, {
+      title: room.title || null,
+      ownerProfileId: room.ownerProfileId || null,
+      dormant: false,
+      users: room.users.size,
+      strokes: room.history.length,
+      lastActivity: room.lastActivity || 0,
+      expiresInMs: room.users.size > 0 || (room.productionId && getProduction(room.productionId))
+        ? null
+        : Math.max(0, allowedIdleMs(room) - (nowTs - (room.lastActivity || nowTs))),
+    });
+  });
+  for (const meta of dormantRoomMetas()) {
+    if (meta.audience === 'kid_safe') continue;
+    const lastSaved = roomLastSavedMs(meta.id, meta);
+    privateIndex.set(meta.id, {
+      title: meta.title,
+      ownerProfileId: meta.ownerProfileId,
+      dormant: true,
+      users: 0,
+      strokes: meta.opCount,
+      lastActivity: lastSaved,
+      expiresInMs: meta.productionId && getProduction(meta.productionId) ? null : Math.max(0, allowedIdleMs(meta) - (nowTs - lastSaved)),
+    });
+  }
+  const ownedBy = new Map(); // profileId -> [roomId]
+  for (const [id, info] of privateIndex) {
+    if (!info.ownerProfileId) continue;
+    const pid = String(info.ownerProfileId);
+    if (!ownedBy.has(pid)) ownedBy.set(pid, []);
+    ownedBy.get(pid).push(id);
+  }
+  const privateRoomsFor = (user) => {
+    const visits = user.rooms || {};
+    const ids = new Set(Object.keys(visits).filter((id) => privateIndex.has(id)));
+    const pid = user.profileId ? String(user.profileId) : null;
+    for (const id of (pid && ownedBy.get(pid)) || []) ids.add(id);
+    return [...ids].map((id) => {
+      const info = privateIndex.get(id);
+      return {
+        room: id,
+        title: info.title,
+        owned: !!(pid && info.ownerProfileId && String(info.ownerProfileId) === pid),
+        hasOwner: !!info.ownerProfileId,
+        visits: Number(visits[id]) || 0,
+        dormant: info.dormant,
+        users: info.users,
+        strokes: info.strokes,
+        lastActivity: info.lastActivity,
+        expiresInMs: info.expiresInMs,
+      };
+    }).sort((a, b) => Number(b.owned) - Number(a.owned) || b.lastActivity - a.lastActivity).slice(0, 40);
+  };
   const rows = [];
   for (const [userKey, user] of Object.entries(analytics.users)) {
     const sessions = byUser.get(userKey) || [];
@@ -6481,6 +6711,8 @@ app.get('/api/admin/users-index', (req, res) => {
       reasons: risk.reasons,
       distinctRooms: risk.distinctRooms,
       rooms: Object.entries(user.rooms || {}).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([room, visits]) => ({ room, visits })),
+      // Invite-only rooms this person owns or has been inside that still exist.
+      privateRooms: privateRoomsFor(user),
       roomsRecent: risk.roomsRecent,
       sessions: Number(user.sessions) || 0,
       activeSessions: Number(user.activeSessions) || 0,
@@ -6501,7 +6733,7 @@ app.get('/api/admin/users-index', (req, res) => {
     });
   }
   const filtered = query
-    ? rows.filter((r) => `${r.label} ${r.userKey} ${r.lastRoom || ''}`.toLowerCase().includes(query))
+    ? rows.filter((r) => `${r.label} ${r.userKey} ${r.lastRoom || ''} ${r.privateRooms.map((p) => p.room).join(' ')}`.toLowerCase().includes(query))
     : rows;
   filtered.sort((a, b) => b.risk - a.risk || b.lastSeen - a.lastSeen);
   res.json({
@@ -6511,6 +6743,8 @@ app.get('/api/admin/users-index', (req, res) => {
       blocked: rows.filter((r) => r.blocked).length,
       high: rows.filter((r) => r.band === 'high').length,
       watch: rows.filter((r) => r.band === 'watch').length,
+      privateRooms: privateIndex.size,
+      privateRoomOwners: ownedBy.size,
       shown: Math.min(limit, filtered.length),
     },
     ts: Date.now(),
