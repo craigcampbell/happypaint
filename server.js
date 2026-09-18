@@ -811,11 +811,39 @@ function saveUserArt(key, arr) {
   writeFileSync(userArtFile(key), JSON.stringify(arr));
 }
 
+// Resolve the gallery owner for an /api/artworks request. Ownership is NEVER
+// taken on the client's word: a signed-in user proves it with a Bearer token,
+// and the verified PocketBase id becomes the key (`pb_<id>`), ignoring whatever
+// userKey the client sent. Without a valid token an account key can't be claimed
+// (PocketBase record ids are not secret — honoring `pb_...` here would be an
+// IDOR), so any `pb_`-prefixed userKey is rejected; anonymous device keys
+// (`u_...`) keep working with no auth. Returns { key } or { status, error }.
+async function resolveArtworkOwner(req) {
+  const claimed = sanitizeKey(req.query.userKey || (req.body && req.body.userKey));
+  const token = bearerToken(req);
+  if (token) {
+    const identity = await verifyAccessToken(token);
+    if (identity) {
+      return { key: `pb_${sanitizeKey(identity.profileId)}` };
+    }
+    // Token present but invalid/expired: fall through and treat as anonymous —
+    // but the `pb_` guard below still blocks claiming an account key.
+  }
+  if (claimed.startsWith('pb_')) {
+    return { status: 401, error: 'auth_required' };
+  }
+  return { key: claimed };
+}
+
 app.use(express.json({ limit: '16mb' }));
 
-app.get('/api/artworks', (req, res) => {
+app.get('/api/artworks', async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  const key = sanitizeKey(req.query.userKey);
+  const owner = await resolveArtworkOwner(req);
+  if (owner.error) {
+    return res.status(owner.status).json({ error: owner.error });
+  }
+  const key = owner.key;
   if (!key) {
     return res.json({ items: [], max: MAX_SAVES });
   }
@@ -823,19 +851,26 @@ app.get('/api/artworks', (req, res) => {
   res.json({ items, max: MAX_SAVES });
 });
 
-app.get('/api/artworks/:id', (req, res) => {
+app.get('/api/artworks/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  const key = sanitizeKey(req.query.userKey);
-  const item = loadUserArt(key).find((a) => a.id === req.params.id);
+  const owner = await resolveArtworkOwner(req);
+  if (owner.error) {
+    return res.status(owner.status).json({ error: owner.error });
+  }
+  const item = loadUserArt(owner.key).find((a) => a.id === req.params.id);
   if (!item) {
     return res.status(404).json({ error: 'not found' });
   }
   res.json({ id: item.id, name: item.name, image: item.image });
 });
 
-app.post('/api/artworks', (req, res) => {
-  const { userKey, name, image, thumb } = req.body || {};
-  const key = sanitizeKey(userKey);
+app.post('/api/artworks', async (req, res) => {
+  const owner = await resolveArtworkOwner(req);
+  if (owner.error) {
+    return res.status(owner.status).json({ error: owner.error });
+  }
+  const key = owner.key;
+  const { name, image, thumb } = req.body || {};
   if (!key || typeof image !== 'string' || !image.startsWith('data:image')) {
     return res.status(400).json({ error: 'bad request' });
   }
@@ -855,11 +890,14 @@ app.post('/api/artworks', (req, res) => {
   res.json({ ok: true, id: item.id, count: arr.length, max: MAX_SAVES });
 });
 
-app.delete('/api/artworks/:id', (req, res) => {
-  const key = sanitizeKey(req.query.userKey);
-  const arr = loadUserArt(key);
+app.delete('/api/artworks/:id', async (req, res) => {
+  const owner = await resolveArtworkOwner(req);
+  if (owner.error) {
+    return res.status(owner.status).json({ error: owner.error });
+  }
+  const arr = loadUserArt(owner.key);
   const next = arr.filter((a) => a.id !== req.params.id);
-  saveUserArt(key, next);
+  saveUserArt(owner.key, next);
   res.json({ ok: true, count: next.length, max: MAX_SAVES });
 });
 

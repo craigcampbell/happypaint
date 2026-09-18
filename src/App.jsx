@@ -210,6 +210,13 @@ function todayName() {
   }).format(new Date());
 }
 
+// Authorization header for /api/artworks when signed in. The server binds gallery
+// ownership to this verified token (not the client-supplied userKey), so it must
+// ride along on every gallery request a signed-in user makes.
+function artworkAuthHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
+}
+
 function downloadBlob(blob, filename) {
   // Append the anchor to the DOM before clicking (some browsers — notably
   // Firefox — ignore clicks on detached anchors) and defer the revoke so the
@@ -356,6 +363,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   // `deviceKeyRef` always holds the anonymous fallback.
   const userKeyRef = useRef(null);
   const deviceKeyRef = useRef(null);
+  // Access token mirrored from `session` so the gallery callbacks (which keep
+  // stable identities via refs) can authenticate /api/artworks without taking a
+  // dependency on session state.
+  const accessTokenRef = useRef(null);
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
@@ -1374,7 +1385,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       return;
     }
     try {
-      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, {
+        cache: "no-store",
+        headers: artworkAuthHeaders(accessTokenRef.current),
+      });
       const data = await res.json();
       setMyDrawings(Array.isArray(data.items) ? data.items : []);
       if (data.max) {
@@ -1399,7 +1413,7 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
       const thumb = await canvasToDataUrl(preview);
       const res = await fetch("/api/artworks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...artworkAuthHeaders(accessTokenRef.current) },
         body: JSON.stringify({ userKey: key, name: `Drawing ${todayName()}`, image, thumb }),
       });
       if (res.status === 409) {
@@ -1427,7 +1441,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       try {
-        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { cache: "no-store" });
+        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+          cache: "no-store",
+          headers: artworkAuthHeaders(accessTokenRef.current),
+        });
         if (!res.ok) {
           throw new Error("not found");
         }
@@ -1464,7 +1481,10 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
         return;
       }
       try {
-        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, { method: "DELETE" });
+        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+          method: "DELETE",
+          headers: artworkAuthHeaders(accessTokenRef.current),
+        });
       } catch {
         // ignore
       }
@@ -3562,6 +3582,9 @@ function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
   useEffect(() => {
     const profileId = session?.user?.id;
     const key = profileId ? `pb_${profileId}` : deviceKeyRef.current;
+    // Keep the token in lockstep with the key: when signed in, every gallery
+    // request must carry it so the server can verify ownership server-side.
+    accessTokenRef.current = session?.access_token || null;
     if (!key) {
       return;
     }

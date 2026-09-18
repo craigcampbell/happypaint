@@ -426,6 +426,76 @@ scenario('F. Watcher election + flag corroboration (Tier 2, never auto-kick)', a
   }
 });
 
+// G: Gallery ownership — the /api/artworks IDOR fix. Anonymous device keys keep
+//    working with no auth; account keys (pb_<id>) are bound to a verified token;
+//    and no caller can read, overwrite, or delete another account's gallery by
+//    spoofing its userKey (PocketBase ids are not secret).
+scenario('G. Gallery ownership: device keys open, account keys auth-bound (IDOR closed)', async (ctx) => {
+  const IMG = 'data:image/png;base64,AAAA';
+  const ownerKey = 'pb_grownup1'; // ctx.signedInToken (tok_grownup1) verifies to id "grownup1"
+
+  // --- Anonymous device-key path still works without any token. ---
+  const devKey = 'u_harness_device';
+  const devSave = await api(ctx.baseHttp, '/api/artworks', {
+    method: 'POST',
+    body: { userKey: devKey, image: IMG, name: 'device art' },
+  });
+  assert.strictEqual(devSave.status, 200, `anon device-key save must be 200, got ${devSave.status}`);
+  const devList = await api(ctx.baseHttp, `/api/artworks?userKey=${devKey}`);
+  assert.strictEqual(devList.status, 200, `anon device-key list must be 200, got ${devList.status}`);
+  assert.strictEqual((devList.body.items || []).length, 1, 'device gallery should hold the one saved item');
+
+  // --- Signed-in save binds to the VERIFIED id, ignoring a spoofed userKey. ---
+  // grownup1 saves but claims to be grownup2; the server must store under the
+  // token's identity (grownup1), not the claimed key.
+  const save = await api(ctx.baseHttp, '/api/artworks', {
+    method: 'POST',
+    token: ctx.signedInToken,
+    body: { userKey: 'pb_grownup2', image: IMG, name: 'owned by grownup1' },
+  });
+  assert.strictEqual(save.status, 200, `signed-in save must be 200, got ${save.status}`);
+  const artId = save.body && save.body.id;
+  assert.ok(artId, 'signed-in save returns an id');
+
+  // It landed in grownup1's gallery (asked for with the real token)...
+  const mine = await api(ctx.baseHttp, `/api/artworks?userKey=${ownerKey}`, { token: ctx.signedInToken });
+  assert.strictEqual(mine.status, 200, `owner list must be 200, got ${mine.status}`);
+  assert.ok((mine.body.items || []).some((a) => a.id === artId), 'saved art must appear in the verified owner gallery');
+
+  // ...and the claimed pb_grownup2 key was ignored: grownup1 sees their own
+  // gallery regardless of which userKey they pass.
+  const spoofRead = await api(ctx.baseHttp, '/api/artworks?userKey=pb_grownup2', { token: ctx.signedInToken });
+  assert.ok((spoofRead.body.items || []).some((a) => a.id === artId),
+    'client-supplied userKey must be ignored — token owner always sees their own gallery');
+
+  // --- IDOR via NO token: an anonymous caller cannot touch a pb_ gallery. ---
+  const anonRead = await api(ctx.baseHttp, `/api/artworks?userKey=${ownerKey}`);
+  assert.strictEqual(anonRead.status, 401, `anon read of an account gallery must be 401, got ${anonRead.status}`);
+
+  const anonItem = await api(ctx.baseHttp, `/api/artworks/${artId}?userKey=${ownerKey}`);
+  assert.strictEqual(anonItem.status, 401, `anon read of an account artwork must be 401, got ${anonItem.status}`);
+
+  const anonDelete = await api(ctx.baseHttp, `/api/artworks/${artId}?userKey=${ownerKey}`, { method: 'DELETE' });
+  assert.strictEqual(anonDelete.status, 401, `anon delete of an account artwork must be 401, got ${anonDelete.status}`);
+
+  const anonWrite = await api(ctx.baseHttp, '/api/artworks', {
+    method: 'POST',
+    body: { userKey: ownerKey, image: IMG, name: 'evil overwrite' },
+  });
+  assert.strictEqual(anonWrite.status, 401, `anon write to an account gallery must be 401, got ${anonWrite.status}`);
+
+  // --- IDOR via a DIFFERENT valid token: grownup2 cannot reach grownup1. ---
+  const otherRead = await api(ctx.baseHttp, `/api/artworks?userKey=${ownerKey}`, { token: 'tok_grownup2' });
+  assert.strictEqual(otherRead.status, 200, `cross-account read must return the caller's own gallery, got ${otherRead.status}`);
+  assert.ok(!(otherRead.body.items || []).some((a) => a.id === artId),
+    'a different account must NEVER see grownup1 art by spoofing userKey=pb_grownup1');
+
+  // The owner's gallery survived every spoofed attack intact.
+  const after = await api(ctx.baseHttp, `/api/artworks?userKey=${ownerKey}`, { token: ctx.signedInToken });
+  assert.ok((after.body.items || []).some((a) => a.id === artId),
+    'owner art must still exist after all spoofed read/write/delete attempts');
+});
+
 // ---- runner ----------------------------------------------------------------
 
 async function main() {
