@@ -61,6 +61,10 @@ import { replayInSlices } from "./utils/replayQueue";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
+import { isInlineRaster, remoteOpImage } from "./utils/safeImage";
+
+// A private room's film export needs the same identity its socket does.
+const filmAuthHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : undefined);
 import { useMentionWatcher } from "./hooks/useMentionWatcher";
 import { addNotification, getNotifications, markAllRead, clearNotifications } from "./utils/notifications";
 import { schedulePush, startSync, stopSync } from "./utils/sync";
@@ -3099,10 +3103,27 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       markMixDirty(active, { x0: x, y0: y, w, h }); // wet-mix mirror (layer 0 only)
       renderDisplay();
       refreshActiveThumbnail();
-      if (roomAnimationRef.current) {
-        mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h, frameId: framesRef.current[activeFrameIndexRef.current]?.id });
+      // The room only relays inline PNG/JPEG/GIF/WebP (the server checks the
+      // bytes). An SVG, AVIF, BMP… or a file too heavy for one op is sent as a
+      // PNG of exactly what was just placed, so friends still see it.
+      let wireUrl = dataUrl;
+      if (!isInlineRaster(wireUrl) || wireUrl.length > 7_500_000) {
+        try {
+          const flat = document.createElement("canvas");
+          flat.width = w;
+          flat.height = h;
+          flat.getContext("2d").drawImage(image, 0, 0, w, h);
+          wireUrl = flat.toDataURL("image/png");
+        } catch {
+          wireUrl = "";
+        }
+      }
+      if (!wireUrl) {
+        // placed locally, but there is nothing safe to share
+      } else if (roomAnimationRef.current) {
+        mpRef.current?.sendOp({ kind: "image", dataUrl: wireUrl, x, y, w, h, frameId: framesRef.current[activeFrameIndexRef.current]?.id });
       } else if (activeFrameIndexRef.current === 0) {
-        mpRef.current?.sendOp({ kind: "image", dataUrl, x, y, w, h });
+        mpRef.current?.sendOp({ kind: "image", dataUrl: wireUrl, x, y, w, h });
       }
       markChanged("Image added");
     },
@@ -5925,7 +5946,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     preview.document.body.textContent = "Building your storybook…";
     setIsExportingVideo(true);
     try {
-      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/film`, { cache: "no-store" });
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/film`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) });
       if (!response.ok) throw new Error("book fetch failed");
       const film = await response.json();
       const firstFrameId = film.scenes?.[0]?.frames?.[0]?.id;
@@ -6028,7 +6049,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const plan = [];
       let productionSound = null; // the first part with music scores the film
       for (const segment of activeProduction.segments) {
-        const response = await fetch(`/api/rooms/${encodeURIComponent(segment.code)}/film`, { cache: "no-store" });
+        const response = await fetch(`/api/rooms/${encodeURIComponent(segment.code)}/film`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) });
         if (!response.ok) {
           throw new Error("segment fetch failed");
         }
@@ -7260,7 +7281,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
-        const image = new Image();
+        // Only an inline raster is ever loaded — see utils/safeImage.js.
+        const image = remoteOpImage(op.dataUrl);
+        if (!image) return undefined;
         const epoch = historyReplayEpochRef.current;
         // Track the decode: a scene hydration (and the film exporter waiting
         // on it) isn't complete until embedded images have actually landed.
@@ -9639,10 +9662,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Create a fresh private (invite-only) room with a random code and go there.
   const createPrivateRoom = () => {
+    // The code is the room's only secret from non-members: mint it from the
+    // crypto RNG (32 symbols divides 256 evenly, so the byte → symbol map is
+    // unbiased), never Math.random.
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = new Uint8Array(6);
+    window.crypto.getRandomValues(bytes);
     let code = "";
-    for (let i = 0; i < 6; i += 1) {
-      code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    for (const byte of bytes) {
+      code += alphabet[byte % alphabet.length];
     }
     window.location.href = `/join/${code}`;
   };

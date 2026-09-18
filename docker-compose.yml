@@ -46,6 +46,12 @@ services:
     environment:
       - PORT=8787
       - DATA_DIR=/data
+      # Whose cf-connecting-ip header is believed: only the tunnel container's.
+      # Every other peer (another container, the published port) is keyed by its
+      # own socket address, so the header can't be used to dodge rate limits,
+      # IP blocks or the wall's report threshold. Running the tunnel on the HOST
+      # instead? Leave this empty — private-range peers are then trusted.
+      - TRUSTED_PROXY_HOSTS=${TRUSTED_PROXY_HOSTS-cloudflared}
       # Server-internal PocketBase URL for token validation (not the public URL).
       - PB_URL=http://pocketbase:8090
       # Adult-owned Family subscriptions. Empty = pricing page stays visible,

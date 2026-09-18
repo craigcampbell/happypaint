@@ -73,3 +73,19 @@ export async function verifyAccessToken(token) {
     return null; // network hiccup → treat as anonymous, don't cache
   }
 }
+
+// Drop every cached verdict for one account, so a moderation block or an
+// account deletion takes effect on the next request instead of up to
+// OK_TTL_MS later. The next use of any of its tokens goes back to PocketBase.
+export function forgetProfileTokens(profileId) {
+  const pid = String(profileId || '');
+  if (!pid) return 0;
+  let dropped = 0;
+  for (const [token, hit] of cache) {
+    if (hit.profile && hit.profile.profileId === pid) {
+      cache.delete(token);
+      dropped += 1;
+    }
+  }
+  return dropped;
+}

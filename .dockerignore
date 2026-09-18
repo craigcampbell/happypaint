@@ -20,6 +20,11 @@ backups
 .sheet-theme.json
 .chatlog
 .wall
+.thumbs
+.audio
+.productions
+.blocked.json
+.data
 output
 .playwright-cli
 .commitmsg.txt

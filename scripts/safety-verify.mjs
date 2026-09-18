@@ -189,7 +189,8 @@ const run = async () => {
     await s2.connect();
     s1.send({ type: "watcher_ack", capable: true });
     s2.send({ type: "watcher_ack", capable: true });
-    host.sendOp({ kind: "image", src: "data:image/png;base64,AAAA", x: 0, y: 0 });
+    // A REAL inline PNG: the relay refuses image ops whose payload is not one (security-verify.mjs).
+    host.sendOp({ kind: "image", dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", x: 0, y: 0, w: 1, h: 1 });
     const opMsg = await s1.waitFor((m) => m.type === "op" && m.op?.kind === "image", { timeoutMs: 3000, label: "image op" });
     const toOpId = opMsg.op.opId;
     const sinceOpId = Math.max(0, toOpId - 1);

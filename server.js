@@ -16,10 +16,12 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, openSync, readSync, closeSync, promises as fsp } from 'fs';
-import { randomBytes, createHash, timingSafeEqual } from 'crypto';
+import { randomBytes, randomInt, createHash, timingSafeEqual } from 'crypto';
+import { isIP } from 'net';
+import { promises as dnsPromises } from 'dns';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { gzip } from 'zlib';
-import { verifyAccessToken, pocketbaseConfigured } from './server/pocketbaseAuth.js';
+import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
@@ -130,12 +132,52 @@ const AUTO_CLOSE_OWNED_BASE_MS = Number(process.env.AUTO_CLOSE_OWNED_BASE_MS || 
 const AUTO_CLOSE_OWNED_MAX_MS = Number(process.env.AUTO_CLOSE_OWNED_MAX_MS || 90 * 24 * 60 * 60 * 1000); // 90d ceiling
 
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
-// lives under one directory so a single Docker volume persists everything. Defaults
-// to the app dir, so non-Docker runs behave exactly as before.
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+// lives under one directory so a single Docker volume persists everything.
+//
+// Without DATA_DIR it is `.data/` inside the app dir — NOT the app dir itself.
+// Chat logs, room files and the admin key used to sit beside server.js, one
+// careless express.static(__dirname) away from being served; a dot-directory is
+// skipped by express.static even then. A checkout that ran the old default has
+// its files moved across on boot (per entry, whenever the old one exists and
+// the new one does not, so a move blocked by a locked file finishes next time).
+const LEGACY_ROOT_DATA = ['.rooms', '.chatlog', '.thumbs', '.productions', '.artworks', '.wall', '.audio',
+  '.admin-key', '.metrics.json', '.analytics.json', '.reports.json', '.blocked.json', '.sheets.json',
+  '.sheet-theme.json', '.billing.json'];
+function resolveDataDir() {
+  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+  const dir = join(__dirname, '.data');
+  try { mkdirSync(dir, { recursive: true }); } catch { /* already exists */ }
+  const moved = [];
+  for (const name of LEGACY_ROOT_DATA) {
+    const from = join(__dirname, name);
+    const to = join(dir, name);
+    if (!existsSync(from) || existsSync(to)) continue;
+    try { renameSync(from, to); moved.push(name); } catch { /* in use — next boot */ }
+  }
+  if (moved.length) console.log(`Moved local data into .data/: ${moved.join(', ')}`);
+  return dir;
+}
+const DATA_DIR = resolveDataDir();
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
 const app = express();
+// Nothing here is ever served from behind another Express-aware proxy we want
+// to believe blindly: client IPs come from clientIp(), which checks the peer.
+app.disable('x-powered-by');
+// Baseline response hardening for EVERY route (the SPA shell, /admin, the API).
+// Deliberately not a script-src policy: the page loads ad + analytics scripts
+// whose hosts change, and a CSP that breaks the canvas is worse than none. What
+// this does buy: /admin cannot be framed by another site (clickjacking the
+// moderation buttons), no <base> hijack, no plugin content, and no MIME
+// sniffing of anything a user uploaded. Routes that need stricter (the wall's
+// frame images) set their own header afterwards, which replaces this one.
+app.use((_req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'SAMEORIGIN');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+  next();
+});
 let shuttingDown = false;
 let shutdownPersistenceFailed = false;
 // Existing requests finish normally; keep-alive clients must retry new work on
@@ -1569,6 +1611,8 @@ const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 60
 // Bound a single op's serialized weight (image ops embed dataURLs — a photo
 // import is a few MB; nothing legitimate approaches this).
 const MAX_OP_DATAURL_CHARS = Number(process.env.MAX_OP_DATAURL_CHARS || 8_000_000);
+const JOIN_MISS_PER_MIN = Number(process.env.JOIN_MISS_PER_MIN || 40);
+const MAX_OP_STAMP_CHARS = 96_000; // = the client's MAX_INLINE_STAMP_CHARS (brushes.js)
 const MAX_DRAW_MESSAGE_CHARS = Number(process.env.MAX_DRAW_MESSAGE_CHARS || 128_000);
 const MAX_DRAW_POINTS_PER_OP = Number(process.env.MAX_DRAW_POINTS_PER_OP || 2048);
 const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
@@ -3674,6 +3718,17 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
+  // Code guessing. A join to a code that is neither live nor on disk is either a
+  // brand-new private room (clients mint their own codes) or a guess at someone
+  // else's — and a guesser makes thousands of them. Nobody makes 40 new rooms a
+  // minute, not even a classroom behind one address.
+  if (!rooms.has(roomId) && !FEATURED_CODES.has(roomId) && !existsSync(roomFile(roomId))
+    && !rateOk(`joinmiss:${rawClientIp(req)}`, JOIN_MISS_PER_MIN, 60_000)) {
+    try { ws.send(JSON.stringify({ type: 'rate_limited', reason: 'too_many_rooms' })); } catch { /* gone */ }
+    ws.close(1013, 'slow down');
+    return;
+  }
+
   const room = getRoom(roomId);
 
   // DAILY: flip the day on first contact, not the next 60s tick — otherwise a
@@ -3720,13 +3775,15 @@ wss.on('connection', async (ws, req) => {
   //
   // Transport (task #40): the web client's FIRST frame is {type:'auth', token}
   // (token:null for guests) so the JWT never rides the URL query string, where
-  // proxy/CDN access logs and browser history would capture it. The query param
-  // stays as a fallback for the mobile app and stale cached bundles. A non-auth
+  // proxy/CDN access logs and browser history would capture it. A non-auth
   // first frame (legacy client) is replayed into the normal handler after join.
-  let token = url.searchParams.get('token');
+  // The query-string token is no longer read at all: a JWT in a URL is a JWT in
+  // every proxy / CDN access log on the way here. Every shipped client (web and
+  // mobile) authenticates with the first frame.
+  let token = null;
   let deviceKey = null;
   let replayFirstFrame = null;
-  if (!token) {
+  {
     const first = await new Promise((resolve) => {
       const finish = (value) => {
         clearTimeout(timer);
@@ -4113,6 +4170,17 @@ wss.on('connection', async (ws, req) => {
         // Bound single-op weight: image ops embed dataURLs; nothing legitimate
         // approaches this cap, and unbounded ops multiply across history/joins.
         if (typeof data.op.dataUrl === 'string' && data.op.dataUrl.length > MAX_OP_DATAURL_CHARS) break;
+        // …and whatever an op carries that a browser will load as an image must
+        // BE an image, inline. `dataUrl` (image ops) and `stampDataUrl` (imported
+        // brush tips) both end up in `new Image().src` on every current and
+        // future member of the room — see rasterDataUrlOk for why a URL is fatal.
+        if (data.op.dataUrl != null && !rasterDataUrlOk(data.op.dataUrl, MAX_OP_DATAURL_CHARS)) break;
+        if (data.op.kind === 'image' && data.op.dataUrl == null) break;
+        {
+          const dab = data.op.settings && data.op.settings.dab;
+          if (dab && typeof dab === 'object' && dab.stampDataUrl != null
+            && !rasterDataUrlOk(dab.stampDataUrl, MAX_OP_STAMP_CHARS)) break;
+        }
         // Animation frames: an op may target a specific shared frame. Validate
         // the frame exists (stale clients race frame deletes) and enforce the
         // per-frame cap by REJECTING — FIFO-trimming would rot early frames.
@@ -5811,14 +5879,53 @@ app.get('/api/artworks/:id', async (req, res) => {
   res.json({ id: item.id, name: item.name, image: item.image });
 });
 
+// The gallery is the one place an anonymous caller writes megabytes to disk
+// under a key THEY choose: every fresh userKey is another 12 × 16MB. Three
+// fences, outermost last: a per-visitor rate (a class behind one school NAT all
+// saving at the bell still fits), real image bytes only (it used to take any
+// "data:image…" prefix, SVG included), and a ceiling on the whole directory so
+// the worst a flood can do is fill the GALLERY — never the volume that room
+// persistence and billing writes share.
+const ARTWORK_DIR_MAX_BYTES = Number(process.env.ARTWORK_DIR_MAX_BYTES || 4 * 1024 * 1024 * 1024);
+const ART_IMAGE_MAX_CHARS = 16 * 1024 * 1024;
+const ART_THUMB_MAX_CHARS = 400_000;
+let artworkDirBytes = -1; // -1 = not measured yet
+let artworkDirMeasuredAt = 0;
+function artworkDirUsage() {
+  const now = Date.now();
+  if (artworkDirBytes < 0 || now - artworkDirMeasuredAt > 5 * 60_000) {
+    let total = 0;
+    try {
+      for (const f of readdirSync(ARTWORK_DIR)) {
+        try { total += statSync(join(ARTWORK_DIR, f)).size; } catch { /* raced a delete */ }
+      }
+    } catch { /* no gallery yet */ }
+    artworkDirBytes = total;
+    artworkDirMeasuredAt = now;
+  }
+  return artworkDirBytes;
+}
+
 app.post('/api/artworks', async (req, res) => {
+  const ip = clientIp(req);
+  if (!rateOk(`art:${ip}`, 40, 10 * 60_000) || !rateOk(`art-day:${ip}`, 300, 24 * 3_600_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
   const key = await resolveArtOwner(req);
   if (key === null) {
     return res.status(401).json({ error: 'auth_required' });
   }
   const { name, image, thumb } = req.body || {};
-  if (!key || typeof image !== 'string' || !image.startsWith('data:image')) {
+  if (!key || !rasterDataUrlOk(image, ART_IMAGE_MAX_CHARS)) {
     return res.status(400).json({ error: 'bad request' });
+  }
+  // One gallery can't be machine-gunned either (the 12-save cap bounds its size;
+  // this bounds the rewrite churn of save → delete → save).
+  if (!rateOk(`art-key:${key}`, 12, 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  if (artworkDirUsage() + image.length > ARTWORK_DIR_MAX_BYTES) {
+    return res.status(507).json({ error: 'storage_full' });
   }
   const arr = loadUserArt(key);
   if (arr.length >= MAX_SAVES) {
@@ -5828,11 +5935,12 @@ app.post('/api/artworks', async (req, res) => {
     id: 'art_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
     name: String(name || 'My drawing').slice(0, 60),
     createdAt: Date.now(),
-    thumb: typeof thumb === 'string' ? thumb : '',
+    thumb: rasterDataUrlOk(thumb, ART_THUMB_MAX_CHARS) ? thumb : '',
     image,
   };
   arr.unshift(item);
   saveUserArt(key, arr);
+  if (artworkDirBytes >= 0) artworkDirBytes += image.length + item.thumb.length;
   analyticsRecordGallerySave(key, req);
   res.json({ ok: true, id: item.id, count: arr.length, max: MAX_SAVES });
 });
@@ -6193,6 +6301,12 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   const identity = token ? await verifyAccessToken(token) : null;
   if (!identity || !identity.profileId) return res.status(401).json({ error: 'unauthorized' });
   const pid = identity.profileId;
+  // This is a once-per-account action that synchronously rereads and rewrites
+  // EVERY chat log and sweeps every live room and wall post. Unthrottled, one
+  // free account in a loop stalls the event loop — i.e. every live canvas.
+  if (!rateOk(`scrub:${pid}`, 3, 60 * 60_000) || !rateOk(`scrub-ip:${clientIp(req)}`, 6, 60 * 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
   let scrubbed = 0;
   // 1) durable audit logs
   let files = [];
@@ -6292,6 +6406,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   // cleanup removes the mapping; a Stripe outage leaves a durable retry record
   // that revokes entitlement and retains only the ids needed to cancel later.
   const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
+  forgetProfileTokens(pid); // the account is gone — its cached sign-in must not outlive it
   res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed });
 });
 
@@ -6758,6 +6873,9 @@ app.post('/api/admin/users/:key/block', (req, res) => {
   const reason = String((req.body && req.body.reason) || '').slice(0, 200) || null;
   blockedKeys.set(key, { ts: Date.now(), reason, by: adminLabel(req) });
   persistBlocked();
+  // Verified tokens are cached for a minute; drop this account's so nothing
+  // (REST included) keeps treating it as signed-in on the strength of the cache.
+  if (key.startsWith('pb:')) forgetProfileTokens(key.slice(3));
   // Close any live sockets this block applies to, so the block is effective now
   // and not only on the next join. An anonymous socket matches on its device
   // key (when it sent one) or its IP.
@@ -7072,6 +7190,23 @@ function sniffWallImage(buffer) {
   return null;
 }
 
+// The gate for client-supplied rasters that are RELAYED or STORED as a string
+// (canvas image ops, stamp-brush tips, gallery saves) rather than re-served as
+// bytes: an allowlisted data:image type, strict base64 to the end, and a real
+// image header in the decoded bytes. Anything else — above all an http(s) URL,
+// which every joiner's browser would fetch (leaking kids' IPs to a stranger and
+// tainting the shared canvas so no one can save or pin it again) — is refused.
+// Only the header is decoded, so an 8MB import costs a regex pass, not a copy.
+const RASTER_DATA_URL_RE = /^data:image\/(png|jpe?g|gif|webp);base64,([a-z0-9+/]+={0,2})$/i;
+function rasterDataUrlOk(dataUrl, maxChars) {
+  if (typeof dataUrl !== 'string' || dataUrl.length > maxChars || dataUrl.length < 40) return false;
+  const m = RASTER_DATA_URL_RE.exec(dataUrl);
+  if (!m) return false;
+  let head;
+  try { head = Buffer.from(m[2].slice(0, 32), 'base64'); } catch { return false; }
+  return !!sniffWallImage(head);
+}
+
 // Decode a raster-image data URL to {mime, buffer}, or null if it isn't one we
 // accept (SVG, non-image, or bytes that don't match a known image header).
 function decodeWallFrame(dataUrl) {
@@ -7132,16 +7267,79 @@ function deleteWallPost(id) {
 // ONE. Cloudflare puts the real client IP in CF-Connecting-IP (it overwrites any
 // client-sent value, so it can't be spoofed through the tunnel); fall back to
 // req.ip for local/dev where that header is absent.
+// cf-connecting-ip is only as trustworthy as whoever handed it to us. Through
+// the Cloudflare tunnel it is the visitor's real address; from any OTHER peer
+// (the origin reached directly by IP, another container, a future proxy) it is
+// attacker-chosen text, and every IP-keyed control — rate limits, wall votes and
+// the 3-report auto-hide, IP blocks, mod-auth throttles — would follow it. So
+// the header is honoured only when the TCP peer is the tunnel:
+//   TRUSTED_PROXY_HOSTS=cloudflared   (compose sets this) → only the address(es)
+//       that name resolves to. Re-resolved on a timer, because a restarted
+//       container comes back on a new IP.
+//   unset (bare `node server.js`, a host-level cloudflared) → loopback and
+//       private-range peers only. A request arriving from a public address is
+//       never believed, which is the "someone found the droplet IP" case.
+// If the named host cannot be resolved (the tunnel profile is not running) the
+// private-range rule applies, so a host-level tunnel keeps working.
+const TRUSTED_PROXY_HOSTS = String(process.env.TRUSTED_PROXY_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
+const TRUSTED_PROXY_REFRESH_MS = 15_000;
+let trustedProxyIps = new Set();
+let trustedProxyCheckedAt = 0;
+let trustedProxyRefreshing = false;
+function normalizeIp(addr) {
+  const a = String(addr || '').trim();
+  return a.startsWith('::ffff:') ? a.slice(7) : a;
+}
+function isPrivatePeer(a) {
+  return a === '::1' || /^127\./.test(a) || /^10\./.test(a) || /^192\.168\./.test(a)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(a) || /^f[cd][0-9a-f]{2}:/i.test(a) || /^fe80:/i.test(a);
+}
+async function refreshTrustedProxies() {
+  if (!TRUSTED_PROXY_HOSTS.length || trustedProxyRefreshing) return;
+  trustedProxyRefreshing = true;
+  try {
+    const next = new Set();
+    for (const host of TRUSTED_PROXY_HOSTS) {
+      if (isIP(host)) { next.add(normalizeIp(host)); continue; }
+      try {
+        for (const hit of await dnsPromises.lookup(host, { all: true })) next.add(normalizeIp(hit.address));
+      } catch { /* not running / not on this network */ }
+    }
+    trustedProxyIps = next;
+  } finally {
+    trustedProxyCheckedAt = Date.now();
+    trustedProxyRefreshing = false;
+  }
+}
+if (TRUSTED_PROXY_HOSTS.length) {
+  refreshTrustedProxies();
+  setInterval(refreshTrustedProxies, TRUSTED_PROXY_REFRESH_MS).unref?.();
+}
+function peerIsTrustedProxy(peer) {
+  if (TRUSTED_PROXY_HOSTS.length && trustedProxyIps.size) {
+    if (trustedProxyIps.has(peer)) return true;
+    // An unknown peer claiming to be the tunnel: it may have just restarted on
+    // a new address — look again soon rather than waiting out the timer.
+    if (Date.now() - trustedProxyCheckedAt > 2000) refreshTrustedProxies();
+    return false;
+  }
+  return isPrivatePeer(peer);
+}
+function forwardedClientIp(claimedHeader, peerAddr) {
+  const peer = normalizeIp(peerAddr) || 'anon';
+  const claimed = typeof claimedHeader === 'string' ? claimedHeader.trim() : '';
+  // isIP also keeps junk out of every rate-limit / block key built from this.
+  if (claimed && isIP(claimed) && peerIsTrustedProxy(peer)) return normalizeIp(claimed);
+  return peer;
+}
 function clientIp(req) {
-  return req.get('cf-connecting-ip') || req.ip || 'anon';
+  return forwardedClientIp(req.get('cf-connecting-ip'), req.socket && req.socket.remoteAddress);
 }
 
-// Same intent as clientIp, but for the RAW upgrade request in the WS handler
-// (an http.IncomingMessage — no Express .get()/.ip). Header-based only.
+// Same rule for the RAW upgrade request in the WS handler (an
+// http.IncomingMessage — no Express .get()).
 function rawClientIp(req) {
-  return (req.headers && req.headers['cf-connecting-ip'])
-    || (req.socket && req.socket.remoteAddress)
-    || 'anon';
+  return forwardedClientIp(req.headers && req.headers['cf-connecting-ip'], req.socket && req.socket.remoteAddress);
 }
 
 // Voter identity on a post is a salted hash — the meta file never stores raw
@@ -7250,7 +7448,7 @@ app.get('/api/wall', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   // Viewer identity MUST match how a vote is recorded (account, else IP) so the
   // heart the viewer just tapped shows as filled on their next feed load.
-  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${req.ip || 'anon'}`));
+  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${clientIp(req)}`));
   const q = String(req.query.q || '').toLowerCase().trim();
   const tag = sanitizeWallTag(req.query.tag || '');
   const sort = ['top', 'new', 'fresh'].includes(req.query.sort) ? req.query.sort : 'fresh';
@@ -7321,7 +7519,7 @@ app.get('/api/wall/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const meta = wallPosts.get(req.params.id);
   if (!meta || meta.hidden) return res.status(404).json({ error: 'not found' });
-  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${req.ip || 'anon'}`));
+  const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${clientIp(req)}`));
   res.json({ post: publicWallPost(meta, viewerHash) });
 });
 
@@ -7579,7 +7777,9 @@ function genRoomCode() {
   do {
     code = '';
     for (let i = 0; i < 6; i += 1) {
-      code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
+      // A private room's code is its only secret from non-members — mint it like
+      // every other unguessable id here, not from a predictable PRNG.
+      code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
     }
   } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)));
   return code;
@@ -7587,8 +7787,10 @@ function genRoomCode() {
 
 // Tiny in-memory rate limiter (per profile/IP) so room creation can't be spammed.
 const createHits = new Map();
+const createHitWindows = new Map(); // key -> windowMs, only for windows the sweep would otherwise cut short
 function rateOk(key, max = 8, windowMs = 60_000) {
   const now = Date.now();
+  if (windowMs > 10 * 60_000) createHitWindows.set(key, windowMs);
   const arr = (createHits.get(key) || []).filter((t) => now - t < windowMs);
   if (arr.length >= max) {
     createHits.set(key, arr);
@@ -7602,9 +7804,14 @@ function rateOk(key, max = 8, windowMs = 60_000) {
 // sweep createHits would grow unbounded. Every 5 min, drop keys whose newest
 // hit is older than 10 min (past any window we use).
 setInterval(() => {
-  const cutoff = Date.now() - 10 * 60_000;
+  const now = Date.now();
   for (const [key, arr] of createHits) {
-    if (!arr.length || arr[arr.length - 1] < cutoff) createHits.delete(key);
+    // Hour/day-long limiters keep their history for their own window.
+    const keepMs = Math.max(10 * 60_000, createHitWindows.get(key) || 0);
+    if (!arr.length || arr[arr.length - 1] < now - keepMs) {
+      createHits.delete(key);
+      createHitWindows.delete(key);
+    }
   }
 }, 5 * 60_000).unref?.();
 
@@ -7647,7 +7854,7 @@ app.post('/api/rooms', async (req, res) => {
   if (audience === 'friends' && !identity && ACCOUNTS_CONFIGURED) {
     return res.status(401).json({ error: 'signin_required' });
   }
-  const rlKey = (identity && identity.profileId) || req.ip || 'anon';
+  const rlKey = (identity && identity.profileId) || clientIp(req);
   if (!rateOk(`room:${rlKey}`)) {
     return res.status(429).json({ error: 'rate_limited' });
   }
@@ -7669,12 +7876,14 @@ app.post('/api/rooms', async (req, res) => {
 // scene metadata + every visible op, replayed offline through the shared op
 // interpreter. Animation rooms only. Access model matches invites: knowing
 // the room code = being in the crew. Never materializes rooms for probes.
-app.get('/api/rooms/:code/film', (req, res) => {
+app.get('/api/rooms/:code/film', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   // Serializing a whole segment's history is a heavy, event-loop-blocking
   // sync stringify (up to MAX_ANIM_ROOM_OPS ops). FLIPBOOK's code is public, so
   // gate per-IP or an anon client could loop this and jank every live canvas.
-  if (!rateOk(`film:${req.ip || 'anon'}`)) {
+  // Keyed on the VISITOR. req.ip behind the tunnel is the tunnel's one address,
+  // so this used to be a single site-wide bucket any one client could drain.
+  if (!rateOk(`film:${clientIp(req)}`)) {
     return res.status(429).json({ error: 'rate_limited' });
   }
   const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9_-]/gi, '').slice(0, 16);
@@ -7684,6 +7893,16 @@ app.get('/api/rooms/:code/film', (req, res) => {
   const room = getRoom(code);
   if (!room.animationEnabled) {
     return res.status(404).json({ error: 'not_a_film' });
+  }
+  // The same door as the socket: a private room's complete drawing history is
+  // not handed to whoever holds a 6-character code when joining that room takes
+  // an account. (Blocked accounts are refused here exactly as they are there.)
+  if (room.audience !== 'kid_safe' && ACCOUNTS_CONFIGURED) {
+    const identity = await verifyAccessToken(bearerToken(req));
+    if (!identity) return res.status(401).json({ error: 'signin_required' });
+    if (blockFor([`pb:${sanitizeKey(identity.profileId)}`, `ip:${clientIp(req)}`])) {
+      return res.status(403).json({ error: 'blocked' });
+    }
   }
   res.json({ code, title: room.title || null, scenes: scenesMeta(room), soundtrack: room.soundtrack || null, ops: visibleHistory(room) });
 });
@@ -8556,8 +8775,12 @@ if (existsSync(distPath)) {
   app.use((_req, res) => res.status(503).send('Build missing. Run `npm run build` first.'));
 }
 
-server.listen(PORT, () => {
-  console.log(`Drawesome server on http://localhost:${PORT}  (ws path /ws)`);
+// Bare `node server.js` listens on loopback only: a dev box on cafe or school
+// wifi should not be offering an unmoderated server (and its admin login) to the
+// LAN. Containers and LAN testing opt in with HOST=0.0.0.0 (the Dockerfile does).
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
+  console.log(`Drawesome server on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}  (ws path /ws)`);
   // The admin key is intentionally NOT logged. Read it on this host from
   // ${ADMIN_KEY_FILE} (or set ADMIN_KEY in the environment).
   console.log(`Admin key: set via ADMIN_KEY env or read ${ADMIN_KEY_FILE} on the server host.`);

@@ -34,6 +34,14 @@ server.err.log
 .metrics.json
 .analytics.json
 .billing.json
+.blocked.json
+.sheet-theme.json
+.thumbs/
+.wall/
+.audio/
+.productions/
+# Default local DATA_DIR (server.js resolveDataDir)
+.data/
 
 # Local secrets / config — never commit
 .env

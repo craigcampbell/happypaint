@@ -762,6 +762,10 @@ export function preloadBrushStamp(dab) {
   }
   entry.promise = new Promise((resolve) => {
     const image = new Image();
+    // The tip is regex-validated as an inline raster before it gets here
+    // (validStampDataUrl); this keeps a cross-origin tip from tainting the
+    // canvas even if that ever regresses.
+    image.crossOrigin = "anonymous";
     image.onload = () => {
       entry.image = image;
       entry.ready = true;

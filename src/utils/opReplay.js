@@ -24,6 +24,7 @@ import { createMixMap } from "./mixMap";
 import { drawShape, drawText } from "./shapes";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "./layers";
 import { normalizeSymmetry, transformPointsBySymmetry } from "./symmetry";
+import { isInlineRaster, remoteOpImage } from "./safeImage";
 
 // Cap on concurrently BUFFERED in-progress strokes (each buffer ≤2048x2048);
 // stroke #5 falls back to the legacy direct per-segment path.
@@ -186,7 +187,8 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
   } else if (op.kind === "text") {
     drawText(dest, op.point, op.text, op.opts || {});
   } else if (op.kind === "image" && op.dataUrl) {
-    const img = new Image();
+    const img = remoteOpImage(op.dataUrl); // null → not an inline raster: never loaded
+    if (!img) return;
     img.onload = () => {
       dest.drawImage(img, op.x, op.y, op.w, op.h);
       mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
@@ -214,13 +216,14 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
   // Decode embedded images up front, then paint them synchronously in op
   // order below. A warm cache still dispatches Image.onload asynchronously:
   // letting applyOp schedule it would put a checkpoint ON TOP of later ink.
-  const imageOps = ops.filter((op) => op.kind === "image" && op.dataUrl);
+  const imageOps = ops.filter((op) => op.kind === "image" && isInlineRaster(op.dataUrl));
   const decodedImages = new Map();
   await Promise.all(
     [...new Set(imageOps.map((op) => op.dataUrl))].map(
       (dataUrl) =>
         new Promise((resolve) => {
-          const img = new Image();
+          const img = remoteOpImage(dataUrl);
+          if (!img) { resolve(); return; }
           img.onload = () => { decodedImages.set(dataUrl, img); resolve(); };
           img.onerror = () => resolve();
           img.src = dataUrl;
