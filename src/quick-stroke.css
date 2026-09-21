@@ -469,7 +469,13 @@ input.cw-range-plain {
   display: none;
 }
 
-/* ---- Narrow phones: seven items must fit the bar ---------------------------- */
+/* ---- Narrow phones: eight items must fit the bar ---------------------------- */
+/* (paint · eraser · size · colour · pan · tools · chat │ undo)
+   Undo made this eight, and stepped breakpoints kept missing a phone between
+   them — 375px clipped the last button clean off the bar. The width is fluid
+   instead: 44px where there is room, otherwise an even share of the bar's own
+   96vw ceiling minus its chrome (4px padding each side, 2px × 8 gaps, and the
+   ~5px hairline before undo ≈ 32px). Every phone fits by construction. */
 @media (max-width: 430px) {
   .mobile-quickbar {
     gap: 2px;
@@ -477,7 +483,7 @@ input.cw-range-plain {
   }
 
   .qb-btn {
-    min-width: 44px;
+    min-width: min(44px, calc((96vw - 32px) / 8));
     padding: 4px 2px;
   }
 
@@ -486,8 +492,9 @@ input.cw-range-plain {
   }
 }
 
-@media (max-width: 360px) {
-  .qb-btn {
-    min-width: 41px;
+/* Below this the buttons are narrower than "Eraser" is wide at 10.5px. */
+@media (max-width: 380px) {
+  .qb-label {
+    font-size: 9.5px;
   }
 }

@@ -56,8 +56,9 @@ import {
 } from "./utils/frameRasters";
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
-import { replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
+import { applyOp, replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
 import { replayInSlices } from "./utils/replayQueue";
+import { createSharedOpLog } from "./utils/sharedOpLog";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
@@ -2190,6 +2191,80 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blitToDisplay]);
 
+  // ---- Undo in a shared room -----------------------------------------------
+  // Since layers became shared state, a friend's op paints into the SAME stack
+  // we do — there is no separate "remote" canvas any more. So the snapshot an
+  // undo entry holds is "my layer, plus whatever friends had drawn by then",
+  // and restoring it verbatim rubs off every stroke they have added SINCE: an
+  // undo that undoes other people. Each entry therefore also marks its place
+  // in the shared op log (utils/sharedOpLog), and a restore re-applies the ops
+  // that landed after that mark. Only our own stroke actually disappears.
+  const sharedOpLogRef = useRef(createSharedOpLog());
+  const replaySharedOpsSince = useCallback(
+    (mark) => {
+      if (mark == null) {
+        return;
+      }
+      const frame = framesRef.current[activeFrameIndexRef.current];
+      const layers = layersRef.current;
+      if (!frame || !layers.length) {
+        return;
+      }
+      // A stroke with a live buffer has NO pixels on the layer yet: the restore
+      // left its buffer alone and it commits on its own end op, so replaying it
+      // would paint it twice. Symmetry copies are buffered under ":symN" ids by
+      // whichever interpreter expanded them.
+      const isOpen = (strokeId) =>
+        remoteStrokesRef.current.has(strokeId)
+        || remoteStrokesRef.current.has(`${strokeId}:sym0`)
+        || remoteStampQueueRef.current.has(strokeId);
+      const ops = sharedOpLogRef.current.replaySince(mark, isOpen);
+      // null = the log rolled past this entry (a very long session between two
+      // of our strokes): fall back to the plain restore rather than replaying
+      // a partial room.
+      if (!ops || !ops.length) {
+        return;
+      }
+      const firstFrameId = framesRef.current[0]?.id;
+      const byLayerId = new Map(layers.map((layer) => [layer.id, layer]));
+      // Same routing as applyRemoteOp: the layer the op names, else the bottom
+      // one (where every untagged legacy stroke has always gone).
+      const canvasFor = (op) => (byLayerId.get(op.layerId) || layers[0]).canvas;
+      const targetFor = (op) => canvasFor(op).getContext("2d");
+      const ctx0 = layers[0].canvas.getContext("2d");
+      const mix = ensureMixMap();
+      const lastMap = new Map();
+      const strokes = new Map();
+      const deferred = new Map();
+      const destFor = new Map(); // strokeId -> ctx, for the tail commit below
+      for (const op of ops) {
+        // Only THIS frame's ops: the restore only touched this frame's layers.
+        if ((op.frameId || firstFrameId) !== frame.id) {
+          continue;
+        }
+        if (op.strokeId) {
+          destFor.set(op.strokeId, targetFor(op));
+        }
+        // The parity-tested offline interpreter — the same pixels every peer
+        // sees, and independent of the live remote-stroke buffers, which this
+        // must not disturb.
+        applyOp(ctx0, op, lastMap, strokes, renderDisplay, mix, deferred, CANVAS_WIDTH, CANVAS_HEIGHT, targetFor);
+      }
+      // Every stroke we replay is one that already landed, so its end op came
+      // with it — except a stroke the idle sweep committed without one. Bank
+      // those rather than leak the buffer.
+      for (const [strokeId, entry] of strokes) {
+        if (entry.buf) {
+          prepareStrokeCommit(entry.buf, entry.renderer, entry.fx);
+          entry.buf.commit(destFor.get(strokeId) || ctx0, entry.opacity);
+          entry.buf.dispose();
+        }
+        strokes.delete(strokeId);
+      }
+    },
+    [ensureMixMap, renderDisplay],
+  );
+
   // Push an undo entry. Brush/fill/shape/text ops only touch the ACTIVE layer,
   // so they snapshot just that layer + a lightweight structural descriptor (W4)
   // — roughly Nx less memory than cloning the whole stack. Structural ops
@@ -2200,6 +2275,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         scope === "full"
           ? snapshotLayers(layersRef.current, activeLayerIdRef.current)
           : snapshotActiveLayer(layersRef.current, activeLayerIdRef.current);
+      // Where the room was when these pixels were captured (see above).
+      entry.sharedMark = sharedOpLogRef.current.mark();
       historyRef.current.push(entry);
 
       if (historyRef.current.length > MAX_HISTORY) {
@@ -2215,9 +2292,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Capture the current state in the SAME shape as the entry we are about to
   // apply, so undo/redo round-trips correctly for both snapshot kinds.
   const captureInverse = useCallback((entry) => {
-    return entry.kind === "active"
+    const inverse = entry.kind === "active"
       ? snapshotActiveLayer(layersRef.current, activeLayerIdRef.current)
       : snapshotLayers(layersRef.current, activeLayerIdRef.current);
+    // Friends keep drawing between an undo and its redo, so the inverse needs
+    // its own mark for the same reason the forward entry does.
+    inverse.sharedMark = sharedOpLogRef.current.mark();
+    return inverse;
   }, []);
 
   // Apply a layer snapshot (used by undo/redo). Full snapshots rebuild the whole
@@ -2245,6 +2326,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       // Undo/redo can swap layer 0's pixels wholesale — re-mirror on next wet sample.
       mixMapRef.current?.markAllDirty();
+      // …then put the room back: the snapshot is OUR layer as it was, so every
+      // stroke a friend has added since is missing from it. Re-applied AFTER
+      // markAllDirty so a wet dab in the replay samples the restored paper.
+      replaySharedOpsSince(snapshot.sharedMark);
       // The active frame's pixels changed outside the stroke path — its onion
       // proxy is stale for when it next becomes someone's neighbour.
       bumpFrameStamp(framesRef.current[activeFrameIndexRef.current]?.id);
@@ -2253,7 +2338,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
       updateHistoryCounts();
     },
-    [bumpFrameStamp, invalidateCompositeCache, renderDisplay, syncLayerState, updateHistoryCounts],
+    [bumpFrameStamp, invalidateCompositeCache, renderDisplay, replaySharedOpsSince, syncLayerState, updateHistoryCounts],
   );
 
   const undo = useCallback(() => {
@@ -7530,6 +7615,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           const incomingOps = Array.isArray(data.ops) ? data.ops : [];
           const epoch = ++historyReplayEpochRef.current;
           historyReplayActiveRef.current = true;
+          // This repaints every layer from the server's own list, so every
+          // mark into the undo log points at pixels that no longer exist.
+          // (Live ops arriving mid-replay are deferred and logged when they
+          // are re-dispatched afterwards.)
+          sharedOpLogRef.current.reset();
           if (playTimerRef.current) stopPlayback();
           // Scene bookkeeping: a history frame may be one SCENE's slice of the
           // film (join, page, resync). Track which scene we now hold.
@@ -7805,6 +7895,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             });
           }
           coldFramesRef.current?.noteFrameOp(data.op); // its frame's own op list (cold frames re-raster)
+          // …and the undo log, so our own undo can put this friend's stroke
+          // back after it restores our layer (see replaySharedOpsSince).
+          sharedOpLogRef.current.note(data.op);
           applyRemoteOp(data.op);
           if (typeof data.op?.opId === "number" && data.op.opId > lastOpIdRef.current) {
             lastOpIdRef.current = data.op.opId;
@@ -9740,9 +9833,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <h1><BrandMark /></h1>
           </div>
           <div className="topbar-actions">
-            <button type="button" onClick={undo} disabled={historyCount === 0}>
-              Undo
-            </button>
+            {/* Undo is not here: it is the floating ↶ over the canvas
+                top-right (.undo-fab), within reach of the drawing hand. */}
             <button type="button" onClick={redo} disabled={redoCount === 0}>
               Redo
             </button>
@@ -10270,6 +10362,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               ) : null}
             </div>
             )}
+
+            {/* Undo, floating over the canvas top-right so it is one reach
+                from the drawing hand instead of a trip to the tool rail. It
+                takes back YOUR last stroke only — friends' art is replayed
+                back over the restore (see replaySharedOpsSince). The compact
+                tiers keep zoom in this corner, so they carry undo as its own
+                button on the bottom quick bar instead. */}
+            {layoutTier === "desktop" ? (
+              <button
+                type="button"
+                className="undo-fab"
+                onClick={undo}
+                disabled={historyCount === 0}
+                title="Undo my last stroke (Ctrl+Z) — nobody else's"
+                aria-label="Undo my last stroke"
+              >
+                <span className="undo-fab-ico" aria-hidden="true">↶</span>
+                <span className="undo-fab-label">Undo</span>
+              </button>
+            ) : null}
 
             {roomPrompt && !promptDismissed && !(roomGame && game) && !(roomPhone && phone) ? (
               <div className="room-prompt-chip" role="note">
@@ -10954,9 +11066,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" className="compact-only-action" onClick={() => setShowLobby(true)}>
               🚪 Rooms
             </button>
-            <button type="button" onClick={undo} disabled={historyCount === 0}>
-              ↶ Undo
-            </button>
+            {/* Undo is not here: it has its own ↶ button on the quick bar. */}
             <button type="button" onClick={redo} disabled={redoCount === 0}>
               ↷ Redo
             </button>
@@ -11721,6 +11831,21 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <span className="qb-label">Chat</span>
           </button>
         )}
+        {/* Undo on its own at the end of the bar, behind a hairline: it is an
+            action, not a tool, and the far end is the easiest thumb reach.
+            Takes back YOUR last stroke only — never a friend's. */}
+        <span className="qb-sep" aria-hidden="true" />
+        <button
+          type="button"
+          className="qb-btn qb-undo"
+          onClick={undo}
+          disabled={historyCount === 0}
+          title="Undo my last stroke — nobody else's"
+          aria-label="Undo my last stroke"
+        >
+          <span className="qb-ico" aria-hidden="true">↶</span>
+          <span className="qb-label">Undo</span>
+        </button>
         {layoutTier !== "desktop" ? quickPopover : null}
       </div>
       {toolsOpen ? <div className="tools-backdrop" onClick={() => setToolsOpen(false)} aria-hidden="true" /> : null}

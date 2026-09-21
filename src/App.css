@@ -10115,3 +10115,69 @@ img.cc-doodle { background: #fff; }
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* ==== Undo, on its own ==================================================== */
+/* Undo used to sit in the Actions list inside the tool rail — a trip away from
+   the canvas mid-drawing. It is now the one action with its own control: a
+   floating pill over the canvas top-right on desktop, and its own button at
+   the end of the quick bar on the compact tiers (the top-right corner there
+   belongs to zoom). It takes back YOUR last stroke only — the restore replays
+   friends' ops back over itself (App.jsx#replaySharedOpsSince), so nobody
+   else's art moves. */
+.undo-fab {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 29; /* above .room-prompt-chip (28), below .clear-banner (30) */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 15px 0 12px;
+  border: 1px solid #cdd7e0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+  color: #21456f;
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.undo-fab:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.undo-fab:active:not(:disabled) { transform: translateY(1px); }
+.undo-fab:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+.undo-fab-ico { font-size: 20px; line-height: 1; }
+
+/* The countdown chip shared this corner — give it the row underneath, exactly
+   as the compact tiers already do, instead of squeezing two pills onto one
+   line. (The FAB only renders on desktop, so this never fires on a phone.) */
+.undo-fab ~ .wipe-chip { top: 60px; }
+.undo-fab ~ .wipe-chip ~ .wipe-panel { top: 96px; }
+/* The prompt chip is centred across the same strip — keep it clear of the FAB. */
+.undo-fab ~ .room-prompt-chip,
+.undo-fab ~ .room-prompt-chip:has(~ .wipe-chip) { max-width: calc(100% - 230px); }
+
+@media (max-width: 1024px), (pointer: coarse) {
+  /* The quick bar's hairline divider — tablet already styled its zoom group's
+     one; undo sits behind the same rule at the far end of every compact bar. */
+  .qb-sep {
+    align-self: center;
+    flex: none;
+    width: 1px;
+    height: 28px;
+    margin: 0 2px;
+    background: var(--snap-gray-200, #dfe3e8);
+  }
+  /* Nothing to take back yet — dim, but keep the slot so the bar never shifts
+     under a thumb that is already on its way to the button. */
+  .qb-btn:disabled { opacity: 0.4; }
+  .qb-undo .qb-ico { font-size: 25px; }
+}

@@ -32,7 +32,11 @@ mkdirSync(SCRATCH, { recursive: true });
 mkdirSync(SHOTS, { recursive: true });
 
 const server = spawn(process.execPath, ["server.js"], {
-  cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH }, stdio: "pipe",
+  // PB_URL blanked: ZZQS is an ordinary code, so it is an invite-only room, and
+  // the door gate turns those away without an account on a deploy that HAS
+  // accounts. With a PocketBase in the ambient env this harness drew nothing at
+  // all — every interaction check failed behind the sign-in modal.
+  cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, PB_URL: "" }, stdio: "pipe",
 });
 server.stderr.on("data", (d) => { if (process.env.SRV_LOG) process.stderr.write("[srv] " + d); });
 
@@ -164,8 +168,9 @@ async function runControls(page, tier, tap, drag, shot) {
     if (tier !== "desktop") {
       const items = await page.$$eval(`${barSel} > button`, (els) => els.map((e) => e.textContent.trim()));
       // The tablet bar leads with the zoom trio (- / fit% / +), like the
-      // desktop cluster; the phone bar carries only the seven quick tools.
-      const expected = tier === "tablet" ? 10 : 7;
+      // desktop cluster; the phone bar carries the seven quick tools. Both end
+      // with undo, behind a hairline (see scripts/undo-verify.mjs).
+      const expected = tier === "tablet" ? 11 : 8;
       check(`A2b ${expected} quick bar items`, items.length === expected, items.join(" · "));
       await shot("bar");
     }
