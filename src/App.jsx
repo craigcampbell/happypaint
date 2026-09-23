@@ -327,8 +327,14 @@ const MAX_PALETTE_COLORS = 10;
 // hover), so a hand resting on a Cintiq / iPad can't paint or pinch while the
 // pen is in use, yet fingers work again a moment after the pen is put down.
 const PEN_PRIORITY_MS = 1500;
-// A touch contact wider/taller than this is a palm or forearm, never a fingertip.
-const PALM_CONTACT_PX = 45;
+// While a pen is in use, a touch contact wider/taller than this is the resting
+// palm / forearm. Sized for iPad Safari, which reports a touch's width as
+// 2 × UITouch.majorRadius: an ordinary fingertip there is ~40-65px and a
+// child's flat finger pad ~85px (Chromium on Android reports ~10-25px). This
+// used to be 45 and applied with no pen at all, which silently threw away
+// most finger strokes on an iPad. With no pen in play there is NO size test:
+// whatever a kid touches the canvas with paints.
+const PALM_CONTACT_PX = 100;
 // "Pen session": a pen was used this recently, so a lone finger landing on
 // the canvas is most likely the drawing hand settling ahead of the pen tip
 // (the classic palm mark: hand down, then pen). Its stroke is HELD for
@@ -340,6 +346,12 @@ const TOUCH_HOLD_MS = 160;
 // A held touch that lifts inside the hold window is dropped as a stray palm
 // tap unless it travelled this far — a real quick flick still draws.
 const TOUCH_HOLD_FLICK_PX = 12;
+// A palm-sized touch contact during a pen session (penAt = lastPenAtRef; 0 =
+// no pen yet this page load).
+const isPalmContact = (event, penAt) =>
+  penAt > 0 &&
+  (event.timeStamp || performance.now()) - penAt < PEN_SESSION_MS &&
+  ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX);
 // Desktop tool-rail open/closed preference (desktop tier only; the compact
 // tiers always start with the rail closed so the canvas gets the screen).
 const RAIL_OPEN_STORAGE_KEY = "happypaint:studio-rail:v1";
@@ -3713,9 +3725,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (now - lastPenAtRef.current < PEN_PRIORITY_MS) {
         return true; // pen was just here; ignore resting-hand / second-finger touches
       }
-      // Palm heuristic: real fingertips report a small contact patch. A large
-      // width/height is almost certainly a palm or forearm resting on a tablet.
-      if ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX) {
+      // Palm heuristic, pen sessions only: a large contact patch while a pen
+      // is in use is the drawing hand resting on the glass.
+      if (isPalmContact(event, lastPenAtRef.current)) {
         return true;
       }
     }
@@ -4432,6 +4444,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     showToast("✋ Ignored a palm touch. Tools ▸ Hand & pen ▸ Pen only keeps fingers from painting.");
   };
 
+  // "Pen only" only means something on a device that has shown us a pen. A
+  // kid who taps it on an iPad with no stylus must not end up with a canvas
+  // their fingers can't paint on, so without a pen it reads as "Draw too".
+  const penOnlyTouch = () => inputPrefsRef.current.touch === "pen" && inputPrefsRef.current.penSeen;
+
+  // First pen contact or hover on this device: remember it, unlock the pen
+  // settings (Pressure, Fingers: Pen only) that stay hidden for finger
+  // painters, and say where they are. Fires once per device.
+  const penSeenNotedRef = useRef(false);
+  const notePenSeen = () => {
+    if (penSeenNotedRef.current || inputPrefsRef.current.penSeen) {
+      return;
+    }
+    penSeenNotedRef.current = true;
+    updateInputPrefs({ penSeen: true });
+    showToast("✏️ Pen found! Pressure and Pen-only settings are now in Tools ▸ Hand & pen.");
+  };
+
   const handleCanvasPointerDown = (event) => {
     if (isExportingVideoRef.current || historyReplayActiveRef.current) {
       return; // don't start a stroke on a scene that is still being rebuilt
@@ -4469,13 +4499,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // paint (the pen-priority window in startStroke keeps single touches
     // inert). Rejected touches are still captured so their up/cancel returns.
     if (event.pointerType === "touch") {
-      const palm = (event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX;
-      if (palm || (activePointerRef.current != null && activePointerTypeRef.current === "pen")) {
+      if (
+        isPalmContact(event, lastPenAtRef.current) ||
+        (activePointerRef.current != null && activePointerTypeRef.current === "pen")
+      ) {
         return;
       }
     }
     if (event.pointerType === "pen") {
       lastPenAtRef.current = event.timeStamp || performance.now();
+      notePenSeen();
       // Pen down: a finger stroke that was on hold, or has just started, was
       // the drawing hand landing first. Drop it (see discardTouchStroke).
       if (cancelHeldTouch() || discardTouchStroke()) {
@@ -4494,7 +4527,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       gestureRef.current == null &&
       panPointerRef.current == null &&
       pointersRef.current.size > 0 &&
-      inputPrefsRef.current.touch !== "pen" &&
+      !penOnlyTouch() &&
       (event.timeStamp || performance.now()) - lastPenAtRef.current >= PEN_PRIORITY_MS
     ) {
       pointersRef.current.clear();
@@ -4538,7 +4571,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Otherwise a lone finger inside the pen-priority window stays a silent
       // gesture candidate — no ring, no stroke (startStroke would reject it
       // anyway, but the ring hopping to a resting finger looks broken).
-      if (inputPrefsRef.current.touch === "pen" || now - penAt < PEN_PRIORITY_MS) {
+      if (penOnlyTouch() || now - penAt < PEN_PRIORITY_MS) {
         return;
       }
       // Pen session: hold the stroke briefly in case this is the hand landing
@@ -4560,6 +4593,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // — and drops a finger stroke still on hold (the hand rests, the pen
       // approaches).
       lastPenAtRef.current = event.timeStamp || performance.now();
+      notePenSeen();
       if (cancelHeldTouch()) {
         notePalmCaught();
       }
@@ -4637,7 +4671,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // owns neither the ring nor the cursor relay — those follow the pen.
     if (
       event.pointerType === "touch" &&
-      (inputPrefsRef.current.touch === "pen" ||
+      (penOnlyTouch() ||
         (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS)
     ) {
       return;
@@ -11592,7 +11626,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               <output>{Math.round(brushVariation * 100)}%</output>
             </label>
           )}
-          {isGooActive || selectedTool === "text" ? null : (
+          {/* Pen pressure is a stylus setting: hidden until this device has shown
+              a pen (always offered on desktop, where a Wacom may not have
+              touched yet), and kept for anyone who already changed it. */}
+          {isGooActive ||
+          selectedTool === "text" ||
+          !(inputPrefs.penSeen || layoutTier === "desktop" || inputPrefs.pressure !== "size") ? null : (
             <div className="pref-row pref-pressure" role="group" aria-label="Pen pressure">
               <span>Pressure</span>
               <div className="seg-toggle">
@@ -11669,32 +11708,36 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 : "Right-hand mode: the tools open on the right of the canvas."}
             </p>
           </div>
-          <div className="pref-row" role="group" aria-label="Finger touch">
-            <span>Fingers</span>
-            <div className="seg-toggle">
-              <button
-                type="button"
-                className={inputPrefs.touch === "auto" ? "is-on" : ""}
-                aria-pressed={inputPrefs.touch === "auto"}
-                onClick={() => updateInputPrefs({ touch: "auto" })}
-              >
-                Draw too
-              </button>
-              <button
-                type="button"
-                className={inputPrefs.touch === "pen" ? "is-on" : ""}
-                aria-pressed={inputPrefs.touch === "pen"}
-                onClick={() => updateInputPrefs({ touch: "pen" })}
-              >
-                Pen only
-              </button>
+          {inputPrefs.penSeen ? (
+            <div className="pref-row pref-touch" role="group" aria-label="Finger touch">
+              <span>Fingers</span>
+              <div className="seg-toggle">
+                <button
+                  type="button"
+                  className={inputPrefs.touch === "auto" ? "is-on" : ""}
+                  aria-pressed={inputPrefs.touch === "auto"}
+                  onClick={() => updateInputPrefs({ touch: "auto" })}
+                >
+                  Draw too
+                </button>
+                <button
+                  type="button"
+                  className={inputPrefs.touch === "pen" ? "is-on" : ""}
+                  aria-pressed={inputPrefs.touch === "pen"}
+                  onClick={() => updateInputPrefs({ touch: "pen" })}
+                >
+                  Pen only
+                </button>
+              </div>
+              <p className="tool-hint">
+                {inputPrefs.touch === "pen"
+                  ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
+                  : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
+              </p>
             </div>
-            <p className="tool-hint">
-              {inputPrefs.touch === "pen"
-                ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
-                : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
-            </p>
-          </div>
+          ) : (
+            <p className="tool-hint pen-hint">Got a stylus? Draw with it once and the pen settings show up here.</p>
+          )}
         </section>
 
         <section className="tool-section economy-rail">
