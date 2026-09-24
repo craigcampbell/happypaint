@@ -1082,7 +1082,7 @@ function opRateOk(user) {
 // Ops appended since the last full room write, merged back on load. Only ops
 // NEWER than the base file's last opId count (a crash between "write base" and
 // "truncate log" leaves duplicates behind; a torn last line is skipped).
-function mergeOpLog(roomId, base) {
+function mergeOpLog(roomId, base, cap = MAX_HISTORY) {
   let text;
   try { text = readFileSync(opLogFile(roomId), 'utf8'); } catch { return base; }
   const history = base.slice();
@@ -1095,12 +1095,12 @@ function mergeOpLog(roomId, base) {
     history.push(op);
     last = op.opId;
   }
-  return history.length > MAX_HISTORY ? history.slice(-MAX_HISTORY) : history;
+  return history.length > cap ? history.slice(-cap) : history;
 }
 // The persisted history: the `.history.json` base (newest) wins; a legacy room
 // file that still carries `history` inline is the fallback; the op log is
 // merged on top of either.
-function loadRoomHistory(roomId, inline) {
+function loadRoomHistory(roomId, inline, cap) {
   let base = null;
   try {
     const parsed = JSON.parse(readFileSync(historyFile(roomId), 'utf8'));
@@ -1110,7 +1110,7 @@ function loadRoomHistory(roomId, inline) {
   }
   const onDisk = !!base;
   if (!base) base = Array.isArray(inline) ? inline : [];
-  return { history: mergeOpLog(roomId, base), onDisk };
+  return { history: mergeOpLog(roomId, base, cap), onDisk };
 }
 
 // ---- Rendered-snapshot catch-up -------------------------------------------
@@ -1310,7 +1310,13 @@ function loadRoom(roomId) {
   // Recover files written by the experimental settings-once transport.
   // Each op must stand alone when moderation, previews or paging select
   // only part of a stroke. Never borrow settings from another author/cel.
-  const stored = loadRoomHistory(roomId, data ? data.history : null);
+  // Same audience default + multi-frame test getRoom applies, so a big film
+  // (animation, or frames preserved with the toggle off) is never front-trimmed.
+  const loadAudience = (data && data.audience) || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
+  const loadMultiFrame = ANIMATION_ROOM_CODES.has(roomId)
+    || (loadAudience !== 'kid_safe' && !!(data && data.animation))
+    || (Array.isArray(data && data.frames) && data.frames.length > 1);
+  const stored = loadRoomHistory(roomId, data ? data.history : null, historyCeiling(loadAudience, loadMultiFrame));
   const history = hydrateHistorySettings(stored.history);
   try {
     if (!data) throw new Error('no room file');
@@ -1605,13 +1611,18 @@ function storybookPayload(room) {
 // relayed + persisted, and rejoiners replay the whole flipbook exactly like the
 // mural. Caps REJECT at ingest (frame_full) rather than FIFO-trim, which would
 // silently rot the earliest frames of an animation.
-// Frame caps are a MEMORY budget, not just server disk: every client holds a
-// full-res canvas per frame (~40MB at 4000x2500), so 12 frames ≈ 480MB on an
-// iPad. Raise these only after frames move to the smaller animation doc size.
-const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 8);
-// Private rooms: clients keep only the active frame (+ neighbours) as live
-// canvases and hold the rest as ops + a WebP raster (src/utils/frameRasters.js),
-// so a scene can run to 60 frames (5s at 12fps, minutes with holds/loops).
+// Frame caps used to be a MEMORY budget (every client held a ~40MB full-res
+// canvas per frame, so 8 frames). Every server-synced animation room — the
+// public FLIPBOOK included — now keeps only the active frame (+ neighbours) as
+// live canvases and the rest as ops + a ~100KB WebP raster
+// (src/utils/frameRasters.js), so the ceiling is the OP budget below instead.
+// Public: 240 frames ≈ 30s at the default 120ms (~8fps), 24s at 10fps — a real
+// short film. FLIPBOOK is hostless, so it is one scene: this IS its length.
+const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 240);
+// Private rooms: 60 frames a scene (5s at 12fps), minutes with scenes, holds
+// and loops. (A fork of a longer FLIPBOOK film copies whole — this caps adding.
+// Per-scene length for private rooms is a pricing-tier lever: see
+// docs/pricing-tiers.md before raising it.)
 const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 60);
 // Bound a single op's serialized weight (image ops embed dataURLs — a photo
 // import is a few MB; nothing legitimate approaches this).
@@ -1622,9 +1633,9 @@ const MAX_DRAW_MESSAGE_CHARS = Number(process.env.MAX_DRAW_MESSAGE_CHARS || 128_
 const MAX_DRAW_POINTS_PER_OP = Number(process.env.MAX_DRAW_POINTS_PER_OP || 2048);
 const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
 // Scenes break the per-room frame ceiling without breaking the memory budget:
-// an animation room is one ~30-second SEGMENT — up to MAX_SCENES scenes of up
-// to 8 frames each (20 x 8 = 160 frames) — but clients only ever HYDRATE one
-// scene's frames, so RAM stays at a scene's worth. Scene creation is
+// an animation room is one SEGMENT of up to MAX_SCENES scenes (each capped by
+// MAX_ANIM_FRAMES_*) — but clients only ever HYDRATE one scene's frames (and
+// only the active few as canvases), so RAM stays small. Scene creation is
 // host-only — which also means the public FLIPBOOK playground (hostless by
 // design) stays single-scene. Multi-segment "productions" (several linked
 // rooms stitched into one film) build on top of this: see
@@ -1633,6 +1644,22 @@ const MAX_SCENES = Number(process.env.MAX_SCENES || 40);
 // A whole segment's op budget (protects the room file + join/fetch payloads;
 // per-frame caps alone would allow 160 x 1500 = 240k ops ≈ 260MB JSON).
 const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 120000);
+// The public FLIPBOOK's whole-film budget. A public joiner downloads every op
+// of the (single) scene, so this is sized for a phone on school wifi: ~100 ops
+// a frame across 240 frames (real FLIPBOOK frames average ~20; an op is ~1.5KB
+// raw and the socket deflates ~10x). Rejected at ingest like the private cap.
+const MAX_PUBLIC_ANIM_OPS = Number(process.env.MAX_PUBLIC_ANIM_OPS || 24000);
+function animOpBudget(audience) {
+  return audience === 'kid_safe' ? MAX_PUBLIC_ANIM_OPS : MAX_ANIM_ROOM_OPS;
+}
+// The most ops a room may hold after a reload. Multi-frame rooms are capped at
+// INGEST (per frame + animOpBudget) and must never be FIFO-trimmed on load: a
+// front trim deletes the FIRST frames' drawings. Single-canvas rooms keep the
+// rolling mural cap.
+function historyCeiling(audience, multiFrame) {
+  if (multiFrame) return animOpBudget(audience);
+  return audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+}
 // Film timing (mirrors src/utils/filmPlan.js): a frame can HOLD up to 10s, a
 // scene can LOOP up to 20x and carry a camera move — minutes of film without
 // minutes of frames.
@@ -2025,8 +2052,9 @@ function getRoom(roomId) {
     // film strip, so the animation cap only ever applies to a private room.
     const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
     // Public rooms carry a lower cap than the global file cap — apply it on load
-    // too, so a file written under the old cap doesn't reload oversized.
-    const loadCap = audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+    // too, so a file written under the old cap doesn't reload oversized. Films
+    // use their ingest budget instead (a front trim would erase frame 1).
+    const loadCap = historyCeiling(audience, animEnabled || (Array.isArray(saved.frames) && saved.frames.length > 1));
     if (saved.history.length > loadCap) saved.history = saved.history.slice(-loadCap);
     // Recover the op-id counter from persisted history so ids stay monotonic
     // across restarts (selective moderation hides/restores by opId).
@@ -4116,7 +4144,11 @@ wss.on('connection', async (ws, req) => {
   // Where accounts are not configured there is nothing to sign in to, so the
   // rule is skipped and private rooms keep working anonymously.
   if (room.audience === 'friends' && !identity && ACCOUNTS_CONFIGURED) {
-    ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience }));
+    // tokenRejected: a token WAS sent but didn't check out (expired, revoked,
+    // or PocketBase unreachable). The browser still believes it's signed in,
+    // so without this it sent the person to /signup, which said "signed in",
+    // which sent them back here — the sign-in loop.
+    ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience, tokenRejected: !!token }));
     ws.close(1008, 'signin required');
     return;
   }
@@ -4486,7 +4518,7 @@ wss.on('connection', async (ws, req) => {
         const multiFrame = room.animationEnabled || room.frames.length > 1;
         const countKey = frameId || room.frames[0].id;
         const frameCount = room.frameOpCounts.get(countKey) || 0;
-        if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= MAX_ANIM_ROOM_OPS)) {
+        if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= animOpBudget(room.audience))) {
           if (data.op.kind === 'draw' && data.op.end) {
             // Relay the end marker so peers close their stroke buffers, but
             // don't grow history/counts — the cap is a hard ceiling for EVERY
@@ -5230,7 +5262,9 @@ wss.on('connection', async (ws, req) => {
         if (!rateOk(`fork:${user.ip}`, 3, 10 * 60_000)) { denyFork(user, 'slow_down'); break; }
         const source = visibleHistory(room);
         if (!source.length) { denyFork(user, 'empty'); break; }
-        if (source.length > FORK_MAX_OPS) { denyFork(user, 'too_big'); break; }
+        // A public FILM may run to its whole budget — rescuing a 30-second
+        // FLIPBOOK short before the 3-day refresh is exactly what this is for.
+        if (source.length > (room.animationEnabled ? MAX_PUBLIC_ANIM_OPS : FORK_MAX_OPS)) { denyFork(user, 'too_big'); break; }
         const forkCode = genRoomCode();
         const fork = getRoom(forkCode);
         fork.audience = 'friends';
@@ -5471,7 +5505,7 @@ wss.on('connection', async (ws, req) => {
           // Duplicates count against the room's op budget too — otherwise
           // repeated Duplicate taps grow history past the ceiling ordinary
           // draws are already being rejected at.
-          if (room.history.length + copies.length > MAX_ANIM_ROOM_OPS) {
+          if (room.history.length + copies.length > animOpBudget(room.audience)) {
             ws.send(JSON.stringify({ type: 'frame_denied', reason: 'This segment is out of drawing space — start a new one!' }));
             break;
           }
@@ -5708,7 +5742,7 @@ wss.on('connection', async (ws, req) => {
         const copies = visibleHistory(room)
           .filter((op) => opFrameId(room, op) === target.id && (op.layerId || target.layers[0].id) === srcId)
           .map((op) => ({ ...op, layerId: copy.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
-        if (room.history.length + copies.length > (room.animationEnabled ? MAX_ANIM_ROOM_OPS : historyCapFor(room))) {
+        if (room.history.length + copies.length > (room.animationEnabled ? animOpBudget(room.audience) : historyCapFor(room))) {
           ws.send(JSON.stringify({ type: 'layer_denied', reason: 'This canvas is out of room to duplicate a layer' }));
           break;
         }
@@ -8174,6 +8208,142 @@ function bearerToken(req) {
 // Create a room with an explicit audience. Public (kid_safe) rooms require a
 // signed-in owner; adult_18 is disabled; friends rooms don't need this (an
 // invite code lazily creates a private room on connect).
+// ---- "My rooms": a signed-in person's own rooms ------------------------------
+// The explorer behind /rooms and the studio's Rooms modal: rooms this account
+// OWNS (or co-hosts), plus rooms it has been in, newest first — each with its
+// liveness, size, and the person's OWN last chat line there (never anyone
+// else's words: a private room's conversation stays in the room). Private room
+// codes are passwords, so a room only ever appears here if this account owns
+// it or has already been inside it. Expired rooms simply drop out (a stale
+// "Continue" would otherwise mint a fresh empty room under the same code).
+const MY_ROOMS_MAX = 30;
+async function myRoomsIdentity(req, res) {
+  const token = bearerToken(req);
+  if (!token) { res.status(401).json({ error: 'signin_required' }); return null; }
+  if (!rateOk(`merooms:${clientIp(req)}`, 60, 60_000)) { res.status(429).json({ error: 'rate_limited' }); return null; }
+  const identity = await verifyAccessToken(token);
+  if (!identity || !identity.profileId) { res.status(401).json({ error: 'signin_required' }); return null; }
+  return String(identity.profileId);
+}
+// A card grid asks for the list and then a dozen thumbnails, each re-checking
+// membership — so remember one account's answer briefly (a stat per dormant
+// room adds up across a grid).
+const myRoomsCache = new Map(); // pid -> { at, rooms }
+function myRoomsFor(pid) {
+  const hit = myRoomsCache.get(pid);
+  if (hit && Date.now() - hit.at < 10_000) return hit.rooms;
+  const rooms = computeMyRooms(pid);
+  if (myRoomsCache.size > 500) myRoomsCache.clear();
+  myRoomsCache.set(pid, { at: Date.now(), rooms });
+  return rooms;
+}
+function computeMyRooms(pid) {
+  const now = Date.now();
+  const record = analytics.users[`pb:${pid}`] || null;
+  const visits = (record && record.rooms) || {};
+  // Last time we saw this account in each room (the session log is capped, so
+  // older visits fall back to the room's own activity).
+  const lastVisit = new Map();
+  for (const s of analytics.sessions) {
+    if (!s || String(s.profileId || '') !== pid || !s.room) continue;
+    const at = Number(s.lastSeen || s.leftAt || s.joinedAt) || 0;
+    if (at > (lastVisit.get(s.room) || 0)) lastVisit.set(s.room, at);
+  }
+  const info = new Map(); // code -> facts about a room that still exists
+  rooms.forEach((room, code) => {
+    if (isPhantomRoom(room, code)) return;
+    info.set(code, {
+      title: room.title || null,
+      audience: room.audience,
+      owned: String(room.ownerProfileId || '') === pid,
+      coHost: (room.coHosts || []).map(String).includes(pid),
+      users: room.users.size,
+      strokes: room.history.length,
+      lastActivity: room.lastActivity || 0,
+      animation: !!room.animationEnabled,
+      expiresInMs: room.users.size > 0 || room.audience === 'kid_safe' || (room.productionId && getProduction(room.productionId))
+        ? null
+        : Math.max(0, allowedIdleMs(room) - (now - (room.lastActivity || now))),
+    });
+  });
+  for (const meta of dormantRoomMetas()) {
+    const lastSaved = roomLastSavedMs(meta.id, meta);
+    info.set(meta.id, {
+      title: meta.title,
+      audience: meta.audience,
+      owned: String(meta.ownerProfileId || '') === pid,
+      coHost: false,
+      users: 0,
+      strokes: meta.opCount,
+      lastActivity: lastSaved,
+      animation: meta.animation,
+      expiresInMs: meta.audience === 'kid_safe' || (meta.productionId && getProduction(meta.productionId))
+        ? null
+        : Math.max(0, allowedIdleMs(meta) - (now - lastSaved)),
+    });
+  }
+  const codes = new Set(Object.keys(visits));
+  for (const [code, facts] of info) if (facts.owned || facts.coHost) codes.add(code);
+  const out = [];
+  for (const code of codes) {
+    const facts = info.get(code);
+    if (!facts) continue; // expired / deleted — nothing to continue
+    // The person's own most recent line here (the durable log carries the
+    // profileId; the tail cache keeps this to a stat per room).
+    let myLastChat = null;
+    const tail = chatTail(chatLogFile(code));
+    for (let i = tail.length - 1; i >= 0; i -= 1) {
+      const line = tail[i];
+      if (String(line.profileId || '') !== pid || line.blocked) continue;
+      myLastChat = { message: String(line.message || '').slice(0, 140), doodle: !!line.doodle, ts: Number(line.ts) || 0 };
+      break;
+    }
+    const featured = FEATURED_ROOMS.find((r) => r.code === code);
+    let thumb = false;
+    try { thumb = statSync(thumbFile(code)).size > 0; } catch { thumb = false; }
+    out.push({
+      code,
+      title: facts.title || (featured ? featured.title : null),
+      emoji: featured ? featured.emoji : null,
+      private: facts.audience !== 'kid_safe',
+      role: facts.owned ? 'owner' : facts.coHost ? 'cohost' : 'visited',
+      visits: Number(visits[code]) || 0,
+      users: facts.users,
+      strokes: facts.strokes,
+      animation: facts.animation,
+      lastActivity: facts.lastActivity,
+      lastVisit: lastVisit.get(code) || null,
+      expiresInMs: facts.expiresInMs,
+      myLastChat,
+      thumb,
+    });
+  }
+  // Most recently touched by THIS person first; your own rooms break ties.
+  const touched = (r) => Math.max(r.lastVisit || 0, r.myLastChat ? r.myLastChat.ts : 0, r.role !== 'visited' ? r.lastActivity : 0);
+  out.sort((a, b) => touched(b) - touched(a) || Number(b.role !== 'visited') - Number(a.role !== 'visited'));
+  return out.slice(0, MY_ROOMS_MAX);
+}
+app.get('/api/me/rooms', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pid = await myRoomsIdentity(req, res);
+  if (!pid) return;
+  res.json({ rooms: myRoomsFor(pid) });
+});
+// A room's card picture — only for a room that is in this person's own list
+// (the same gate as the list itself; admin thumbnails stay admin-only).
+app.get('/api/me/rooms/:code/thumb', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  const pid = await myRoomsIdentity(req, res);
+  if (!pid) return;
+  const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  if (!myRoomsFor(pid).some((r) => r.code === code)) return res.status(404).json({ error: 'not_found' });
+  try {
+    res.type('image/jpeg').send(readFileSync(thumbFile(code)));
+  } catch {
+    res.status(404).json({ error: 'no_thumbnail' });
+  }
+});
+
 app.post('/api/rooms', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const body = req.body || {};

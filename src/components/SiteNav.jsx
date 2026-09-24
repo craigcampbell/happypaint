@@ -80,11 +80,13 @@ export default function SiteNav({ onNavigate, current }) {
           </a>
         ))}
         {session ? (
+          // Signed in: your name opens YOUR rooms (continue where you left off),
+          // not the sign-up form.
           <a
-            href="/signup"
-            className={`site-nav-account${current === "/signup" ? " is-current" : ""}`}
-            onClick={(e) => follow(e, "/signup")}
-            title="Your account"
+            href="/rooms"
+            className={`site-nav-account${current === "/rooms" ? " is-current" : ""}`}
+            onClick={(e) => follow(e, "/rooms")}
+            title="Your rooms"
           >
             {sessionLabel(session)}
           </a>

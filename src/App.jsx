@@ -60,7 +60,7 @@ import { applyOp, replayFrameComposite, replayFrameOnto } from "./utils/opReplay
 import { replayInSlices } from "./utils/replayQueue";
 import { createSharedOpLog } from "./utils/sharedOpLog";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
-import { getSession, onAuthStateChange, signOut } from "./utils/auth";
+import { getSession, hasStoredSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
 import { isInlineRaster, remoteOpImage } from "./utils/safeImage";
 
@@ -1051,6 +1051,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // so the access token can ride the multiplayer socket and the host UI can read
   // identity. Room ownership/host flags are learned live from the WS server.
   const [session, setSession] = useState(null);
+  // Has the stored sign-in (if any) finished loading? The room socket waits for
+  // it, so a signed-in person joins AS themselves — never as a guest first (a
+  // private room turns a guest away with the sign-in gate). Guests settle at once.
+  const [authSettled, setAuthSettled] = useState(() => !hasStoredSession());
   // Cross-room @mention inbox (shown in the profile menu). Persisted in
   // localStorage so it survives the reload that happens when hopping rooms.
   const [notifications, setNotifications] = useState(() => getNotifications());
@@ -7522,6 +7526,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       switch (data.type) {
         case "connected": {
+          // We're IN. A sign-in gate raised by an earlier (guest) attempt is
+          // stale now — it used to stay up over a room we'd already joined.
+          setSigninGate(null);
           // A fresh connection supersedes work from the previous socket.
           historyReplayEpochRef.current += 1;
           historyReplayActiveRef.current = false;
@@ -7666,7 +7673,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // down like a kick so we don't hammer the server, then explain WHY and
           // give the kid a way forward: sign up, or go draw in a public room.
           mpRef.current?.disconnect?.();
-          setSigninGate({ reason: data.reason || null, audience: data.audience || null });
+          setSigninGate({ reason: data.reason || null, audience: data.audience || null, tokenRejected: !!data.tokenRejected });
           break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
@@ -8685,7 +8692,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     handleMpMessageRef.current = handleMpMessage;
   }, [handleMpMessage]);
 
-  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
+  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token, authSettled);
 
   // Join curtain: the socket is up. The handshake and the history frame that
   // hydrate the canvas still have to land (steps 2 and 3, in handleMpMessage).
@@ -9487,7 +9494,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Lift the session so the access token can ride the multiplayer socket and
       // the host UI can read identity. Re-running the socket connect on token
       // change reconnects us with our verified identity.
-      if (active) setSession(session || null);
+      if (active) {
+        setSession(session || null);
+        setAuthSettled(true);
+      }
       if (session) {
         await startSync(session);
         await refreshFromLocal();
@@ -9500,6 +9510,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         handleSession(session);
       }
     });
+    // Never hold the room hostage to a slow/failed SDK load: after 5s connect
+    // as whoever we are (a private room will ask to sign in, and that gate now
+    // clears itself once the signed-in reconnect lands).
+    const settleTimer = window.setTimeout(() => active && setAuthSettled(true), 5000);
     const unsub = onAuthStateChange((session) => {
       if (active) {
         handleSession(session);
@@ -9507,6 +9521,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     });
     return () => {
       active = false;
+      window.clearTimeout(settleTimer);
       unsub();
       stopSync();
     };
@@ -12093,28 +12108,59 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // are sign up, log in, or keep drawing in a public room — and under-13s
         // get the grown-up route rather than a wall, because a kid that young
         // can't create an account themselves.
+        // Both sign-in exits carry `return` so the person lands back in THIS room
+        // (they used to be dropped in a brand-new random room). A rejected token
+        // (expired / revoked) gets "sign in again": we clear the stale local
+        // session first, or /signup would claim "signed in" and bounce them here.
         <div className="modal-backdrop" role="presentation">
-          <section className="studio-modal" role="dialog" aria-modal="true">
-            <h2>Private rooms need a free account</h2>
-            <p className="account-note">
-              Invite-only rooms are for a crew you know, so we ask for an account before you
-              go in — that way a room always has someone we can reach if something goes wrong.
-              You never need an account to draw in the public rooms.
-            </p>
-            <p className="account-note">
-              Under 13? Ask a grown-up to set up the room with you.
-            </p>
-            <div className="account-actions">
-              <button type="button" className="primary-action" onClick={() => { window.location.href = "/signup"; }}>
-                Sign up free
-              </button>
-              <button type="button" onClick={() => { window.location.href = "/signup"; }}>
-                I already have an account
-              </button>
-              <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
-                Keep drawing in the open studio
-              </button>
-            </div>
+          <section className="studio-modal" role="dialog" aria-modal="true" aria-labelledby="signin-gate-title">
+            {signinGate.tokenRejected ? (
+              <>
+                <h2 id="signin-gate-title">Let&rsquo;s sign you in again</h2>
+                <p className="account-note">
+                  Your sign-in didn&rsquo;t go through for this private room — it may have expired.
+                  Sign in again and you&rsquo;ll come straight back here.
+                </p>
+                <div className="account-actions">
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={async () => {
+                      await signOut();
+                      window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`;
+                    }}
+                  >
+                    Sign in again
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
+                    Keep drawing in the open studio
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id="signin-gate-title">Private rooms need a free account</h2>
+                <p className="account-note">
+                  Invite-only rooms are for a crew you know, so we ask for an account before you
+                  go in — that way a room always has someone we can reach if something goes wrong.
+                  You never need an account to draw in the public rooms.
+                </p>
+                <p className="account-note">
+                  Under 13? Ask a grown-up to set up the room with you.
+                </p>
+                <div className="account-actions">
+                  <button type="button" className="primary-action" onClick={() => { window.location.href = `/signup?return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                    Sign up free
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                    I already have an account
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
+                    Keep drawing in the open studio
+                  </button>
+                </div>
+              </>
+            )}
           </section>
         </div>
       ) : null}

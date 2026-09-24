@@ -18,7 +18,9 @@ try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH },
+  // PB_URL blanked: the repo-root .env (auto-loaded by server.js) configures
+  // accounts, and the private-room door would refuse the guest-host scenes step.
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, PB_URL: "", POCKETBASE_URL: "" },
   stdio: "pipe",
 });
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));

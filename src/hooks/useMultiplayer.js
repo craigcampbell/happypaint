@@ -70,7 +70,9 @@ function clientInfoPayload() {
   }
 }
 
-export function useMultiplayer(roomId, onMessage, token) {
+// `enabled` = false holds the socket closed (the studio waits for a stored
+// sign-in to load, so a signed-in person never joins as a guest first).
+export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -207,6 +209,7 @@ export function useMultiplayer(roomId, onMessage, token) {
   }, [roomId, token]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     connect();
     return () => {
       shouldReconnectRef.current = false;
@@ -216,7 +219,7 @@ export function useMultiplayer(roomId, onMessage, token) {
       wsRef.current = null;
       closing?.close();
     };
-  }, [connect]);
+  }, [connect, enabled]);
 
   const send = useCallback((payload) => {
     const ws = wsRef.current;
