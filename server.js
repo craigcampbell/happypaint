@@ -2481,6 +2481,7 @@ function ensureDailyFresh() {
   if (room.dailyDate === fresh.date) return;
   room.dailyDate = fresh.date;
   room.customPrompt = null; // a theme vote never outlives the day
+  cancelWipeRequest(room, 'cleared'); // the new day already blanked it
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
@@ -2488,6 +2489,7 @@ function ensureDailyFresh() {
   room.lastCleared = null;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   // Yesterday's ops are gone — stale moderation state on them is pure liability
   // (recycled opIds would silently hide innocent new-day strokes).
   room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
@@ -2583,6 +2585,7 @@ function ensureRoomFresh(roomId) {
   }
   if (Date.now() < room.wipeAt) return;
 
+  cancelWipeRequest(room, 'cleared'); // the refresh beat the countdown to it
   room.history = [];
   invalidateRoomSnapshot(room);
   // An uploaded trace photo belongs to the mural being retired — free the image
@@ -2600,6 +2603,7 @@ function ensureRoomFresh(roomId) {
   room.lastCleared = null; // the refresh is not undoable — it IS the reset
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   // The old ops are gone; stale moderation state on recycled opIds would
   // silently hide innocent new strokes (same reasoning as the daily wipe).
   room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
@@ -2627,6 +2631,232 @@ const roomWipeTimer = setInterval(sweepRoomWipes, 60_000);
 const roomThumbTimer = setInterval(sweepRoomThumbs, THUMB_SWEEP_MS);
 roomThumbTimer.unref?.();
 if (roomWipeTimer.unref) roomWipeTimer.unref();
+
+// ---- Member wipes: a countdown, and a room vote at 3+ ----------------------
+// Wiping the shared mural is the most destructive thing a member can do, so a
+// member's Clear is a REQUEST, never an instant wipe:
+//   alone          -> a 10s countdown
+//   two people     -> a 30s countdown (no vote — the pair just get warned)
+//   three or more  -> a 30s room vote; it wipes only if MORE THAN HALF of the
+//                     people in the room say yes. Not voting is not a yes: the
+//                     kids busy drawing are exactly who this protects.
+// The asker can cancel until the last WIPE_CANCEL_LOCK_MS. The countdown IS the
+// undo window, so members can't "Bring it back" afterwards (one kid could
+// overturn the room's vote); a moderator's Undo still can. The chat stays —
+// only a moderator's reset (moderateResetRoom) starts a room over completely.
+//
+// A host's Clear (host panel) and the Draw & Guess drawer scrapping their own
+// turn stay instant — see the `clear` case. In-memory only on purpose: a
+// restart mid-countdown drops the request, which fails safe (nothing wiped).
+const WIPE_SOLO_MS = 10_000;
+const WIPE_COUNTDOWN_MS = 30_000;
+const WIPE_CANCEL_LOCK_MS = 3_000; // the client greys Cancel for the last 3s
+const WIPE_VOTE_MIN_PEOPLE = 3;
+const WIPE_VOTE_COOLDOWN_MS = 30_000; // a room that just said no isn't re-asked at once
+
+// A person, not a tab: two tabs of one browser (or one account) are one head
+// and one vote. Falls back to the socket — never the IP, which would fold a
+// whole classroom behind one NAT into a single "person".
+function wipePersonKey(user) {
+  if (user.profileId) return `pb_${user.profileId}`;
+  if (user.deviceKey) return `dk:${user.deviceKey}`;
+  return `u:${user.id}`;
+}
+
+function wipePeople(room) {
+  const keys = new Set();
+  room.users.forEach((u) => keys.add(wipePersonKey(u)));
+  return keys;
+}
+
+// Only people still in the room count — a voter who leaves takes their vote
+// with them, and a joiner raises the bar (and gets a vote).
+function wipeTally(room) {
+  const req = room.wipeReq;
+  const people = wipePeople(room);
+  let yes = 0;
+  let no = 0;
+  for (const k of req.yes) if (people.has(k)) yes += 1;
+  for (const k of req.no) if (people.has(k)) no += 1;
+  return { yes, no, people: people.size, needed: Math.floor(people.size / 2) + 1 };
+}
+
+// Why a wipe can't be asked for (or carried out) right now; null = it can.
+// Re-checked when the countdown fires, so a game round, phone game or
+// flipbook that started meanwhile is never wiped by a stale request.
+function wipeRequestBlock(room, user) {
+  if (phoneActive(room)) return 'game';
+  if (room.gameEnabled && room.game && room.game.phase === 'playing') return 'game';
+  if (room.animationEnabled) return 'animation'; // flipbooks clear one frame at a time
+  if (user.muted) return 'muted';
+  const host = isHost(room, user);
+  if (room.ownerProfileId && !host) return 'host_only';
+  if (room.storybook?.enabled && !host) return 'host_only';
+  if (room.locked && !host) return 'locked';
+  return null;
+}
+
+function denyWipeRequest(user, reason) {
+  if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'wipe_req_denied', reason }));
+}
+
+// What one member sees. Clocks travel as ms-left (never a server timestamp),
+// so a kid's skewed device clock can't make the countdown lie.
+function wipeReqPayload(room, user) {
+  const req = room.wipeReq;
+  if (!req) return null;
+  const payload = {
+    id: req.id,
+    byId: req.byId,
+    byName: req.byName,
+    mode: req.mode,
+    msLeft: Math.max(0, req.endsAt - Date.now()),
+    totalMs: req.totalMs,
+    cancelLockMs: WIPE_CANCEL_LOCK_MS,
+    sheet: !!req.sheetId,
+  };
+  if (req.mode === 'vote') {
+    Object.assign(payload, wipeTally(room));
+    const key = wipePersonKey(user);
+    payload.myVote = req.yes.has(key) ? 'yes' : req.no.has(key) ? 'no' : null;
+  }
+  return payload;
+}
+
+// One send per member (not a broadcast) because each copy carries that
+// member's own vote. Members only — homepage spectators never see it.
+function sendWipeReq(room, ended = null) {
+  room.users.forEach((u) => {
+    if (u.ws.readyState !== 1) return;
+    u.ws.send(JSON.stringify({ type: 'wipe_req', req: wipeReqPayload(room, u), ...(ended ? { ended } : {}) }));
+  });
+}
+
+function endWipeRequest(room, outcome, detail = {}) {
+  const req = room.wipeReq;
+  if (!req) return;
+  clearTimeout(req.timer);
+  room.wipeReq = null;
+  sendWipeReq(room, { id: req.id, outcome, byId: req.byId, byName: req.byName, mode: req.mode, ...detail });
+}
+
+// Anything else that blanks the mural first (a host's Clear, a moderator, the
+// daily/3-day refresh, a game round) calls off a pending request.
+function cancelWipeRequest(room, reason) {
+  if (room && room.wipeReq) endWipeRequest(room, reason);
+}
+
+function scheduleWipeRequest(room) {
+  const req = room.wipeReq;
+  clearTimeout(req.timer);
+  const reqId = req.id;
+  req.timer = setTimeout(() => resolveWipeRequest(room.code, reqId), Math.max(0, req.endsAt - Date.now()));
+  req.timer.unref?.();
+}
+
+function startWipeRequest(room, id, user, sheetId) {
+  const block = wipeRequestBlock(room, user);
+  if (block) return denyWipeRequest(user, block);
+  if (room.wipeReq) return denyWipeRequest(user, 'busy');
+  const key = wipePersonKey(user);
+  if (!rateOk(`wipereq:${room.code}:${key}`, 4, 5 * 60_000)) return denyWipeRequest(user, 'slow_down');
+  const people = wipePeople(room).size;
+  // A host runs their own room: they get the countdown (nobody is surprised)
+  // but not a vote.
+  const mode = people <= 1 ? 'solo' : people < WIPE_VOTE_MIN_PEOPLE || isHost(room, user) ? 'countdown' : 'vote';
+  if (mode === 'vote' && Date.now() < (room.wipeVoteCooldownUntil || 0)) return denyWipeRequest(user, 'cooldown');
+  const totalMs = mode === 'solo' ? WIPE_SOLO_MS : WIPE_COUNTDOWN_MS;
+  room.wipeReqSeq = (room.wipeReqSeq || 0) + 1;
+  room.wipeReq = {
+    id: room.wipeReqSeq,
+    byId: id,
+    byName: user.name,
+    mode,
+    totalMs,
+    endsAt: Date.now() + totalMs,
+    sheetId: sheetId || null, // "fresh page with this coloring sheet"
+    yes: new Set([key]), // asking is a yes
+    no: new Set(),
+    timer: null,
+  };
+  scheduleWipeRequest(room);
+  sendWipeReq(room);
+}
+
+function failWipeVote(room, tally) {
+  room.wipeVoteCooldownUntil = Date.now() + WIPE_VOTE_COOLDOWN_MS;
+  if (!room.fingerPaint) {
+    pushSystemChat(room, room.code, `The room voted to keep the canvas (${tally.yes} of ${tally.needed} yes votes needed). 🎨`);
+  }
+  endWipeRequest(room, 'failed', { yes: tally.yes, no: tally.no, needed: tally.needed });
+}
+
+// Settle a vote early once its outcome is fixed: yes can no longer reach a
+// majority (fail now), or EVERYONE has voted and it passed (skip to the final
+// locked seconds rather than make the room sit out the clock). A plain
+// majority with people still undecided waits — the countdown is their warning.
+function settleWipeVote(room) {
+  const req = room.wipeReq;
+  if (!req || req.mode !== 'vote') return;
+  const tally = wipeTally(room);
+  const undecided = tally.people - tally.yes - tally.no;
+  if (tally.yes + undecided < tally.needed) return failWipeVote(room, tally);
+  if (undecided === 0 && req.endsAt - Date.now() > WIPE_CANCEL_LOCK_MS) {
+    req.endsAt = Date.now() + WIPE_CANCEL_LOCK_MS;
+    scheduleWipeRequest(room);
+  }
+  sendWipeReq(room);
+}
+
+function voteWipeRequest(room, user, reqId, yes) {
+  const req = room.wipeReq;
+  if (!req || req.mode !== 'vote' || req.id !== reqId) return denyWipeRequest(user, 'no_request');
+  if (user.muted) return denyWipeRequest(user, 'muted');
+  const key = wipePersonKey(user);
+  // One vote per person, and final: no flip-flopping, so an early "can't
+  // pass" really can't pass.
+  if (req.yes.has(key) || req.no.has(key)) return denyWipeRequest(user, 'already_voted');
+  (yes ? req.yes : req.no).add(key);
+  settleWipeVote(room);
+}
+
+function cancelOwnWipeRequest(room, id, user, reqId) {
+  const req = room.wipeReq;
+  if (!req || req.id !== reqId) return denyWipeRequest(user, 'no_request');
+  if (req.byId !== id) return denyWipeRequest(user, 'not_yours');
+  // The last seconds are locked (the client greys the button); one second of
+  // grace covers a tap that was already in flight when the lock started.
+  if (req.endsAt - Date.now() < WIPE_CANCEL_LOCK_MS - 1000) return denyWipeRequest(user, 'too_late');
+  endWipeRequest(room, 'cancelled');
+}
+
+function resolveWipeRequest(roomId, reqId) {
+  const room = rooms.get(roomId);
+  const req = room && room.wipeReq;
+  if (!req || req.id !== reqId) return;
+  const asker = room.users.get(req.byId);
+  if (!asker) return endWipeRequest(room, 'left');
+  if (wipeRequestBlock(room, asker)) return endWipeRequest(room, 'blocked');
+  let tally = null;
+  if (req.mode === 'vote') {
+    tally = wipeTally(room);
+    if (tally.yes < tally.needed) return failWipeVote(room, tally);
+    if (!room.fingerPaint) {
+      pushSystemChat(room, roomId, `The room voted to wipe the canvas (${tally.yes} of ${tally.people} said yes). 🧽`);
+    }
+  }
+  clearTimeout(req.timer);
+  room.wipeReq = null;
+  // Everyone gets the clear, the asker included — their canvas waited for the room.
+  wipeMural(room, memberActor(req.byId, asker), {
+    undoable: false,
+    message: { final: true, wipeMode: req.mode },
+    nextSheet: req.sheetId,
+    note: req.mode === 'vote' ? 'wipe_vote' : 'wipe_countdown',
+    detail: tally ? `${tally.yes}/${tally.people} yes` : null,
+  });
+  sendWipeReq(room, { id: req.id, outcome: 'wiped', byId: req.byId, byName: req.byName, mode: req.mode });
+}
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
 // lewd" that an image flag implicates.
@@ -2784,8 +3014,10 @@ function broadcast(roomId, message, exceptId = null) {
   // filter) — ops/clears for other frames would smear onto their one canvas.
   if (room.spectators && room.spectators.size) {
     const t = message.type;
+    // (chat_history rides only a moderator's reset/undo — the same projection
+    // a spectator already gets on join.)
     if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history'
-      && t !== 'chat' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
+      && t !== 'chat' && t !== 'chat_history' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
     if (room.animationEnabled) {
       // A history rebuild carries every frame's ops — a spectator's single
       // canvas would smear them together. Skip it; the tile catches up on hop.
@@ -2945,6 +3177,7 @@ function startGameRound(roomId) {
   // Blank the canvas for the fresh drawing (reuse the clear semantics). Reset
   // the undo-clear backup too, or "Bring it back" would resurrect a previous
   // round's drawing onto the live canvas.
+  cancelWipeRequest(room, 'cleared');
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
@@ -2952,6 +3185,7 @@ function startGameRound(roomId) {
   room.lastCleared = null;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   broadcast(roomId, { type: 'clear', userId: 'system', name: 'Draw & Guess', gameRound: true });
   broadcast(roomId, { type: 'sheet', sheetId: null });
   // Secret word to the DRAWER ONLY (send-to-one); everyone else gets guesser.
@@ -3191,6 +3425,7 @@ function startPhoneGame(roomId) {
     return { ownerKey: k, ownerName: names[k], pages: [{ type: 'prompt', by: 'system', byName: 'Prompt', content: seed }] };
   });
   room.phone = { phase: 'starting', round: 0, totalRounds, players, names, books, deadline: 0, submitted: new Set() };
+  cancelWipeRequest(room, 'blocked'); // the game owns the canvas now
   // The shared canvas is off for the whole game — clear its server state so any
   // pre-game doodles don't resurrect for a late joiner (ops are dropped while
   // the game runs; see the `op` case).
@@ -3676,8 +3911,9 @@ wss.on('connection', async (ws, req) => {
       // boundary that counts.
       switch (data.type) {
         case 'clear':
+          // A moderator's Wipe resets the room — mural AND chat, as if new.
           // The Draw Phone engine owns the canvas mid-game; don't fight it.
-          if (!phoneActive(watched)) moderateClear(watched, MOD_ACTOR);
+          if (!phoneActive(watched)) moderateResetRoom(watched, MOD_ACTOR);
           break;
         case 'undo_clear':
           if (!phoneActive(watched)) moderateUndoClear(watched, MOD_ACTOR);
@@ -4081,6 +4317,9 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify(chatHistoryMsg(room))); // catch the late joiner up on the conversation
   }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
+  // A wipe counting down: the joiner sees it (and gets a vote); everyone's
+  // tally gains a head.
+  if (room.wipeReq) sendWipeReq(room);
   if (room.quests) {
     broadcast(roomId, { type: 'quest_state', quest: questPayload(room) });
   }
@@ -4528,21 +4767,54 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'clear': {
-        // In an owned room only a host may wipe the shared mural; unowned public
-        // rooms keep the original free-for-all behavior.
-        if (room.ownerProfileId && !isHost(room, user)) break;
         // Draw Phone: each player's page is private and independent — a shared
         // clear would wipe everyone's in-progress drawing. Only the engine blanks.
         if (phoneActive(room)) break;
-        if (room.storybook?.enabled && !isHost(room, user)) break;
+        const host = isHost(room, user);
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
-        moderateClear(room, memberActor(id, user), clearFrameId);
+        // One shared FRAME of a flipbook: instant, as ever — it's one cel, not
+        // the room. In an owned room only a host may clear it.
+        if (clearFrameId && room.animationEnabled && room.frames.some((f) => f.id === clearFrameId)) {
+          if (room.ownerProfileId && !host) break;
+          if (room.storybook?.enabled && !host) break;
+          moderateClear(room, memberActor(id, user), clearFrameId);
+          break;
+        }
+        // The whole mural. A host's Clear is a moderation action and stays
+        // instant (and undoable); so does the Draw & Guess drawer scrapping
+        // their own turn's drawing. Anyone else's Clear — including an older
+        // client still sending this bare message — becomes a wipe REQUEST, so
+        // the countdown/vote can't be skipped by speaking the old protocol.
+        const drawerScrap = room.gameEnabled && room.game && room.game.phase === 'playing' && room.game.drawerId === id;
+        if (host || drawerScrap) {
+          moderateClear(room, memberActor(id, user), clearFrameId);
+          break;
+        }
+        startWipeRequest(room, id, user, null);
         break;
       }
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
         if (phoneActive(room)) break; // no resurrecting the pre-game canvas mid-game
+        // A countdown/vote wipe or a moderator's reset is final for members —
+        // the countdown was the undo window (see startWipeRequest).
+        if (room.clearUndoable === false) break;
         moderateUndoClear(room, memberActor(id, user));
+        break;
+      // ---- Member wipes: ask / vote / call it off (see startWipeRequest) ----
+      case 'wipe_request': {
+        const nextSheet = typeof data.sheetId === 'string' && data.sheetId ? data.sheetId.slice(0, 200) : null;
+        // Same rule as set_sheet: trace photos and Draw Phone pages are only
+        // ever set by their own minting handlers.
+        if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
+        startWipeRequest(room, id, user, nextSheet);
+        break;
+      }
+      case 'wipe_vote':
+        voteWipeRequest(room, user, Number(data.id), data.yes === true);
+        break;
+      case 'wipe_cancel':
+        cancelOwnWipeRequest(room, id, user, Number(data.id));
         break;
       case 'chat': {
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
@@ -5769,6 +6041,11 @@ wss.on('connection', async (ws, req) => {
     analyticsEndSession(user);
     room.users.delete(id);
     if (room.snapshotRequest?.userId === id) room.snapshotRequest = null;
+    // The asker leaving calls their wipe off; anyone else leaving may settle a vote.
+    if (room.wipeReq) {
+      if (room.wipeReq.byId === id) endWipeRequest(room, 'left');
+      else if (room.wipeReq.mode === 'vote') settleWipeVote(room);
+    }
     room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
     if (room.quests) {
       for (const voters of room.quests.nominations.values()) voters.delete(id);
@@ -6142,30 +6419,72 @@ function moderateClear(room, actor, frameId = null) {
     persistRoom(roomId);
     return true;
   }
+  return wipeMural(room, actor, { except });
+}
+
+// The full-mural wipe every path shares — a host's Clear, a room's countdown
+// or vote, a moderator's reset — so they can never drift apart. Keeps a backup
+// for undo; `undoable` says whether MEMBERS may "Bring it back" (a moderator's
+// Undo always can). `resetChat` also empties the room's chat for everyone (the
+// durable .chatlog audit trail is never touched).
+function wipeMural(room, actor, { except = null, undoable = true, resetChat = false, message = {}, nextSheet = null, note = 'clear', detail = null } = {}) {
+  const roomId = room.code;
+  cancelWipeRequest(room, 'cleared');
   room.lastCleared = room.history;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
+  room.lastClearedChat = null;
+  room.clearUndoable = undoable;
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
   analyticsRecordClear(roomId, actor.user || null, actor.user ? 'user' : 'admin');
-  broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name }, except);
+  broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name, ...message }, except);
   // A full clear blanks the canvas completely — drop the coloring sheet too
-  // (it would otherwise reload for everyone on every visit). Echoed to the
-  // clearer as well, hence no sender exclusion.
-  if (room.sheetId) {
-    room.sheetId = null;
-    broadcast(roomId, { type: 'sheet', sheetId: null });
+  // (it would otherwise reload for everyone on every visit), unless the wipe
+  // was for a fresh sheet. Echoed to the clearer as well, hence no sender
+  // exclusion.
+  if ((room.sheetId || null) !== nextSheet) {
+    room.sheetId = nextSheet;
+    broadcast(roomId, { type: 'sheet', sheetId: nextSheet });
   }
-  noteMod(room, 'clear', actor);
+  if (resetChat) {
+    room.lastClearedChat = room.chat.length ? room.chat : null; // for the moderator's Undo
+    room.chat = [];
+    // Every chat surface (studio, homepage tile, RoomWatch) treats
+    // chat_history as REPLACE, so an empty one empties them all.
+    broadcast(roomId, { type: 'chat_history', messages: [] });
+  }
+  noteMod(room, note, actor, detail);
   persistRoom(roomId);
+  return true;
+}
+
+// A moderator's Wipe is a RESET: the room comes back as if brand new — no
+// mural, no sheet, no chat, a fresh 3-day clock — and nobody in the room can
+// "Bring it back". Only the moderator's own Undo (RoomWatch) restores it.
+function moderateResetRoom(room, actor = MOD_ACTOR) {
+  const roomId = room.code;
+  if (wipesOnCycle(room, roomId)) {
+    room.wipeAt = Date.now() + ROOM_WIPE_MS;
+    if (room.keepVotes) room.keepVotes.clear();
+  }
+  wipeMural(room, actor, { undoable: false, resetChat: true, message: { modReset: true }, note: 'reset' });
+  broadcastWipeState(roomId);
   return true;
 }
 
 // Put back the most recently cleared mural/frame AND any sheet that wipe removed.
 function moderateUndoClear(room, actor) {
   const roomId = room.code;
-  if (!((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet)) return false;
+  if (!((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet || room.lastClearedChat)) return false;
+  // A moderator's reset took the chat too: put the old conversation back in
+  // front of anything said since.
+  if (room.lastClearedChat) {
+    room.chat = room.lastClearedChat.concat(room.chat).slice(-CHAT_BUFFER_MAX);
+    room.lastClearedChat = null;
+    broadcast(roomId, chatHistoryMsg(room));
+  }
   if (room.lastCleared && room.lastCleared.length) {
     if (room.lastClearedFrameId) {
       // Per-frame restore: merge the backup in and re-sort by opId so replay
@@ -7142,16 +7461,8 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
   if (!adminGuard(req, res)) return;
   const id = String(req.params.id).toUpperCase().slice(0, 16);
   const room = rooms.get(id);
-  if (room) {
-    room.lastCleared = room.history;
-    room.lastClearedFrameId = null;
-    room.history = [];
-    invalidateRoomSnapshot(room);
-    recountFrameOps(room);
-    analyticsRecordClear(id, null, 'admin');
-    broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
-    persistRoom(id);
-  }
+  // Same reset as the RoomWatch Wipe: mural, sheet and chat, as if new.
+  if (room) moderateResetRoom(room, MOD_ACTOR);
   res.json({ ok: true });
 });
 

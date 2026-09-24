@@ -9704,6 +9704,89 @@ img.cc-doodle { background: #fff; }
   .wipe-panel { top: 136px; right: 8px; }
 }
 
+/* ==== Member wipe: countdown + room vote (WipeCountdown.jsx) ============== */
+/* Same dark card language as the refresh panel. It floats over the top of the
+   canvas — above the prompt chip (28) and clear banner (30), under the refresh
+   panel (33) — only while a wipe is pending. */
+.wipe-req {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 32;
+  width: min(360px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 0;
+  border-radius: 16px;
+  background: #0b1524;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+  color: #f5f8fc;
+  overflow: hidden;
+}
+.wipe-req-row { display: flex; align-items: center; gap: 12px; }
+.wipe-req-clock {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 1.2rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.wipe-req.is-locked .wipe-req-clock { background: #dc2626; }
+.wipe-req-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wipe-req-text strong { font-size: 0.95rem; line-height: 1.25; }
+.wipe-req-text small { font-size: 0.78rem; line-height: 1.4; color: #b6c2d1; }
+.wipe-req-actions { display: flex; gap: 8px; }
+.wipe-req-actions button {
+  flex: 1;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.wipe-req-cancel { background: #f5f8fc; color: #0b1524; }
+/* The last seconds: still visible, clearly greyed out — it's happening. */
+.wipe-req-cancel:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(245, 248, 252, 0.5);
+  cursor: not-allowed;
+}
+.wipe-req-yes { background: #dc2626; border-color: #ef4444; color: #fff; }
+.wipe-req-no { background: #16a34a; border-color: #22c55e; color: #fff; }
+.wipe-req-bar {
+  height: 5px;
+  margin: 0 -14px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.wipe-req-bar span {
+  display: block;
+  height: 100%;
+  background: #f97316;
+  transform-origin: left center;
+  animation-name: wipe-req-drain;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+.wipe-req.is-locked .wipe-req-bar span { background: #dc2626; }
+@keyframes wipe-req-drain {
+  from { transform: scaleX(var(--wipe-from, 1)); }
+  to { transform: scaleX(0); }
+}
+@media (max-width: 1024px), (pointer: coarse) {
+  /* Below the fixed rooms FAB row (like the prompt chip), never under it. */
+  .wipe-req { top: 60px; }
+}
+
 /* ============================== Join curtain ==============================
    The paint-stroke loading modal (src/components/RoomLoadingCurtain.jsx) that
    sits over the canvas area while a room hooks up. It lives INSIDE

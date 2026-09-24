@@ -215,7 +215,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
   };
 
   const wipe = () => {
-    if (!window.confirm(`Wipe room ${code} for everyone in it? They keep it on their screen until it clears (and you can undo it).`)) return;
+    if (!window.confirm(`Reset room ${code}? The drawing AND the chat are wiped for everyone — it'll look brand new, and they can't bring it back. (You can still undo it from here; the chat log in /admin is kept.)`)) return;
     send({ type: "clear" });
   };
 

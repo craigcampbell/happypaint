@@ -126,6 +126,7 @@ import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import GameHud from "./components/GameHud";
+import WipeCountdown from "./components/WipeCountdown";
 import DrawPhonePanel from "./components/DrawPhonePanel";
 import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
@@ -921,6 +922,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const stepBackBusyRef = useRef(false);
   // Public canvas refresh: { wipeAt, keepVotes, keepNeeded } or null off-cycle.
   const [roomWipe, setRoomWipe] = useState(null);
+  // A member wipe counting down (or a room vote): the server's payload plus
+  // when it arrived — WipeCountdown ticks its own clock from msLeft.
+  const [wipeReq, setWipeReq] = useState(null);
   const [wipePanelOpen, setWipePanelOpen] = useState(false);
   const [, setWipeTick] = useState(0); // ticks the countdown label
   const [hypes, setHypes] = useState([]); // live big-reaction bursts (capped, ephemeral)
@@ -2906,6 +2910,28 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms);
   }, []);
+
+  // The toolbar Clear. The shared mural is never wiped on the spot any more:
+  // this ASKS the server, which counts down (10s alone, 30s with company) or
+  // runs a room vote at 3+ people, and the canvas waits for its `clear` (see
+  // WipeCountdown). Clears that touch only one frame — a flipbook cel, a local
+  // frame 2+ — and the Draw & Guess drawer scrapping their own turn keep the
+  // old confirm-and-clear.
+  const requestClear = useCallback(() => {
+    const game = gameRef.current;
+    const drawerScrap = roomGameRef.current && game?.phase === "playing" && game?.drawerId === myUserIdRef.current;
+    if (roomAnimationRef.current || activeFrameIndexRef.current !== 0 || drawerScrap) {
+      setShowClearConfirm(true);
+      return;
+    }
+    if (!mpConnectedRef.current) {
+      showToast("Reconnecting to the room — try again in a moment.");
+      return;
+    }
+    mpRef.current?.sendWipeRequest?.();
+    // The phone/tablet sheet would cover the countdown and its Cancel.
+    if (layoutTierRef.current !== "desktop") setToolsOpen(false);
+  }, [showToast]);
 
   const closeStepBackPreview = useCallback(() => {
     if (stepBackUrlRef.current) {
@@ -7568,6 +7594,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setMyWord(null);
           setRoomWipe(data.wipe || null);
           setWipePanelOpen(false);
+          setWipeReq(null); // a live one is re-sent right after the join
           // Draw Phone room? Reset any stale telephone state from a prior room;
           // the live phone_state / phone_task (if any) arrive right after.
           roomPhoneRef.current = !!data.phone;
@@ -8034,6 +8061,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // Not blame-worthy and not a surprise — say what happened, which
             // also covers FINGERS, where there's no chat to read it in.
             showToast("🧽 Fresh canvas! This room starts over every 3 days.");
+          } else if (data.modReset) {
+            // A moderator reset the room (chat too) — nothing to bring back.
+            setClearBanner(null);
+            showToast("🧽 A moderator gave this room a fresh start.");
+          } else if (data.final) {
+            // A countdown/vote wipe: the countdown WAS the undo window, so no
+            // "Bring it back" (one kid could overturn the room's vote).
+            setClearBanner(null);
+            showToast(
+              data.wipeMode === "vote" ? "🧽 The room voted — fresh canvas!"
+                : data.userId === myUserIdRef.current ? "🧽 Fresh canvas!"
+                  : `🧽 ${data.name || "Someone"} wiped the canvas — fresh start!`,
+            );
           } else if (!data.gameRound) {
             showClearBanner(data.name || "Someone");
           }
@@ -8555,6 +8595,41 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   : "Give it a moment and try again.",
           );
           break;
+        // Member wipes: the live countdown/vote (null = over) and why it ended.
+        case "wipe_req": {
+          setWipeReq(data.req ? { ...data.req, receivedAt: Date.now() } : null);
+          const ended = data.ended;
+          if (ended) {
+            const mine = ended.byId === myUserIdRef.current;
+            if (ended.outcome === "cancelled") {
+              showToast(mine ? "Wipe cancelled — the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
+            } else if (ended.outcome === "failed") {
+              showToast(`The room voted to keep the canvas 🎨 (${ended.yes} of ${ended.needed} yes votes needed)`, 5000);
+            } else if (ended.outcome === "left") {
+              showToast(`Wipe called off — ${ended.byName || "the asker"} left the room`);
+            }
+            // "wiped" is announced by the clear itself; "cleared"/"blocked"
+            // by whatever beat the countdown to it.
+          }
+          break;
+        }
+        case "wipe_req_denied":
+          showToast(
+            {
+              busy: "A wipe is already counting down! ⏳",
+              cooldown: "The room just voted to keep it — try again in a little bit 🎨",
+              slow_down: "Give it a moment and try again.",
+              muted: "You're muted by a host right now.",
+              host_only: "Only this room's host can wipe the canvas.",
+              locked: "A host locked this room.",
+              game: "Wait until the game round is over! ⏱️",
+              animation: "In a flipbook, clear one frame at a time.",
+              already_voted: "You already voted! 🗳️",
+              too_late: "Too late to cancel — here comes a fresh canvas! 🧽",
+              no_request: "That vote already ended.",
+            }[data.reason] || "Give it a moment and try again.",
+          );
+          break;
         case "fork_denied":
           showToast(
             data.reason === "empty" ? "Draw something first, then you can take it private! ✏️"
@@ -8791,12 +8866,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendSetGame: mp.sendSetGame,
       sendWipeKeep: mp.sendWipeKeep,
       sendForkPrivate: mp.sendForkPrivate,
+      sendWipeRequest: mp.sendWipeRequest,
+      sendWipeVote: mp.sendWipeVote,
+      sendWipeCancel: mp.sendWipeCancel,
       sendSetPhone: mp.sendSetPhone,
       sendPhoneStart: mp.sendPhoneStart,
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate, mp.sendWipeRequest, mp.sendWipeVote, mp.sendWipeCancel]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -8923,6 +9001,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     (sheet) => {
       if (!sheet?.id) return;
       const hasContent = Boolean(sheetId) || historyCount > 0;
+      // Over existing art a fresh sheet is a WIPE, so it takes Clear's road:
+      // the server counts down (or asks the room) and sets the sheet as the
+      // canvas clears. Flipbooks keep the old confirm-and-clear.
+      if (hasContent && !roomAnimationRef.current) {
+        if (!mpConnectedRef.current) {
+          showToast("Reconnecting to the room — try again in a moment.");
+          return;
+        }
+        mpRef.current?.sendWipeRequest?.(`lib:${sheet.id}`);
+        setShowSheetModal(false);
+        if (layoutTierRef.current !== "desktop") setToolsOpen(false); // don't hide the countdown
+        return;
+      }
       if (hasContent && !window.confirm("Start a fresh page with this coloring sheet? It clears the canvas for everyone in the room.")) {
         return;
       }
@@ -9875,7 +9966,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
               {isPreparingStepBack ? "Framing..." : "Step back"}
             </button>
-            <button type="button" onClick={() => setShowClearConfirm(true)}>
+            <button type="button" onClick={requestClear}>
               Clear
             </button>
             <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
@@ -10537,6 +10628,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
             ) : null}
 
+            {/* A member wipe counting down, or the room voting on one. */}
+            {wipeReq ? (
+              <WipeCountdown
+                req={wipeReq}
+                myId={mp.self?.id}
+                onCancel={(id) => mpRef.current?.sendWipeCancel?.(id)}
+                onVote={(id, yes) => mpRef.current?.sendWipeVote?.(id, yes)}
+              />
+            ) : null}
+
             {/* Draw & Guess HUD — word/timer/scoreboard over the canvas. */}
             {roomGame && game ? (
               <GameHud
@@ -11107,7 +11208,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
               {isPreparingStepBack ? "Framing..." : "Preview"}
             </button>
-            <button type="button" onClick={() => setShowClearConfirm(true)}>
+            <button type="button" onClick={requestClear}>
               Clear
             </button>
             <button type="button" onClick={() => imageInputRef.current?.click()}>

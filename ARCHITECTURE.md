@@ -258,7 +258,20 @@ learn the user's identity. Message `type`s:
 | `set_sheet` (coloring sheet) | `op`, `cursor`, `cursor_leave`, `history`, `clear`, `sheet` |
 | `rename` (own name/color) | `chat`, `pong`, `room_full` |
 | `clear`, `undo_clear` | `room_state` (locked), `room_renamed`, `role_changed` |
+| `wipe_request` (+`sheetId`), `wipe_vote`, `wipe_cancel` | `wipe_req` (live countdown/vote, or `null` + `ended`), `wipe_req_denied` |
 | host: `lock`/`unlock`/`kick`/`mute`/`rename_room`/`promote`/`demote` | `muted`, `kicked` |
+
+**Wiping the mural.** A member's Clear is a *request* (`startWipeRequest` in
+`server.js`, UI `src/components/WipeCountdown.jsx`): alone → 10s countdown; two
+people → 30s countdown; three or more → a 30s room vote that passes only if more
+than half the people in the room say yes (people = account > device key > socket,
+so two tabs are one vote). The asker can cancel until the last 3s. Member wipes
+keep the chat and can't be "brought back" by members. A bare `clear` from a
+non-host is treated as a request too; a host's Clear (host panel), the Draw &
+Guess drawer's own turn, and flipbook per-frame clears stay instant. A
+moderator's Wipe (`moderateResetRoom`) is a reset — mural, sheet **and** chat,
+as if new — that only the moderator's Undo can restore (the `.chatlog` audit
+trail is never touched). All paths share `wipeMural`.
 
 Client hook: `src/hooks/useMultiplayer.js` (`useMultiplayer(roomId, onMessage,
 token)`), returns `send*` emitters + `disconnect()`.
