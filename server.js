@@ -1652,6 +1652,57 @@ const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 // their files are PROTECTED — the idle sweep must never delete the old mural,
 // and the room stays joinable by its code. Also off the 3-day wipe cycle.
 const RETIRED_ROOM_CODES = new Set(['DINOS']);
+
+// ---- Flag rooms (the painted planet) ---------------------------------------
+// /planet lets anyone click a country and colour its flag together. Each flag
+// is a public, kid-safe room whose code is FLAG + the ISO-3166 alpha-2 code
+// (FLAGUS, FLAGMX — 6 chars, inside the 8-char code rule) and whose coloring
+// sheet is PINNED to that flag's line-art (`flag:XX`, served from
+// dist/flags-lineart). Nobody can swap or drop the sheet: the flag IS the room.
+// They materialise on first visit (no boot seeding — 250 empty rooms would bury
+// the lobby), survive the idle sweep like the featured rooms, and still take
+// the ordinary 3-day public refresh so the flag comes back blank for the next
+// class. The valid set is whatever line-art shipped in the build.
+const FLAG_LINEART_DIR = join(__dirname, 'dist', 'flags-lineart');
+let flagCodesCache = null;
+function flagCodes() {
+  if (flagCodesCache) return flagCodesCache;
+  try {
+    flagCodesCache = new Set(readdirSync(FLAG_LINEART_DIR).filter((f) => /^[A-Z]{2}\.png$/.test(f)).map((f) => f.slice(0, 2)));
+  } catch {
+    flagCodesCache = new Set();
+  }
+  return flagCodesCache;
+}
+function flagCodeOf(roomId) {
+  const m = /^FLAG([A-Z]{2})$/.exec(String(roomId || ''));
+  return m && flagCodes().has(m[1]) ? m[1] : null;
+}
+function isFlagRoom(roomId) { return flagCodeOf(roomId) !== null; }
+// Display names for flag-room titles. Loaded from the same table /planet uses
+// so the lobby card and the map agree; the code is the fallback.
+let flagNamesCache = null;
+function flagName(code) {
+  if (!flagNamesCache) {
+    try { flagNamesCache = JSON.parse(readFileSync(join(__dirname, 'src', 'data', 'world-paths.json'), 'utf8')).names || {}; } catch { flagNamesCache = {}; }
+  }
+  return flagNamesCache[code] || code;
+}
+function flagEmoji(code) {
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+function flagRoomTitle(code) { return `${flagEmoji(code)} ${flagName(code)} flag`; }
+function flagRoomPrompt(code) { return `${flagEmoji(code)} Colour in the flag of ${flagName(code)} — together!`; }
+// Re-assert the invariants a flag room can never lose (boot, wipe, sheet ops).
+function pinFlagRoom(room, roomId) {
+  const code = flagCodeOf(roomId);
+  if (!code) return false;
+  room.audience = 'kid_safe';
+  room.listed = true;
+  room.title = flagRoomTitle(code);
+  room.sheetId = `flag:${code}`;
+  return true;
+}
 const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
 const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
 const GAME_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.game).map((r) => r.code));
@@ -2155,8 +2206,8 @@ function getRoom(roomId) {
     // Audience default: the legacy MAIN room is the public hall (kid_safe); a
     // room first reached by an invite code is private (friends). A room created
     // via POST /api/rooms persists its audience, which wins here.
-    const audience = saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
-    const listed = (saved.listed != null ? saved.listed : audience === 'kid_safe')
+    const audience = isFlagRoom(roomId) ? 'kid_safe' : (saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends'));
+    const listed = (isFlagRoom(roomId) || (saved.listed != null ? saved.listed : audience === 'kid_safe'))
       && !RETIRED_ROOM_CODES.has(roomId); // retired seasonal rooms never list
     // Which frame/scene layer caps apply. Public rooms can never opt into the
     // film strip, so the animation cap only ever applies to a private room.
@@ -2309,6 +2360,7 @@ function getRoom(roomId) {
       createdAt: saved.fromDisk ? (saved.createdAt || 0) : Date.now(),
       lastActivity: (saved.fromDisk && saved.lastSaved) || Date.now(),
     });
+    pinFlagRoom(fresh, roomId); // a flag room's title/sheet/audience are derived, never persisted state
     rooms.set(roomId, fresh);
     const created = fresh;
     // Storybooks reuse the paged animation scene model: one scene is one page.
@@ -2588,7 +2640,7 @@ function closeRoom(roomId, reason) {
 function autoCloseSweep() {
   const now = Date.now();
   rooms.forEach((room, id) => {
-    if (FEATURED_CODES.has(id) || room.users.size > 0) return;
+    if (FEATURED_CODES.has(id) || isFlagRoom(id) || room.users.size > 0) return;
     if (room.mods && room.mods.size > 0) return; // a moderator is looking at it right now
     // Production segments are chapters of someone's FILM — an idle Part 3
     // getting reaped would put a hole in the movie. They outlive the sweep,
@@ -2604,7 +2656,7 @@ function autoCloseSweep() {
   for (const f of files) {
     if (f.endsWith('.history.json')) continue; // a room's history base rides with its meta file below
     const id = f.replace(/\.json$/, '');
-    if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || rooms.has(id)) continue;
+    if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || isFlagRoom(id) || rooms.has(id)) continue;
     try {
       const path = join(ROOM_DIR, f);
       // The meta file is small once a room has been saved by this build; only a
@@ -2831,6 +2883,7 @@ function ensureRoomFresh(roomId) {
   }
   recountFrameOps(room);
   room.sheetId = null;
+  pinFlagRoom(room, roomId); // a flag room refreshes to a blank FLAG, not a blank page
   room.lastCleared = null; // the refresh is not undoable — it IS the reset
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
@@ -2846,7 +2899,7 @@ function ensureRoomFresh(roomId) {
   // did this), and wipeRefresh lets the client explain what actually happened
   // — including in FINGERS, which has no chat to read.
   broadcast(roomId, { type: 'clear', userId: 'system', name: 'Fresh canvas', gameRound: true, wipeRefresh: true });
-  broadcast(roomId, { type: 'sheet', sheetId: null });
+  broadcast(roomId, { type: 'sheet', sheetId: room.sheetId || null });
   if (!room.fingerPaint) {
     pushSystemChat(room, roomId, 'Fresh canvas! This room refreshes every 3 days — pin art to the Fridge Wall to keep it forever. 🧽');
   }
@@ -4072,7 +4125,7 @@ wss.on('connection', async (ws, req) => {
     if (roomId === 'DAILY') ensureDailyFresh();
     if (roomId === INKTOBER_ROOM) ensureInktoberFresh();
     const specFeatured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
-    const specPrompt = live.customPrompt || (specFeatured ? dailyPromptFor(specFeatured) : null);
+    const specPrompt = live.customPrompt || (specFeatured ? dailyPromptFor(specFeatured) : null) || (flagCodeOf(roomId) ? flagRoomPrompt(flagCodeOf(roomId)) : null);
     live.spectators.add(ws);
     ws.isSpectator = true;
     ws.roomId = roomId;
@@ -4289,7 +4342,7 @@ wss.on('connection', async (ws, req) => {
   // beats the daily rotation; featured rooms otherwise carry the same daily
   // prompt the lobby shows; ad-hoc rooms have none until they vote one in.
   const featured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
-  const roomPrompt = room.customPrompt || (featured ? dailyPromptFor(featured) : null);
+  const roomPrompt = room.customPrompt || (featured ? dailyPromptFor(featured) : null) || (flagCodeOf(roomId) ? flagRoomPrompt(flagCodeOf(roomId)) : null);
 
   // adult_18 is a defined-but-disabled audience: real adult verification doesn't
   // exist in this stack, so no normal user can create one (POST /api/rooms 403s)
@@ -4927,6 +4980,7 @@ wss.on('connection', async (ws, req) => {
         // blank shared page is the whole event; a sheet underlay is a bypass.
         // Same for an Inktober-opted-in artist studio while the event is live.
         if (inkEnforcedFor(room)) break;
+        if (isFlagRoom(roomId)) break; // the flag IS the room: the sheet is pinned
         // Setting the shared coloring sheet is a host decision once the room is
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
@@ -5183,6 +5237,7 @@ wss.on('connection', async (ws, req) => {
         // as set_sheet). A plain member wipe request still follows the normal
         // countdown/vote path.
         if (inkEnforcedFor(room) && nextSheet) break;
+        if (isFlagRoom(roomId) && nextSheet) break; // pinned flag sheet (same class as ink rooms)
         // Same rule as set_sheet: trace photos and Draw Phone pages are only
         // ever set by their own minting handlers.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
@@ -8620,6 +8675,39 @@ app.get('/api/inktober', (_req, res) => {
 // The paper equivalent is illustrative (1,000 recorded stroke batches ≈ a
 // sheet), not a measured resource saving.
 const PAINTJAR_MIN_COUNTRY_COUNT = 5;
+// The painted planet: the same aggregate country groups as /api/paintjar plus,
+// per country, whether its flag room exists and is live right now — so the map
+// can show "3 colouring the Brazil flag" without the client opening a socket
+// per country. Only headcounts, never names. `flags` is the list of countries
+// that HAVE a line-art sheet (i.e. can be clicked into a room).
+app.get('/api/planet', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const strokes = Number(analytics.totals.strokes) || 0;
+  const sessions = Number(analytics.totals.sessions) || 0;
+  const countries = Object.entries(analytics.countries || {})
+    .map(([code, count]) => ({ code, count: Number(count) || 0 }))
+    .filter((c) => c.count >= PAINTJAR_MIN_COUNTRY_COUNT)
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+    .slice(0, 120);
+  const live = {};
+  rooms.forEach((room, code) => {
+    const fc = flagCodeOf(code);
+    if (!fc) return;
+    live[fc] = { painting: room.users.size, ops: Number.isFinite(room.opCount) ? room.opCount : room.history.length };
+  });
+  res.json({
+    updatedAt: new Date().toISOString(),
+    strokes,
+    sessions,
+    countries,
+    flags: [...flagCodes()].sort(),
+    live,
+    // The nature scene on /planet grows from these: illustrative milestones,
+    // NOT measured savings (see /api/paintjar).
+    milestones: { strokesPerSheet: 1000, sheets: Math.floor(strokes / 1000) },
+    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The growing scene is an illustrative picture of how much drawing happens here — not a measured saving of paper, trees, water or carbon. Country groups under 5 are omitted.',
+  });
+});
 app.get('/api/paintjar', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   const strokes = Number(analytics.totals.strokes) || 0;
@@ -9661,7 +9749,8 @@ app.get('/api/rooms/public', (_req, res) => {
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
       featured,
       emoji: f ? f.emoji : null,
-      prompt: f ? dailyPromptFor(f) : null,
+      prompt: f ? dailyPromptFor(f) : (flagCodeOf(code) ? flagRoomPrompt(flagCodeOf(code)) : null),
+      flag: flagCodeOf(code),
       wipeAt: wipesOnCycle(room, code) ? (room.wipeAt || 0) : 0,
     });
   });
@@ -10324,9 +10413,13 @@ const PAGE_META = {
     title: 'Inktober on Drawesome — one shared ink & pencil mural',
     description: 'Draw the official Inktober prompt of the day in ink and pencil on one big shared mural — a fresh prompt every day of October. Free, no account needed. Independent fan participation; not affiliated with or endorsed by Inktober.',
   },
+  '/planet': {
+    title: 'The Painted Planet — colour the world’s flags together on Drawesome',
+    description: 'A world map painted by the Drawesome community: hover a country to see how much it has drawn, click it to colour that country’s flag together, and watch the shared nature scene grow with every stroke.',
+  },
   '/paintjar': {
-    title: 'The Paint Jar — Drawesome community impact',
-    description: 'See what the Drawesome community has painted together: aggregate recorded strokes and sessions, an illustrative paper equivalent, and the countries drawing with us.',
+    title: 'The Painted Planet — Drawesome community impact',
+    description: 'See what the Drawesome community has painted together: a world map of painters, every country’s flag as a shared coloring room, and a scene that grows with every recorded stroke.',
   },
   '/gallery': {
     title: 'Artist studios gallery — Drawesome',
@@ -10419,6 +10512,15 @@ function seoOverridesFor(reqPath) {
     // Public rooms get a real invite card. Private rooms stay opaque: the link
     // itself is the capability, so preview bots (and code guessers) never see a
     // kid-entered title or a headcount.
+    const flag = flagCodeOf(code);
+    if (flag) {
+      const painting = room && room.users ? room.users.size : 0;
+      return {
+        title: `Colour the ${flagName(flag)} flag together ${flagEmoji(flag)} — Drawesome`,
+        description: `${painting > 0 ? `${painting} colouring right now — ` : ''}a shared coloring page of the flag of ${flagName(flag)}. Free, no account needed.`,
+        url: `${SITE_ORIGIN}/join/${code}`,
+      };
+    }
     if (room && room.audience === 'kid_safe' && room.listed) {
       const painting = room.users ? room.users.size : 0;
       return {

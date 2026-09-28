@@ -20,7 +20,7 @@ const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const PublicWatch = lazy(() => import("./components/PublicWatch"));
 const WallPage = lazy(() => import("./components/WallPage"));
 const InktoberPage = lazy(() => import("./components/InktoberPage"));
-const PaintJarPage = lazy(() => import("./components/PaintJarPage"));
+const PlanetPage = lazy(() => import("./components/PlanetPage"));
 const ArtistGalleryRoute = lazy(() => import("./components/ArtistGalleryRoute"));
 
 class RouteErrorBoundary extends Component {
@@ -122,8 +122,9 @@ export default function Router() {
     page = <WallPage onNavigate={navigate} initialPostId={(path.split("/")[2] || "").slice(0, 64)} />;
   } else if (path.startsWith("/inktober")) {
     page = <InktoberPage onNavigate={navigate} />;
-  } else if (path.startsWith("/paintjar")) {
-    page = <PaintJarPage onNavigate={navigate} />;
+  } else if (path.startsWith("/planet") || path.startsWith("/paintjar")) {
+    // /paintjar is the old name; both land on the Painted Planet.
+    page = <PlanetPage onNavigate={navigate} />;
   } else {
     page = <HomePage onNavigate={navigate} />;
   }

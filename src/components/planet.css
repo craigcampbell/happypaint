@@ -1,0 +1,157 @@
+/* The Painted Planet (/planet, /paintjar). Builds on the .jar-* base styles in
+   seasonal.css. Mobile-first; every animation stops under
+   prefers-reduced-motion (and the .scene-still class the page sets). */
+
+.planet-page {
+  background:
+    radial-gradient(900px 420px at 88% -10%, rgba(14, 165, 233, 0.18), transparent 70%),
+    radial-gradient(720px 400px at 4% 6%, rgba(250, 204, 21, 0.16), transparent 70%),
+    radial-gradient(600px 300px at 50% 100%, rgba(34, 197, 94, 0.14), transparent 70%),
+    #f4f7f2;
+}
+.planet-main { max-width: 1120px; }
+.planet-hero p strong { color: #0f2c22; }
+
+.planet-panel {
+  background: rgba(255, 255, 255, 0.88);
+  border: 2px solid #dbe7df;
+  border-radius: 22px;
+  padding: 18px 16px 16px;
+  margin: 0 0 18px;
+  box-shadow: 0 10px 30px rgba(15, 44, 34, 0.06);
+}
+.planet-panel-head { text-align: center; margin-bottom: 12px; }
+.planet-panel-head h2 { margin: 0 0 6px; font-size: 1.25rem; color: #0f2c22; }
+
+/* ---- Map ---- */
+.planet-map-wrap { position: relative; }
+.planet-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 18px;
+  overflow: visible;
+}
+.planet-country {
+  stroke: rgba(40, 60, 50, 0.45);
+  stroke-width: 0.6;
+  stroke-linejoin: round;
+  transition: fill 240ms ease, transform 160ms ease;
+  outline: none;
+}
+.planet-country.is-clickable { cursor: pointer; }
+.planet-country.is-painted { stroke: rgba(70, 30, 20, 0.55); }
+.planet-country.is-hover,
+.planet-country:focus-visible {
+  stroke: #0f2c22;
+  stroke-width: 1.6;
+  filter: brightness(1.08);
+}
+.planet-dot {
+  stroke: rgba(70, 30, 20, 0.7);
+  stroke-width: 1;
+  cursor: pointer;
+  outline: none;
+}
+.planet-dot.is-hover, .planet-dot:focus-visible { stroke: #0f2c22; stroke-width: 2; r: 6; }
+.planet-live-ring { transform-origin: center; animation: planet-pulse 1.8s ease-out infinite; }
+@keyframes planet-pulse {
+  0% { transform: scale(0.5); opacity: 0.7; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+.planet-card {
+  position: absolute;
+  z-index: 3;
+  width: 220px;
+  background: #fffdf7;
+  border: 2px solid #0f2c22;
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 4px 5px 0 rgba(15, 44, 34, 0.18);
+  pointer-events: none;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: #1f3a2e;
+}
+.planet-card-title { font-weight: 900; font-size: 1.05rem; color: #0f2c22; margin-bottom: 4px; }
+.planet-card-stat strong { color: #c2410c; font-size: 1.05rem; }
+.planet-card-muted { color: #5b7266; font-weight: 600; }
+.planet-card-live { margin-top: 4px; color: #15803d; font-weight: 800; }
+.planet-card-cta { margin-top: 6px; color: #1d4ed8; font-weight: 800; }
+
+.planet-legend {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: center;
+  margin-top: 10px; font-size: 0.82rem; font-weight: 700; color: #4b6a5d;
+}
+.planet-legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 4px; border: 1px solid rgba(70,30,20,0.4); }
+.planet-legend-live { background: #22c55e; border-radius: 50% !important; border-color: #15803d !important; }
+
+.planet-active {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
+  margin-top: 14px;
+}
+.planet-active-label { font-weight: 800; color: #335146; font-size: 0.9rem; }
+.planet-chip {
+  border: 2px solid #0f2c22; background: #fff; border-radius: 999px;
+  padding: 6px 12px; font-weight: 800; color: #0f2c22; cursor: pointer; font-size: 0.9rem;
+  box-shadow: 2px 3px 0 rgba(15, 44, 34, 0.18);
+}
+.planet-chip:hover { background: #fff7d6; transform: translateY(-1px); }
+.planet-chip em { font-style: normal; color: #15803d; }
+
+.planet-list { margin-top: 14px; }
+.planet-list summary { cursor: pointer; font-weight: 800; color: #335146; padding: 6px 0; }
+.planet-list .jar-countries { margin-top: 8px; }
+.planet-list .jar-countries li { position: relative; }
+.planet-mini {
+  border: 1.5px solid #1d4ed8; color: #1d4ed8; background: #fff; border-radius: 999px;
+  padding: 2px 8px; font-size: 0.75rem; font-weight: 800; cursor: pointer; margin-left: 6px;
+}
+.planet-mini:hover { background: #e0e7ff; }
+
+/* ---- Growing scene ---- */
+.scene-wrap { max-width: 820px; margin: 0 auto; }
+.scene {
+  display: block; width: 100%; height: auto; border-radius: 18px;
+  border: 8px solid #fff; box-shadow: 0 8px 26px rgba(15, 44, 34, 0.14);
+  background: #fbf8f0;
+}
+.scene-layer { transition: opacity 900ms ease; }
+.scene-layer.is-off { opacity: 0; }
+.scene-layer.is-on { opacity: 1; }
+.scene-sun.is-on { animation: scene-glow 4s ease-in-out infinite; transform-origin: 660px 92px; }
+@keyframes scene-glow { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+.scene-clouds .cloud-a { animation: scene-drift 26s linear infinite; }
+.scene-clouds .cloud-b { animation: scene-drift 34s linear infinite reverse; }
+@keyframes scene-drift { 0% { transform: translateX(0); } 50% { transform: translateX(40px); } 100% { transform: translateX(0); } }
+.scene-birds.is-on { animation: scene-fly 9s ease-in-out infinite; }
+@keyframes scene-fly { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(30px, -8px); } }
+.scene-river .river-shine { stroke-dasharray: 14 22; animation: scene-flow 3s linear infinite; }
+@keyframes scene-flow { to { stroke-dashoffset: -36; } }
+.scene-fish.is-on { animation: scene-swim 6s ease-in-out infinite; }
+@keyframes scene-swim { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-24px); } }
+.scene-tree.is-on { animation: scene-sway 5s ease-in-out infinite; transform-box: fill-box; transform-origin: 50% 100%; }
+@keyframes scene-sway { 0%, 100% { rotate: 0deg; } 50% { rotate: 1.2deg; } }
+.scene-stars.is-on { animation: scene-twinkle 2.4s ease-in-out infinite; }
+@keyframes scene-twinkle { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+.scene-still *, .scene-still .scene-layer { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .scene *, .planet-live-ring { animation: none !important; }
+  .scene-layer, .planet-country { transition: none; }
+}
+
+.scene-meter { margin-top: 12px; text-align: center; color: #335146; font-weight: 600; }
+.scene-meter p { margin: 8px 0 0; font-size: 0.95rem; }
+.scene-meter-row { display: flex; align-items: center; gap: 10px; justify-content: center; max-width: 640px; margin: 0 auto; }
+.scene-meter-end { font-size: 0.8rem; font-weight: 800; color: #4b6a5d; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scene-meter-bar {
+  flex: 1; height: 14px; border-radius: 999px; background: #e6ead9; overflow: hidden;
+  border: 2px solid #cfd9c9; min-width: 120px;
+}
+.scene-meter-bar i { display: block; height: 100%; background: linear-gradient(90deg, #86efac, #22c55e); border-radius: 999px; transition: width 800ms ease; }
+
+@media (min-width: 720px) {
+  .planet-panel { padding: 22px 24px 20px; }
+}

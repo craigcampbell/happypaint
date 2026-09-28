@@ -969,6 +969,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const sheetRectRef = useRef(null);
   const sheetModeRef = useRef("over"); // 'over' = lines on top (colour under)
   const [sheetId, setSheetId] = useState(null);
+  // Flag rooms pin their sheet server-side; the rail hides swap/remove for them.
+  const pinnedFlagSheet = typeof sheetId === "string" && /^flag:[A-Z]{2}$/.test(sheetId);
   const [sheetMode, setSheetMode] = useState("over");
   const [, setSheets] = useState([]);
   // Trace-a-photo: upload a photo as the room's traced underlay.
@@ -7203,6 +7205,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         applySrc(sheetFullUrl(id.slice(4)));
         return;
       }
+      // Flag rooms (/planet): "flag:US" is the pinned line-art of that flag,
+      // shipped with the build. Colour goes UNDER the lines like any sheet.
+      if (/^flag:[A-Z]{2}$/.test(id)) {
+        applySrc(`/flags-lineart/${id.slice(5)}.png`);
+        return;
+      }
       if (id.startsWith("remix:")) {
         const postId = id.slice(6);
         if (/^wp_[a-z0-9]{1,40}$/i.test(postId)) {
@@ -11837,13 +11845,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <section className="tool-section rail-top rail-top-0">
           <div className="section-title-row">
             <h2>Coloring sheet</h2>
-            {sheetId ? (
+            {sheetId && !pinnedFlagSheet ? (
               <button type="button" onClick={() => applySheet(null)}>
                 Remove
               </button>
             ) : null}
           </div>
-          {!inkOnly ? (
+          {pinnedFlagSheet ? (
+            <p className="tool-hint">🌍 This is a flag room from the Painted Planet — the flag stays on the page for everyone. Colour it in together!</p>
+          ) : null}
+          {!inkOnly && !pinnedFlagSheet ? (
             <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
               🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
             </button>

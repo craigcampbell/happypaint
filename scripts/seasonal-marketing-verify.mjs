@@ -184,7 +184,7 @@ const run = async () => {
   check("router has /inktober route", routerSrc.includes("/inktober"));
   check("router has /paintjar route", routerSrc.includes("/paintjar"));
   const navSrc = readFileSync(path.join(ROOT, "src/components/SiteNav.jsx"), "utf8");
-  check("site nav links Inktober + Paint Jar", navSrc.includes("/inktober") && navSrc.includes("/paintjar"));
+  check("site nav links Inktober + Planet", navSrc.includes("/inktober") && navSrc.includes("/planet"));
   // Informational only: App.jsx / server.js / LiveRoomCanvas.jsx are owned by
   // other agents working concurrently in this tree; this task did not edit them.
   const othersDirty = execSync("git diff --name-only HEAD -- src/App.jsx server.js src/components/LiveRoomCanvas.jsx src/App.css", { cwd: ROOT }).toString().trim().split("\n").filter(Boolean);
@@ -232,10 +232,11 @@ const run = async () => {
       if (realInktober) return proxy(route);
       return route.fulfill({ json: fx.inktober }); // SYNTHETIC
     }
-    if (p === "/api/paintjar") {
+    if (p === "/api/paintjar" || p === "/api/planet") {
       if (fx.forceJarFail) return route.fulfill({ status: 500, body: "boom", contentType: "text/plain" });
       if (realPaintjar) return proxy(route);
-      return route.fulfill({ json: PAINTJAR }); // SYNTHETIC
+      // SYNTHETIC: /api/planet carries the same aggregates plus the flag set.
+      return route.fulfill({ json: p === "/api/planet" ? { ...PAINTJAR, flags: ["US", "MX", "BR"], live: {}, milestones: { strokesPerSheet: 1000, sheets: PAINTJAR.paperEquivalent.sheets } } : PAINTJAR });
     }
     if (p === "/api/wall" && route.request().method() === "GET") {
       if (url.searchParams.get("event") === "inktober-2026") {
@@ -425,40 +426,40 @@ const run = async () => {
   const jarExpect = realPaintjar ? realJar : PAINTJAR;
   const fmtNum = (n) => n.toLocaleString("en-US").replace(/,/g, "[,\\s ]?");
   await page.goto(UI + "/paintjar", { waitUntil: "domcontentloaded" });
-  await page.locator("main.jar-page h1").waitFor({ timeout: 15000 });
+  // /paintjar now lands on the Painted Planet (PlanetPage). It reads
+  // /api/planet, whose strokes/sessions/countries/disclaimer are the same
+  // aggregates as /api/paintjar.
+  await page.locator("main.planet-main h1").waitFor({ timeout: 15000 });
   await page.waitForTimeout(600);
-  const jarText = (await page.locator("main.jar-page").innerText()).replace(/\s+/g, " ");
+  const jarText = (await page.locator("main.planet-main").innerText()).replace(/\s+/g, " ");
   check(`/paintjar shows real aggregate strokes (${MODE})`, new RegExp(fmtNum(jarExpect.strokes)).test(jarText), `${jarExpect.strokes}`);
   check("/paintjar shows sessions count", new RegExp(fmtNum(jarExpect.sessions)).test(jarText), `${jarExpect.sessions}`);
   check("/paintjar shows illustrative sheet equivalent", new RegExp(fmtNum(jarExpect.paperEquivalent.sheets)).test(jarText) && /sheet/i.test(jarText));
   check("/paintjar labels equivalent as illustrative, not measured savings",
     /illustrative/i.test(jarText) && !/litre|liter|CO2|carbon saved|trees saved/i.test(jarText.replace(/not a measured[^.]*carbon/i, "")));
-  const discWords = (jarExpect.disclaimer || "").split(/\s+/).slice(0, 6).join(" ");
-  check("/paintjar includes the API disclaimer", discWords.length > 3 && jarText.includes(discWords), discWords.slice(0, 50));
-  check("/paintjar renders the animated Earth", (await page.locator(".jar-earth").count()) === 1);
-  const perSheet = jarExpect.paperEquivalent.strokesPerSheet || 1000;
-  const expectedFill = Math.round(((jarExpect.strokes % perSheet) / perSheet) * 1000) / 10;
-  const fillPct = await page.locator(".jar-fill").evaluate((el) => parseFloat(el.style.height));
-  check(`/paintjar jar fill matches strokes → next sheet (${jarExpect.strokes % perSheet}/${perSheet} = ${expectedFill}%)`,
-    Math.abs(fillPct - expectedFill) < 0.6, `${fillPct}%`);
-  const countries = await page.locator(".jar-countries li").allInnerTexts();
+  check("/paintjar includes the disclaimer", /Counts are aggregate recorded drawing activity/.test(jarText));
+  check("/paintjar renders the painted world map", (await page.locator(".planet-map").count()) === 1 && (await page.locator("path.planet-country").count()) > 150);
+  check("/paintjar renders the growing scene", (await page.locator(".scene").count()) === 1);
+  const countries = await page.locator(".planet-list .jar-countries li").allInnerTexts();
   const expectedCountries = jarExpect.countries || [];
   check(`/paintjar lists country groups with counts (${MODE})`,
     countries.length === expectedCountries.length
       && (expectedCountries.length === 0 || (countries[0].includes(expectedCountries[0].code) && countries[0].includes(String(expectedCountries[0].count)))),
     `${countries.length}/${expectedCountries.length} groups`);
 
-  // Accessible reduced motion: Earth + jar animations must stop.
+  // Accessible reduced motion: scene animations must stop.
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const earthAnim = await page.locator(".jar-earth-inner").evaluate((el) => getComputedStyle(el).animationName);
-  check("/paintjar honours prefers-reduced-motion (Earth still)", earthAnim === "none", earthAnim);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(".scene").waitFor({ timeout: 15000 });
+  const sunAnim = await page.locator(".scene-sun").evaluate((el) => getComputedStyle(el).animationName);
+  check("/paintjar honours prefers-reduced-motion (scene still)", sunAnim === "none", sunAnim);
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
   // Error state (no fake numbers) — simulated outage in both modes.
   fx.forceJarFail = true;
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
-  const jarErr = (await page.locator("main.jar-page").innerText()).replace(/\s+/g, " ");
+  const jarErr = (await page.locator("main.planet-main").innerText()).replace(/\s+/g, " ");
   check("/paintjar error state shows no fabricated stats",
     /(couldn|try again)/i.test(jarErr) && !new RegExp(fmtNum(jarExpect.strokes)).test(jarErr));
   fx.forceJarFail = false;
@@ -467,7 +468,7 @@ const run = async () => {
   await page.goto(UI + "/", { waitUntil: "domcontentloaded" });
   await page.locator(".site-nav-toggle").click();
   const menuText = await page.locator(".site-nav-links").innerText();
-  check("mobile nav menu contains Inktober and Paint Jar", /Inktober/.test(menuText) && /Paint Jar/.test(menuText));
+  check("mobile nav menu contains Inktober and Planet", /Inktober/.test(menuText) && /Planet/.test(menuText));
   await page.locator(".site-nav-toggle").click(); // close the menu
 
   // ---- auth CTA beside Draw now: guest ---------------------------------------

@@ -50,7 +50,7 @@ export default function SiteNav({ onNavigate, current }) {
     { href: "/gallery", label: "Gallery" },
     { href: "/inktober", label: "Inktober" },
     { href: "/wall", label: "Wall" },
-    { href: "/paintjar", label: "Paint Jar" },
+    { href: "/planet", label: "Planet" },
     { href: "/family", label: "Family" },
     { href: "/parents", label: "Parents & teachers" },
     { href: "/faq", label: "Safety" },
