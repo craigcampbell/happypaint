@@ -182,8 +182,12 @@ async function pairScenario() {
 
 // C. Vote of 3: two yes is a majority, but it waits for the third; when
 // everyone has voted it skips to the final 3s and wipes.
+// A featured PUBLIC room like the other scenarios: hostless, so a member's
+// request becomes a room vote. (DINOS is a retired protected mural — member
+// wipe requests are refused there by design — and an ad-hoc friends room
+// would make the first joiner guest host, whose request is a countdown.)
 async function votePassScenario() {
-  const R = "DINOS";
+  const R = "SPOOKY";
   const a = await connectMember(R);
   const b = await connectMember(R);
   const c = await connectMember(R);

@@ -7,6 +7,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import BrandMark from "./BrandMark";
 import { getSession, isCloudConfigured, onAuthStateChange, sessionLabel } from "../utils/auth";
+import "../seasonal.css";
 
 export default function SiteNav({ onNavigate, current }) {
   const [session, setSession] = useState(null);
@@ -46,7 +47,10 @@ export default function SiteNav({ onNavigate, current }) {
 
   const links = [
     { href: "/rooms", label: "Live rooms" },
+    { href: "/gallery", label: "Gallery" },
+    { href: "/inktober", label: "Inktober" },
     { href: "/wall", label: "Wall" },
+    { href: "/paintjar", label: "Paint Jar" },
     { href: "/family", label: "Family" },
     { href: "/parents", label: "Parents & teachers" },
     { href: "/faq", label: "Safety" },
@@ -98,6 +102,19 @@ export default function SiteNav({ onNavigate, current }) {
       </nav>
 
       <div className="site-nav-actions">
+        {/* Auth entry right beside the Draw now CTA, visible on mobile too.
+            Signed in → "My account" (your rooms); signed out → one clear
+            "Sign in" (never both, and hidden entirely when cloud accounts
+            aren't configured — the app stays anonymous-first). */}
+        {session ? (
+          <a href="/rooms" className="site-nav-account-cta" onClick={(event) => follow(event, "/rooms")}>
+            My account
+          </a>
+        ) : isCloudConfigured ? (
+          <a href="/signup?mode=login" className="site-nav-signin" onClick={(event) => follow(event, "/signup?mode=login")}>
+            Sign in
+          </a>
+        ) : null}
         {/* The generic "Draw now" entry lands in the shared MAIN room (the
             commons); a private room is still one custom code away. */}
         <a href="/join/MAIN" className="site-nav-paint primary-action" onClick={(event) => follow(event, "/join/MAIN")}>

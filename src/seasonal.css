@@ -1,0 +1,598 @@
+/* Seasonal marketing UI — Inktober event page, Paint Jar page, and the
+   homepage seasonal banner / room cards / prompt-artwork strips.
+   Mobile-first; honours prefers-reduced-motion. Loaded by the seasonal
+   components (HomePage / InktoberPage / PaintJarPage); reuses the global
+   wall-card / open-room-card / primary-action styles from App.css. */
+
+/* ---- Nav auth CTA (Sign in / My account beside Draw now) ------------------ */
+.site-nav-signin,
+.site-nav-account-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 2px solid #2d6cdf;
+  background: #fff;
+  color: #2d6cdf;
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.site-nav-signin:hover,
+.site-nav-account-cta:hover {
+  background: #eef4ff;
+  text-decoration: none;
+}
+.site-nav-account-cta {
+  background: #2d6cdf;
+  color: #fff;
+}
+.site-nav-account-cta:hover { background: #1d56c4; }
+/* Keep the auth CTA visible and tappable beside Draw now on phones. */
+@media (max-width: 560px) {
+  .site-nav-signin,
+  .site-nav-account-cta {
+    min-height: 38px;
+    padding: 6px 12px;
+    font-size: 0.88rem;
+  }
+}
+/* With the extra auth CTA in the row, the homepage wordmark crowds the
+   hamburger against the viewport edge at phone widths — drop the text, keep
+   the mark (other pages already hide it ≤390px). NOTE: main.jsx imports
+   Router before its CSS, so seasonal.css lands EARLIER in the cascade than
+   homepage-redesign.css — this selector needs the extra .site-nav class to
+   beat homepage-redesign's ≤620px `display: inline` on specificity. */
+@media (max-width: 480px) {
+  .home-page .site-nav .site-brand .brand-name { display: none; }
+}
+
+/* ---- Seasonal banner (homepage, phase-aware) ----------------------------- */
+.seasonal-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 14px auto 0;
+  padding: 14px 18px;
+  max-width: 1060px;
+  border-radius: 20px;
+  color: #f5f0ff;
+  background: linear-gradient(115deg, #1c1530 0%, #2b1b4d 55%, #3a2364 100%);
+  border: 1.5px solid rgba(167, 139, 250, 0.45);
+  box-shadow: 0 10px 28px rgba(24, 12, 48, 0.35);
+  overflow: hidden;
+}
+.seasonal-banner::after {
+  /* ink droplets drifting across the banner */
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 12% 30%, rgba(196, 181, 253, 0.35) 0 3px, transparent 4px),
+    radial-gradient(circle at 68% 70%, rgba(196, 181, 253, 0.28) 0 2.5px, transparent 3.5px),
+    radial-gradient(circle at 88% 22%, rgba(240, 171, 252, 0.3) 0 2px, transparent 3px),
+    radial-gradient(circle at 40% 82%, rgba(196, 181, 253, 0.22) 0 2px, transparent 3px);
+  animation: seasonal-drift 9s ease-in-out infinite alternate;
+}
+@keyframes seasonal-drift {
+  from { transform: translateY(-4px); opacity: 0.85; }
+  to { transform: translateY(5px); opacity: 1; }
+}
+.seasonal-banner-emoji {
+  font-size: 1.9rem;
+  line-height: 1;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+}
+.seasonal-banner-copy { flex: 1 1 240px; position: relative; z-index: 1; }
+.seasonal-banner-title {
+  margin: 0;
+  font-family: "Fredoka Variable", "Nunito Sans Variable", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.05rem, 3.4vw, 1.35rem);
+  letter-spacing: 0.01em;
+}
+.seasonal-banner-sub {
+  margin: 2px 0 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #d9ccff;
+}
+.seasonal-banner-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+}
+.seasonal-banner-actions a,
+.seasonal-banner-actions button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 2px solid #c4b5fd;
+  background: #c4b5fd;
+  color: #241442;
+  font-weight: 800;
+  font-size: 0.95rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+.seasonal-banner-actions a.seasonal-banner-quiet {
+  background: transparent;
+  color: #e5dcff;
+}
+.seasonal-banner[data-phase="ended"] {
+  background: linear-gradient(115deg, #232030 0%, #322e44 100%);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+/* ---- Homepage live-room cards -------------------------------------------- */
+.home-rooms {
+  max-width: 1060px;
+  margin: 34px auto 0;
+  padding: 0 4px;
+}
+.home-rooms-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.home-rooms-head h2 { margin: 2px 0 0; font-size: clamp(1.2rem, 3vw, 1.6rem); color: #101010; }
+.home-rooms-grid .open-room-card { text-align: left; }
+.home-rooms-more {
+  font-weight: 800;
+  color: #2d6cdf;
+  background: none;
+  border: none;
+  cursor: pointer;
+  min-height: 40px;
+  font-size: 0.98rem;
+}
+
+/* ---- Homepage prompt artwork strips -------------------------------------- */
+.home-prompt-wall { margin-bottom: 18px; }
+.home-prompt-wall-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+.home-prompt-wall-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #1f2937;
+}
+.home-prompt-wall-head .home-prompt-wall-prompt {
+  font-weight: 700;
+  color: #5b21b6;
+}
+.home-prompt-wall-head button {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: #2d6cdf;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+/* ---- Inktober page -------------------------------------------------------- */
+.ink-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 420px at 85% -8%, rgba(124, 58, 237, 0.16), transparent 70%),
+    radial-gradient(700px 380px at 8% 4%, rgba(56, 189, 248, 0.12), transparent 70%),
+    #f6f3ee;
+  padding-bottom: 64px;
+}
+.ink-main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 0; }
+.ink-hero {
+  border-radius: 24px;
+  padding: clamp(20px, 5vw, 40px);
+  color: #f5f0ff;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(196, 181, 253, 0.18) 0 56px, transparent 57px),
+    radial-gradient(circle at 6% 88%, rgba(240, 171, 252, 0.12) 0 40px, transparent 41px),
+    linear-gradient(120deg, #17122a 0%, #2a1a4e 60%, #3b2568 100%);
+  border: 1.5px solid rgba(167, 139, 250, 0.4);
+  box-shadow: 0 16px 40px rgba(24, 12, 48, 0.3);
+}
+.ink-eyebrow {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #c4b5fd;
+}
+.ink-hero h1 {
+  margin: 0 0 8px;
+  font-family: "Fredoka Variable", "Nunito Sans Variable", system-ui, sans-serif;
+  font-size: clamp(1.7rem, 6vw, 2.6rem);
+  line-height: 1.08;
+}
+.ink-hero-sub { margin: 0; max-width: 58ch; color: #ddd3f7; font-weight: 600; line-height: 1.5; }
+.ink-phase-card {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(196, 181, 253, 0.35);
+}
+.ink-phase-prompt { flex: 1 1 220px; }
+.ink-phase-prompt strong { display: block; font-size: 1.2rem; }
+.ink-phase-prompt small { color: #cdbffa; font-weight: 700; }
+.ink-join-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  border: none;
+  background: #c4b5fd;
+  color: #241442;
+  font-weight: 900;
+  font-size: 1.02rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+.ink-join-btn:hover { background: #ddd0fe; }
+
+.ink-live {
+  margin-top: 16px;
+}
+.ink-live-toggle {
+  min-height: 44px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(196, 181, 253, 0.6);
+  background: transparent;
+  color: #e5dcff;
+  font-weight: 800;
+  cursor: pointer;
+}
+.ink-live-canvas {
+  margin-top: 12px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #fff;
+  aspect-ratio: 8 / 5;
+  max-height: 420px;
+  box-shadow: 0 12px 30px rgba(24, 12, 48, 0.35);
+}
+.ink-live-canvas canvas { width: 100%; height: 100%; display: block; }
+
+.ink-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 26px 0 14px;
+}
+.ink-controls label { font-weight: 800; color: #2e2440; }
+.ink-controls select {
+  min-height: 46px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 2px solid #4c1d95;
+  background: #fff;
+  font: inherit;
+  font-weight: 700;
+  color: #2e1065;
+  max-width: 100%;
+}
+.ink-selected-prompt { color: #5b21b6; font-weight: 700; }
+
+.ink-gallery .wall-masonry { margin-top: 4px; }
+.ink-gallery .wall-card { background: #fff; }
+.ink-day-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #ede9fe;
+  color: #5b21b6;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+.ink-card-link {
+  display: inline-block;
+  margin-top: 6px;
+  color: #2d6cdf;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.ink-status, .ink-error {
+  padding: 26px 18px;
+  text-align: center;
+  border-radius: 16px;
+  background: #fff;
+  border: 1.5px dashed #c9c2dc;
+  color: #4b4260;
+  font-weight: 700;
+}
+.ink-error { border-color: #f0a8b8; color: #9f1239; }
+.ink-error button, .ink-status button {
+  margin-top: 10px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none;
+  background: #4c1d95;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ink-about {
+  margin-top: 30px;
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid #e3ddf0;
+  color: #453a5e;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+.ink-about h2 { margin: 0 0 8px; font-size: 1.1rem; color: #2e2440; }
+.ink-about a { color: #4c1d95; font-weight: 800; }
+
+/* ---- Paint Jar page ------------------------------------------------------- */
+.jar-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 420px at 88% -10%, rgba(14, 165, 233, 0.16), transparent 70%),
+    radial-gradient(720px 400px at 4% 6%, rgba(34, 197, 94, 0.14), transparent 70%),
+    #f2f7f4;
+  padding-bottom: 64px;
+}
+.jar-main { max-width: 1060px; margin: 0 auto; padding: 22px 16px 0; }
+.jar-hero { text-align: center; margin-bottom: 18px; }
+.jar-hero h1 {
+  margin: 0 0 6px;
+  font-family: "Fredoka Variable", "Nunito Sans Variable", system-ui, sans-serif;
+  font-size: clamp(1.8rem, 6vw, 2.6rem);
+  color: #0f2c22;
+}
+.jar-hero p { margin: 0 auto; max-width: 56ch; color: #335146; font-weight: 600; line-height: 1.5; }
+
+.jar-stage {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  align-items: stretch;
+  margin-top: 20px;
+}
+@media (min-width: 760px) {
+  .jar-stage { grid-template-columns: 1fr 1fr; }
+}
+.jar-panel {
+  border-radius: 22px;
+  background: #fff;
+  border: 1.5px solid #dcebe2;
+  box-shadow: 0 12px 30px rgba(15, 44, 34, 0.08);
+  padding: 22px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.jar-panel h2 { margin: 0; font-size: 1.15rem; color: #0f2c22; }
+.jar-panel .jar-panel-sub { margin: 0; text-align: center; color: #4b6a5d; font-weight: 600; font-size: 0.92rem; }
+
+/* The Earth: a stylised spinning globe (pure CSS, stops on reduced motion). */
+.jar-earth {
+  width: min(240px, 60vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 32% 30%, #bfe8ff 0%, #5fb2ec 45%, #2b6cb0 100%);
+  box-shadow:
+    inset -18px -14px 40px rgba(9, 40, 78, 0.45),
+    0 14px 30px rgba(15, 44, 34, 0.18);
+}
+.jar-earth-inner {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background-image:
+    radial-gradient(ellipse 34% 22% at 30% 34%, #7cc78a 0 96%, transparent 100%),
+    radial-gradient(ellipse 26% 30% at 68% 58%, #69b877 0 96%, transparent 100%),
+    radial-gradient(ellipse 20% 14% at 44% 72%, #8fd29b 0 96%, transparent 100%),
+    radial-gradient(ellipse 16% 10% at 76% 26%, #7cc78a 0 96%, transparent 100%);
+  background-size: 200% 100%;
+  animation: jar-earth-spin 26s linear infinite;
+}
+@keyframes jar-earth-spin {
+  from { background-position-x: 0, 0, 0, 0; }
+  to { background-position-x: 200%, 200%, 200%, 200%; }
+}
+.jar-earth-shine {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 26%, rgba(255, 255, 255, 0.5) 0%, transparent 42%);
+  pointer-events: none;
+}
+
+/* The jar: fill level driven by real aggregate strokes (inline --jar-fill). */
+.jar-jar {
+  width: min(200px, 52vw);
+  aspect-ratio: 3 / 4;
+  position: relative;
+  border: 5px solid #8aa5b5;
+  border-top-width: 12px;
+  border-radius: 18px 18px 34px 34px;
+  background: rgba(224, 242, 254, 0.55);
+  overflow: hidden;
+  box-shadow: inset 0 0 24px rgba(90, 130, 160, 0.25);
+}
+.jar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #f472b6 0%, #a855f7 55%, #6366f1 100%);
+  transition: height 1.2s ease;
+}
+.jar-fill::before {
+  /* gentle paint wave on the surface */
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: -25%;
+  width: 150%;
+  height: 12px;
+  border-radius: 45%;
+  background: rgba(255, 255, 255, 0.45);
+  animation: jar-wave 3.4s ease-in-out infinite;
+}
+@keyframes jar-wave {
+  0%, 100% { transform: translateX(-4%) rotate(-1.2deg); }
+  50% { transform: translateX(4%) rotate(1.2deg); }
+}
+.jar-jar::after {
+  /* scale marks — the jar reads as a gauge even at 0% */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, transparent calc(25% - 1px), rgba(90, 130, 160, 0.35) 25%, transparent calc(25% + 1px)),
+    linear-gradient(180deg, transparent calc(50% - 1px), rgba(90, 130, 160, 0.35) 50%, transparent calc(50% + 1px)),
+    linear-gradient(180deg, transparent calc(75% - 1px), rgba(90, 130, 160, 0.35) 75%, transparent calc(75% + 1px));
+  pointer-events: none;
+}
+.jar-jar-label {
+  position: absolute;
+  inset: auto 8px 10px;
+  text-align: center;
+  font-weight: 900;
+  color: #fff;
+  background: rgba(15, 44, 34, 0.55);
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+
+.jar-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 22px;
+}
+@media (max-width: 560px) {
+  .jar-stats { gap: 8px; }
+  .jar-stat { padding: 12px 8px; }
+}
+.jar-stat {
+  border-radius: 16px;
+  background: #fff;
+  border: 1.5px solid #dcebe2;
+  padding: 16px 14px;
+  text-align: center;
+}
+.jar-stat strong { display: block; font-size: clamp(1.4rem, 5vw, 1.9rem); color: #0f2c22; font-variant-numeric: tabular-nums; }
+.jar-stat span { color: #4b6a5d; font-weight: 700; font-size: 0.9rem; }
+
+.jar-countries {
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.jar-countries li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1.5px solid #dcebe2;
+  font-weight: 700;
+  color: #234034;
+}
+.jar-country-bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: #e3efe8;
+  overflow: hidden;
+}
+.jar-country-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #34d399, #0ea5e9);
+}
+.jar-country-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 900; color: #0f2c22; min-width: 2.4em; }
+.jar-country-count { font-variant-numeric: tabular-nums; color: #335146; }
+
+.jar-note {
+  margin-top: 22px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid #dcebe2;
+  color: #335146;
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+.jar-note h2 { margin: 0 0 6px; font-size: 1.05rem; color: #0f2c22; }
+.jar-updated { color: #6b8a7c; font-size: 0.85rem; font-weight: 600; }
+.jar-status, .jar-error {
+  margin-top: 24px;
+  padding: 28px 18px;
+  text-align: center;
+  border-radius: 16px;
+  background: #fff;
+  border: 1.5px dashed #c4d8cc;
+  color: #335146;
+  font-weight: 700;
+}
+.jar-error { border-color: #f0a8b8; color: #9f1239; }
+.jar-error button {
+  margin-top: 10px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jar-cta { margin-top: 24px; text-align: center; }
+
+/* ---- Reduced motion: every seasonal animation stops ----------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .seasonal-banner::after,
+  .jar-earth-inner,
+  .jar-fill::before {
+    animation: none !important;
+  }
+  .jar-fill { transition: none; }
+}

@@ -8,9 +8,23 @@ import SiteFooter from "./SiteFooter";
 import BrandMark from "./BrandMark";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
+import "../seasonal.css";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
+
+// The homepage live preview is fixed to the shared Open Studio (MAIN) — the
+// commons every visitor can walk into — refreshing as a periodic snapshot
+// (preview owner's snapshotIntervalMs) instead of a continually-running canvas.
+const PREVIEW_CODE = "MAIN";
+
+// Seasonal dates roll over at UTC midnight (server contract); label them in UTC
+// so the banner never says "September 30" for an October 1 start.
+function utcLabel(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { timeZone: "UTC", month: "long", day: "numeric" });
+}
 
 // The device-local drawing streak (written by the studio on the first stroke of
 // each day). Shown only while it's alive: last drew today, or yesterday (still
@@ -94,12 +108,18 @@ function HomeBanter({ listenerRef }) {
 
 export default function HomePage({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
-  const [activeCode, setActiveCode] = useState(null);
   const [code, setCode] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [joinRoom, setJoinRoom] = useState(null); // frozen snapshot of the room the modal is for
   const [wallPosts, setWallPosts] = useState([]); // recent Fridge Wall art
   const [wallLoaded, setWallLoaded] = useState(false);
+  // Prompt-specific artwork: today's Daily Challenge entries and the Inktober
+  // event gallery. Empty = the strips simply don't render and the generic
+  // wall strip below carries the section (no art is ever mislabelled).
+  const [dailyPosts, setDailyPosts] = useState([]);
+  const [inktoberPosts, setInktoberPosts] = useState([]);
+  // The Inktober event state (phase/day/prompt) drives the seasonal banner.
+  const [inktober, setInktober] = useState(null);
   // The Daily Challenge: today's prompt + a countdown tick.
   const [daily, setDaily] = useState(null);
   const [, setCountTick] = useState(0); // re-render for the countdown label
@@ -167,10 +187,6 @@ export default function HomePage({ onNavigate }) {
   const onSocial = useCallback((data) => {
     socialListenerRef.current?.(data);
   }, []);
-  // Mirrored into a ref so refresh() can leave the selected room alone while
-  // its join dialog is open.
-  const showJoinRef = useRef(false);
-  showJoinRef.current = showJoin;
   // Signed-in visitors get one "jump in" button in the join modal instead of
   // the guest/log-in/sign-up spread (same pattern as SiteNav).
   const [session, setSession] = useState(null);
@@ -189,15 +205,9 @@ export default function HomePage({ onNavigate }) {
       const res = await fetch("/api/rooms/public", { cache: "no-store" });
       const data = await res.json();
       const list = Array.isArray(data?.rooms) ? data.rooms : [];
+      // The server orders the lobby: MAIN, then INKTOBER (seasonal), then the
+      // other featured rooms — the room cards below inherit that order as-is.
       setRooms(list);
-      setActiveCode((cur) => {
-        // Don't swap the room out from under an open join modal.
-        if (showJoinRef.current && cur) return cur;
-        if (cur && list.some((r) => r.code === cur)) return cur;
-        // Lead with the liveliest room: most painters, then most art.
-        const best = [...list].sort((a, b) => b.users - a.users || b.ops - a.ops)[0];
-        return best ? best.code : null;
-      });
     } catch {
       /* offline — leave as-is */
     }
@@ -225,6 +235,35 @@ export default function HomePage({ onNavigate }) {
         setWallLoaded(true);
       })
       .catch(() => active && setWallLoaded(true));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // The Inktober event state powers the seasonal banner. Silent on failure —
+  // no banner is better than a wrong one.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/inktober", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active && d && d.phase) setInktober(d);
+      })
+      .catch(() => { /* no banner offline */ });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Inktober gallery peek: server-assigned event posts only. Silent on failure.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/wall?event=inktober-2026&sort=new&limit=6", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active) setInktoberPosts(Array.isArray(d?.posts) ? d.posts : []);
+      })
+      .catch(() => { /* strip just doesn't render */ });
     return () => {
       active = false;
     };
@@ -271,7 +310,24 @@ export default function HomePage({ onNavigate }) {
     return () => window.clearInterval(t);
   }, [daily]);
 
-  const active = useMemo(() => rooms.find((r) => r.code === activeCode) || null, [rooms, activeCode]);
+  // Artwork pinned to today's Daily Challenge (server-stamped challenge date).
+  // Refetches when the challenge rolls over; empty = the strip stays hidden.
+  useEffect(() => {
+    if (!daily?.date) return undefined;
+    let active = true;
+    fetch(`/api/wall?challenge=${encodeURIComponent(daily.date)}&sort=new&limit=6`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active) setDailyPosts(Array.isArray(d?.posts) ? d.posts : []);
+      })
+      .catch(() => { /* strip just doesn't render */ });
+    return () => {
+      active = false;
+    };
+  }, [daily?.date]);
+
+  // The fixed preview room (MAIN = the shared Open Studio).
+  const active = useMemo(() => rooms.find((r) => r.code === PREVIEW_CODE) || null, [rooms]);
 
   const join = (c) => onNavigate(`/join/${c}`);
   const follow = (event, href) => {
@@ -295,6 +351,49 @@ export default function HomePage({ onNavigate }) {
   return (
     <div className="home-page">
       <SiteNav onNavigate={onNavigate} current="/" />
+
+      {inktober ? (
+        <aside className="seasonal-banner" data-phase={inktober.phase} aria-label="Inktober event">
+          <span className="seasonal-banner-emoji" aria-hidden="true">🖋️</span>
+          <div className="seasonal-banner-copy">
+            {inktober.phase === "upcoming" ? (
+              <>
+                <p className="seasonal-banner-title">Inktober is coming — get ready</p>
+                <p className="seasonal-banner-sub">
+                  31 days, 31 ink prompts. Our shared Ink &amp; Pencil room opens{" "}
+                  {utcLabel(inktober.nextChangeAt) || "October 1"}.
+                </p>
+              </>
+            ) : null}
+            {inktober.phase === "active" ? (
+              <>
+                <p className="seasonal-banner-title">Inktober — Day {inktober.day} of 31</p>
+                <p className="seasonal-banner-sub">
+                  Today&rsquo;s prompt: &ldquo;{inktober.prompt}&rdquo; — draw it with ink &amp; pencil, together.
+                </p>
+              </>
+            ) : null}
+            {inktober.phase === "ended" ? (
+              <>
+                <p className="seasonal-banner-title">Inktober {inktober.year} has wrapped</p>
+                <p className="seasonal-banner-sub">See what the community drew, one prompt a day.</p>
+              </>
+            ) : null}
+          </div>
+          <div className="seasonal-banner-actions">
+            {inktober.phase === "active" ? (
+              <a href="/join/INKTOBER" onClick={(e) => follow(e, "/join/INKTOBER")}>Draw today&rsquo;s prompt →</a>
+            ) : null}
+            <a
+              href="/inktober"
+              className={inktober.phase === "active" ? "seasonal-banner-quiet" : ""}
+              onClick={(e) => follow(e, "/inktober")}
+            >
+              {inktober.phase === "upcoming" ? "See the prompts →" : "Event gallery →"}
+            </a>
+          </div>
+        </aside>
+      ) : null}
 
       <main className="home-main">
         <section className="home-hero" aria-labelledby="home-title">
@@ -399,6 +498,45 @@ export default function HomePage({ onNavigate }) {
           </form>
         </section>
 
+        <section className="home-rooms" aria-labelledby="home-rooms-title">
+          <div className="home-rooms-head">
+            <div>
+              <p className="home-eyebrow">Live rooms</p>
+              <h2 id="home-rooms-title">Pick a room and paint.</h2>
+            </div>
+            <button type="button" className="home-rooms-more" onClick={() => onNavigate("/rooms")}>
+              Browse all rooms →
+            </button>
+          </div>
+          {rooms.length > 0 ? (
+            <div className="home-rooms-grid open-rooms-grid">
+              {/* API order is the curated order: MAIN, then INKTOBER, then the
+                  other featured rooms — the cards inherit it untouched. */}
+              {rooms.slice(0, 6).map((room) => (
+                <button
+                  type="button"
+                  key={room.code}
+                  className={`open-room-card${(room.users || 0) > 0 ? " open-room-card-hot" : ""}`}
+                  onClick={() => {
+                    setJoinRoom(room);
+                    setShowJoin(true);
+                  }}
+                  aria-label={`Join ${room.title || `Room ${room.code}`}`}
+                >
+                  <span className="open-room-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
+                  <span className="open-room-code">{room.code}</span>
+                  <span className="open-room-title">{room.title || `Room ${room.code}`}</span>
+                  {room.prompt ? <span className="open-room-prompt">“{room.prompt}”</span> : null}
+                  <span className="open-room-meta">
+                    <span className="open-room-count">{room.users === 0 ? "Be the first!" : `${room.users} painting`}</span>
+                  </span>
+                  <span className="open-room-go">Paint here →</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
         <section className="home-live" aria-labelledby="home-live-title">
           <div className="home-live-copy">
             <p className="home-eyebrow"><span className="live-dot" aria-hidden="true" /> Draw together</p>
@@ -421,7 +559,7 @@ export default function HomePage({ onNavigate }) {
             <div className="home-viewer-head">
               <span className="home-viewing"><span className="live-dot" aria-hidden="true" /> Public canvas</span>
               <strong className="home-room-name">
-                {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "Open drawing room"}
+                {active ? `${active.emoji || "🎨"} ${active.title || active.code}` : "🎨 Open Studio"}
               </strong>
               <span className="home-room-meta">{active ? `${active.users} drawing now` : "Ready for you"}</span>
             </div>
@@ -438,14 +576,14 @@ export default function HomePage({ onNavigate }) {
               }}
               aria-label={active ? `Join ${active.title || active.code}` : "Open the shared studio canvas"}
             >
-              {activeCode && previewVisible ? (
+              {previewVisible ? (
                 <Suspense fallback={<span className="home-viewer-empty">Loading the live canvas…</span>}>
-                  <LiveRoomCanvas roomCode={activeCode} onSocial={onSocial} />
+                  {/* Fixed MAIN preview, refreshed as a periodic snapshot
+                      (every 120s) rather than a continually-running canvas. */}
+                  <LiveRoomCanvas roomCode="MAIN" snapshotIntervalMs={120000} onSocial={onSocial} />
                 </Suspense>
-              ) : <span className="home-viewer-empty">{activeCode ? "A shared canvas, made together" : "Come draw in the Open Studio"}</span>}
-              {/* keyed by room: a carousel hop remounts the overlay clean, so a
-                  late chat_history from the OLD room can never bleed across. */}
-              {activeCode && previewVisible ? <HomeBanter key={activeCode} listenerRef={socialListenerRef} /> : null}
+              ) : <span className="home-viewer-empty">A shared canvas, made together</span>}
+              {previewVisible ? <HomeBanter key={PREVIEW_CODE} listenerRef={socialListenerRef} /> : null}
               <span className="home-viewer-cta">{active ? "Join this canvas →" : "Jump in →"}</span>
             </button>
             {/* One tap from reading the banter to being IN it. */}
@@ -477,6 +615,44 @@ export default function HomePage({ onNavigate }) {
             <button type="button" className="home-wall-link" onClick={() => onNavigate("/wall")}>Visit the Wall →</button>
           </div>
 
+          {/* Prompt-specific artwork first — real wall posts stamped by the
+              server for today's challenge / the Inktober event. When a prompt
+              has no posts yet its strip simply doesn't render, and the generic
+              strip below carries the section (never mislabelled as prompt art). */}
+          {daily && dailyPosts.length > 0 ? (
+            <div className="home-prompt-wall" data-kind="daily">
+              <div className="home-prompt-wall-head">
+                <h3>Today&rsquo;s challenge: <span className="home-prompt-wall-prompt">“{daily.prompt}”</span></h3>
+                <button type="button" onClick={() => join("DAILY")}>Draw it →</button>
+              </div>
+              <button type="button" className="home-wall-strip" onClick={() => join("DAILY")} aria-label={`Draw today's prompt: ${daily.prompt}`}>
+                {dailyPosts.slice(0, 6).map((p) => (
+                  <span className="home-wall-tile" key={p.id}>
+                    <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" draggable={false} />
+                    {p.frames > 1 ? <span className="home-wall-anim" aria-hidden="true">🎬</span> : null}
+                  </span>
+                ))}
+              </button>
+            </div>
+          ) : null}
+
+          {inktoberPosts.length > 0 ? (
+            <div className="home-prompt-wall" data-kind="inktober">
+              <div className="home-prompt-wall-head">
+                <h3>🖋️ Inktober gallery</h3>
+                <button type="button" onClick={() => onNavigate("/inktober")}>See the event →</button>
+              </div>
+              <button type="button" className="home-wall-strip" onClick={() => onNavigate("/inktober")} aria-label="Open the Inktober event gallery">
+                {inktoberPosts.slice(0, 6).map((p) => (
+                  <span className="home-wall-tile" key={p.id}>
+                    <img src={`/api/wall/${p.id}/frame/0`} alt={p.title} loading="lazy" decoding="async" draggable={false} />
+                    {p.frames > 1 ? <span className="home-wall-anim" aria-hidden="true">🎬</span> : null}
+                  </span>
+                ))}
+              </button>
+            </div>
+          ) : null}
+
           {wallPosts.length > 0 ? (
             <button type="button" className="home-wall-strip" onClick={() => onNavigate("/wall")} aria-label="Open the Fridge Wall">
               {wallPosts.slice(0, 6).map((p) => (
@@ -486,7 +662,7 @@ export default function HomePage({ onNavigate }) {
                 </span>
               ))}
             </button>
-          ) : wallLoaded ? (
+          ) : wallLoaded && dailyPosts.length === 0 && inktoberPosts.length === 0 ? (
             <div className="home-wall-empty">
               <span className="home-wall-empty-emoji" aria-hidden="true">🖼️</span>
               <p>The wall is waiting for its first drawing.</p>

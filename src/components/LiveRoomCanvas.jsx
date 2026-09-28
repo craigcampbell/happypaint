@@ -3,6 +3,17 @@
 // history + live ops but never registers us as a user (no presence, no count,
 // no draw rights). We replay ops onto a full-res offscreen canvas and blit it,
 // framed to the drawn content so visitors immediately see art being made.
+//
+// Two display modes:
+// - LIVE (default): every op repaints the visible canvas. /watch, modwatch and
+//   the homepage carousel use this; nothing about it changed.
+// - SNAPSHOT (snapshotIntervalMs > 0): a periodic visitor-rendered thumbnail.
+//   The settled initial history paints at once, then the displayed canvas is
+//   refreshed from a snapshot copy at the interval while the offscreen replay
+//   keeps pace silently. Clear / history rebuilds (moderation included)
+//   invalidate immediately. This is NOT a server-stored cache — each visitor
+//   renders their own preview from the authoritative sanitized spectator
+//   stream; client-uploaded thumbnail images are never trusted or displayed.
 
 import { useEffect, useRef } from "react";
 import { prepareStrokeCommit } from "../utils/brushes";
@@ -71,6 +82,15 @@ export default function LiveRoomCanvas({
   onOps,
   onDenied,
   onSend,
+  // Periodic thumbnail mode (homepage MAIN preview): when > 0, the settled
+  // initial history still renders immediately, but later ops are replayed only
+  // onto the offscreen paper — the VISIBLE canvas is refreshed from a snapshot
+  // copy every snapshotIntervalMs instead of on every op. Clear / history
+  // rebuilds (which is also how moderation hide/remove arrives) invalidate the
+  // snapshot instantly, so removed art never lingers for a whole interval.
+  // 0 (default) = the live view, unchanged. Modwatch is always live: the admin
+  // glass room is a moderation tool, not a thumbnail.
+  snapshotIntervalMs = 0,
 }) {
   const visRef = useRef(null);
   const offRef = useRef(null);
@@ -79,12 +99,28 @@ export default function LiveRoomCanvas({
 
   useEffect(() => {
     if (!roomCode) return undefined;
+    const snapshotMs = !modKey && snapshotIntervalMs > 0 ? snapshotIntervalMs : 0;
     // Full-res offscreen "paper" we replay ops onto.
     const off = document.createElement("canvas");
     off.width = CANVAS_WIDTH;
     off.height = CANVAS_HEIGHT;
     offRef.current = off;
     const offCtx = off.getContext("2d");
+    // Snapshot mode only: the full-res copy the visible canvas is actually
+    // blitted from. `off` keeps replaying ops as they arrive (the replay
+    // internals stay live), but nothing reaches the screen until the interval
+    // flush copies off → snap — so the displayed pixels are byte-frozen
+    // between ticks, and a resize re-blit can never leak un-flushed ops.
+    const snap = snapshotMs ? document.createElement("canvas") : null;
+    if (snap) {
+      snap.width = CANVAS_WIDTH;
+      snap.height = CANVAS_HEIGHT;
+    }
+    const snapCtx = snap ? snap.getContext("2d") : null;
+    // Dirty from the start so an empty room still paints its white placeholder
+    // at the first opportunity instead of waiting for art.
+    let snapDirty = true;
+    const markSnapDirty = () => { snapDirty = true; };
     const resetPaper = () => {
       offCtx.setTransform(1, 0, 0, 1, 0, 0);
       offCtx.globalCompositeOperation = "source-over";
@@ -156,13 +192,17 @@ export default function LiveRoomCanvas({
       const ox = (W - dw) / 2;
       const oy = (H - dh) / 2;
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(off, b.x, b.y, b.w, b.h, ox, oy, dw, dh);
+      // Snapshot mode blits the frozen copy, never the live paper: a resize
+      // or sheet-load re-blit must show the SAME pixels as the last tick.
+      ctx.drawImage(snap || off, b.x, b.y, b.w, b.h, ox, oy, dw, dh);
       // Overlay in-progress buffered strokes (uniform stroke opacity, #62)
       // with the same world→screen mapping AND the stroke's commit composite
       // (entry.composite, from the shared entry core) so pen-up can't "pop",
       // clipped to the framed page so a buffer poking outside the crop can't
-      // paint over the letterbox.
-      if (strokes.size > 0) {
+      // paint over the letterbox. Snapshot mode skips this: half-drawn live
+      // strokes would leak between ticks; they appear at the first flush
+      // after their end-op commits them to the paper.
+      if (!snap && strokes.size > 0) {
         ctx.save();
         ctx.beginPath();
         ctx.rect(ox, oy, dw, dh);
@@ -188,6 +228,19 @@ export default function LiveRoomCanvas({
           sheetRect.h * scale,
         );
       }
+    };
+
+    // Snapshot mode: copy the settled paper into the displayed snapshot and
+    // repaint. Called on the interval tick (when dirty), and IMMEDIATELY on
+    // history rebuilds / clear so removed art never survives for a whole
+    // interval — the one thing a periodic cache must never do.
+    const flushSnapshot = () => {
+      if (!snap) return;
+      snapCtx.setTransform(1, 0, 0, 1, 0, 0);
+      snapCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      snapCtx.drawImage(off, 0, 0);
+      snapDirty = false;
+      blit();
     };
 
     // Resolve + load the room's coloring sheet (lib:<file> → static PNG; else the
@@ -275,16 +328,26 @@ export default function LiveRoomCanvas({
           mix.markAllDirty(); // the paper was rebuilt wholesale
           lastMapRef.current = new Map();
           dropStrokes(); // stale live buffers — the replay re-delivers their points
-          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, blit, mix, deferred);
+          // Snapshot mode: an inline image op's <img> can decode AFTER the
+          // immediate flush below — mark dirty so the next tick picks it up.
+          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
           commitAllStrokes(); // legacy / cut-off strokes with no end marker
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
-          blit();
+          // History is a wholesale rebuild (initial catch-up, moderation
+          // hide/remove, undo-clear): invalidate the snapshot NOW, not at the
+          // next tick — settled art must never linger after it's gone.
+          if (snap) flushSnapshot();
+          else blit();
           onActivity?.((data.ops || []).length);
           if (data.ops?.length) onOps?.(data.ops);
         } else if (data.type === "op") {
-          applyOp(offCtx, data.op, lastMapRef.current, strokes, blit, mix, deferred);
-          blit();
+          // The replay keeps pace with the room either way; only the DISPLAY
+          // differs — live mode repaints per op, snapshot mode just marks the
+          // paper dirty for the next tick (no continual display work).
+          applyOp(offCtx, data.op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
+          if (snap) markSnapDirty();
+          else blit();
           onOps?.([data.op]);
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);
@@ -294,7 +357,8 @@ export default function LiveRoomCanvas({
           lastMapRef.current = new Map();
           dropStrokes(); // in-progress strokes are wiped with the mural
           boundsRef.current = null;
-          blit();
+          if (snap) flushSnapshot(); // a wipe invalidates the thumbnail at once
+          else blit();
         } else if (data.type === "chat" || data.type === "chat_history" || data.type === "hype") {
           // The room's live banter — the parent renders it over the viewport
           // (the conversation is the show; this canvas only paints ops).
@@ -351,11 +415,25 @@ export default function LiveRoomCanvas({
     connect();
 
     // Coming back to a tab whose socket died while hidden: reconnect right away.
+    // Snapshot mode also catches up the thumbnail — ticks were skipped while
+    // the tab was hidden (and browsers throttle the timer anyway).
     const onVisibility = () => {
-      if (closed || document.hidden || reconnectTimer) return;
+      if (closed || document.hidden) return;
+      if (snap && snapDirty) flushSnapshot();
+      if (reconnectTimer) return;
       if (!ws || ws.readyState === WebSocket.CLOSED) connect();
     };
     document.addEventListener("visibilitychange", onVisibility);
+
+    // Snapshot mode: the ONE periodic refresh. Skips hidden tabs (no one is
+    // looking — the visibility handler catches up on return) and idle stretches
+    // with no new ops (an empty room just keeps showing its placeholder).
+    const snapTimer = snap
+      ? window.setInterval(() => {
+          if (document.hidden || !snapDirty) return;
+          flushSnapshot();
+        }, snapshotMs)
+      : null;
 
     // Idle sweep: commit strokes whose end-op never arrived (dropped socket /
     // legacy client) so they don't hover un-inked forever. Cheap size check
@@ -377,12 +455,16 @@ export default function LiveRoomCanvas({
           committed = true;
         }
       }
-      if (committed) blit();
+      if (committed) {
+        if (snap) markSnapDirty(); // settled ink joins the next tick
+        else blit();
+      }
     }, 2000);
 
     return () => {
       closed = true;
       window.clearInterval(sweep);
+      if (snapTimer) window.clearInterval(snapTimer);
       dropStrokes();
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       document.removeEventListener("visibilitychange", onVisibility);
@@ -393,7 +475,7 @@ export default function LiveRoomCanvas({
       }
       window.removeEventListener("resize", onResize);
     };
-  }, [roomCode, modKey, onActivity, onSocial, onModState, onOps, onDenied, onSend]);
+  }, [roomCode, modKey, snapshotIntervalMs, onActivity, onSocial, onModState, onOps, onDenied, onSend]);
 
   return <canvas ref={visRef} className="live-room-canvas" aria-label="Live public room artwork" />;
 }

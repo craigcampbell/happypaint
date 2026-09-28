@@ -19,6 +19,9 @@ const AdminGallery = lazy(() => import("./components/AdminGallery"));
 const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const PublicWatch = lazy(() => import("./components/PublicWatch"));
 const WallPage = lazy(() => import("./components/WallPage"));
+const InktoberPage = lazy(() => import("./components/InktoberPage"));
+const PaintJarPage = lazy(() => import("./components/PaintJarPage"));
+const ArtistGalleryRoute = lazy(() => import("./components/ArtistGalleryRoute"));
 
 class RouteErrorBoundary extends Component {
   state = { failed: false };
@@ -42,14 +45,22 @@ class RouteErrorBoundary extends Component {
 
 export default function Router() {
   const [path, setPath] = useState(() => window.location.pathname);
+  // Pages key on path+search so a query-only navigation (e.g. /gallery?event=
+  // inktober-2026 → plain /gallery from the nav) remounts with fresh state
+  // instead of silently keeping the previous page's filters.
+  const [locKey, setLocKey] = useState(() => window.location.pathname + window.location.search);
   const navigate = useCallback((nextPath) => {
     window.history.pushState({}, "", nextPath);
     setPath(window.location.pathname);
+    setLocKey(window.location.pathname + window.location.search);
     window.scrollTo({ top: 0, behavior: "instant" });
   }, []);
 
   useEffect(() => {
-    const handlePopState = () => setPath(window.location.pathname);
+    const handlePopState = () => {
+      setPath(window.location.pathname);
+      setLocKey(window.location.pathname + window.location.search);
+    };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
@@ -103,14 +114,22 @@ export default function Router() {
     page = <SignupPage onNavigate={navigate} />;
   } else if (path.startsWith("/rooms")) {
     page = <RoomFinderPage onNavigate={navigate} />;
+  } else if (path.startsWith("/gallery")) {
+    // The public artist-studio index. The wrapper resolves the real auth
+    // session (guest / signed-in) and keeps it reactive for the create form.
+    page = <ArtistGalleryRoute onNavigate={navigate} />;
   } else if (path.startsWith("/wall")) {
     page = <WallPage onNavigate={navigate} initialPostId={(path.split("/")[2] || "").slice(0, 64)} />;
+  } else if (path.startsWith("/inktober")) {
+    page = <InktoberPage onNavigate={navigate} />;
+  } else if (path.startsWith("/paintjar")) {
+    page = <PaintJarPage onNavigate={navigate} />;
   } else {
     page = <HomePage onNavigate={navigate} />;
   }
 
   return (
-    <RouteErrorBoundary key={path}>
+    <RouteErrorBoundary key={locKey}>
       <Suspense fallback={(
         <main className="route-status" role="status" aria-live="polite">
           <h1>{drawing ? "Opening your canvas…" : "Opening Drawesome…"}</h1>

@@ -36,6 +36,8 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY server.js ./server.js
 COPY server ./server
+# The server and the gallery use the same verified seasonal prompt list.
+COPY src/data ./src/data
 EXPOSE 8787
 # The server runs as the unprivileged `node` user. The container still STARTS as
 # root, for one job: a bind-mounted ./app_data arrives owned by whoever made it

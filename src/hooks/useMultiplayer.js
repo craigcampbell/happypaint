@@ -86,6 +86,19 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const [users, setUsers] = useState([]);
   const [self, setSelf] = useState(null);
   const [chat, setChat] = useState([]);
+  // Artist studios (audience 'artist_public'): whether WE may draw. The server
+  // is the authority — true everywhere except an artist room where we're not
+  // the owner or an approved painter. Default true keeps the anonymous
+  // commons unchanged; an artist room's handshake flips it to false.
+  const [canPaint, setCanPaint] = useState(true);
+  // The artist room's public profile (gallery description/tags + server-
+  // derived event state). Null in every other audience.
+  const [roomProfile, setRoomProfile] = useState(null);
+  // Owner-only: the live paint-access request queue (session target ids).
+  const [paintRequests, setPaintRequests] = useState([]);
+  // Requester-side: the server's answer to our paint_request (pending /
+  // approved / revoked / already). Null until we ask in this connection.
+  const [paintStatus, setPaintStatus] = useState(null);
 
   const connect = useCallback(() => {
     const existing = wsRef.current;
@@ -117,6 +130,36 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       switch (data.type) {
         case "connected":
           setSelf({ id: data.userId, name: data.userName, color: data.userColor });
+          // Artist-studio handshake: paint permission + the room's public
+          // profile. Other audiences send canPaint:true / roomProfile:null,
+          // which is exactly the default a fresh socket starts from.
+          setCanPaint(data.canPaint !== false);
+          setRoomProfile(data.roomProfile || null);
+          // A reconnect re-derives access from the handshake — a stale
+          // "pending" from the previous socket must not linger.
+          setPaintStatus(null);
+          setPaintRequests([]);
+          break;
+        case "role_changed":
+          // Server-authoritative paint access change (approve/revoke/promote/
+          // demote — the frame always carries canPaint). The App dispatcher
+          // also sees this frame and handles the stroke abort + status copy.
+          if (data.canPaint !== undefined) setCanPaint(data.canPaint !== false);
+          break;
+        case "room_profile":
+          // Friends -> artist_public conversion mid-session (explicit publish):
+          // the profile block rides along; canPaint arrives per-member via
+          // role_changed just before this.
+          setRoomProfile(data.roomProfile || null);
+          break;
+        case "paint_requests":
+          // Owner-only queue of live access requests (session target ids).
+          setPaintRequests(Array.isArray(data.requests) ? data.requests : []);
+          break;
+        case "paint_requested":
+          // The server's answer to our request (or an owner's decision):
+          // pending | approved | revoked | already.
+          setPaintStatus(typeof data.status === "string" ? data.status : null);
           break;
         case "userList":
           setUsers(data.users || []);
@@ -279,6 +322,13 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     [send],
   );
 
+  // Artist studios: a signed-in viewer asks the owner for paint access; the
+  // owner grants/dismisses by the request's SESSION target id (never a name
+  // or profile id). Offline approved painters are revoked over REST instead.
+  const sendPaintRequest = useCallback(() => send({ type: "paint_request" }), [send]);
+  const sendPaintApprove = useCallback((targetId) => send({ type: "paint_approve", targetId }), [send]);
+  const sendPaintRevoke = useCallback((targetId) => send({ type: "paint_revoke", targetId }), [send]);
+
   // Host-only room controls (the server enforces that the sender is a host).
   const sendLock = useCallback(() => send({ type: "lock" }), [send]);
   const sendUnlock = useCallback(() => send({ type: "unlock" }), [send]);
@@ -396,8 +446,9 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendModRemove = useCallback((opIds) => send({ type: "mod_remove", opIds }), [send]);
 
   return {
-    connected, users, self, chat, disconnect,
+    connected, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
     sendOp, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
+    sendPaintRequest, sendPaintApprove, sendPaintRevoke,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendSetBrushMode, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,

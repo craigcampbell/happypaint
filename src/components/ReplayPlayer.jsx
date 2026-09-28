@@ -23,7 +23,11 @@ export default function ReplayPlayer({
   onShareTimelapse,
   onExportTimelapse,
   onSaveTimelapse,
+  onSharePrepared,
   isExporting,
+  inkOnly = false,
+  seasonalPrompt = null,
+  shareReadyKind = null,
 }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(0);
@@ -31,6 +35,8 @@ export default function ReplayPlayer({
   const [index, setIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speedIndex, setSpeedIndex] = useState(1);
+  // Optional Inktober border on the export pixels only (never the stored art).
+  const [themedExport, setThemedExport] = useState(true);
 
   // Decode every snapshot Blob into an Image once. Object URLs are revoked on
   // unmount / when the snapshot set changes.
@@ -204,24 +210,50 @@ export default function ReplayPlayer({
             </div>
 
             <div className="replay-actions">
+              {seasonalPrompt ? (
+                <p className="tool-hint replay-seasonal">
+                  🖋️ Inktober prompt: “{seasonalPrompt}”
+                  <label className="color-picker replay-theme-toggle">
+                    <input
+                      type="checkbox"
+                      checked={themedExport}
+                      onChange={(event) => setThemedExport(event.target.checked)}
+                    />
+                    <span>Inktober border on the export</span>
+                  </label>
+                </p>
+              ) : null}
               {onShareTimelapse ? (
+                shareReadyKind && onSharePrepared ? (
+                  <button
+                    type="button"
+                    className="replay-share primary-action"
+                    onClick={() => onSharePrepared()}
+                    title="Your share is ready — this tap completes it"
+                  >
+                    {shareReadyKind === "mp4" ? "📤 Tap to share your video" : "📤 Tap to share your drawing"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="replay-share primary-action"
+                    onClick={() => onShareTimelapse({ themed: seasonalPrompt ? themedExport : false })}
+                    disabled={isExporting}
+                    title="Share as a video (MP4) — or the finished drawing where video isn't supported. Never a flat GIF."
+                  >
+                    {isExporting ? "Making it…" : "📤 Share my timelapse"}
+                  </button>
+                )
+              ) : null}
+              {!inkOnly ? (
                 <button
                   type="button"
-                  className="replay-share primary-action"
-                  onClick={() => onShareTimelapse()}
-                  disabled={isExporting}
-                  title="Share the watch-it-draw GIF"
+                  onClick={() => onRemixFromHere?.(selectedSnapshot)}
+                  title="Restore this snapshot as a new artwork"
                 >
-                  {isExporting ? "Making it…" : "📤 Share my timelapse"}
+                  Remix from here
                 </button>
               ) : null}
-              <button
-                type="button"
-                onClick={() => onRemixFromHere?.(selectedSnapshot)}
-                title="Restore this snapshot as a new artwork"
-              >
-                Remix from here
-              </button>
               <button
                 type="button"
                 onClick={() => onExportTimelapse?.()}

@@ -98,6 +98,8 @@ import {
   loadReplaySnapshots,
   purgeLegacyReplaySnapshots,
 } from "./utils/replay";
+import { buildReplayShareAsset, shareFile } from "./utils/replayShare";
+import { checkExportAllowed } from "./utils/exportGate";
 import {
   isAiConsented,
   loadAiConsent,
@@ -119,6 +121,7 @@ import WalletPanel from "./components/WalletPanel";
 import StorePanel from "./components/StorePanel";
 import CreatorDashboard from "./components/CreatorDashboard";
 import AccountPanel from "./components/AccountPanel";
+import ArtistAccessPanel from "./components/ArtistAccessPanel";
 import HostControlPanel from "./components/HostControlPanel";
 import RoomLobby from "./components/RoomLobby";
 import RoomLoadingCurtain from "./components/RoomLoadingCurtain";
@@ -300,6 +303,15 @@ const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge"
 // painting. Realistic mode shows the full catalog. (The toddler room keeps its
 // own tighter set above.)
 const FUN_BRUSHES = new Set(["marker", "crayon", "paint", "watercolor", "watercolor-wet", "gouache", "glow", "spray", "smudge", "goo", "eraser"]);
+
+// Ink-only (Ink & Pencil / INKTOBER) rooms: the server accepts ink, pencil
+// and eraser draw ops ONLY, so every local path must stay inside the same set
+// — anything else would paint locally but never reach the room (divergent
+// art). The eraser is a draw-op brush setting, not a separate tool.
+const INK_ONLY_BRUSHES = new Set(["ink", "pencil", "eraser"]);
+const INK_ONLY_PAINT_BRUSHES = new Set(["ink", "pencil"]);
+const inkSafeBrush = (brushId) => (INK_ONLY_BRUSHES.has(brushId) ? brushId : "ink");
+
 // The brush list a room shows, given its finger-paint kind and brush mode.
 const visibleBrushList = (fingerPaint, brushMode) => {
   if (fingerPaint) return brushCatalog.filter((b) => FINGER_PAINT_BRUSHES.has(b.id));
@@ -1042,6 +1054,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [replaySnapshots, setReplaySnapshots] = useState([]);
   const [replayCount, setReplayCount] = useState(0);
   const [isExportingTimelapse, setIsExportingTimelapse] = useState(false);
+  // Prepared share artifact parked when the encode ate the tap's user
+  // activation (see shareTimelapse); completed by a fresh "tap to share".
+  const [preparedShare, setPreparedShare] = useState(null);
+  const shareAbortRef = useRef(null);
   const [showAiAssist, setShowAiAssist] = useState(false);
   const [aiConsent, setAiConsent] = useState(null);
   const [showBrushStudio, setShowBrushStudio] = useState(false);
@@ -1105,9 +1121,65 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Today's drawing prompt for this room (sent in the 'connected' payload),
   // shown as a dismissible chip over the canvas top.
   const [roomPrompt, setRoomPrompt] = useState(null);
+  // Seasonal (Inktober) room state from the server handshake / seasonal_prompt
+  // pushes: inkOnly restricts the studio to ink/pencil/eraser, seasonalEvent
+  // marks the room as part of the event (export theming, share copy).
+  const inkOnlyRef = useRef(false);
+  const [inkOnly, setInkOnly] = useState(false);
+  const [seasonalEvent, setSeasonalEvent] = useState(null);
+  // Artist studios (audience 'artist_public'): whether THIS client may draw,
+  // server-authoritative via the handshake (connected.canPaint) and
+  // role_changed. Default TRUE — the anonymous commons and every non-artist
+  // room keep working exactly as before; an artist room's handshake flips it
+  // to false until the owner approves. The ref is the hot-path truth (pointer
+  // handlers), the mp hook's state drives the UI.
+  const canPaintRef = useRef(true);
+  // Throttle for the "watching only" notice on the draw hot path, and the
+  // owner's new-request toast baseline.
+  const paintAccessNoticeAtRef = useRef(0);
+  const paintRequestCountRef = useRef(0);
+  const [showArtistStudio, setShowArtistStudio] = useState(false);
   const [promptDismissed, setPromptDismissed] = useState(false);
   const [privateNoticeDismissed, setPrivateNoticeDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
+
+  // ---- Artist studios: the local mutation gate -----------------------------
+  // A watcher in an artist studio must never change local canvas state — the
+  // server already drops their ops, and any local-only change would diverge
+  // from the shared truth (the "ghost drawing" a reload then wipes). EVERY
+  // local mutation entrypoint (pointer strokes, fill/text, image import,
+  // draft/gallery/replay restores, sheets, trace-a-photo, undo/redo, local
+  // clear, undo-clear restore) calls paintGate first. Pan/zoom, chat,
+  // reactions and all view paths stay open. Non-artist rooms: canPaintRef is
+  // always true and this is a no-op.
+  const paintGate = useCallback((action = null) => {
+    if (canPaintRef.current) return false;
+    const now = Date.now();
+    if (now - paintAccessNoticeAtRef.current > 2500) {
+      paintAccessNoticeAtRef.current = now;
+      setStatus(action
+        ? `👀 Watching only — ${action} stays off until the artist approves you`
+        : "👀 Watching only — the artist hasn't approved painting here");
+    }
+    return true;
+  }, []);
+
+  // Ink-only tool snap, shared by the handshake, friends->artist conversions
+  // (room_profile) and Inktober phase flips (seasonal_prompt): force the
+  // brush tool + an ink-safe brush so nothing already in hand can paint
+  // divergent art the room would refuse at the boundary.
+  const applyInkOnlyTools = useCallback((on) => {
+    inkOnlyRef.current = on;
+    setInkOnly(on);
+    if (on) {
+      setActiveBrushRecipe(null);
+      setSelectedTool("brush");
+      setSelectedBrush((prev) => inkSafeBrush(prev));
+      if (!INK_ONLY_PAINT_BRUSHES.has(lastPaintBrushRef.current)) {
+        lastPaintBrushRef.current = "ink";
+      }
+    }
+  }, []);
   // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
   const [wallPostDraft, setWallPostDraft] = useState(null);
   const [showShareInvite, setShowShareInvite] = useState(false); // "Invite friends" sheet (copy / share / Instagram / X)
@@ -1615,10 +1687,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [cancelPrebuild, schedulePrebuild, scheduleMixPrefetch]);
 
   useEffect(() => {
-    const recipeSettings = activeBrushRecipe ? recipeToBrushSettings(activeBrushRecipe, { color: selectedColor }) : null;
+    // Ink-only rooms: saved brush recipes stay on the shelf (a recipe's dab
+    // would fail the server's native-dab check), and the tool/brush pair is
+    // forced inside ink/pencil/eraser no matter how state got set.
+    const recipeSettings = activeBrushRecipe && !inkOnly ? recipeToBrushSettings(activeBrushRecipe, { color: selectedColor }) : null;
     settingsRef.current = {
-      tool: selectedTool,
-      brush: recipeSettings?.brush || selectedBrush,
+      tool: inkOnly ? "brush" : selectedTool,
+      brush: inkOnly ? inkSafeBrush(recipeSettings?.brush || selectedBrush) : recipeSettings?.brush || selectedBrush,
       color: selectedColor,
       opacity: brushOpacity,
       size: brushSize,
@@ -1641,6 +1716,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     brushSize,
     brushVariation,
     fillShape,
+    inkOnly,
     inputPrefs.pressure,
     selectedBrush,
     selectedColor,
@@ -2364,6 +2440,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const undo = useCallback(() => {
     if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
+    if (paintGate("undo")) return; // artist-studio watchers: local pixels stay shared-truth only
     const previous = historyRef.current.pop();
     if (!previous) {
       return;
@@ -2371,10 +2448,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     redoRef.current.push(captureInverse(previous));
     applySnapshot(previous);
     markChanged("Undo");
-  }, [applySnapshot, captureInverse, markChanged]);
+  }, [applySnapshot, captureInverse, markChanged, paintGate]);
 
   const redo = useCallback(() => {
     if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
+    if (paintGate("redo")) return;
     const next = redoRef.current.pop();
     if (!next) {
       return;
@@ -2382,7 +2460,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     historyRef.current.push(captureInverse(next));
     applySnapshot(next);
     markChanged("Redo");
-  }, [applySnapshot, captureInverse, markChanged]);
+  }, [applySnapshot, captureInverse, markChanged, paintGate]);
 
   // Show the "mural cleared — bring it back" banner for a while (whoever cleared).
   const showClearBanner = useCallback((by) => {
@@ -2395,9 +2473,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Ask the room to undo the most recent clear (restores it for everyone).
   const restoreCanvas = useCallback(() => {
+    if (paintGate("restore")) return;
     mpRef.current?.sendRestore?.();
     setStatus("Bringing the canvas back…");
-  }, []);
+  }, [paintGate]);
 
   // A whole-mural wipe starts a new drawing, so the timelapse starts over too:
   // the recorder empties and the (empty) series is flushed via onChange.
@@ -2407,6 +2486,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const clearCanvas = useCallback(() => {
     if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
+    if (paintGate("clearing")) return;
     if (layersRef.current.length === 0) {
       return;
     }
@@ -2443,7 +2523,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (!animated && onLiveFrame) {
       resetReplay();
     }
-  }, [dropRemoteStrokes, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, resetReplay, showClearBanner]);
+  }, [dropRemoteStrokes, markChanged, paintGate, pushHistory, refreshActiveThumbnail, renderDisplay, resetReplay, showClearBanner]);
 
   // Build the paper-texture background as an offscreen canvas at any size.
   const renderPaper = useCallback(async (context, { width, height, textureId }) => {
@@ -2672,7 +2752,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // phone there is no hover to tell them why. Brush, colour, size and the rest
     // below still persist; only the tool resets. (handTool is never persisted.)
     setSelectedTool("brush");
-    setSelectedBrush(draftSettings.brush || "marker");
+    setSelectedBrush(inkOnlyRef.current ? inkSafeBrush(draftSettings.brush) : draftSettings.brush || "marker");
     setSelectedColor(draftSettings.color || "#111827");
     setSelectedTexture(draftSettings.texture || "linen");
     setBrushSize(draftSettings.size || 24);
@@ -2783,6 +2863,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [roomId]);
 
   const restoreDraft = useCallback(async () => {
+    // Artist-studio watchers: a restored draft pastes divergent local pixels.
+    if (paintGate("draft restore")) return;
+    // Ink-only rooms: restoring a saved draft would paste pixels (possibly
+    // non-ink, definitely not this room's op truth) into a shared mural that
+    // only accepts ink/pencil ops — divergent art. Closed here.
+    if (inkOnlyRef.current) {
+      setStatus("Drafts stay on the shelf in the Ink & Pencil room ✒️");
+      return;
+    }
     const draft = await loadDraft();
 
     if (!draft?.layers?.length) {
@@ -2806,7 +2895,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       dirtyRef.current = true;
     }
     markChanged("Draft restored");
-  }, [applyDraftSettings, loadDraft, markChanged, pushHistory, restoreLayersFromDraft, syncLayerState]);
+  }, [applyDraftSettings, loadDraft, markChanged, paintGate, pushHistory, restoreLayersFromDraft, syncLayerState]);
 
   // Persist the gallery array. IndexedDB when available (large quota), else
   // localStorage. Rejects on failure so the caller can surface an honest status
@@ -2883,7 +2972,28 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     schedulePush();
   }, [composeCanvas, persistGallery, selectedTexture]);
 
+  // Account gate for every export/share path (product UX gate, not DRM):
+  // exports leave the device, so they need a signed-in account. Anonymous
+  // drawing, spectating, autosave/draft recovery and local Paint Space saves
+  // stay ungated. Sign-in happens in the existing AccountPanel and returns to
+  // the drawing/replay untouched; a cloud-unconfigured deployment explains
+  // instead of silently bypassing.
+  const gateExport = useCallback(async () => {
+    const verdict = await checkExportAllowed();
+    if (verdict.ok) {
+      return true;
+    }
+    setStatus(verdict.message);
+    if (verdict.reason === "sign-in") {
+      setShowAccount(true);
+    }
+    return false;
+  }, []);
+
   const exportPng = useCallback(async () => {
+    if (!(await gateExport())) {
+      return;
+    }
     const exportCanvas = await composeCanvas();
     const blob = await canvasToBlob(exportCanvas);
 
@@ -2892,9 +3002,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setStatus("PNG exported");
       signalNaturalAdBreak("png_export");
     }
-  }, [composeCanvas]);
+  }, [composeCanvas, gateExport]);
 
   const exportTransparentPng = useCallback(async () => {
+    if (!(await gateExport())) {
+      return;
+    }
     const exportCanvas = await composeCanvas({ transparent: true });
     const blob = await canvasToBlob(exportCanvas);
 
@@ -2903,7 +3016,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setStatus("Transparent PNG exported");
       signalNaturalAdBreak("transparent_export");
     }
-  }, [composeCanvas]);
+  }, [composeCanvas, gateExport]);
 
   // ---- Saved artwork on the server ("My Art") ----
   // `ms` lets a longer explanation (e.g. why the + is done) stay up long enough
@@ -3197,6 +3310,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!file) {
         return;
       }
+      // Artist-studio watchers: no imports (local-only divergent pixels).
+      if (paintGate("image import")) return;
+      // Ink-only rooms: no image/stamp imports (the server drops image ops).
+      if (inkOnlyRef.current) {
+        setStatus("The Ink & Pencil room is hand-drawn only — no image imports ✒️");
+        return;
+      }
       const active = getActiveLayer();
       if (!active) {
         return;
@@ -3255,7 +3375,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       markChanged("Image added");
     },
-    [getActiveLayer, markChanged, markMixDirty, pushHistory, refreshActiveThumbnail, renderDisplay],
+    [getActiveLayer, markChanged, markMixDirty, paintGate, pushHistory, refreshActiveThumbnail, renderDisplay],
   );
 
   // Every "Share" / "Invite" button opens the invite sheet (copy link, OS share,
@@ -3270,6 +3390,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
     async (item) => {
+      if (paintGate("pasting saved art")) return;
+      if (inkOnlyRef.current) {
+        setStatus("Saved art can't be pasted into the Ink & Pencil room ✒️");
+        return;
+      }
       if (roomAnimationRef.current) {
         setStatus("Open gallery art in a drawing room — this room is a shared animation");
         return;
@@ -3292,11 +3417,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncFrameState();
       markChanged("Artwork restored");
     },
-    [adoptRoomFrameId, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, markChanged, paintGate, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   const chooseBrush = useCallback(
     (brushId) => {
+      // Ink-only rooms: ink, pencil and the eraser — nothing else may paint.
+      if (inkOnlyRef.current && !INK_ONLY_BRUSHES.has(brushId)) {
+        setStatus("This room is ink, pencil and eraser only ✒️");
+        return;
+      }
       const brush = brushCatalog.find((item) => item.id === brushId);
 
       if (brush?.tier === "studio" && !studioUnlocked) {
@@ -3770,6 +3900,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (shouldRejectPointer(event)) {
         return;
       }
+      // Artist-studio watchers: the server drops their ops, so never start a
+      // local stroke either — pan/zoom paths return before this point and
+      // stay available.
+      if (paintGate()) {
+        return;
+      }
       let settings = settingsRef.current;
       // Stylus eraser end (Wacom / Surface / any pen reporting button 5): erase
       // with whatever is in hand, whatever tool the rail shows. The rail flips
@@ -3791,6 +3927,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       const tool = settings?.tool || "brush";
 
+      // Ink-only rooms: the settings effect already forces the brush tool,
+      // but never let a stale fill/text/shape tool past the draw hot path —
+      // those ops are refused by the room and would diverge locally.
+      if (inkOnlyRef.current && tool !== "brush") {
+        return;
+      }
       // Fill is a single click: commit immediately, no drag.
       if (tool === "fill") {
         if (event.button !== undefined && event.button !== 0) {
@@ -4050,7 +4192,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // finishStroke's markChanged("Stroke saved") covers the status update.
       dirtyRef.current = true;
     },
-    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, invalidateMixPrefetch, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, sampleMix, shouldRejectPointer, updateHistoryCounts],
+    [beginInteraction, buildCompositeCache, commitLocalStroke, drawBrushFromEvent, getActiveLayer, getPoint, invalidateMixPrefetch, markChanged, paintGate, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, sampleMix, shouldRejectPointer, updateHistoryCounts],
   );
 
   const continueStroke = useCallback(
@@ -4271,6 +4413,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const ring = brushCursorRef.current;
     const canvas = overlayCanvasRef.current;
     if (!ring || !canvas) {
+      return;
+    }
+    // Artist-studio watchers get no brush ring — there is no brush in hand.
+    if (!canPaintRef.current) {
+      hideBrushCursor();
       return;
     }
     if (handToolRef.current || selectedTool === "fill" || selectedTool === "text") {
@@ -5029,6 +5176,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // exactly the paint everyone else sees (ops carry no layer; peers already see
   // everything on layer 0). Undoable: a full snapshot restores the stack.
   const flattenLayers = useCallback(() => {
+    if (paintGate()) return;
     const stack = layersRef.current;
     if (stack.length <= 1) {
       if (activeLayerIdRef.current !== stack[0]?.id) {
@@ -5045,7 +5193,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     renderDisplay();
     syncLayerState();
     markChanged("Fun mode — flattened to one layer");
-  }, [markChanged, pushHistory, renderDisplay, syncLayerState]);
+  }, [markChanged, paintGate, pushHistory, renderDisplay, syncLayerState]);
 
   // Entering fun mode (the toggle, or joining a fun/toddler room, or a draft
   // restoring a multi-layer stack into one) collapses the local stack to a
@@ -5884,6 +6032,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (isExportingGif) {
       return;
     }
+    if (!(await gateExport())) {
+      return;
+    }
     if (playTimerRef.current) {
       stopPlayback();
     }
@@ -5967,7 +6118,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     } finally {
       setIsExportingGif(false);
     }
-  }, [commitLayersToFrame, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
+  }, [commitLayersToFrame, gateExport, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
 
   // Real video export — MP4 where the browser can (H.264 plays everywhere:
   // iMessage, Discord, camera roll), WebM otherwise. Free for everyone.
@@ -5975,6 +6126,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // reusable canvas, so long flipbooks never pile up snapshots in memory.
   const exportVideo = useCallback(async () => {
     if (isExportingVideo) {
+      return;
+    }
+    if (!(await gateExport())) {
       return;
     }
     if (playTimerRef.current) {
@@ -6083,10 +6237,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         switchScene(originalSceneId); // land back where the artist was working
       }
     }
-  }, [commitLayersToFrame, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
+  }, [commitLayersToFrame, gateExport, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
 
   const exportStorybook = useCallback(async () => {
     if (!storybook || isExportingVideo) return;
+    if (!(await gateExport())) return;
     const preview = window.open("", "_blank", "noopener");
     if (!preview) {
       showToast("Allow pop-ups to open the printable storybook.");
@@ -6173,7 +6328,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     } finally {
       setIsExportingVideo(false);
     }
-  }, [isExportingVideo, renderPaper, roomId, selectedTexture, showToast, storybook]);
+  }, [gateExport, isExportingVideo, renderPaper, roomId, selectedTexture, showToast, storybook]);
 
   // Export the WHOLE production — every part, in order, as one movie. Fully
   // offline: each segment's ops come from /api/rooms/:code/film and replay
@@ -6184,6 +6339,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const exportProduction = useCallback(async () => {
     const activeProduction = productionRef.current;
     if (!activeProduction || isExportingVideo) {
+      return;
+    }
+    if (!(await gateExport())) {
       return;
     }
     if (typeof window.VideoEncoder !== "function") {
@@ -6287,7 +6445,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     } finally {
       setIsExportingVideo(false);
     }
-  }, [isExportingVideo, renderPaper, selectedTexture]);
+  }, [gateExport, isExportingVideo, renderPaper, selectedTexture]);
 
   // ---- Replay & Timelapse ----
 
@@ -6381,6 +6539,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (isExportingTimelapse) {
       return;
     }
+    if (!(await gateExport())) {
+      return;
+    }
     setIsExportingTimelapse(true);
     setStatus("Encoding timelapse…");
     try {
@@ -6397,44 +6558,112 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     } finally {
       setIsExportingTimelapse(false);
     }
-  }, [encodeTimelapseBytes, isExportingTimelapse]);
+  }, [encodeTimelapseBytes, gateExport, isExportingTimelapse]);
 
-  // Share the timelapse GIF straight to the OS share sheet (socials, iMessage,
-  // etc.) — the shareable "watch it draw" artifact is the growth loop. Falls
-  // back to a plain download where file-sharing isn't supported (most desktops).
-  const shareTimelapse = useCallback(async () => {
-    if (isExportingTimelapse) return;
-    setIsExportingTimelapse(true);
-    setStatus("Making your timelapse…");
-    try {
-      const bytes = await encodeTimelapseBytes();
-      if (!bytes) {
+  // Share the timelapse straight to the OS share sheet (socials, iMessage,
+  // etc.) — the shareable "watch it draw" artifact is the growth loop.
+  //
+  // The artifact is NEVER a GIF: Instagram/Android share targets flatten an
+  // animated GIF to its first frame, and a process timelapse's first frame is
+  // near-blank paper (the receiver saw a white picture). We prepare an MP4
+  // (H.264) when the browser encodes it, else an explicit finished-frame PNG;
+  // "Save GIF" stays as a separate, explicit download. Encoding is async, so
+  // the tap's user activation can be gone by share time — in that case the
+  // prepared file is parked in `preparedShare` and the replay player shows a
+  // separate "tap to share" button (a fresh gesture) to complete it.
+  const shareTimelapse = useCallback(
+    async ({ themed = false } = {}) => {
+      if (isExportingTimelapse) return;
+      if (!(await gateExport())) return;
+      const recorder = replayRecorderRef.current;
+      const snaps = recorder ? recorder.getSnapshots() : [];
+      if (snaps.length === 0) {
         setStatus("Draw a bit first — no timelapse yet!");
         return;
       }
-      const blob = new Blob([bytes], { type: "image/gif" });
-      const file = new File([blob], "drawesome-timelapse.gif", { type: "image/gif" });
-      const shareData = {
-        files: [file],
-        title: "Watch my drawing come together! 🎨",
-        text: "I made this on Drawesome — watch it draw itself!",
-        url: `${window.location.origin}/join/${roomId}`,
-      };
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share(shareData);
-        setStatus("Shared your timelapse! 🎉");
-      } else {
-        // Desktop / unsupported: download the GIF so it can still be shared.
-        downloadBlob(blob, `drawesome-timelapse-${Date.now()}.gif`);
-        setStatus("Saved your timelapse GIF — share it anywhere!");
+      shareAbortRef.current?.abort();
+      const controller = new AbortController();
+      shareAbortRef.current = controller;
+      setPreparedShare(null);
+      setIsExportingTimelapse(true);
+      setStatus("Preparing your video…");
+      try {
+        // The Inktober border only ever lands on the export pixels — the
+        // stored art and the room's mural are untouched.
+        const useTheme = themed && seasonalEvent;
+        const asset = await buildReplayShareAsset({
+          snapshots: snaps,
+          width: SNAPSHOT_WIDTH,
+          height: SNAPSHOT_HEIGHT,
+          signal: controller.signal,
+          themed: useTheme,
+          prompt: useTheme ? roomPrompt : null,
+          eventLabel: useTheme ? "Inktober 2026" : null,
+        });
+        if (!asset) {
+          setStatus("Draw a bit first — no timelapse yet!");
+          return;
+        }
+        const fileName = asset.kind === "mp4" ? "drawesome-timelapse.mp4" : "drawesome-drawing.png";
+        const file = new File([asset.blob], fileName, { type: asset.mime });
+        const promptBit = seasonalEvent && roomPrompt ? ` (Inktober prompt: “${roomPrompt}”)` : "";
+        const shareData = {
+          files: [file],
+          title: "Watch my drawing come together! 🎨",
+          text: `I made this on Drawesome${promptBit} — watch it draw itself!`,
+          url: `${window.location.origin}/join/${roomId}`,
+        };
+        const outcome = await shareFile(file, shareData);
+        if (outcome === "shared") {
+          setStatus("Shared your timelapse! 🎉");
+        } else if (outcome === "needs-gesture") {
+          // The encode consumed the tap's user activation — park the prepared
+          // file; the replay player's "tap to share" button finishes it.
+          setPreparedShare({ blob: asset.blob, file, shareData, kind: asset.kind });
+          setStatus(asset.kind === "mp4" ? "Your video is ready — tap to share it!" : "Your drawing is ready — tap to share it!");
+        } else if (outcome === "aborted") {
+          setStatus("Share dismissed — nothing left your device");
+        } else {
+          // Desktop / unsupported: download the artifact so it can be shared.
+          downloadBlob(asset.blob, fileName);
+          setStatus(asset.kind === "mp4" ? "Saved your timelapse video — share it anywhere!" : "Saved your finished drawing — share it anywhere!");
+        }
+      } catch (err) {
+        // AbortError = a newer prepare (or closing the player) cancelled this one.
+        if (err?.name !== "AbortError") setStatus("Couldn't make the timelapse — try again");
+      } finally {
+        setIsExportingTimelapse(false);
       }
-    } catch (err) {
-      // AbortError = the user dismissed the share sheet; not a failure.
-      if (err?.name !== "AbortError") setStatus("Couldn't make the timelapse — try again");
-    } finally {
-      setIsExportingTimelapse(false);
+    },
+    [gateExport, isExportingTimelapse, roomId, roomPrompt, seasonalEvent],
+  );
+
+  // Complete a prepared share from a FRESH tap (the replay player's ready
+  // button). Re-runs the account gate: signing out (or an expired session)
+  // after preparing must NOT let the artifact leave the device.
+  const sharePreparedTimelapse = useCallback(async () => {
+    const prepared = preparedShare;
+    if (!prepared) {
+      return;
     }
-  }, [encodeTimelapseBytes, isExportingTimelapse, roomId]);
+    if (!(await gateExport())) {
+      setPreparedShare(null); // logged out / expired: the prepared share is invalidated
+      return;
+    }
+    const outcome = await shareFile(prepared.file, prepared.shareData);
+    if (outcome === "shared") {
+      setPreparedShare(null);
+      setStatus("Shared your timelapse! 🎉");
+    } else if (outcome === "aborted") {
+      setStatus("Share dismissed — it's still ready when you are");
+    } else if (outcome === "unsupported") {
+      setPreparedShare(null);
+      downloadBlob(prepared.blob, prepared.file.name);
+      setStatus("Saved it — share it anywhere!");
+    } else if (outcome !== "needs-gesture") {
+      setStatus("Couldn't share that — try again");
+    }
+  }, [gateExport, preparedShare]);
 
   // ---- Paint Space locker ----
 
@@ -6593,6 +6822,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!snapshot?.blob) {
         return;
       }
+      if (paintGate("remix")) return;
+      if (inkOnlyRef.current) {
+        setStatus("Remix is paused in the Ink & Pencil room — keep drawing in ink ✒️");
+        return;
+      }
       if (roomAnimationRef.current) {
         setStatus("Remix in a drawing room — this room is a shared animation");
         return;
@@ -6615,7 +6849,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setShowReplay(false);
       markChanged("Remixed from replay");
     },
-    [adoptRoomFrameId, markChanged, pushHistory, renderDisplay, syncFrameState, syncLayerState],
+    [adoptRoomFrameId, markChanged, paintGate, pushHistory, renderDisplay, syncFrameState, syncLayerState],
   );
 
   // ---- AI Assist handlers (local helpers; consent-gated) ----
@@ -6650,6 +6884,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!recipe) {
         return;
       }
+      if (inkOnlyRef.current) {
+        setStatus("Brush recipes stay on the shelf in the Ink & Pencil room ✒️");
+        return;
+      }
       const settings = recipeToBrushSettings(recipe, { color: selectedColor });
       const brush = brushCatalog.find((item) => item.id === settings.brush);
       if (brush?.tier === "studio" && !studioUnlocked) {
@@ -6681,6 +6919,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const handleApplyBrushRecipe = useCallback(
     async (recipe) => {
       if (!recipe) {
+        return;
+      }
+      if (inkOnlyRef.current) {
+        setStatus("Brush recipes stay on the shelf in the Ink & Pencil room ✒️");
         return;
       }
       const settings = recipeToBrushSettings(recipe, { color: selectedColor });
@@ -6804,6 +7046,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Apply a saved asset back onto the canvas / studio state.
   const handleUseAsset = useCallback(
     async (asset) => {
+      // Ink-only rooms: stickers/templates/loops paste pixels and brush
+      // recipes carry non-native dabs — all of them would diverge from the
+      // room's ink/pencil op truth. Palettes (colour only) stay available.
+      if (inkOnlyRef.current && asset.kind !== "palette") {
+        setStatus("Paint Space stamps and recipes stay on the shelf in the Ink & Pencil room ✒️");
+        setShowPaintSpace(false);
+        return;
+      }
       if (asset.kind === "sticker") {
         // Stamp the sticker onto the active layer, centered at full size.
         const active = getActiveLayer();
@@ -7104,6 +7354,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const handleTracePhotoFile = useCallback(
     async (file) => {
       if (!file || !file.type.startsWith("image/")) return;
+      if (paintGate("trace-a-photo")) { setTraceBusy(false); return; }
       setTraceBusy(true);
       try {
         // Downscale to a sane max so the WS payload + everyone's decode stay light.
@@ -7135,7 +7386,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         setTraceBusy(false);
       }
     },
-    [showToast],
+    [paintGate, showToast],
   );
 
   // Remote ops land on the frame AND LAYER they were drawn on (op.frameId +
@@ -7560,6 +7811,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
           setRoomAdFree(!!data.adFree);
+          // Artist studios: paint permission is server-authoritative. True in
+          // every other audience (the ref's default), false for an artist
+          // room's watchers until the owner approves (role_changed).
+          canPaintRef.current = data.canPaint !== false;
+          paintRequestCountRef.current = 0;
           // Today's drawing prompt for this room (public prompt rooms / the
           // last theme-vote winner).
           setRoomPrompt(data.prompt || null);
@@ -7593,6 +7849,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setRoomAudience(data.audience || null);
           roomFingerPaintRef.current = !!data.fingerPaint;
           setRoomFingerPaint(!!data.fingerPaint);
+          // Ink-only (Ink & Pencil / INKTOBER): the handshake tells us the
+          // room is ink/pencil/eraser-only and carries the seasonal event
+          // state. Snap the local tool/brush inside the room's rules so a
+          // restored draft or a pre-join marker can't paint divergent art
+          // (the server refuses non-ink ops — they'd be local-only).
+          const roomIsInkOnly = !!data.inkOnly;
+          applyInkOnlyTools(roomIsInkOnly);
+          if (data.event !== undefined) {
+            setSeasonalEvent(data.event || null);
+          }
           // Draw & Guess room? Reset any stale round from a previous room; the
           // live game_state (if a round is running) arrives right after.
           roomGameRef.current = !!data.game;
@@ -7635,6 +7901,59 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           break;
         }
+        case "seasonal_prompt": {
+          // Inktober prompt rotation pushed to already-connected artists: the
+          // shared room's prompt (and its event state) updates live.
+          setRoomPrompt(data.prompt || null);
+          if (data.event !== undefined) {
+            setSeasonalEvent(data.event || null);
+            // Inktober-opted-in artist studios enforce ink/pencil only while
+            // the event is ACTIVE — the phase rides this push (warm-up <->
+            // October rollover), so the rail + guard follow it live.
+            if (roomAudienceRef.current === "artist_public") {
+              applyInkOnlyTools(Boolean(data.event && data.event.phase === "active"));
+            }
+          }
+          break;
+        }
+        case "room_profile": {
+          // An explicit publish converted this room to an artist studio
+          // mid-session (friends -> artist_public). Paint access already
+          // flipped per-member via role_changed; adopt the audience, the
+          // public profile (mp hook holds it for display) and the Inktober
+          // rules the profile's server-derived event carries.
+          if (data.audience) {
+            roomAudienceRef.current = data.audience;
+            setRoomAudience(data.audience);
+          }
+          if (data.audience === "artist_public") {
+            const profileEvent = data.roomProfile?.event || null;
+            applyInkOnlyTools(Boolean(profileEvent && profileEvent.phase === "active"));
+            setSeasonalEvent(profileEvent);
+          }
+          break;
+        }
+        case "paint_requests": {
+          // Owner-only queue. Toast on NEW requests so a busy artist notices;
+          // the Studio panel itself renders from the mp hook's state.
+          const nextRequests = Array.isArray(data.requests) ? data.requests : [];
+          const had = paintRequestCountRef.current;
+          paintRequestCountRef.current = nextRequests.length;
+          if (nextRequests.length > had) {
+            const newest = nextRequests[nextRequests.length - 1];
+            showToast(`🖌 ${newest?.name || "Someone"} asked to paint — open Studio to approve`);
+          }
+          break;
+        }
+        case "paint_requested": {
+          // The server's answer to OUR request (or an owner's live decision).
+          if (data.status === "approved") {
+            showToast("🖌 The artist approved you — paint away!");
+          } else if (data.status === "revoked") {
+            showToast("The artist turned off your brush — you can keep watching");
+          }
+          break;
+        }
         case "billing_entitlement":
           setRoomAdFree(!!data.adFree);
           break;
@@ -7645,11 +7964,27 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         case "room_renamed":
           setRoomTitle(data.title || null);
           break;
-        case "role_changed":
+        case "role_changed": {
           isRoomHostRef.current = !!data.isHost;
           setIsRoomHost(!!data.isHost);
           if (data.isHost) setStatus("⭐ You're a co-host now");
+          // Artist studios: the server flipped our paint access (approve /
+          // revoke — co-hosting never grants paint). A live revoke aborts the
+          // in-flight stroke so not one more point leaves this client; the
+          // painted-so-far part stays, exactly like a peer saw it.
+          if (data.canPaint !== undefined) {
+            const nextCanPaint = data.canPaint !== false;
+            const hadPaint = canPaintRef.current;
+            canPaintRef.current = nextCanPaint;
+            if (hadPaint && !nextCanPaint) {
+              abortActiveStroke();
+              setStatus("👀 Your brush is off — you can keep watching");
+            } else if (!hadPaint && nextCanPaint) {
+              setStatus("🖌 You can paint now!");
+            }
+          }
           break;
+        }
         case "muted":
           setMutedSelf(!!data.muted);
           setStatus(data.muted ? "🔇 A host muted you in chat" : "🔈 You can chat again");
@@ -8684,7 +9019,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrameLayers, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, syncLayerState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyInkOnlyTools, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrameLayers, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, syncLayerState, touchFrame],
   );
 
   // Deferred messages drain by re-entering handleMpMessage, so it needs a
@@ -8705,6 +9040,70 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   useEffect(() => {
     mpConnectedRef.current = mp.connected;
   }, [mp.connected]);
+
+  // Artist studios: keep the hot-path paint-permission ref in lockstep with
+  // the handshake/role_changed state the mp hook tracks. A flip to false
+  // mid-stroke ends the stroke here too (the role_changed handler shows the
+  // status copy; this covers the initial handshake + any future path that
+  // changes canPaint without one).
+  useEffect(() => {
+    const was = canPaintRef.current;
+    canPaintRef.current = mp.canPaint;
+    if (was && !mp.canPaint) abortActiveStroke();
+  }, [mp.canPaint, abortActiveStroke]);
+
+  // ---- Artist-studio owner REST (docs/ARTIST-ROOMS-CONTRACT.md) -----------
+  // Relative API (same origin in prod; the dev harness proxies /api). The
+  // bearer token comes from the live session, never stored; server error
+  // messages surface verbatim (moderation wording, ownership, rate limits).
+  const artistApiFetch = useCallback(async (path, { token, method = "GET", body } = {}) => {
+    const res = await fetch(path, {
+      method,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        Authorization: `Bearer ${token}`,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    let json = null;
+    try { json = await res.json(); } catch { /* not json */ }
+    if (!res.ok) {
+      const message = json?.message
+        || (json?.error === "signin_required" ? "Sign in as this studio's owner first." : null)
+        || (json?.error === "not_owner" ? "Only this studio's owner can change that." : null)
+        || (json?.error === "moderation_hidden" ? "Moderators have hidden this studio from the gallery." : null)
+        || json?.error
+        || `Request failed (${res.status})`;
+      throw new Error(message);
+    }
+    return json;
+  }, []);
+
+  const artistLoadPublishInfo = useCallback(
+    ({ roomCode, token }) => artistApiFetch(`/api/rooms/${encodeURIComponent(roomCode)}/artist`, { token }),
+    [artistApiFetch],
+  );
+  const artistPublish = useCallback(
+    ({ roomCode, token, description, tags, inktober }) =>
+      artistApiFetch(`/api/rooms/${encodeURIComponent(roomCode)}/publish`, { token, method: "POST", body: { description, tags, inktober } }),
+    [artistApiFetch],
+  );
+  const artistUnpublish = useCallback(
+    ({ roomCode, token }) =>
+      artistApiFetch(`/api/rooms/${encodeURIComponent(roomCode)}/unpublish`, { token, method: "POST", body: {} }),
+    [artistApiFetch],
+  );
+  // Revoke an approved painter by their opaque account id — works whether
+  // they're in the room right now or offline (the owner-only REST ACL).
+  const artistRevokePainter = useCallback(
+    async (profileId) => {
+      const token = session?.access_token;
+      if (!token) throw new Error("Sign in as this studio's owner to manage painters.");
+      await artistApiFetch(`/api/rooms/${encodeURIComponent(roomId)}/painters/revoke`, { token, method: "POST", body: { profileId } });
+    },
+    [artistApiFetch, session?.access_token, roomId],
+  );
 
   // A room that refused us has its own full-screen explanation — never leave a
   // loading bar painting hopefully on top of it.
@@ -9008,6 +9407,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const applyLibrarySheet = useCallback(
     (sheet) => {
       if (!sheet?.id) return;
+      // Artist-studio watchers: a sheet wipe/set is a shared mutation.
+      if (paintGate("coloring sheets")) return;
       const hasContent = Boolean(sheetId) || historyCount > 0;
       // Over existing art a fresh sheet is a WIPE, so it takes Clear's road:
       // the server counts down (or asks the room) and sets the sheet as the
@@ -9030,7 +9431,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setShowSheetModal(false);
       showToast(`Coloring sheet: ${sheet.title}`);
     },
-    [sheetId, historyCount, showToast],
+    [sheetId, historyCount, paintGate, showToast],
   );
 
   // Load any saved profile (name/colour) once.
@@ -9337,7 +9738,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           handToolRef.current = false;
           setHandTool(false);
           setSelectedTool("brush");
-          setSelectedBrush((prev) => (prev === "eraser" ? lastPaintBrushRef.current || "marker" : prev));
+          setSelectedBrush((prev) => {
+            if (prev !== "eraser") return prev;
+            const last = lastPaintBrushRef.current || "marker";
+            // Ink-only rooms: the remembered brush could predate the join
+            // (e.g. marker) — snap back inside the room's rules instead.
+            return inkOnlyRef.current ? inkSafeBrush(last) : last;
+          });
           break;
         case "Tab":
           if (tag !== "button" && tag !== "a") {
@@ -9799,7 +10206,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     setHandTool(false);
     setSelectedTool("brush");
     if (selectedBrush === "eraser") {
-      setSelectedBrush(lastPaintBrushRef.current || "marker");
+      const last = lastPaintBrushRef.current || "marker";
+      setSelectedBrush(inkOnlyRef.current ? inkSafeBrush(last) : last);
     }
   };
 
@@ -9841,14 +10249,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const toggleBrushMenu = () => setQuickMenu((open) => (open === "brush" ? null : "brush"));
   const toggleColorMenu = () => setQuickMenu((open) => (open === "color" ? null : "color"));
   const brushMenuItems = useMemo(() => {
-    const list = visibleBrushList(roomFingerPaint, roomBrushMode);
+    const list = visibleBrushList(roomFingerPaint, roomBrushMode).filter((brush) => !inkOnly || INK_ONLY_BRUSHES.has(brush.id));
     return list.map((brush) => ({
       id: brush.id,
       name: brush.name,
       locked: brush.tier === "studio" && !studioUnlocked,
       gated: Boolean(brush.privateOnly) && roomAudience === "kid_safe" && !roomFingerPaint,
     }));
-  }, [roomAudience, roomFingerPaint, roomBrushMode, studioUnlocked]);
+  }, [roomAudience, roomFingerPaint, roomBrushMode, studioUnlocked, inkOnly]);
   const quickPopover =
     quickMenu === "brush" ? (
       <div className="qs-pop">
@@ -9985,9 +10393,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={requestClear}>
               Clear
             </button>
-            <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
-              🖼 GIF
-            </button>
+            {!inkOnly ? (
+              <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
+                🖼 GIF
+              </button>
+            ) : null}
             <input
               ref={imageInputRef}
               type="file"
@@ -10208,6 +10618,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             </button>
           ) : roomLocked ? (
             <span className="mp-lock-chip" title="A host locked the canvas">🔒 Locked</span>
+          ) : null}
+
+          {/* Artist studios: the owner's door to approvals + publishing —
+              badged while watchers are asking to paint. */}
+          {roomAudience === "artist_public" && isRoomOwner ? (
+            <button
+              type="button"
+              className="mp-host-btn"
+              onClick={() => setShowArtistStudio(true)}
+              title="Studio: paint requests, approved painters & gallery publishing"
+            >
+              🖌 Studio{mp.paintRequests.length ? ` · ${mp.paintRequests.length}` : ""}
+            </button>
           ) : null}
 
           <div className="mp-you">
@@ -10531,6 +10954,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   ✕
                 </button>
               </div>
+            ) : null}
+
+            {/* Artist studios: the watcher's banner (guests get the sign-in
+                CTA preserving this room; signed-in watchers request access;
+                approved painters get a small "you can paint" chip). The owner
+                uses the Studio button in the topbar instead. */}
+            {roomAudience === "artist_public" && !isRoomOwner ? (
+              <ArtistAccessPanel
+                roomCode={roomId}
+                roomTitle={roomTitle}
+                isOwner={false}
+                canPaint={mp.canPaint}
+                session={session}
+                roomProfile={mp.roomProfile}
+                paintStatus={mp.paintStatus}
+                onRequestAccess={() => mp.sendPaintRequest()}
+                onSignIn={() => {
+                  window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`;
+                }}
+              />
             ) : null}
 
             {/* Public canvas refresh: a live countdown so the reset is never a
@@ -10912,16 +11355,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               ) : null}
 
               <div className="myart-foot">
-                <button
-                  type="button"
-                  onClick={() => {
-                    restoreDraft();
-                    setShowMyArt(false);
-                  }}
-                  title="Bring back your last unsaved drawing"
-                >
-                  ↩︎ Restore last draft
-                </button>
+                {!inkOnly ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      restoreDraft();
+                      setShowMyArt(false);
+                    }}
+                    title="Bring back your last unsaved drawing"
+                  >
+                    ↩︎ Restore last draft
+                  </button>
+                ) : null}
                 <p className="myart-note">
                   {session
                     ? "New saves are kept in your account gallery."
@@ -11227,9 +11672,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={requestClear}>
               Clear
             </button>
-            <button type="button" onClick={() => imageInputRef.current?.click()}>
-              🖼 GIF
-            </button>
+            {!inkOnly ? (
+              <button type="button" onClick={() => imageInputRef.current?.click()}>
+                🖼 GIF
+              </button>
+            ) : null}
             <button type="button" className="primary-action" onClick={saveToServer} disabled={savingArt}>
               {savingArt ? "Saving…" : "💾 Save"}
             </button>
@@ -11292,9 +11739,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           ) : null}
         </section>
 
-        {roomAudience === "kid_safe" ? null : (
+        {roomAudience === "kid_safe" || inkOnly ? null : (
           /* Public (kid_safe) rooms are brush-only — with a single forced chip the
-             whole section is pointless, so it's hidden there entirely. */
+             whole section is pointless, so it's hidden there entirely. Ink-only
+             (INKTOBER) rooms are brush-only by room rule, same treatment. */
           <section className="tool-section">
             <h2>Tool</h2>
             <div className="brush-grid">
@@ -11395,35 +11843,39 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </button>
             ) : null}
           </div>
-          <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
-            🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
-          </button>
+          {!inkOnly ? (
+            <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
+              🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
+            </button>
+          ) : null}
           {/* Trace-a-photo: private rooms (friends) or the host of an owned
               public room. The hostless public drawing rooms never see it — a
               photo shows on every screen instantly, so it needs an accountable
               uploader. */}
           {roomAudience !== "kid_safe" || isRoomHost ? (
-            <>
-              <button
-                type="button"
-                className="sheet-browse-btn sheet-trace-btn"
-                onClick={() => tracePhotoInputRef.current?.click()}
-                disabled={traceBusy}
-              >
-                {traceBusy ? "Checking photo…" : "📷 Trace a photo"}
-              </button>
-              <input
-                ref={tracePhotoInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: "none" }}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) handleTracePhotoFile(file);
-                  event.target.value = "";
-                }}
-              />
-            </>
+            !inkOnly ? (
+              <>
+                <button
+                  type="button"
+                  className="sheet-browse-btn sheet-trace-btn"
+                  onClick={() => tracePhotoInputRef.current?.click()}
+                  disabled={traceBusy}
+                >
+                  {traceBusy ? "Checking photo…" : "📷 Trace a photo"}
+                </button>
+                <input
+                  ref={tracePhotoInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) handleTracePhotoFile(file);
+                    event.target.value = "";
+                  }}
+                />
+              </>
+            ) : null
           ) : null}
           {roomAnimation ? (
             <div className="film-media">
@@ -11532,8 +11984,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
         <section className="tool-section rail-top rail-top-1" ref={brushSectionRef}>
           <h2>Brushes</h2>
+          {inkOnly ? (
+            <p className="tool-hint ink-only-note">✒️ Ink &amp; Pencil room — ink, pencil and the eraser only. Everything else stays on the shelf for Inktober.</p>
+          ) : null}
           <div className="brush-grid">
-            {visibleBrushList(roomFingerPaint, roomBrushMode).map((brush) => {
+            {visibleBrushList(roomFingerPaint, roomBrushMode).filter((brush) => !inkOnly || INK_ONLY_BRUSHES.has(brush.id)).map((brush) => {
               const locked = brush.tier === "studio" && !studioUnlocked;
               // Private-room-only brushes (smudge) render ghosted in public
               // rooms: not selectable, tap explains where they DO work — except
@@ -12031,17 +12486,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         />
       ) : null}
 
-      {showAccount ? (
-        <AccountPanel
-          onClose={() => setShowAccount(false)}
-          onDeleted={() => {
-            // All local stores were wiped — reload so every in-memory locker
-            // (draft, gallery, paint space, economy, AI) starts from empty.
-            window.setTimeout(() => window.location.reload(), 2500);
-          }}
-        />
-      ) : null}
-
       {showHostPanel && isRoomHost ? (
         <HostControlPanel
           roomId={roomId}
@@ -12069,6 +12513,45 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           onDismissAlert={(id) => setModAlerts((list) => list.filter((a) => a.id !== id))}
           onClose={() => setShowHostPanel(false)}
         />
+      ) : null}
+
+      {/* Artist studios: the owner's Studio panel — live paint requests,
+          the approved-painter ACL (revoke works online + offline), and
+          gallery publishing (ArtistRoomSettings wired to the real bearer
+          API). Server-side every one of these is owner-only; this is just
+          the door. */}
+      {showArtistStudio && isRoomOwner && roomAudience === "artist_public" ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setShowArtistStudio(false)}>
+          <section
+            className="studio-modal aap-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="aap-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-title-row">
+              <h2 id="aap-title">🖌 {roomTitle ? `“${roomTitle}”` : "Artist studio"} — access &amp; publishing</h2>
+              <button type="button" onClick={() => setShowArtistStudio(false)}>
+                Close
+              </button>
+            </div>
+            <ArtistAccessPanel
+              roomCode={roomId}
+              roomTitle={roomTitle}
+              isOwner
+              canPaint={mp.canPaint}
+              session={session}
+              roomProfile={mp.roomProfile}
+              paintRequests={mp.paintRequests}
+              loadPublishInfo={artistLoadPublishInfo}
+              publish={artistPublish}
+              unpublish={artistUnpublish}
+              onApprove={(targetId) => mp.sendPaintApprove(targetId)}
+              onDismiss={(targetId) => mp.sendPaintRevoke(targetId)}
+              onRevokePainter={artistRevokePainter}
+            />
+          </section>
+        </div>
       ) : null}
 
       {kicked ? (
@@ -12259,11 +12742,34 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <ReplayPlayer
           snapshots={replaySnapshots}
           isExporting={isExportingTimelapse}
-          onClose={() => setShowReplay(false)}
+          inkOnly={inkOnly}
+          seasonalPrompt={seasonalEvent ? roomPrompt : null}
+          shareReadyKind={preparedShare?.kind || null}
+          onSharePrepared={sharePreparedTimelapse}
+          onClose={() => {
+            shareAbortRef.current?.abort();
+            setPreparedShare(null);
+            setShowReplay(false);
+          }}
           onRemixFromHere={remixFromSnapshot}
           onShareTimelapse={shareTimelapse}
           onExportTimelapse={exportTimelapse}
           onSaveTimelapse={saveTimelapseToSpace}
+        />
+      ) : null}
+
+      {/* The account panel renders LAST so the export gate's sign-in UX is
+          always reachable above whichever modal (replay player, paint space…)
+          the export was attempted from — all modals share z-index 200, so DOM
+          order decides stacking. */}
+      {showAccount ? (
+        <AccountPanel
+          onClose={() => setShowAccount(false)}
+          onDeleted={() => {
+            // All local stores were wiped — reload so every in-memory locker
+            // (draft, gallery, paint space, economy, AI) starts from empty.
+            window.setTimeout(() => window.location.reload(), 2500);
+          }}
         />
       ) : null}
 

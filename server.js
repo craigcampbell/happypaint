@@ -28,6 +28,12 @@ import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
+import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
+import {
+  ARTIST_AUDIENCE, ARTIST_VIEWER_ALLOWLIST, ARTIST_MANAGE_HOST_ONLY,
+  isArtistRoom, defaultGallery, normalizeGallery, normalizePainters,
+  validateArtistFields, canPaintIn, roomProfileFor, galleryCard, galleryMatches,
+} from './server/artistRooms.js';
 import { questMissions, questSetFor } from './server/questDeck.js';
 import { defaultStorybook, storybookPrompt } from './server/storybookPrompts.js';
 
@@ -136,6 +142,18 @@ const AUTO_CLOSE_SWEEP_MS = Number(process.env.AUTO_CLOSE_SWEEP_MS || 30 * 60 * 
 // keep the short scale above.
 const AUTO_CLOSE_OWNED_BASE_MS = Number(process.env.AUTO_CLOSE_OWNED_BASE_MS || 30 * 24 * 60 * 60 * 1000); // 30d idle floor
 const AUTO_CLOSE_OWNED_MAX_MS = Number(process.env.AUTO_CLOSE_OWNED_MAX_MS || 90 * 24 * 60 * 60 * 1000); // 90d ceiling
+// Artist studios (audience 'artist_public') hold posted artwork that is the
+// whole point of the room, so they are protected from the ordinary short idle
+// sweeps: a long documented retention floor instead (still bounded — storage
+// is capped by the per-account creation quota below plus this TTL).
+const AUTO_CLOSE_ARTIST_BASE_MS = Number(process.env.AUTO_CLOSE_ARTIST_BASE_MS || 180 * 24 * 60 * 60 * 1000); // 180d floor
+const AUTO_CLOSE_ARTIST_MAX_MS = Number(process.env.AUTO_CLOSE_ARTIST_MAX_MS || 365 * 24 * 60 * 60 * 1000); // 365d ceiling
+// Artist-studio creation is bounded per account so gallery/storage growth
+// stays finite even before moderation.
+const ARTIST_ROOMS_PER_ACCOUNT = Number(process.env.ARTIST_ROOMS_PER_ACCOUNT || 5);
+// Paint-access requests: session-targeted, expiring, bounded per room.
+const ARTIST_REQUEST_TTL_MS = Number(process.env.ARTIST_REQUEST_TTL_MS || 10 * 60 * 1000);
+const ARTIST_REQUEST_MAX = Number(process.env.ARTIST_REQUEST_MAX || 25);
 
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
 // lives under one directory so a single Docker volume persists everything.
@@ -448,7 +466,7 @@ try {
   const todayKey = new Date().toISOString().slice(0, 10);
   const restored = analytics.uniqueHashes && analytics.uniqueHashes[todayKey];
   if (Array.isArray(restored) && restored.length) trafficUniques.set(todayKey, new Set(restored));
-} catch {}
+} catch { /* Ignore malformed analytics state; new traffic rebuilds the dedupe set. */ }
 function routeClassOf(path) {
   if (path === '/' || path === '') return 'home';
   if (path.startsWith('/studio')) return 'studio';
@@ -566,16 +584,18 @@ function scheduleAnalyticsPersist() {
 
 function cleanCountry(value) {
   const cc = String(value || '').trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(cc) && cc !== 'XX' ? cc : null;
+  // XX = "unknown" and T1 = Tor: neither is a place, so neither is counted.
+  return /^[A-Z]{2}$/.test(cc) && cc !== 'XX' && cc !== 'T1' ? cc : null;
 }
 
+// This deployment sits behind the Cloudflare tunnel ONLY: cf-ipcountry is set
+// by Cloudflare's edge from the connecting IP and a client cannot spoof it.
+// Every other platform header (x-vercel-ip-country, x-country-code,
+// cloudfront-viewer-country) is NOT stripped or rewritten by Cloudflare — the
+// client can send them verbatim, so trusting them lets anyone forge a
+// location. One trusted header, nothing else; approximate by design.
 function countryFromReq(req) {
-  return cleanCountry(
-    req.headers['cf-ipcountry']
-    || req.headers['x-vercel-ip-country']
-    || req.headers['x-country-code']
-    || req.headers['cloudfront-viewer-country'],
-  );
+  return cleanCountry(req.headers['cf-ipcountry']);
 }
 
 function deviceTypeFromReq(req) {
@@ -1073,6 +1093,19 @@ const persistTimers = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
+// The persisted audience WITHOUT materializing the room (no history load, no
+// map entry): read-side probes (homepage spectate) check this BEFORE getRoom,
+// so watching can never pull a private room into the live map.
+function storedRoomAudience(roomId) {
+  try {
+    const data = JSON.parse(readFileSync(roomFile(roomId), 'utf8'));
+    if (data && typeof data.audience === 'string') return data.audience;
+    // Same default getRoom applies: an undecided audience is private.
+    return roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends';
+  } catch {
+    return null;
+  }
+}
 function opLogFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.ops.jsonl`);
 }
@@ -1400,6 +1433,12 @@ function loadRoom(roomId) {
       soundtrack: sanitizeSoundtrack(data.soundtrack),
       // Server-side capability secrets for cross-room @mention watching.
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
+      // Artist studios (audience 'artist_public'): the approved-painter ACL
+      // (opaque verified account ids only — never names/emails), the gallery
+      // publication block, and the Inktober opt-in all survive restarts.
+      painters: normalizePainters(data.painters),
+      gallery: normalizeGallery(data.gallery),
+      inktober: data.inktober === true,
       // Bookkeeping for retention + the admin console: a room loaded from disk
       // keeps its real idle clock instead of looking brand new after a restart.
       fromDisk: true,
@@ -1407,7 +1446,7 @@ function loadRoom(roomId) {
       lastSaved: roomLastSavedMs(roomId, data),
     };
   } catch {
-    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [] };
+    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [], painters: [], gallery: defaultGallery(), inktober: false };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -1503,6 +1542,11 @@ async function saveRoomNow(roomId) {
         // Mention-watch capability keys (see issueMentionKey). Server-side only:
         // this file never leaves the host, and keys never appear in any API.
         mentionKeys: room.mentionKeys instanceof Map ? Array.from(room.mentionKeys.entries()) : [],
+        // Artist-studio state: approved painters (opaque ids), the gallery
+        // publication block, and the Inktober opt-in.
+        painters: Array.isArray(room.painters) ? room.painters : [],
+        gallery: normalizeGallery(room.gallery),
+        inktober: room.inktober === true,
         opCount: room.history.length, // the idle sweep sizes a room's TTL by this
         createdAt: room.createdAt || 0,
         savedAt: Date.now(),
@@ -1553,8 +1597,16 @@ const DEFAULT_PUBLIC_ROOM = 'MAIN';
 // normalizer uppercases + strips + slices to 8).
 const FEATURED_ROOMS = [
   { code: 'MAIN', title: 'Open Studio', emoji: '🎨', prompts: ['Draw anything you like!', 'Free draw — make something awesome', 'Your canvas, your rules'] },
+  // Ink & Pencil: the Inktober room (independent participation — no official
+  // affiliation or endorsement). One shared mural across the whole event: the
+  // daily prompt rotates (server/inktober.js), the art is NEVER wiped. Ink and
+  // pencil ops only, enforced at ingest. Seasonal: also off the 3-day refresh.
+  { code: 'INKTOBER', title: 'Ink & Pencil', emoji: '🖋️', inktober: true, prompts: ['(inktober prompt)'] },
   { code: 'DOODLE', title: 'Doodle Jam', emoji: '✏️', prompts: ['Fill the page with doodles', 'Squiggles, swirls & shapes', 'One big group scribble'] },
-  { code: 'DINOS', title: 'Dino World', emoji: '🦕', prompts: ['Draw your wildest dinosaur', 'A dino having a picnic', 'T-rex vs triceratops!'] },
+  // Friendly Halloween room — replaces DINOS in public discovery for the
+  // season. DINOS itself is retired (RETIRED_ROOM_CODES): files preserved,
+  // still joinable by code, just no longer listed.
+  { code: 'SPOOKY', title: 'Spooky Cute', emoji: '🎃', prompts: ['Draw a friendly ghost', 'A pumpkin with the biggest smile', 'A witch’s cat stirring soup', 'Not-scary monster parade'] },
   { code: 'SPACE', title: 'Outer Space', emoji: '🚀', prompts: ['Rockets, planets & friendly aliens', 'Build a space station', 'Your own little galaxy'] },
   { code: 'OCEAN', title: 'Under the Sea', emoji: '🐙', prompts: ['Fish, mermaids & sea monsters', 'A coral reef party', 'Deep-sea treasure hunt'] },
   { code: 'PETS', title: 'Pet Parade', emoji: '🐶', prompts: ['Draw the cutest pet', 'A puppy and a kitten', 'Your dream pet'] },
@@ -1588,6 +1640,10 @@ const FEATURED_ROOMS = [
 ];
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
+// Retired seasonal rooms: excluded from public discovery (forced unlisted) but
+// their files are PROTECTED — the idle sweep must never delete the old mural,
+// and the room stays joinable by its code. Also off the 3-day wipe cycle.
+const RETIRED_ROOM_CODES = new Set(['DINOS']);
 const ANIMATION_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.animation).map((r) => r.code));
 const FINGER_PAINT_CODES = new Set(FEATURED_ROOMS.filter((r) => r.fingerPaint).map((r) => r.code));
 const GAME_ROOM_CODES = new Set(FEATURED_ROOMS.filter((r) => r.game).map((r) => r.code));
@@ -2074,6 +2130,13 @@ function dailyPromptFor(featured) {
     const c = dailyChallenge();
     return `${c.emoji} ${c.prompt}`;
   }
+  // The Ink & Pencil room's prompt IS the Inktober event state (warm-up before
+  // October, the official prompt of the UTC day during it) — derived, so the
+  // lobby card, the handshake and /api/inktober always agree.
+  if (featured.inktober) {
+    const s = inktoberState();
+    return `${featured.emoji} ${s.prompt}`;
+  }
   const day = Math.floor(Date.now() / 86400000);
   return featured.prompts[day % featured.prompts.length];
 }
@@ -2085,7 +2148,8 @@ function getRoom(roomId) {
     // room first reached by an invite code is private (friends). A room created
     // via POST /api/rooms persists its audience, which wins here.
     const audience = saved.audience || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
-    const listed = saved.listed != null ? saved.listed : audience === 'kid_safe';
+    const listed = (saved.listed != null ? saved.listed : audience === 'kid_safe')
+      && !RETIRED_ROOM_CODES.has(roomId); // retired seasonal rooms never list
     // Which frame/scene layer caps apply. Public rooms can never opt into the
     // film strip, so the animation cap only ever applies to a private room.
     const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
@@ -2173,6 +2237,14 @@ function getRoom(roomId) {
       modLog: [], // recent moderation actions (in-memory, capped)
       // name(lower) -> capability key for cross-room mention watching (persisted).
       mentionKeys: new Map(Array.isArray(saved.mentionKeys) ? saved.mentionKeys : []),
+      // Artist studios: the persisted approved-painter ACL (verified opaque
+      // account ids), the gallery publication block, and the Inktober opt-in.
+      // paintRequests is ephemeral: live access requests keyed by requester
+      // profileId -> { userId, name, ts } (bounded + expiring).
+      painters: Array.isArray(saved.painters) ? saved.painters : [],
+      gallery: saved.gallery && typeof saved.gallery === 'object' ? saved.gallery : defaultGallery(),
+      inktober: saved.inktober === true,
+      paintRequests: new Map(),
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
       brushMode: saved.brushMode === 'fun' ? 'fun' : 'realistic', // realistic | fun (persisted)
@@ -2209,6 +2281,11 @@ function getRoom(roomId) {
       // Daily Challenge: which challenge date this room's canvas belongs to
       // (only meaningful for DAILY; drives the derived midnight wipe).
       dailyDate: saved.dailyDate || null,
+      // Ink & Pencil (INKTOBER): ink/pencil-only ingest guard + the stroke
+      // brush ledger that lets a settings-less continuation batch of a known
+      // ink stroke through (same author + strokeId) while refusing orphans.
+      inkOnly: roomId === INKTOBER_ROOM,
+      inkStrokes: new Map(), // `${userId}:${strokeId}` -> allowed brush
       // Draw Phone (telephone): DRAWPHONE is always on; private rooms opt in via
       // set_phone. `phone` is the ephemeral live game (books/rounds; never persisted).
       phoneEnabled: PHONE_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.phone),
@@ -2401,6 +2478,12 @@ function allowedIdleMs(room) {
   const ops = Number.isFinite(room.opCount) ? room.opCount : (Array.isArray(room.history) ? room.history.length : 0);
   const userSeconds = room.userSeconds || 0;
   const bonus = ops * AUTO_CLOSE_PER_OP_MS + userSeconds * AUTO_CLOSE_PER_USER_SEC_MS;
+  // Artist studios are protected from the ordinary short sweeps: the room IS
+  // the artist's posted work, so it runs on the long documented retention
+  // scale (bounded by creation quotas + this TTL, never unbounded).
+  if (room.audience === ARTIST_AUDIENCE) {
+    return Math.min(AUTO_CLOSE_ARTIST_MAX_MS, AUTO_CLOSE_ARTIST_BASE_MS + bonus);
+  }
   if (room.ownerProfileId) {
     return Math.min(Math.max(AUTO_CLOSE_OWNED_MAX_MS, AUTO_CLOSE_MAX_MS), AUTO_CLOSE_OWNED_BASE_MS + bonus);
   }
@@ -2484,7 +2567,7 @@ function autoCloseSweep() {
   for (const f of files) {
     if (f.endsWith('.history.json')) continue; // a room's history base rides with its meta file below
     const id = f.replace(/\.json$/, '');
-    if (FEATURED_CODES.has(id) || rooms.has(id)) continue;
+    if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || rooms.has(id)) continue;
     try {
       const path = join(ROOM_DIR, f);
       // The meta file is small once a room has been saved by this build; only a
@@ -2492,7 +2575,7 @@ function autoCloseSweep() {
       const data = JSON.parse(readFileSync(path, 'utf8'));
       if (data.productionId && getProduction(data.productionId)) continue; // only live films are exempt
       const lastSaved = roomLastSavedMs(id, data);
-      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null };
+      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null, audience: typeof data.audience === 'string' ? data.audience : null };
       if (now - lastSaved > allowedIdleMs(pseudo)) {
         unlinkSync(path);
         try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
@@ -2571,6 +2654,47 @@ ensureDailyFresh(); // boot: wipe a stale canvas loaded from disk (restart spann
 const dailyRolloverTimer = setInterval(ensureDailyFresh, 60_000);
 if (dailyRolloverTimer.unref) dailyRolloverTimer.unref();
 
+// ---- Inktober rollover -------------------------------------------------------
+// The INKTOBER mural is ONE shared canvas across the whole event — a phase or
+// day flip NEVER wipes it; only the prompt rotates. Derived from the UTC date
+// (server/inktober.js), exactly like the daily challenge, so a restart can
+// never lag the calendar. Connected members (and spectators) get the new
+// prompt pushed as seasonal_prompt; the next handshake carries it too.
+function ensureInktoberFresh() {
+  const state = inktoberState();
+  const key = `${state.phase}:${state.day == null ? '-' : state.day}`;
+  const room = rooms.get(INKTOBER_ROOM);
+  if (room) {
+    if (room.inktoberKey !== key) {
+      room.inktoberKey = key;
+      broadcast(INKTOBER_ROOM, { type: 'seasonal_prompt', prompt: state.prompt, event: state });
+    }
+  }
+  // Inktober-opted-in artist studios inherit the same rotating server-derived
+  // prompt (their murals are likewise never wiped on rollover).
+  rooms.forEach((artistRoom, artistCode) => {
+    if (!isArtistRoom(artistRoom) || !artistRoom.inktober) return;
+    if (artistRoom.inktoberKey !== key) {
+      artistRoom.inktoberKey = key;
+      broadcast(artistCode, { type: 'seasonal_prompt', prompt: state.prompt, event: state });
+    }
+  });
+  return state;
+}
+ensureInktoberFresh(); // boot: settle the phase before the first join
+const inktoberRolloverTimer = setInterval(ensureInktoberFresh, Number(process.env.INKTOBER_TICK_MS || 60_000));
+if (inktoberRolloverTimer.unref) inktoberRolloverTimer.unref();
+
+// Ink/pencil-only enforcement: the shared INKTOBER room always; an artist
+// studio that opted in only while the event is ACTIVE (its warm-up phase
+// carries the banner/prompt but doesn't restrict tools, matching the
+// settings copy: "during October this studio uses ink & pencil tools only").
+function inkEnforcedFor(room) {
+  if (!room) return false;
+  if (room.inkOnly) return true; // the shared INKTOBER room
+  return isArtistRoom(room) && room.inktober === true && inktoberState().phase === 'active';
+}
+
 // ---- Public canvas refresh (3-day cycle) -----------------------------------
 // A public room's mural is a commons: left alone it silts up until there's no
 // blank space for the next kid, and the oldest art is also the least
@@ -2606,6 +2730,10 @@ function denyFork(user, reason) {
 function wipesOnCycle(room, roomId) {
   if (!room || room.audience !== 'kid_safe' || !room.listed) return false;
   if (roomId === 'DAILY') return false;
+  // Seasonal: the INKTOBER mural is one shared canvas across the whole event
+  // (the prompt rotates; the art is never destroyed), and retired rooms keep
+  // their old murals untouched.
+  if (roomId === INKTOBER_ROOM || RETIRED_ROOM_CODES.has(roomId)) return false;
   if (GAME_ROOM_CODES.has(roomId) || PHONE_ROOM_CODES.has(roomId)) return false;
   return true;
 }
@@ -2751,6 +2879,14 @@ function wipeTally(room) {
 // Re-checked when the countdown fires, so a game round, phone game or
 // flipbook that started meanwhile is never wiped by a stale request.
 function wipeRequestBlock(room, user) {
+  // Protected murals: the shared INKTOBER event canvas and retired seasonal
+  // rooms (DINOS) are never on a member wipe countdown — the whole point is
+  // that the art accumulates across the event and beyond, so one visitor
+  // (solo countdowns included) must not be able to erase everyone else's
+  // mural. Moderation wipes stay available through the admin surface
+  // (/api/admin/rooms/:id/clear and the glass-room wipe), which never goes
+  // through startWipeRequest.
+  if (room.code === INKTOBER_ROOM || RETIRED_ROOM_CODES.has(room.code)) return 'protected';
   if (phoneActive(room)) return 'game';
   if (room.gameEnabled && room.game && room.game.phase === 'playing') return 'game';
   if (room.animationEnabled) return 'animation'; // flipbooks clear one frame at a time
@@ -3024,6 +3160,34 @@ function isHost(room, user) {
   return user.profileId === room.ownerProfileId || (room.coHosts || []).includes(user.profileId);
 }
 
+// ---- Artist-studio paint access (docs/ARTIST-ROOMS-CONTRACT.md) ------------
+// Requests are session-targeted (the owner approves a LIVE verified account by
+// its session user id), bounded per room, and expire — a stale queue entry can
+// never become a standing invitation. Approvals land in the persisted
+// room.painters ACL (opaque account ids only); the owner manages offline
+// entries through the owner-only REST ACL (see /api/rooms/:code/artist).
+function paintRequestsMsg(room) {
+  const now = Date.now();
+  const entries = [];
+  for (const [pid, request] of room.paintRequests || []) {
+    if (now - request.ts > ARTIST_REQUEST_TTL_MS) { room.paintRequests.delete(pid); continue; }
+    entries.push({ userId: request.userId, name: request.name, ts: request.ts });
+  }
+  entries.sort((a, b) => a.ts - b.ts);
+  return { type: 'paint_requests', requests: entries };
+}
+function sendPaintRequestsToOwner(room) {
+  if (!isArtistRoom(room)) return;
+  const msg = JSON.stringify(paintRequestsMsg(room));
+  room.users.forEach((u) => {
+    if (u.profileId && u.profileId === room.ownerProfileId && u.ws.readyState === 1) u.ws.send(msg);
+  });
+}
+function sendRoleChanged(room, target) {
+  if (target.ws.readyState !== 1) return;
+  target.ws.send(JSON.stringify({ type: 'role_changed', isHost: isHost(room, target), canPaint: target.canPaint !== false }));
+}
+
 function userListOf(room) {
   return Array.from(room.users.values()).map((u) => ({
     id: u.id,
@@ -3083,7 +3247,8 @@ function broadcast(roomId, message, exceptId = null) {
     // (chat_history rides only a moderator's reset/undo — the same projection
     // a spectator already gets on join.)
     if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history'
-      && t !== 'chat' && t !== 'chat_history' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
+      && t !== 'chat' && t !== 'chat_history' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed'
+      && t !== 'seasonal_prompt') return; // seasonal_prompt: server-authored, safe for previews
     if (room.animationEnabled) {
       // A history rebuild carries every frame's ops — a spectator's single
       // canvas would smear them together. Skip it; the tile catches up on hop.
@@ -3775,7 +3940,16 @@ function finishVote(roomId) {
 
 wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().slice(0, 16);
+  // Canonical room id: same alphabet the persistence layer enforces
+  // (roomFile strips anything outside [A-Z0-9_-]). Without this, `A..B` and
+  // `AB` resolve to the SAME file but DIFFERENT in-memory map keys — alias
+  // forks of one room with diverging state. Invalid-only input has no
+  // canonical id, so the socket is refused rather than aliased.
+  const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  if (!roomId) {
+    ws.close(1008, 'bad room');
+    return;
+  }
   // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
   // everything else — old builds, the test harness by default — gets text.
   ws.acceptsGzip = url.searchParams.get('gz') === '1';
@@ -3833,9 +4007,17 @@ wss.on('connection', async (ws, req) => {
   // PUBLIC-room privilege: private rooms are never watchable (a friends-room
   // code is an invite to draw, not a window for silent strangers), a spectate
   // probe never lazily creates a room, and viewers are capped per room.
+  // Artist studios (artist_public) ARE watchable by code — the gallery is
+  // discoverability, not authorization — and materialize from disk on demand.
   if (url.searchParams.get('spectate') === '1') {
-    const live = rooms.get(roomId);
-    if (!live || live.audience !== 'kid_safe' || !live.listed) {
+    let live = rooms.get(roomId);
+    if (!live && existsSync(roomFile(roomId)) && storedRoomAudience(roomId) === ARTIST_AUDIENCE) {
+      // Only an artist studio materializes for a viewer — a private room file
+      // is never pulled into the live map by a spectate probe.
+      live = getRoom(roomId); // audience already confirmed server-persisted
+    }
+    if (!live || (live.audience === 'kid_safe' && !live.listed)
+      || (live.audience !== 'kid_safe' && live.audience !== ARTIST_AUDIENCE)) {
       ws.send(JSON.stringify({ type: 'room_blocked', reason: 'not_watchable' }));
       ws.close(1008, 'not watchable');
       return;
@@ -3846,6 +4028,7 @@ wss.on('connection', async (ws, req) => {
       return;
     }
     if (roomId === 'DAILY') ensureDailyFresh();
+    if (roomId === INKTOBER_ROOM) ensureInktoberFresh();
     const specFeatured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
     const specPrompt = live.customPrompt || (specFeatured ? dailyPromptFor(specFeatured) : null);
     live.spectators.add(ws);
@@ -3854,7 +4037,11 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify({
       type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
       roomId, spectator: true, locked: !!live.locked, roomTitle: live.title || null, audience: live.audience,
-      prompt: specPrompt,
+      prompt: isArtistRoom(live) && live.inktober ? inktoberState().prompt : specPrompt,
+      canPaint: false,
+      roomProfile: roomProfileFor(live, isArtistRoom(live) && live.inktober ? inktoberState() : null),
+      inkOnly: inkEnforcedFor(live),
+      event: (live.inkOnly || (isArtistRoom(live) && live.inktober)) ? inktoberState() : null,
       wetCanvas: !!live.wetCanvas,
       moderated: live.audience === 'kid_safe',
       watched: live.watchers.size > 0,
@@ -4042,6 +4229,8 @@ wss.on('connection', async (ws, req) => {
   // just-past-midnight joiner would see yesterday's mural under today's prompt
   // and then lose their first strokes to the delayed wipe.
   if (roomId === 'DAILY') ensureDailyFresh();
+  // INKTOBER: same contact-settle for the seasonal prompt (never wipes art).
+  if (roomId === INKTOBER_ROOM) ensureInktoberFresh();
   // Public rooms refresh on a 3-day cycle — settle it on contact, not on the
   // next sweep tick, so a joiner never lands on a canvas that is already due.
   ensureRoomFresh(roomId);
@@ -4237,6 +4426,10 @@ wss.on('connection', async (ws, req) => {
   room.users.set(id, user);
   room.lastActivity = Date.now();
   room.everJoined = true; // no longer a phantom (see sweepPhantomRooms)
+  // Artist studios: whether THIS member may draw (verified owner or approved
+  // painter). Other audiences leave the existing guards in charge (true here
+  // only means "not view-only", never an override of lock/host rules).
+  user.canPaint = canPaintIn(room, user);
   notePeak();
   analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
@@ -4249,10 +4442,13 @@ wss.on('connection', async (ws, req) => {
   // already got its owner at creation time (POST /api/rooms). Without this guard
   // the first signed-in visitor silently "owned" MAIN, so the host-gated Clear
   // dropped everyone else's wipe and the shared mural stacked up un-clearable.
+  // Artist studios are NEVER claimable: ownership is assigned by the server at
+  // creation and survives even account deletion (no ownership takeover).
   if (
     user.profileId &&
     !room.ownerProfileId &&
     room.audience !== 'kid_safe' &&
+    room.audience !== ARTIST_AUDIENCE &&
     !FEATURED_CODES.has(roomId)
   ) {
     room.ownerProfileId = user.profileId;
@@ -4261,7 +4457,9 @@ wss.on('connection', async (ws, req) => {
   // Private rooms don't require a signed-in owner, but SOMEONE must be able to
   // moderate — the first person in an ownerless, non-public room becomes its
   // (session-scoped) guest host; reassigned to a present user if the host left.
-  if (!room.ownerProfileId && room.audience !== 'kid_safe' && (!room.hostUserId || !room.users.has(room.hostUserId))) {
+  // Artist studios never get a guest/first-arrival host, even orphaned ones:
+  // moderation there belongs to the verified owner (and admin), nobody else.
+  if (!room.ownerProfileId && room.audience !== 'kid_safe' && room.audience !== ARTIST_AUDIENCE && (!room.hostUserId || !room.users.has(room.hostUserId))) {
     room.hostUserId = id;
   }
 
@@ -4278,7 +4476,18 @@ wss.on('connection', async (ws, req) => {
     muted: !!user.muted,
     roomTitle: room.title || null,
     audience: room.audience,
-    prompt: roomPrompt,
+    // Artist studios: view vs paint, plus the public room profile (gallery
+    // description/tags + the server-derived event state). roomProfile is null
+    // in every other audience; canPaint is true there (existing guards rule).
+    canPaint: user.canPaint !== false,
+    roomProfile: roomProfileFor(room, isArtistRoom(room) && room.inktober ? inktoberState() : null),
+    prompt: isArtistRoom(room) && room.inktober ? inktoberState().prompt : roomPrompt,
+    // Ink & Pencil room: the client restricts itself to ink/pencil tools, and
+    // the same derived event state /api/inktober serves rides the handshake.
+    // An Inktober-opted-in artist studio reports the same state and enforces
+    // ink-only only while the event is active (see inkEnforcedFor).
+    inkOnly: inkEnforcedFor(room),
+    event: (room.inkOnly || (isArtistRoom(room) && room.inktober)) ? inktoberState() : null,
     wetCanvas: !!room.wetCanvas,
     brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
     moderated: room.audience === 'kid_safe',
@@ -4316,6 +4525,10 @@ wss.on('connection', async (ws, req) => {
     soundtrack: room.soundtrack || null,
   }));
   ws.send(JSON.stringify({ type: 'userList', users: userListOf(room) }));
+  // An artist-studio owner is handed the live paint-request queue on join.
+  if (isArtistRoom(room) && user.profileId && user.profileId === room.ownerProfileId) {
+    ws.send(JSON.stringify(paintRequestsMsg(room)));
+  }
   // ALWAYS send a history frame on join — even an empty one. The client treats it
   // as the authoritative shared state and clears its canvas before applying it, so
   // joining an empty room reliably shows a blank canvas instead of whatever the
@@ -4360,7 +4573,8 @@ wss.on('connection', async (ws, req) => {
       // is still replaying, so it would bake a half-empty snapshot).
       let candidate = null;
       room.users.forEach((u) => {
-        if (u.id !== id && !u.muted && (!room.locked || isHost(room, u)) && u.ws.readyState === 1 && (!candidate || u.id < candidate.id)) candidate = u;
+        if (u.id !== id && !u.muted && (!room.locked || isHost(room, u)) && u.ws.readyState === 1
+          && u.canPaint !== false && (!candidate || u.id < candidate.id)) candidate = u;
       });
       if (candidate && candidate.ws.readyState === 1) {
         room.snapshotRequestedAt = Date.now();
@@ -4451,6 +4665,21 @@ wss.on('connection', async (ws, req) => {
     user.lastActivity = Date.now();
     room.lastActivity = Date.now();
 
+    // Artist studios, broad defense: a member without canPaint (guests,
+    // strangers, revoked painters) may ONLY use the explicit read/social/
+    // request allowlist — every mutation message (ops, clears, sheets,
+    // imports, layers, frames, scenes, animation, votes, helper setters,
+    // moderation, room management) is dropped BEFORE the switch, so no
+    // bypass exists through any of those paths. Painters then pass through
+    // the ordinary host/layer/frame/lock guards below — EXCEPT room
+    // management: approval grants drawing, not the studio's controls, so
+    // set_wet / set_brush_mode / set_symmetry / vote_start and their peers
+    // stay host-only even for an approved painter.
+    if (isArtistRoom(room)) {
+      if (user.canPaint === false && !ARTIST_VIEWER_ALLOWLIST.has(data.type)) return;
+      if (!isHost(room, user) && ARTIST_MANAGE_HOST_ONLY.has(data.type)) return;
+    }
+
     switch (data.type) {
       case 'client_info':
         // Browser-local id (localStorage): survives reload, differs between two
@@ -4507,6 +4736,27 @@ wss.on('connection', async (ws, req) => {
               settings: { ...data.op.settings, symmetry: normalizeRoomSymmetry(data.op.settings.symmetry) },
             };
           }
+        }
+        // Ink & Pencil room (INKTOBER): ink/pencil ops ONLY — the server is the
+        // boundary, so a patched client cannot self-attest its way around the
+        // room's rules. Draw ops must be ink, pencil, or the eraser; a v3
+        // inline dab must describe the DECLARED brush's native dab (forged
+        // non-ink dab settings are refused; legitimate native dabs pass).
+        // Every other op kind (shape/text/image/…) is a bypass and dropped.
+        if (inkEnforcedFor(room)) {
+          if (data.op.kind !== 'draw') break;
+          const strokeKey = `${id}:${String(data.op.strokeId)}`;
+          if (data.op.settings != null) {
+            if (!inkDrawSettingsAllowed(data.op.settings)) break;
+            room.inkStrokes.set(strokeKey, data.op.settings.brush);
+            if (room.inkStrokes.size > 400) room.inkStrokes.clear();
+          } else {
+            // Settings-less continuation batch (older client): only allowed as
+            // part of a stroke this member already opened with ink/pencil —
+            // same author + strokeId, mirroring the server's repair contract.
+            if (!INK_BRUSHES.has(room.inkStrokes.get(strokeKey))) break;
+          }
+          if (data.op.end) room.inkStrokes.delete(strokeKey);
         }
         // Bound single-op weight: image ops embed dataURLs; nothing legitimate
         // approaches this cap, and unbounded ops multiply across history/joins.
@@ -4630,6 +4880,10 @@ wss.on('connection', async (ws, req) => {
         }, id);
         break;
       case 'set_sheet': {
+        // The Ink & Pencil room takes no coloring sheet — ink and pencil on a
+        // blank shared page is the whole event; a sheet underlay is a bypass.
+        // Same for an Inktober-opted-in artist studio while the event is live.
+        if (inkEnforcedFor(room)) break;
         // Setting the shared coloring sheet is a host decision once the room is
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
         if (room.ownerProfileId && !isHost(room, user)) break;
@@ -4841,6 +5095,11 @@ wss.on('connection', async (ws, req) => {
         // clear would wipe everyone's in-progress drawing. Only the engine blanks.
         if (phoneActive(room)) break;
         const host = isHost(room, user);
+        // Artist studios: clearing the artist's work is a moderation action —
+        // hosts only. A painter's clear must NOT degrade into a wipe request
+        // (paint-only approval grants no clear-other-art power, and there is
+        // no commons countdown in a studio).
+        if (room.audience === ARTIST_AUDIENCE && !host) break;
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
         // One shared FRAME of a flipbook: instant, as ever — it's one cel, not
         // the room. In an owned room only a host may clear it.
@@ -4873,7 +5132,14 @@ wss.on('connection', async (ws, req) => {
         break;
       // ---- Member wipes: ask / vote / call it off (see startWipeRequest) ----
       case 'wipe_request': {
+        // Artist studios have no commons wipe cycle — a non-host wipe request
+        // would put the artist's posted work on a countdown.
+        if (room.audience === ARTIST_AUDIENCE && !isHost(room, user)) break;
         const nextSheet = typeof data.sheetId === 'string' && data.sheetId ? data.sheetId.slice(0, 200) : null;
+        // No sheet substitutions in the Ink & Pencil room (same bypass class
+        // as set_sheet). A plain member wipe request still follows the normal
+        // countdown/vote path.
+        if (inkEnforcedFor(room) && nextSheet) break;
         // Same rule as set_sheet: trace photos and Draw Phone pages are only
         // ever set by their own minting handlers.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
@@ -4928,7 +5194,7 @@ wss.on('connection', async (ws, req) => {
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked' }));
             break;
           }
-          if (verdict.hit && room.audience === 'kid_safe') message = maskMessage(message);
+          if (verdict.hit && (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE)) message = maskMessage(message);
         }
         // Draw & Guess: a message that is (or contains) the secret word is a
         // guess — score it and SUPPRESS the raw text so the word never leaks to
@@ -5180,7 +5446,9 @@ wss.on('connection', async (ws, req) => {
       case 'set_animation': {
         // The film strip is a PRIVATE-room setting (host flips it). Public
         // rooms can never opt in — FLIPBOOK is the one public animation room.
-        if (room.audience === 'kid_safe') break;
+        // Artist studios are public-viewable too: no film strip there either.
+        if (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE) break;
+        if (inkEnforcedFor(room)) break; // no animation bypass in the Ink & Pencil room
         if (!isHost(room, user)) break;
         if (room.storybook?.enabled) break;
         room.animationEnabled = !!data.enabled;
@@ -5211,7 +5479,7 @@ wss.on('connection', async (ws, req) => {
       // players are present; off stops any live round.
       case 'set_game': {
         if (GAME_ROOM_CODES.has(roomId)) break; // featured game room is fixed on
-        if (room.audience === 'kid_safe') break; // public drawing rooms never opt in
+        if (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE) break; // public drawing rooms never opt in
         if (!isHost(room, user)) break;
         room.gameEnabled = !!data.enabled;
         // Mutually exclusive with animation (see set_animation): the per-round
@@ -5348,7 +5616,7 @@ wss.on('connection', async (ws, req) => {
       // players are present; off stops any live game and frees its pages.
       case 'set_phone': {
         if (PHONE_ROOM_CODES.has(roomId)) break; // featured phone room is fixed on
-        if (room.audience === 'kid_safe') break; // public drawing rooms never opt in
+        if (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE) break; // public drawing rooms never opt in
         if (!isHost(room, user)) break;
         room.phoneEnabled = !!data.enabled;
         if (room.phoneEnabled && room.animationEnabled) {
@@ -5925,6 +6193,13 @@ wss.on('connection', async (ws, req) => {
           ws.send(JSON.stringify({ type: 'vote_denied', reason: "Today's Challenge is the theme — new one tomorrow!" }));
           break;
         }
+        // The INKTOBER room's theme is the official event prompt — a vote must
+        // not spoof it in the handshake or the lobby card. Same for an
+        // Inktober-opted-in artist studio (any phase).
+        if (room.inkOnly || (isArtistRoom(room) && room.inktober)) {
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: 'The Inktober prompt is the theme — new one each day of October!' }));
+          break;
+        }
         const now = Date.now();
         if (room.vote) {
           ws.send(JSON.stringify({ type: 'vote_denied', reason: 'A vote is already running!' }));
@@ -5986,9 +6261,8 @@ wss.on('connection', async (ws, req) => {
         if (data.type === 'promote') set.add(target.profileId);
         else set.delete(target.profileId);
         room.coHosts = Array.from(set);
-        if (target.ws.readyState === 1) {
-          target.ws.send(JSON.stringify({ type: 'role_changed', isHost: isHost(room, target) }));
-        }
+        target.canPaint = canPaintIn(room, target); // co-hosting never grants paint in an artist studio
+        sendRoleChanged(room, target);
         broadcast(roomId, { type: 'userList', users: userListOf(room) });
         persistRoom(roomId);
         break;
@@ -6084,6 +6358,76 @@ wss.on('connection', async (ws, req) => {
             persistRoom(roomId);
           }
         }
+        break;
+      }
+
+      // ---- Artist studios: paint access requests -----------------------------
+      // An AUTHENTICATED viewer asks the owner for paint access. Guests can
+      // watch but can never request (no verified account = no durable ACL id).
+      case 'paint_request': {
+        if (!isArtistRoom(room)) break;
+        if (!user.profileId || !user.verified) break;
+        if (user.profileId === room.ownerProfileId) break; // the owner paints already
+        if ((room.painters || []).includes(user.profileId)) {
+          ws.send(JSON.stringify({ type: 'paint_requested', status: 'already' }));
+          break;
+        }
+        if (!rateOk(`paintreq:${user.profileId}`, 5, 60_000)) break;
+        if (!room.paintRequests) room.paintRequests = new Map();
+        // Sweep expired entries before the bound check so a stale queue can't
+        // lock real requesters out.
+        for (const [pid, request] of room.paintRequests) {
+          if (Date.now() - request.ts > ARTIST_REQUEST_TTL_MS) room.paintRequests.delete(pid);
+        }
+        if (room.paintRequests.size >= ARTIST_REQUEST_MAX) break;
+        // A re-request from a fresher session re-points the session target id.
+        room.paintRequests.set(user.profileId, { userId: id, name: user.name, ts: Date.now() });
+        ws.send(JSON.stringify({ type: 'paint_requested', status: 'pending' }));
+        sendPaintRequestsToOwner(room);
+        break;
+      }
+      // The owner grants paint access to a LIVE verified account, resolved by
+      // its session id — never by a client-supplied name, email or profile id.
+      case 'paint_approve': {
+        if (!isArtistRoom(room)) break;
+        if (!user.profileId || user.profileId !== room.ownerProfileId) break;
+        const target = room.users.get(String(data.targetId || ''));
+        if (!target || !target.verified || !target.profileId || target.profileId === room.ownerProfileId) break;
+        room.painters = normalizePainters([...(room.painters || []), target.profileId]);
+        if (room.paintRequests) room.paintRequests.delete(target.profileId);
+        // The ACL is account-wide, so EVERY live session of that account
+        // flips — a second tab must not sit on a stale canPaint/role while its
+        // sibling gets the grant.
+        room.users.forEach((member) => {
+          if (member.profileId !== target.profileId) return;
+          member.canPaint = canPaintIn(room, member);
+          sendRoleChanged(room, member);
+          if (member.ws.readyState === 1) member.ws.send(JSON.stringify({ type: 'paint_requested', status: 'approved' }));
+        });
+        sendPaintRequestsToOwner(room);
+        persistRoom(roomId);
+        break;
+      }
+      // Live revocation: immediate (the target's very next op is denied) and
+      // persisted. Offline approvals are revoked through the REST ACL.
+      case 'paint_revoke': {
+        if (!isArtistRoom(room)) break;
+        if (!user.profileId || user.profileId !== room.ownerProfileId) break;
+        const target = room.users.get(String(data.targetId || ''));
+        if (!target || !target.profileId) break;
+        room.painters = (room.painters || []).filter((pid) => pid !== target.profileId);
+        if (room.paintRequests) room.paintRequests.delete(target.profileId);
+        // Same account-wide rule as approve: every connected session of the
+        // revoked account is recomputed and told — a second tab keeping a
+        // stale canPaint would keep drawing after the revoke.
+        room.users.forEach((member) => {
+          if (member.profileId !== target.profileId) return;
+          member.canPaint = canPaintIn(room, member);
+          sendRoleChanged(room, member);
+          if (member.ws.readyState === 1) member.ws.send(JSON.stringify({ type: 'paint_requested', status: 'revoked' }));
+        });
+        sendPaintRequestsToOwner(room);
+        persistRoom(roomId);
         break;
       }
 
@@ -6838,8 +7182,68 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   // cleanup removes the mapping; a Stripe outage leaves a durable retry record
   // that revokes entitlement and retains only the ids needed to cancel later.
   const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
+  // 5) ARTIST STUDIOS: unpublish every studio this account owns and cut the
+  //    account from every painter/co-host ACL — INCLUDING persisted OFFLINE
+  //    room files (a restart must not resurrect access). Ownership itself is
+  //    NEVER released: ownerProfileId stays stamped with the deleted id, so
+  //    no first-arrival or sign-in can take an orphaned studio over.
+  let artistRoomsScrubbed = 0;
+  for (const [code, room] of rooms) {
+    let touched = false;
+    if (Array.isArray(room.painters) && room.painters.includes(pid)) {
+      room.painters = room.painters.filter((p) => p !== pid);
+      touched = true;
+    }
+    if (Array.isArray(room.coHosts) && room.coHosts.includes(pid)) {
+      room.coHosts = room.coHosts.filter((p) => p !== pid);
+      touched = true;
+    }
+    if (isArtistRoom(room) && room.ownerProfileId === pid && normalizeGallery(room.gallery).listed) {
+      room.gallery = { ...normalizeGallery(room.gallery), listed: false };
+      touched = true;
+    }
+    if (touched) {
+      room.users.forEach((member) => {
+        if (member.profileId === pid) {
+          member.canPaint = canPaintIn(room, member);
+          sendRoleChanged(room, member);
+        }
+      });
+      persistRoom(code);
+      artistRoomsScrubbed += 1;
+    }
+  }
+  try {
+    for (const f of readdirSync(ROOM_DIR).filter((name) => name.endsWith('.json') && !name.endsWith('.history.json'))) {
+      const id = f.replace(/\.json$/, '');
+      if (rooms.has(id)) continue; // live rooms were handled above (memory wins)
+      const path = join(ROOM_DIR, f);
+      let data;
+      try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+      let touched = false;
+      if (Array.isArray(data.painters) && data.painters.includes(pid)) {
+        data.painters = data.painters.filter((p) => p !== pid);
+        touched = true;
+      }
+      if (Array.isArray(data.coHosts) && data.coHosts.includes(pid)) {
+        data.coHosts = data.coHosts.filter((p) => p !== pid);
+        touched = true;
+      }
+      if (data.audience === ARTIST_AUDIENCE && data.ownerProfileId === pid && data.gallery && data.gallery.listed) {
+        data.gallery = { ...normalizeGallery(data.gallery), listed: false };
+        touched = true;
+      }
+      if (touched) {
+        try {
+          writeFileSync(`${path}.tmp`, JSON.stringify(data));
+          renameSync(`${path}.tmp`, path);
+          artistRoomsScrubbed += 1;
+        } catch { /* best effort */ }
+      }
+    }
+  } catch { /* no room dir yet */ }
   forgetProfileTokens(pid); // the account is gone — its cached sign-in must not outlive it
-  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed });
+  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
@@ -6935,6 +7339,10 @@ function dormantRoomMetas() {
             audience: typeof data.audience === 'string' ? data.audience : (id === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends'),
             listed: typeof data.listed === 'boolean' ? data.listed : null,
             ownerProfileId: data.ownerProfileId || null,
+            // Artist-studio publication state, so the gallery + quota see
+            // persisted offline rooms exactly like live ones.
+            gallery: normalizeGallery(data.gallery),
+            inktober: data.inktober === true,
             opCount: Number.isFinite(data.opCount) ? data.opCount : (Array.isArray(data.history) ? data.history.length : 0),
             userSeconds: Number(data.userSeconds) || 0,
             chats: Array.isArray(data.chat) ? data.chat.length : 0,
@@ -7676,6 +8084,19 @@ function loadWallPosts() {
 }
 loadWallPosts();
 
+// Seasonal event posts are retention-bounded so an event gallery can never
+// grow into unbounded storage: past the window, event posts age out (the
+// ordinary MAX_WALL_POSTS cap still bounds the wall as a whole).
+const WALL_EVENT_RETENTION_DAYS = Number(process.env.WALL_EVENT_RETENTION_DAYS || 120);
+function sweepWallEventRetention() {
+  if (!(WALL_EVENT_RETENTION_DAYS > 0)) return;
+  const cutoff = Date.now() - WALL_EVENT_RETENTION_DAYS * 86_400_000;
+  for (const p of [...wallPosts.values()]) {
+    if (p.event && Number(p.createdAt) < cutoff) deleteWallPost(p.id);
+  }
+}
+sweepWallEventRetention();
+
 // Atomic write (temp + rename) so a crash/ENOSPC mid-write can't leave a
 // truncated JSON file that loadWallPosts would silently drop.
 function writeFileAtomic(file, data) {
@@ -7803,6 +8224,12 @@ function publicWallPost(meta, viewerHash) {
     frames: meta.frameCount,
     durationMs: meta.durationMs,
     createdAt: meta.createdAt,
+    // Server-assigned seasonal event metadata (never client-trusted — see the
+    // POST path): preserved on reads so event galleries can group/filter.
+    event: meta.event || null,
+    eventDay: meta.eventDay != null ? meta.eventDay : null,
+    eventPrompt: meta.eventPrompt || null,
+    challenge: meta.challenge || null, // gallery date stamp (DAILY / active-October INKTOBER)
     liked: viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
     allowRemix: meta.allowRemix === true,
     parentPostId: meta.parentPostId || null,
@@ -7837,6 +8264,43 @@ app.get('/api/daily', (_req, res) => {
     if (!p.hidden && p.challenge === c.date) entries += 1;
   }
   res.json({ ...c, entries });
+});
+
+// ---- Inktober (seasonal) ---------------------------------------------------
+// The derived event state — identical to the WS handshake `event` and the
+// seasonal_prompt broadcast. UTC rollover keeps the shared room prompt
+// consistent worldwide; before October this is a warm-up (no false day stamp).
+app.get('/api/inktober', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(ensureInktoberFresh()); // phase flips on contact, not the next tick
+});
+
+// ---- The Paint Jar -----------------------------------------------------------
+// Public aggregate activity counters. Aggregate recorded activity ONLY — never
+// unique people, sessions lists, user ids or private room metadata. Country
+// counts come exclusively from the Cloudflare edge header (countryFromReq at
+// session start — this deploy is behind the CF tunnel); a client can never
+// supply or override a location, and country groups under 5 are suppressed.
+// The paper equivalent is illustrative (1,000 recorded stroke batches ≈ a
+// sheet), not a measured resource saving.
+const PAINTJAR_MIN_COUNTRY_COUNT = 5;
+app.get('/api/paintjar', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const strokes = Number(analytics.totals.strokes) || 0;
+  const sessions = Number(analytics.totals.sessions) || 0;
+  const countries = Object.entries(analytics.countries || {})
+    .map(([code, count]) => ({ code, count: Number(count) || 0 }))
+    .filter((c) => c.count >= PAINTJAR_MIN_COUNTRY_COUNT)
+    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code))
+    .slice(0, 60);
+  res.json({
+    updatedAt: new Date().toISOString(),
+    strokes,
+    sessions,
+    countries,
+    paperEquivalent: { sheets: Math.floor(strokes / 1000), strokesPerSheet: 1000 },
+    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The paper equivalent is illustrative — about 1,000 recorded stroke batches per sheet — not a measured resource saving. Country groups under 5 are omitted.',
+  });
 });
 
 // ---- Weekly event nights ---------------------------------------------------
@@ -7891,9 +8355,15 @@ app.get('/api/wall', async (req, res) => {
   const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 40));
   // Daily Challenge gallery: filter to posts stamped with one challenge date.
   const challenge = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.challenge || '')) ? String(req.query.challenge) : null;
+  // Seasonal event gallery: filter by the SERVER-ASSIGNED event fields — never
+  // by the tag, which any client could forge onto a non-event post.
+  const event = /^[a-z0-9][a-z0-9-]{0,40}$/.test(String(req.query.event || '')) ? String(req.query.event) : null;
+  const eventDay = /^\d{1,2}$/.test(String(req.query.day || '')) ? Number(req.query.day) : null;
 
   let list = [...wallPosts.values()].filter((p) => !p.hidden);
   if (challenge) list = list.filter((p) => p.challenge === challenge);
+  if (event) list = list.filter((p) => p.event === event);
+  if (eventDay != null && eventDay >= 1 && eventDay <= 31) list = list.filter((p) => p.eventDay === eventDay);
   if (tag) list = list.filter((p) => p.tags.includes(tag));
   if (q) {
     const tokens = q.split(/\s+/).filter(Boolean);
@@ -7985,6 +8455,26 @@ app.post('/api/wall/:id/remix-room', (req, res) => {
   res.json({ code, remixSource: room.remixSource });
 });
 
+// Is this profileId the verified owner or an approved painter of an
+// Inktober-opted-in artist studio? Live rooms first, then the persisted file
+// — an offline studio's wall posts still stamp, but ONLY for its people.
+function artistRoomInktoberFor(code, profileId) {
+  if (!code || !profileId) return false;
+  const pid = String(profileId);
+  const live = rooms.get(code);
+  if (live) {
+    return isArtistRoom(live) && live.inktober === true
+      && (live.ownerProfileId === pid || (live.painters || []).includes(pid));
+  }
+  try {
+    const data = JSON.parse(readFileSync(roomFile(code), 'utf8'));
+    if (!data || data.audience !== ARTIST_AUDIENCE || data.inktober !== true) return false;
+    return data.ownerProfileId === pid || normalizePainters(data.painters).includes(pid);
+  } catch {
+    return false;
+  }
+}
+
 app.post('/api/wall', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const ownerKey = await resolveArtOwner(req);
@@ -7998,6 +8488,7 @@ app.post('/api/wall', async (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const body = req.body || {};
+  const token = bearerToken(req); // one verification serves attribution AND the byline
   const title = String(body.title || 'My drawing').replace(/\s+/g, ' ').trim().slice(0, 60) || 'My drawing';
   const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
   const tags = [...new Set(rawTags.map(sanitizeWallTag).filter(Boolean))];
@@ -8006,6 +8497,25 @@ app.post('/api/wall', async (req, res) => {
   // means opting your art into today's gallery, which is harmless by design.
   const challengeDate = String(body.room || '').toUpperCase() === 'DAILY' ? dailyChallenge().date : null;
   if (challengeDate && !tags.includes('daily challenge')) tags.push('daily challenge');
+  // Inktober event attribution. What the stamp MEANS: the art was submitted
+  // as that day's PROMPT PARTICIPATION from a room opted into the event — it
+  // is NOT proof the medium was ink (any brush may have made it; tool
+  // enforcement is a per-room canvas rule, not a wall claim). Given that:
+  //  - The shared INKTOBER room self-submits: anyone drawing there is in the
+  //    event by definition, so the claimed room code is enough.
+  //  - An artist STUDIO stamp attributes the work to that studio's event
+  //    participation, so the poster must BE the studio's verified owner or an
+  //    approved painter (server-validated identity, live ACL or the persisted
+  //    offline file). A stranger quoting the room code gets NO event — the
+  //    post still lands, as ordinary art.
+  const wallIdentity = token ? await verifyAccessToken(token).catch(() => null) : null;
+  const roomName = String(body.room || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  const inktoberPost = roomName === INKTOBER_ROOM
+    || artistRoomInktoberFor(roomName, wallIdentity && wallIdentity.profileId);
+  const inkState = inktoberPost ? ensureInktoberFresh() : null;
+  const inkIdx = tags.indexOf('inktober');
+  if (inkIdx >= 0) tags.splice(inkIdx, 1);
+  if (inktoberPost) tags.push('inktober');
   const frames = Array.isArray(body.frames) ? body.frames.slice(0, WALL_FRAME_LIMIT) : [];
   const durationMs = Math.min(2000, Math.max(80, Number(body.durationMs) || 400));
   // Every frame must decode to a real raster image (magic-byte checked). This
@@ -8017,12 +8527,7 @@ app.post('/api/wall', async (req, res) => {
   // The wall is for every kid — any flagged word in the text fields rejects
   // the post (mild included), and severe terms auto-file a report so the
   // admin sees who is probing the filter.
-  let artist = '';
-  const token = bearerToken(req);
-  if (token) {
-    const identity = await verifyAccessToken(token).catch(() => null);
-    artist = identity?.displayName || '';
-  }
+  let artist = wallIdentity?.displayName || '';
   if (!artist) artist = String(body.artist || '').replace(/\s+/g, ' ').trim().slice(0, 24);
   if (!artist) artist = 'A Drawesome artist';
   for (const text of [title, artist, ...tags]) {
@@ -8046,6 +8551,7 @@ app.post('/api/wall', async (req, res) => {
   if (wallPosts.size >= MAX_WALL_POSTS) {
     // Prune the least-loved poster older than 48h to make room; a wall full of
     // fresh loved art rejects instead of eating someone's post silently.
+    sweepWallEventRetention(); // aged-out event posts free room first
     const cutoff = Date.now() - 48 * 3600_000;
     const candidates = [...wallPosts.values()].filter((p) => p.createdAt < cutoff);
     candidates.sort((a, b) =>
@@ -8069,7 +8575,11 @@ app.post('/api/wall', async (req, res) => {
     durationMs,
     reports: 0,
     hidden: false,
-    challenge: challengeDate, // 'YYYY-MM-DD' when posted from the DAILY room
+    challenge: challengeDate || (inktoberPost && inkState.phase === 'active' ? inkState.date : null), // 'YYYY-MM-DD' from the DAILY room, or active-October INKTOBER
+    // Seasonal event stamp (server-assigned; null for ordinary posts).
+    event: inktoberPost ? INKTOBER_EVENT : null,
+    eventDay: inktoberPost && inkState.phase === 'active' ? inkState.day : null,
+    eventPrompt: inktoberPost ? inkState.prompt : null,
     allowRemix: body.allowRemix === true,
     parentPostId: parentPost?.id || null,
     rootPostId: parentPost ? (parentPost.rootPostId || parentPost.id) : null,
@@ -8399,7 +8909,7 @@ app.post('/api/rooms', async (req, res) => {
   const body = req.body || {};
   const audience = typeof body.audience === 'string' ? body.audience : 'kid_safe';
   const mode = typeof body.mode === 'string' ? body.mode : null;
-  if (!['kid_safe', 'friends', 'adult_18'].includes(audience)) {
+  if (!['kid_safe', 'friends', 'adult_18', ARTIST_AUDIENCE].includes(audience)) {
     return res.status(400).json({ error: 'bad_audience' });
   }
   if (audience === 'adult_18') {
@@ -8413,6 +8923,13 @@ app.post('/api/rooms', async (req, res) => {
   }
   const token = bearerToken(req);
   const identity = token ? await verifyAccessToken(token) : null;
+  // Artist studios require a VERIFIED account, fail closed: when cloud auth is
+  // unconfigured (or the token doesn't check out) the answer is
+  // accounts_required — identities are never faked (the anonymous commons is
+  // unaffected, below).
+  if (audience === ARTIST_AUDIENCE && (!ACCOUNTS_CONFIGURED || !identity)) {
+    return res.status(401).json({ error: 'accounts_required' });
+  }
   // A public room needs a grown-up owner who can moderate it — but only where
   // accounts exist at all (see ACCOUNTS_CONFIGURED): a self-hosted instance with
   // no PocketBase must still let someone make a public room anonymously, or the
@@ -8429,18 +8946,324 @@ app.post('/api/rooms', async (req, res) => {
   if (!rateOk(`room:${rlKey}`)) {
     return res.status(429).json({ error: 'rate_limited' });
   }
+  // Artist-studio text is gallery-bound: bounded plain text through the
+  // moderation pipeline, and a per-account quota so storage stays bounded.
+  let artistFields = null;
+  if (audience === ARTIST_AUDIENCE) {
+    artistFields = validateArtistFields({ title: body.title, description: body.description, tags: body.tags }, scan);
+    if (!artistFields.ok) {
+      return res.status(400).json({ error: artistFields.error, message: artistFields.message });
+    }
+    if (!artistFields.title) {
+      return res.status(400).json({ error: 'bad_title', message: 'A studio needs a title.' });
+    }
+    if (countArtistRoomsFor(identity.profileId) >= ARTIST_ROOMS_PER_ACCOUNT) {
+      return res.status(429).json({ error: 'artist_quota', message: `You can run up to ${ARTIST_ROOMS_PER_ACCOUNT} artist studios.` });
+    }
+  }
   const code = genRoomCode();
   const room = getRoom(code); // materializes with default audience; we override
   room.audience = audience;
   room.listed = audience === 'kid_safe' ? body.listed !== false : false;
   room.title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 40) : null;
   if (identity) room.ownerProfileId = identity.profileId;
+  if (audience === ARTIST_AUDIENCE) {
+    room.title = artistFields.title;
+    // Creating a studio does NOT list it — publishing is a separate explicit
+    // action. The description/tags ride along as the pre-filled draft.
+    room.painters = [];
+    room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags };
+    // Inktober eligibility is separate from gallery publication.
+    room.inktober = body.inktober === true;
+  }
   if (mode === 'storybook') {
     room.title = room.title || 'Our Story';
     enableStorybookRoom(room);
   }
   persistRoom(code);
   res.json({ code, audience: room.audience, listed: room.listed, title: room.title, mode });
+});
+
+// ---- Artist studios: settings / publishing / gallery / ACL ----------------
+// (docs/ARTIST-ROOMS-CONTRACT.md). Publishing is ALWAYS an explicit owner
+// action — nothing here runs on GET or join — and moderation-hidden is a
+// separate admin-owned flag the owner can never override.
+
+// Live or materialized-from-disk room for the owner/admin APIs. The audience
+// comes from the server-persisted file, never from the request.
+function artistRoomForApi(code) {
+  const id = String(code || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  if (!id) return { id: null, room: null };
+  if (rooms.has(id)) return { id, room: rooms.get(id) };
+  if (!existsSync(roomFile(id))) return { id, room: null };
+  return { id, room: getRoom(id) };
+}
+
+// The publish-info shape shared by the settings GET and the publish/unpublish
+// responses (what ArtistRoomSettings' loadPublishInfo/publish/unpublish
+// callbacks consume). `painters` holds opaque account ids — exposed ONLY to
+// the owner through these owner-only endpoints, never anywhere else.
+function publishInfo(room, code) {
+  const gallery = normalizeGallery(room.gallery);
+  return {
+    code,
+    audience: room.audience,
+    title: room.title || null,
+    listed: gallery.listed,
+    description: gallery.description,
+    tags: gallery.tags,
+    inktober: room.inktober === true,
+    publishedAt: gallery.publishedAt,
+    moderationHidden: gallery.moderationHidden,
+    painters: Array.isArray(room.painters) ? room.painters : [],
+  };
+}
+
+async function artistOwnerIdentity(req, res) {
+  const token = bearerToken(req);
+  if (!token) { res.status(401).json({ error: 'signin_required' }); return null; }
+  const identity = await verifyAccessToken(token);
+  if (!identity || !identity.profileId) { res.status(401).json({ error: 'signin_required' }); return null; }
+  return String(identity.profileId);
+}
+
+// How many artist studios one account owns across live + persisted rooms.
+function countArtistRoomsFor(profileId) {
+  const pid = String(profileId);
+  let count = 0;
+  rooms.forEach((room) => {
+    if (isArtistRoom(room) && room.ownerProfileId === pid) count += 1;
+  });
+  for (const meta of dormantRoomMetas()) {
+    if (rooms.has(meta.id)) continue;
+    if (meta.audience === ARTIST_AUDIENCE && meta.ownerProfileId === pid) count += 1;
+  }
+  return count;
+}
+
+// Owner-only settings: publish state + the offline-manageable painter ACL.
+app.get('/api/rooms/:code/artist', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`artistget:${clientIp(req)}`, 60, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  res.json(publishInfo(room, id));
+});
+
+// Explicit publish. Also the ONLY friends -> artist_public conversion path:
+// an owner who publishes their private room opts it into the public studio
+// model (publicly viewable, approved painters only). Nothing converts through
+// GET, join, or any other implicit path.
+app.post('/api/rooms/:code/publish', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  // Bounded per-owner: publishing toggles listing + rewrites the room file, so
+  // it gets a throttle like every other write — generous enough that no real
+  // owner ever notices (12/min).
+  if (!rateOk(`artistpub:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || room.audience === 'kid_safe') {
+    return res.status(400).json({ error: 'not_artist_room' });
+  }
+  if (room.audience !== 'friends' && room.audience !== ARTIST_AUDIENCE) {
+    return res.status(400).json({ error: 'not_artist_room' });
+  }
+  const gallery = normalizeGallery(room.gallery);
+  if (gallery.moderationHidden) {
+    return res.status(403).json({ error: 'moderation_hidden', message: 'Moderators have hidden this studio from the gallery.' });
+  }
+  const body = req.body || {};
+  let converted = false;
+  const fields = validateArtistFields({ title: room.title, description: body.description, tags: body.tags }, scan);
+  if (!fields.ok) {
+    return res.status(400).json({ error: fields.error, message: fields.message });
+  }
+  if (room.audience === 'friends') {
+    // A studio is a plain shared canvas. Converting a room mid-game, mid-film
+    // or mid-story would either DESTROY that state (the studio model can't
+    // hold it) or surface a blank studio preview — so the conversion is
+    // refused with a clear conflict instead, and the private room is left
+    // exactly as it was. Turn the mode off, then publish.
+    const conflicts = [];
+    if (room.gameEnabled || (room.game && room.game.phase)) conflicts.push('draw_guess');
+    if (room.phoneEnabled || phoneActive(room)) conflicts.push('draw_phone');
+    if (room.storybook?.enabled) conflicts.push('storybook');
+    if (room.animationEnabled) conflicts.push('animation');
+    if (conflicts.length) {
+      return res.status(409).json({
+        error: 'incompatible_state',
+        conflicts,
+        message: 'This room has an active game, film or story mode. Turn it off before publishing as a studio — nothing was changed.',
+      });
+    }
+    // The explicit conversion: public viewing by link, NO inherited access —
+    // friends who were drawing keep watching but must be approved to paint.
+    room.audience = ARTIST_AUDIENCE;
+    room.listed = false; // the kid-safe lobby flag never applies to studios
+    room.painters = [];
+    room.hostUserId = null; // no guest-host fallback in artist studios
+    room.users.forEach((member) => {
+      member.canPaint = canPaintIn(room, member);
+      sendRoleChanged(room, member);
+    });
+    converted = true;
+  }
+  if (typeof body.inktober === 'boolean') room.inktober = body.inktober;
+  if (converted) {
+    broadcast(id, { type: 'room_profile', audience: room.audience, roomProfile: roomProfileFor(room, room.inktober ? inktoberState() : null) });
+  }
+  room.gallery = {
+    ...gallery,
+    listed: true,
+    description: fields.description,
+    tags: fields.tags,
+    publishedAt: gallery.publishedAt || new Date().toISOString(),
+    event: room.inktober ? INKTOBER_EVENT : null,
+  };
+  persistRoom(id);
+  res.json(publishInfo(room, id));
+});
+
+// Explicit unpublish: removes gallery discovery ONLY. The room link keeps
+// working (artist_public stays publicly viewable) — never a silent flip back
+// to a private room.
+app.post('/api/rooms/:code/unpublish', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  if (!rateOk(`artistunpub:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  if (room.audience !== ARTIST_AUDIENCE) return res.status(400).json({ error: 'not_artist_room' });
+  room.gallery = { ...normalizeGallery(room.gallery), listed: false };
+  persistRoom(id);
+  res.json(publishInfo(room, id));
+});
+
+// Owner-only ACL management for OFFLINE approved painters (live ones are
+// handled over WS with a session target id). Opaque ids, owner only.
+app.post('/api/rooms/:code/painters/revoke', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  // ACL edits are cheap but each one rewrites the room file and re-broadcasts
+  // roles — bounded per owner (30/min), far above any real cleanup session.
+  if (!rateOk(`artistrevoke:${pid}`, 30, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  if (room.audience !== ARTIST_AUDIENCE) return res.status(400).json({ error: 'not_artist_room' });
+  const targetPid = String((req.body || {}).profileId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  if (!targetPid) return res.status(400).json({ error: 'bad_painter' });
+  room.painters = (room.painters || []).filter((p) => p !== targetPid);
+  // If that account happens to be connected, the revoke is immediate for them.
+  room.users.forEach((member) => {
+    if (member.profileId === targetPid) {
+      member.canPaint = canPaintIn(room, member);
+      sendRoleChanged(room, member);
+      if (member.ws.readyState === 1) member.ws.send(JSON.stringify({ type: 'paint_requested', status: 'revoked' }));
+    }
+  });
+  persistRoom(id);
+  res.json({ ok: true, painters: room.painters });
+});
+
+// All listed, non-moderation-hidden artist studios, from BOTH live rooms and
+// persisted offline ones — a restart must not empty the public gallery.
+function artistGalleryEntries() {
+  const out = new Map();
+  rooms.forEach((room, code) => {
+    if (!isArtistRoom(room)) return;
+    const gallery = normalizeGallery(room.gallery);
+    if (!gallery.listed || gallery.moderationHidden) return;
+    out.set(code, {
+      code,
+      title: room.title || null,
+      description: gallery.description,
+      tags: gallery.tags,
+      users: room.users.size,
+      ops: room.history.length,
+      event: room.inktober ? INKTOBER_EVENT : null,
+      publishedAt: gallery.publishedAt || '',
+    });
+  });
+  for (const meta of dormantRoomMetas()) {
+    if (out.has(meta.id) || meta.audience !== ARTIST_AUDIENCE) continue;
+    const gallery = normalizeGallery(meta.gallery);
+    if (!gallery.listed || gallery.moderationHidden) continue;
+    out.set(meta.id, {
+      code: meta.id,
+      title: meta.title || null,
+      description: gallery.description,
+      tags: gallery.tags,
+      users: 0,
+      ops: Number.isFinite(meta.opCount) ? meta.opCount : 0,
+      event: meta.inktober ? INKTOBER_EVENT : gallery.event,
+      publishedAt: gallery.publishedAt || '',
+    });
+  }
+  return [...out.values()];
+}
+
+// The public, searchable gallery index. Sanitized: no account ids, no names,
+// no emails, no location — exactly the contracted card keys.
+app.get('/api/rooms/gallery', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`gallery:${clientIp(req)}`, 60, 60_000)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
+  const q = String(req.query.q || '').slice(0, 80).trim();
+  const tag = String(req.query.tag || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 24);
+  const event = String(req.query.event || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40);
+  const offset = Math.max(0, Math.min(100000, Number(req.query.offset) || 0));
+  const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 12));
+  const all = artistGalleryEntries();
+  // Popular tags across the whole listed set (filter chips), count-desc.
+  const tagCounts = new Map();
+  for (const entry of all) {
+    for (const t of entry.tags) tagCounts.set(t, (tagCounts.get(t) || 0) + 1);
+  }
+  const topTags = [...tagCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 12)
+    .map(([tagName, count]) => ({ tag: tagName, count }));
+  const filtered = all.filter((entry) =>
+    galleryMatches(entry, q)
+    && (!tag || entry.tags.includes(tag))
+    && (!event || entry.event === event));
+  // Deterministic: newest published first, code as the stable tie-break.
+  filtered.sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || '') || a.code.localeCompare(b.code));
+  const total = filtered.length;
+  const page = filtered.slice(offset, offset + limit).map(galleryCard);
+  res.json({ rooms: page, total, topTags });
+});
+
+// Admin moderation of gallery presence: a DISTINCT moderationHidden flag the
+// owner cannot override (owner publish 403s while it is set).
+app.post('/api/admin/rooms/:code/unpublish', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (!isArtistRoom(room)) return res.status(400).json({ error: 'not_artist_room' });
+  room.gallery = { ...normalizeGallery(room.gallery), moderationHidden: true };
+  persistRoom(id);
+  res.json({ ok: true, moderationHidden: true });
+});
+app.post('/api/admin/rooms/:code/restore', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const { id, room } = artistRoomForApi(req.params.code);
+  if (!room) return res.status(404).json({ error: 'not_found' });
+  if (!isArtistRoom(room)) return res.status(400).json({ error: 'not_artist_room' });
+  room.gallery = { ...normalizeGallery(room.gallery), moderationHidden: false };
+  persistRoom(id);
+  res.json({ ok: true, moderationHidden: false });
 });
 
 // One segment's complete film data for the client-side production exporter:
@@ -9160,6 +9983,18 @@ const PAGE_META = {
   '/wall': {
     title: 'The Fridge Wall — Drawesome gallery',
     description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
+  },
+  '/inktober': {
+    title: 'Inktober on Drawesome — one shared ink & pencil mural',
+    description: 'Draw the official Inktober prompt of the day in ink and pencil on one big shared mural — a fresh prompt every day of October. Free, no account needed. Independent fan participation; not affiliated with or endorsed by Inktober.',
+  },
+  '/paintjar': {
+    title: 'The Paint Jar — Drawesome community impact',
+    description: 'See what the Drawesome community has painted together: aggregate recorded strokes and sessions, an illustrative paper equivalent, and the countries drawing with us.',
+  },
+  '/gallery': {
+    title: 'Artist studios gallery — Drawesome',
+    description: 'Browse public artist studios: watch verified artists paint live, search by title, description and tags, and open a studio to watch. Anyone can view; only approved painters draw.',
   },
   '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
   '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly.' },

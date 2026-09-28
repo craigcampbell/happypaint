@@ -1,0 +1,429 @@
+/* Artist rooms — gallery page + owner publishing settings.
+   Scoped to .artist-gallery-page / .artist-settings; reuses the global
+   .site-page, .site-page-body, .site-lead and .primary-action primitives from
+   App.css. Mobile-first (375px is the primary audience), 44px tap targets. */
+
+.artist-gallery h1,
+.artist-settings h2 {
+  margin: 0 0 8px;
+}
+
+/* ------------------------------- filters -------------------------------- */
+.ag-filters {
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 2px solid #e3d9ff;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.ag-search-label,
+.ag-filter-row label,
+.ag-create-form label,
+.ars-form label {
+  display: block;
+  margin: 10px 0 4px;
+  font-weight: 800;
+  color: #17131f;
+}
+
+.ag-search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ag-search-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-filters input,
+.ag-filters select,
+.ag-create-form input[type="text"],
+.ag-create-form textarea,
+.ars-form input[type="text"],
+.ars-form textarea {
+  padding: 11px 12px;
+  border: 2px solid #cfc4ee;
+  border-radius: 12px;
+  font: inherit;
+  background: #fbfaff;
+  color: #17131f;
+  min-height: 44px;
+}
+
+.ag-create-form textarea,
+.ars-form textarea {
+  resize: vertical;
+}
+
+.ag-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ag-filter-row label {
+  margin: 0;
+}
+
+.ag-clear-filters,
+.ag-active-filter button {
+  border: none;
+  background: none;
+  color: #5533b2;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: 44px;
+  padding: 8px;
+}
+
+.ag-toptags,
+.ag-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ag-tag-chip {
+  padding: 8px 12px;
+  border: 2px solid #d9cffb;
+  border-radius: 999px;
+  background: #f4efff;
+  color: #5533b2;
+  font: inherit;
+  font-weight: 800;
+  font-size: 0.9rem;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.ag-tag-chip.is-active,
+.ag-tag-chip[aria-pressed="true"] {
+  background: #6f46db;
+  border-color: #6f46db;
+  color: #ffffff;
+}
+
+.ag-active-filter {
+  margin: 10px 0 0;
+  color: #494157;
+}
+
+/* ------------------------------- results -------------------------------- */
+.ag-results {
+  margin: 0 0 26px;
+}
+
+.ag-status {
+  padding: 18px;
+  text-align: center;
+  color: #655d71;
+  font-weight: 700;
+}
+
+.ag-error,
+.ag-empty {
+  padding: 18px;
+  border-radius: 14px;
+  background: #fff7e6;
+  border: 2px solid #ffd98a;
+  color: #7a5200;
+  font-weight: 600;
+}
+
+.ag-error {
+  background: #ffecec;
+  border-color: #ffb3b3;
+  color: #8a1f1f;
+}
+
+.ag-count {
+  margin: 0 0 10px;
+  color: #655d71;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.ag-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 720px) {
+  .ag-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1080px) {
+  .ag-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.ag-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 2px solid #e3d9ff;
+  border-radius: 16px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.ag-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ag-card-code {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 2px solid #2d6cdf;
+  border-radius: 10px;
+  background: #eef4ff;
+  color: #2d6cdf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 900;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+}
+
+.ag-card-event {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #17131f;
+  color: #f7ff54;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+
+.ag-card-title {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.ag-card-desc {
+  margin: 0;
+  color: #494157;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ag-card-meta {
+  margin: 0;
+  color: #655d71;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.ag-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ag-watch,
+.ag-secondary {
+  padding: 10px 16px;
+  border: 2px solid #cfc4ee;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #5533b2;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.ag-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ag-pager button {
+  padding: 12px 18px;
+  border: 2px solid #cfc4ee;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #5533b2;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.ag-pager button:disabled,
+.ars-form button:disabled,
+.ag-create-form button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ------------------------------ create form ----------------------------- */
+.ag-create {
+  padding: 16px;
+  border: 2px dashed #cfc4ee;
+  border-radius: 16px;
+  background: #fbfaff;
+}
+
+.ag-signin-note,
+.ag-create-note,
+.ars-note {
+  color: #494157;
+  font-weight: 600;
+}
+
+.ag-create-form input[type="text"],
+.ag-create-form textarea,
+.ars-form input[type="text"],
+.ars-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ag-hint {
+  font-weight: 600;
+  color: #655d71;
+  font-size: 0.85rem;
+}
+
+.ag-inktober-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+  font-weight: 600;
+  color: #17131f;
+}
+
+.ag-inktober-opt input {
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  flex: none;
+}
+
+.ag-form-error {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #ffecec;
+  border: 2px solid #ffb3b3;
+  color: #8a1f1f;
+  font-weight: 700;
+}
+
+.ag-create-actions,
+.ars-actions,
+.ars-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ag-created {
+  padding: 14px;
+  border-radius: 14px;
+  background: #e6f7ee;
+  border: 2px solid #19a463;
+  color: #127a49;
+  font-weight: 600;
+}
+
+.ag-created .ag-secondary {
+  margin-left: 8px;
+}
+
+/* ------------------------------ settings -------------------------------- */
+.artist-settings {
+  padding: 16px;
+  border: 2px solid #e3d9ff;
+  border-radius: 16px;
+  background: #ffffff;
+  max-width: 640px;
+}
+
+.ars-status {
+  color: #655d71;
+  font-weight: 700;
+}
+
+.ars-error {
+  padding: 14px;
+  border-radius: 12px;
+  background: #ffecec;
+  border: 2px solid #ffb3b3;
+  color: #8a1f1f;
+  font-weight: 700;
+}
+
+.ars-state {
+  margin: 0 0 10px;
+  font-weight: 800;
+}
+
+.ars-state-listed {
+  color: #127a49;
+}
+
+.ars-state-unlisted {
+  color: #655d71;
+}
+
+.ars-moderation {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff7e6;
+  border: 2px solid #ffd98a;
+  color: #7a5200;
+  font-weight: 700;
+}
+
+.ars-confirm {
+  margin: 12px 0;
+  padding: 14px;
+  border: 2px solid #6f46db;
+  border-radius: 14px;
+  background: #f4efff;
+  color: #17131f;
+  font-weight: 600;
+}
+
+.ars-danger {
+  padding: 10px 16px;
+  border: 2px solid #d43b3b;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #b32323;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ag-card,
+  .ag-tag-chip,
+  .ag-pager button {
+    transition: box-shadow 120ms ease, border-color 120ms ease;
+  }
+
+  .ag-card:hover {
+    border-color: #b9a6f2;
+    box-shadow: 0 4px 16px rgba(111, 70, 219, 0.14);
+  }
+}
