@@ -108,8 +108,10 @@ The server is an op-agnostic relay + store:
     canvases and replays its ops (`hydrateFrame`); playback/scrub/onion/thumbs/
     exports paint cold frames from a small decoded-raster LRU. Local layer
     stacks flatten when a frame cools (the shared truth is flat). Caps: private
-    rooms 60 frames/scene, 40 scenes, 120k ops; the handshake carries
-    `animMaxFrames`. `window.__drawesomeFrames()` is a read-only diagnostic.
+    rooms 60 frames/scene, 40 scenes, 120k ops; the public FLIPBOOK (one scene)
+    240 frames (~30s at 8fps), 24k ops; the handshake carries `animMaxFrames`.
+    Multi-frame rooms are never front-trimmed on reload (`historyCeiling`) —
+    that would erase the first frames. `window.__drawesomeFrames()` is a read-only diagnostic.
   - Export (`src/utils/videoExport.js`): past 90s the muxer streams into Blob
     parts (fragmented MP4 / streaming WebM), bitrate scales to keep a film under
     ~220MB, the soundtrack is muxed (AAC in MP4 where the platform encodes it,
@@ -258,7 +260,20 @@ learn the user's identity. Message `type`s:
 | `set_sheet` (coloring sheet) | `op`, `cursor`, `cursor_leave`, `history`, `clear`, `sheet` |
 | `rename` (own name/color) | `chat`, `pong`, `room_full` |
 | `clear`, `undo_clear` | `room_state` (locked), `room_renamed`, `role_changed` |
+| `wipe_request` (+`sheetId`), `wipe_vote`, `wipe_cancel` | `wipe_req` (live countdown/vote, or `null` + `ended`), `wipe_req_denied` |
 | host: `lock`/`unlock`/`kick`/`mute`/`rename_room`/`promote`/`demote` | `muted`, `kicked` |
+
+**Wiping the mural.** A member's Clear is a *request* (`startWipeRequest` in
+`server.js`, UI `src/components/WipeCountdown.jsx`): alone → 10s countdown; two
+people → 30s countdown; three or more → a 30s room vote that passes only if more
+than half the people in the room say yes (people = account > device key > socket,
+so two tabs are one vote). The asker can cancel until the last 3s. Member wipes
+keep the chat and can't be "brought back" by members. A bare `clear` from a
+non-host is treated as a request too; a host's Clear (host panel), the Draw &
+Guess drawer's own turn, and flipbook per-frame clears stay instant. A
+moderator's Wipe (`moderateResetRoom`) is a reset — mural, sheet **and** chat,
+as if new — that only the moderator's Undo can restore (the `.chatlog` audit
+trail is never touched). All paths share `wipeMural`.
 
 Client hook: `src/hooks/useMultiplayer.js` (`useMultiplayer(roomId, onMessage,
 token)`), returns `send*` emitters + `disconnect()`.
@@ -272,6 +287,19 @@ token)`), returns `send*` emitters + `disconnect()`.
   `server/pocketbaseAuth.js` via `POST {PB_URL}/api/collections/users/auth-refresh`
   (raw `Authorization` header, no secret) → `{profileId, displayName}`. Fails
   closed to anonymous.
+- **Studio join waits for a stored sign-in** (`hasStoredSession` in `auth.js` +
+  `useMultiplayer`'s `enabled` flag): with a `pocketbase_auth` record present
+  the room socket opens only once the session has loaded (5s fallback), so a
+  signed-in person never joins a private room as a guest first (that raced
+  into the sign-in gate = the "sign in → back to sign in" loop). The gate
+  clears on `connected`, its exits carry `return=/join/CODE`, and the server
+  flags `tokenRejected` so a stale token gets "sign in again".
+- **My rooms**: `GET /api/me/rooms` (Bearer) → rooms the account owns/co-hosts
+  or has been in (analytics visits), newest first, with liveness, size and the
+  person's OWN last chat line; `/api/me/rooms/:code/thumb` serves a card
+  picture only for a room in that list. UI: `MyRooms.jsx` on `/rooms` (where a
+  log-in lands) and in the studio's Rooms modal. Derived from existing stores
+  (analytics, `.chatlog`, room files) — nothing new to wipe on deletion.
 - **Room ownership**: the first signed-in user to enter an unowned room becomes
   `ownerProfileId` (persisted). Owner + `coHosts` = hosts. Host-only WS actions
   (lock/clear/kick/mute/rename/promote) are enforced **server-side** behind

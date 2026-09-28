@@ -12,6 +12,7 @@ import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
 // the production film renderer — one parity-tested replay path for both.
 import { applyOp } from "../utils/opReplay";
 import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
+import { sheetFullUrl } from "../utils/sheetAssets";
 
 // Strokes whose end-op never arrives are committed by the idle sweep after this long.
 const STROKE_IDLE_MS = 8000;
@@ -215,7 +216,7 @@ export default function LiveRoomCanvas({
         img.src = src;
       };
       if (id.startsWith("lib:")) {
-        apply(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
+        apply(sheetFullUrl(id.slice(4)));
         return;
       }
       fetch(`/api/sheets/${id}`, { cache: "no-store" })

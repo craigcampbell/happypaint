@@ -14,6 +14,10 @@
 //          (a constant line whatever the pressure). The choice is stamped
 //          INTO each stroke op (pressureSize / pressureOpacity) so friends,
 //          spectators and history replay lay the identical stroke.
+//   penSeen  true once this device has shown a stylus (pointerType "pen").
+//          Until then the studio is finger-first: the pen-only settings
+//          (Pressure, Fingers: Pen only) stay hidden, and a saved touch "pen"
+//          is ignored so fingers always paint.
 //
 // Stored in ONE localStorage key so the account-deletion wipe list stays
 // short (utils/accountDeletion lists it).
@@ -28,6 +32,7 @@ export const DEFAULT_INPUT_PREFS = Object.freeze({
   hand: "right",
   touch: "auto",
   pressure: "size",
+  penSeen: false,
   // One-shot hint: set once the "ignored a palm — try Pen only" toast has shown.
   palmTipShown: false,
 });
@@ -38,6 +43,7 @@ export function normalizeInputPrefs(raw) {
     hand: HAND_OPTIONS.includes(src.hand) ? src.hand : DEFAULT_INPUT_PREFS.hand,
     touch: TOUCH_OPTIONS.includes(src.touch) ? src.touch : DEFAULT_INPUT_PREFS.touch,
     pressure: PRESSURE_OPTIONS.includes(src.pressure) ? src.pressure : DEFAULT_INPUT_PREFS.pressure,
+    penSeen: Boolean(src.penSeen),
     palmTipShown: Boolean(src.palmTipShown),
   };
 }

@@ -18,6 +18,7 @@ import {
   releaseBrushSprites,
 } from "./utils/brushes";
 import { BRUSH_TIP_ALPHA, brushTipExtent, drawBrushTip } from "./utils/brushTip";
+import { sheetFullUrl } from "./utils/sheetAssets";
 import { createMixMap } from "./utils/mixMap";
 import {
   CANVAS_WIDTH,
@@ -60,7 +61,7 @@ import { applyOp, replayFrameComposite, replayFrameOnto } from "./utils/opReplay
 import { replayInSlices } from "./utils/replayQueue";
 import { createSharedOpLog } from "./utils/sharedOpLog";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
-import { getSession, onAuthStateChange, signOut } from "./utils/auth";
+import { getSession, hasStoredSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
 import { isInlineRaster, remoteOpImage } from "./utils/safeImage";
 
@@ -126,6 +127,7 @@ import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
 import GameHud from "./components/GameHud";
+import WipeCountdown from "./components/WipeCountdown";
 import DrawPhonePanel from "./components/DrawPhonePanel";
 import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
@@ -327,8 +329,14 @@ const MAX_PALETTE_COLORS = 10;
 // hover), so a hand resting on a Cintiq / iPad can't paint or pinch while the
 // pen is in use, yet fingers work again a moment after the pen is put down.
 const PEN_PRIORITY_MS = 1500;
-// A touch contact wider/taller than this is a palm or forearm, never a fingertip.
-const PALM_CONTACT_PX = 45;
+// While a pen is in use, a touch contact wider/taller than this is the resting
+// palm / forearm. Sized for iPad Safari, which reports a touch's width as
+// 2 × UITouch.majorRadius: an ordinary fingertip there is ~40-65px and a
+// child's flat finger pad ~85px (Chromium on Android reports ~10-25px). This
+// used to be 45 and applied with no pen at all, which silently threw away
+// most finger strokes on an iPad. With no pen in play there is NO size test:
+// whatever a kid touches the canvas with paints.
+const PALM_CONTACT_PX = 100;
 // "Pen session": a pen was used this recently, so a lone finger landing on
 // the canvas is most likely the drawing hand settling ahead of the pen tip
 // (the classic palm mark: hand down, then pen). Its stroke is HELD for
@@ -340,6 +348,12 @@ const TOUCH_HOLD_MS = 160;
 // A held touch that lifts inside the hold window is dropped as a stray palm
 // tap unless it travelled this far — a real quick flick still draws.
 const TOUCH_HOLD_FLICK_PX = 12;
+// A palm-sized touch contact during a pen session (penAt = lastPenAtRef; 0 =
+// no pen yet this page load).
+const isPalmContact = (event, penAt) =>
+  penAt > 0 &&
+  (event.timeStamp || performance.now()) - penAt < PEN_SESSION_MS &&
+  ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX);
 // Desktop tool-rail open/closed preference (desktop tier only; the compact
 // tiers always start with the rail closed so the canvas gets the screen).
 const RAIL_OPEN_STORAGE_KEY = "happypaint:studio-rail:v1";
@@ -909,6 +923,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const stepBackBusyRef = useRef(false);
   // Public canvas refresh: { wipeAt, keepVotes, keepNeeded } or null off-cycle.
   const [roomWipe, setRoomWipe] = useState(null);
+  // A member wipe counting down (or a room vote): the server's payload plus
+  // when it arrived — WipeCountdown ticks its own clock from msLeft.
+  const [wipeReq, setWipeReq] = useState(null);
   const [wipePanelOpen, setWipePanelOpen] = useState(false);
   const [, setWipeTick] = useState(0); // ticks the countdown label
   const [hypes, setHypes] = useState([]); // live big-reaction bursts (capped, ephemeral)
@@ -1035,6 +1052,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // so the access token can ride the multiplayer socket and the host UI can read
   // identity. Room ownership/host flags are learned live from the WS server.
   const [session, setSession] = useState(null);
+  // Has the stored sign-in (if any) finished loading? The room socket waits for
+  // it, so a signed-in person joins AS themselves — never as a guest first (a
+  // private room turns a guest away with the sign-in gate). Guests settle at once.
+  const [authSettled, setAuthSettled] = useState(() => !hasStoredSession());
   // Cross-room @mention inbox (shown in the profile menu). Persisted in
   // localStorage so it survives the reload that happens when hopping rooms.
   const [notifications, setNotifications] = useState(() => getNotifications());
@@ -2895,6 +2916,28 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms);
   }, []);
 
+  // The toolbar Clear. The shared mural is never wiped on the spot any more:
+  // this ASKS the server, which counts down (10s alone, 30s with company) or
+  // runs a room vote at 3+ people, and the canvas waits for its `clear` (see
+  // WipeCountdown). Clears that touch only one frame — a flipbook cel, a local
+  // frame 2+ — and the Draw & Guess drawer scrapping their own turn keep the
+  // old confirm-and-clear.
+  const requestClear = useCallback(() => {
+    const game = gameRef.current;
+    const drawerScrap = roomGameRef.current && game?.phase === "playing" && game?.drawerId === myUserIdRef.current;
+    if (roomAnimationRef.current || activeFrameIndexRef.current !== 0 || drawerScrap) {
+      setShowClearConfirm(true);
+      return;
+    }
+    if (!mpConnectedRef.current) {
+      showToast("Reconnecting to the room — try again in a moment.");
+      return;
+    }
+    mpRef.current?.sendWipeRequest?.();
+    // The phone/tablet sheet would cover the countdown and its Cancel.
+    if (layoutTierRef.current !== "desktop") setToolsOpen(false);
+  }, [showToast]);
+
   const closeStepBackPreview = useCallback(() => {
     if (stepBackUrlRef.current) {
       URL.revokeObjectURL(stepBackUrlRef.current);
@@ -3713,9 +3756,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (now - lastPenAtRef.current < PEN_PRIORITY_MS) {
         return true; // pen was just here; ignore resting-hand / second-finger touches
       }
-      // Palm heuristic: real fingertips report a small contact patch. A large
-      // width/height is almost certainly a palm or forearm resting on a tablet.
-      if ((event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX) {
+      // Palm heuristic, pen sessions only: a large contact patch while a pen
+      // is in use is the drawing hand resting on the glass.
+      if (isPalmContact(event, lastPenAtRef.current)) {
         return true;
       }
     }
@@ -4432,6 +4475,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     showToast("✋ Ignored a palm touch. Tools ▸ Hand & pen ▸ Pen only keeps fingers from painting.");
   };
 
+  // "Pen only" only means something on a device that has shown us a pen. A
+  // kid who taps it on an iPad with no stylus must not end up with a canvas
+  // their fingers can't paint on, so without a pen it reads as "Draw too".
+  const penOnlyTouch = () => inputPrefsRef.current.touch === "pen" && inputPrefsRef.current.penSeen;
+
+  // First pen contact or hover on this device: remember it, unlock the pen
+  // settings (Pressure, Fingers: Pen only) that stay hidden for finger
+  // painters, and say where they are. Fires once per device.
+  const penSeenNotedRef = useRef(false);
+  const notePenSeen = () => {
+    if (penSeenNotedRef.current || inputPrefsRef.current.penSeen) {
+      return;
+    }
+    penSeenNotedRef.current = true;
+    updateInputPrefs({ penSeen: true });
+    showToast("✏️ Pen found! Pressure and Pen-only settings are now in Tools ▸ Hand & pen.");
+  };
+
   const handleCanvasPointerDown = (event) => {
     if (isExportingVideoRef.current || historyReplayActiveRef.current) {
       return; // don't start a stroke on a scene that is still being rebuilt
@@ -4469,13 +4530,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // paint (the pen-priority window in startStroke keeps single touches
     // inert). Rejected touches are still captured so their up/cancel returns.
     if (event.pointerType === "touch") {
-      const palm = (event.width || 0) > PALM_CONTACT_PX || (event.height || 0) > PALM_CONTACT_PX;
-      if (palm || (activePointerRef.current != null && activePointerTypeRef.current === "pen")) {
+      if (
+        isPalmContact(event, lastPenAtRef.current) ||
+        (activePointerRef.current != null && activePointerTypeRef.current === "pen")
+      ) {
         return;
       }
     }
     if (event.pointerType === "pen") {
       lastPenAtRef.current = event.timeStamp || performance.now();
+      notePenSeen();
       // Pen down: a finger stroke that was on hold, or has just started, was
       // the drawing hand landing first. Drop it (see discardTouchStroke).
       if (cancelHeldTouch() || discardTouchStroke()) {
@@ -4494,7 +4558,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       gestureRef.current == null &&
       panPointerRef.current == null &&
       pointersRef.current.size > 0 &&
-      inputPrefsRef.current.touch !== "pen" &&
+      !penOnlyTouch() &&
       (event.timeStamp || performance.now()) - lastPenAtRef.current >= PEN_PRIORITY_MS
     ) {
       pointersRef.current.clear();
@@ -4538,7 +4602,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Otherwise a lone finger inside the pen-priority window stays a silent
       // gesture candidate — no ring, no stroke (startStroke would reject it
       // anyway, but the ring hopping to a resting finger looks broken).
-      if (inputPrefsRef.current.touch === "pen" || now - penAt < PEN_PRIORITY_MS) {
+      if (penOnlyTouch() || now - penAt < PEN_PRIORITY_MS) {
         return;
       }
       // Pen session: hold the stroke briefly in case this is the hand landing
@@ -4560,6 +4624,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // — and drops a finger stroke still on hold (the hand rests, the pen
       // approaches).
       lastPenAtRef.current = event.timeStamp || performance.now();
+      notePenSeen();
       if (cancelHeldTouch()) {
         notePalmCaught();
       }
@@ -4637,7 +4702,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // owns neither the ring nor the cursor relay — those follow the pen.
     if (
       event.pointerType === "touch" &&
-      (inputPrefsRef.current.touch === "pen" ||
+      (penOnlyTouch() ||
         (event.timeStamp || performance.now()) - lastPenAtRef.current < PEN_PRIORITY_MS)
     ) {
       return;
@@ -6885,7 +6950,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       };
       // Library sheets (id is "lib:<filename>") are served as a static PNG.
       if (id.startsWith("lib:")) {
-        applySrc(`/coloring-sheets/full/${encodeURIComponent(id.slice(4))}.png`);
+        applySrc(sheetFullUrl(id.slice(4)));
         return;
       }
       if (id.startsWith("remix:")) {
@@ -7462,6 +7527,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       switch (data.type) {
         case "connected": {
+          // We're IN. A sign-in gate raised by an earlier (guest) attempt is
+          // stale now — it used to stay up over a room we'd already joined.
+          setSigninGate(null);
           // A fresh connection supersedes work from the previous socket.
           historyReplayEpochRef.current += 1;
           historyReplayActiveRef.current = false;
@@ -7534,6 +7602,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setMyWord(null);
           setRoomWipe(data.wipe || null);
           setWipePanelOpen(false);
+          setWipeReq(null); // a live one is re-sent right after the join
           // Draw Phone room? Reset any stale telephone state from a prior room;
           // the live phone_state / phone_task (if any) arrive right after.
           roomPhoneRef.current = !!data.phone;
@@ -7605,7 +7674,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // down like a kick so we don't hammer the server, then explain WHY and
           // give the kid a way forward: sign up, or go draw in a public room.
           mpRef.current?.disconnect?.();
-          setSigninGate({ reason: data.reason || null, audience: data.audience || null });
+          setSigninGate({ reason: data.reason || null, audience: data.audience || null, tokenRejected: !!data.tokenRejected });
           break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
@@ -8000,6 +8069,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // Not blame-worthy and not a surprise — say what happened, which
             // also covers FINGERS, where there's no chat to read it in.
             showToast("🧽 Fresh canvas! This room starts over every 3 days.");
+          } else if (data.modReset) {
+            // A moderator reset the room (chat too) — nothing to bring back.
+            setClearBanner(null);
+            showToast("🧽 A moderator gave this room a fresh start.");
+          } else if (data.final) {
+            // A countdown/vote wipe: the countdown WAS the undo window, so no
+            // "Bring it back" (one kid could overturn the room's vote).
+            setClearBanner(null);
+            showToast(
+              data.wipeMode === "vote" ? "🧽 The room voted — fresh canvas!"
+                : data.userId === myUserIdRef.current ? "🧽 Fresh canvas!"
+                  : `🧽 ${data.name || "Someone"} wiped the canvas — fresh start!`,
+            );
           } else if (!data.gameRound) {
             showClearBanner(data.name || "Someone");
           }
@@ -8521,6 +8603,41 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   : "Give it a moment and try again.",
           );
           break;
+        // Member wipes: the live countdown/vote (null = over) and why it ended.
+        case "wipe_req": {
+          setWipeReq(data.req ? { ...data.req, receivedAt: Date.now() } : null);
+          const ended = data.ended;
+          if (ended) {
+            const mine = ended.byId === myUserIdRef.current;
+            if (ended.outcome === "cancelled") {
+              showToast(mine ? "Wipe cancelled — the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
+            } else if (ended.outcome === "failed") {
+              showToast(`The room voted to keep the canvas 🎨 (${ended.yes} of ${ended.needed} yes votes needed)`, 5000);
+            } else if (ended.outcome === "left") {
+              showToast(`Wipe called off — ${ended.byName || "the asker"} left the room`);
+            }
+            // "wiped" is announced by the clear itself; "cleared"/"blocked"
+            // by whatever beat the countdown to it.
+          }
+          break;
+        }
+        case "wipe_req_denied":
+          showToast(
+            {
+              busy: "A wipe is already counting down! ⏳",
+              cooldown: "The room just voted to keep it — try again in a little bit 🎨",
+              slow_down: "Give it a moment and try again.",
+              muted: "You're muted by a host right now.",
+              host_only: "Only this room's host can wipe the canvas.",
+              locked: "A host locked this room.",
+              game: "Wait until the game round is over! ⏱️",
+              animation: "In a flipbook, clear one frame at a time.",
+              already_voted: "You already voted! 🗳️",
+              too_late: "Too late to cancel — here comes a fresh canvas! 🧽",
+              no_request: "That vote already ended.",
+            }[data.reason] || "Give it a moment and try again.",
+          );
+          break;
         case "fork_denied":
           showToast(
             data.reason === "empty" ? "Draw something first, then you can take it private! ✏️"
@@ -8576,7 +8693,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     handleMpMessageRef.current = handleMpMessage;
   }, [handleMpMessage]);
 
-  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token);
+  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token, authSettled);
 
   // Join curtain: the socket is up. The handshake and the history frame that
   // hydrate the canvas still have to land (steps 2 and 3, in handleMpMessage).
@@ -8757,12 +8874,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendSetGame: mp.sendSetGame,
       sendWipeKeep: mp.sendWipeKeep,
       sendForkPrivate: mp.sendForkPrivate,
+      sendWipeRequest: mp.sendWipeRequest,
+      sendWipeVote: mp.sendWipeVote,
+      sendWipeCancel: mp.sendWipeCancel,
       sendSetPhone: mp.sendSetPhone,
       sendPhoneStart: mp.sendPhoneStart,
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate]);
+  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate, mp.sendWipeRequest, mp.sendWipeVote, mp.sendWipeCancel]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -8889,6 +9009,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     (sheet) => {
       if (!sheet?.id) return;
       const hasContent = Boolean(sheetId) || historyCount > 0;
+      // Over existing art a fresh sheet is a WIPE, so it takes Clear's road:
+      // the server counts down (or asks the room) and sets the sheet as the
+      // canvas clears. Flipbooks keep the old confirm-and-clear.
+      if (hasContent && !roomAnimationRef.current) {
+        if (!mpConnectedRef.current) {
+          showToast("Reconnecting to the room — try again in a moment.");
+          return;
+        }
+        mpRef.current?.sendWipeRequest?.(`lib:${sheet.id}`);
+        setShowSheetModal(false);
+        if (layoutTierRef.current !== "desktop") setToolsOpen(false); // don't hide the countdown
+        return;
+      }
       if (hasContent && !window.confirm("Start a fresh page with this coloring sheet? It clears the canvas for everyone in the room.")) {
         return;
       }
@@ -9362,7 +9495,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Lift the session so the access token can ride the multiplayer socket and
       // the host UI can read identity. Re-running the socket connect on token
       // change reconnects us with our verified identity.
-      if (active) setSession(session || null);
+      if (active) {
+        setSession(session || null);
+        setAuthSettled(true);
+      }
       if (session) {
         await startSync(session);
         await refreshFromLocal();
@@ -9375,6 +9511,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         handleSession(session);
       }
     });
+    // Never hold the room hostage to a slow/failed SDK load: after 5s connect
+    // as whoever we are (a private room will ask to sign in, and that gate now
+    // clears itself once the signed-in reconnect lands).
+    const settleTimer = window.setTimeout(() => active && setAuthSettled(true), 5000);
     const unsub = onAuthStateChange((session) => {
       if (active) {
         handleSession(session);
@@ -9382,6 +9522,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     });
     return () => {
       active = false;
+      window.clearTimeout(settleTimer);
       unsub();
       stopSync();
     };
@@ -9841,7 +9982,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
               {isPreparingStepBack ? "Framing..." : "Step back"}
             </button>
-            <button type="button" onClick={() => setShowClearConfirm(true)}>
+            <button type="button" onClick={requestClear}>
               Clear
             </button>
             <button type="button" onClick={() => imageInputRef.current?.click()} title="Add a GIF or image">
@@ -10503,6 +10644,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
             ) : null}
 
+            {/* A member wipe counting down, or the room voting on one. */}
+            {wipeReq ? (
+              <WipeCountdown
+                req={wipeReq}
+                myId={mp.self?.id}
+                onCancel={(id) => mpRef.current?.sendWipeCancel?.(id)}
+                onVote={(id, yes) => mpRef.current?.sendWipeVote?.(id, yes)}
+              />
+            ) : null}
+
             {/* Draw & Guess HUD — word/timer/scoreboard over the canvas. */}
             {roomGame && game ? (
               <GameHud
@@ -11073,7 +11224,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <button type="button" onClick={openStepBackPreview} disabled={isPreparingStepBack}>
               {isPreparingStepBack ? "Framing..." : "Preview"}
             </button>
-            <button type="button" onClick={() => setShowClearConfirm(true)}>
+            <button type="button" onClick={requestClear}>
               Clear
             </button>
             <button type="button" onClick={() => imageInputRef.current?.click()}>
@@ -11592,7 +11743,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               <output>{Math.round(brushVariation * 100)}%</output>
             </label>
           )}
-          {isGooActive || selectedTool === "text" ? null : (
+          {/* Pen pressure is a stylus setting: hidden until this device has shown
+              a pen (always offered on desktop, where a Wacom may not have
+              touched yet), and kept for anyone who already changed it. */}
+          {isGooActive ||
+          selectedTool === "text" ||
+          !(inputPrefs.penSeen || layoutTier === "desktop" || inputPrefs.pressure !== "size") ? null : (
             <div className="pref-row pref-pressure" role="group" aria-label="Pen pressure">
               <span>Pressure</span>
               <div className="seg-toggle">
@@ -11669,32 +11825,36 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 : "Right-hand mode: the tools open on the right of the canvas."}
             </p>
           </div>
-          <div className="pref-row" role="group" aria-label="Finger touch">
-            <span>Fingers</span>
-            <div className="seg-toggle">
-              <button
-                type="button"
-                className={inputPrefs.touch === "auto" ? "is-on" : ""}
-                aria-pressed={inputPrefs.touch === "auto"}
-                onClick={() => updateInputPrefs({ touch: "auto" })}
-              >
-                Draw too
-              </button>
-              <button
-                type="button"
-                className={inputPrefs.touch === "pen" ? "is-on" : ""}
-                aria-pressed={inputPrefs.touch === "pen"}
-                onClick={() => updateInputPrefs({ touch: "pen" })}
-              >
-                Pen only
-              </button>
+          {inputPrefs.penSeen ? (
+            <div className="pref-row pref-touch" role="group" aria-label="Finger touch">
+              <span>Fingers</span>
+              <div className="seg-toggle">
+                <button
+                  type="button"
+                  className={inputPrefs.touch === "auto" ? "is-on" : ""}
+                  aria-pressed={inputPrefs.touch === "auto"}
+                  onClick={() => updateInputPrefs({ touch: "auto" })}
+                >
+                  Draw too
+                </button>
+                <button
+                  type="button"
+                  className={inputPrefs.touch === "pen" ? "is-on" : ""}
+                  aria-pressed={inputPrefs.touch === "pen"}
+                  onClick={() => updateInputPrefs({ touch: "pen" })}
+                >
+                  Pen only
+                </button>
+              </div>
+              <p className="tool-hint">
+                {inputPrefs.touch === "pen"
+                  ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
+                  : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
+              </p>
             </div>
-            <p className="tool-hint">
-              {inputPrefs.touch === "pen"
-                ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
-                : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
-            </p>
-          </div>
+          ) : (
+            <p className="tool-hint pen-hint">Got a stylus? Draw with it once and the pen settings show up here.</p>
+          )}
         </section>
 
         <section className="tool-section economy-rail">
@@ -11949,28 +12109,59 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // are sign up, log in, or keep drawing in a public room — and under-13s
         // get the grown-up route rather than a wall, because a kid that young
         // can't create an account themselves.
+        // Both sign-in exits carry `return` so the person lands back in THIS room
+        // (they used to be dropped in a brand-new random room). A rejected token
+        // (expired / revoked) gets "sign in again": we clear the stale local
+        // session first, or /signup would claim "signed in" and bounce them here.
         <div className="modal-backdrop" role="presentation">
-          <section className="studio-modal" role="dialog" aria-modal="true">
-            <h2>Private rooms need a free account</h2>
-            <p className="account-note">
-              Invite-only rooms are for a crew you know, so we ask for an account before you
-              go in — that way a room always has someone we can reach if something goes wrong.
-              You never need an account to draw in the public rooms.
-            </p>
-            <p className="account-note">
-              Under 13? Ask a grown-up to set up the room with you.
-            </p>
-            <div className="account-actions">
-              <button type="button" className="primary-action" onClick={() => { window.location.href = "/signup"; }}>
-                Sign up free
-              </button>
-              <button type="button" onClick={() => { window.location.href = "/signup"; }}>
-                I already have an account
-              </button>
-              <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
-                Keep drawing in the open studio
-              </button>
-            </div>
+          <section className="studio-modal" role="dialog" aria-modal="true" aria-labelledby="signin-gate-title">
+            {signinGate.tokenRejected ? (
+              <>
+                <h2 id="signin-gate-title">Let&rsquo;s sign you in again</h2>
+                <p className="account-note">
+                  Your sign-in didn&rsquo;t go through for this private room — it may have expired.
+                  Sign in again and you&rsquo;ll come straight back here.
+                </p>
+                <div className="account-actions">
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={async () => {
+                      await signOut();
+                      window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`;
+                    }}
+                  >
+                    Sign in again
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
+                    Keep drawing in the open studio
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id="signin-gate-title">Private rooms need a free account</h2>
+                <p className="account-note">
+                  Invite-only rooms are for a crew you know, so we ask for an account before you
+                  go in — that way a room always has someone we can reach if something goes wrong.
+                  You never need an account to draw in the public rooms.
+                </p>
+                <p className="account-note">
+                  Under 13? Ask a grown-up to set up the room with you.
+                </p>
+                <div className="account-actions">
+                  <button type="button" className="primary-action" onClick={() => { window.location.href = `/signup?return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                    Sign up free
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                    I already have an account
+                  </button>
+                  <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>
+                    Keep drawing in the open studio
+                  </button>
+                </div>
+              </>
+            )}
           </section>
         </div>
       ) : null}

@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getRecentRooms } from "../utils/recentRooms";
+import MyRooms from "./MyRooms";
 
 export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome, onClose, onToast }) {
   const [rooms, setRooms] = useState(null); // null = loading
@@ -98,25 +99,12 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
           🏠 Front page — explore &amp; watch live rooms
         </button>
 
-        {recent.length ? (
+        {/* Signed in: your rooms from the server (owned + visited, with who's
+            there and your last chat line); signed out: this device's recents. */}
+        {signedIn || recent.length ? (
           <div className="ps-group lobby-section">
             <h3>Your rooms</h3>
-            <ul className="lobby-room-list">
-              {recent.map((r) => {
-                const here = r.code === currentRoom;
-                return (
-                  <li key={r.code} className="lobby-room">
-                    <span className="lobby-room-main">
-                      <span className="lobby-room-name">{r.title || `Room ${r.code}`}</span>
-                      <span className="lobby-room-meta">{here ? "you're here now" : `Room ${r.code}`}</span>
-                    </span>
-                    <button type="button" disabled={here} onClick={() => onJoin(r.code)}>
-                      {here ? "Here" : "Go →"}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            <MyRooms variant="list" token={signedIn ? token : null} currentRoom={currentRoom} onJoin={onJoin} />
           </div>
         ) : null}
 

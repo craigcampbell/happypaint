@@ -13,6 +13,7 @@ import {
   sessionLabel,
   signInWithEmail,
   signInWithProvider,
+  signOut,
   signUpWithEmail,
 } from "../utils/auth";
 
@@ -26,17 +27,27 @@ export default function SignupPage({ onNavigate }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
+  // Where to go afterwards. Only our own few destinations are honoured (never an
+  // arbitrary URL — that would be an open redirect): a room the person was
+  // trying to enter (the private-room gate sends `/join/CODE`), their rooms, or
+  // the family page.
   const returnPath = (() => {
     const requested = new URLSearchParams(window.location.search).get("return") || "";
-    return requested === "/family" ? requested : "";
+    return /^\/(family|rooms|join\/[A-Z0-9]{1,8})$/.test(requested) ? requested : "";
   })();
-  const nextDrawingPath = () => {
-    if (returnPath) return returnPath;
+  const newRoomPath = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = "";
     for (let i = 0; i < 6; i += 1) code += alphabet[Math.floor(Math.random() * alphabet.length)];
     return `/join/${code}`;
   };
+  // A NEW account starts in its own fresh room ("keep your art forever");
+  // someone logging BACK in lands on their rooms to pick up where they left off
+  // — never a random empty room, which is what made logging in feel like a loop.
+  const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
+  // A guest can't enter a private room (the door asks for an account), so the
+  // guest exit goes to the open studio rather than a random private code.
+  const guestPath = returnPath === "/family" ? returnPath : "/join/MAIN";
   // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
   // "" until answered; signup stays disabled until one option is picked.
   const [ageBand, setAgeBand] = useState("");
@@ -69,7 +80,7 @@ export default function SignupPage({ onNavigate }) {
           JSON.stringify({ band: ageBand || "login", ts: Date.now() }),
         );
       } catch { /* best-effort */ }
-      onNavigate(nextDrawingPath());
+      onNavigate(afterAuthPath(mode));
     }
   };
 
@@ -84,7 +95,7 @@ export default function SignupPage({ onNavigate }) {
     const result = await signInWithProvider(provider, popup);
     setMessage(result.message);
     setBusy(false);
-    if (result.ok) onNavigate(nextDrawingPath());
+    if (result.ok) onNavigate(afterAuthPath(mode));
   };
 
   const oauthProviders = OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id));
@@ -93,7 +104,7 @@ export default function SignupPage({ onNavigate }) {
     <div className="site-page">
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
-        <h1>{mode === "signup" ? "Sign up — keep your art forever" : "Welcome back"}</h1>
+        <h1>{session ? "You’re signed in" : mode === "signup" ? "Sign up — keep your art forever" : "Welcome back"}</h1>
         <p className="site-lead">
           You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find
           it on any device.
@@ -103,8 +114,23 @@ export default function SignupPage({ onNavigate }) {
           {session ? (
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
-              <button type="button" className="primary-action" onClick={() => onNavigate(nextDrawingPath())}>
-                🎨 Go paint
+              <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/rooms")}>
+                {returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
+              </button>
+              <button type="button" className="signup-guest" onClick={() => onNavigate(newRoomPath())}>
+                ✨ Start a new private room
+              </button>
+              {/* Without a way out, a stale sign-in here could never be fixed. */}
+              <button
+                type="button"
+                className="signup-toggle"
+                onClick={async () => {
+                  await signOut();
+                  setSession(null);
+                  setMode("login");
+                }}
+              >
+                Not you? Sign out
               </button>
             </>
           ) : (
@@ -211,7 +237,7 @@ export default function SignupPage({ onNavigate }) {
               ) : null}
 
               {!isCloudConfigured ? <p className="account-note compliance">{LOCAL_ONLY_MESSAGE}</p> : null}
-              <button type="button" className="signup-guest" onClick={() => onNavigate(nextDrawingPath())}>
+              <button type="button" className="signup-guest" onClick={() => onNavigate(guestPath)}>
                 Keep drawing as a guest →
               </button>
             </>

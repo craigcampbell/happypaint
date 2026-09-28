@@ -70,6 +70,26 @@ export async function getSession() {
   }
 }
 
+// SYNCHRONOUS peek: does this browser hold an unexpired sign-in? No SDK load —
+// it reads PocketBase's own localStorage record ("pocketbase_auth") and the
+// token's exp claim. The studio uses it to hold its room socket until the real
+// session has loaded: connecting first sent a signed-in person into a private
+// room as a GUEST, which the door turned away with "sign in" — the sign-in loop.
+// Guests (no stored record) get false and connect instantly, as before.
+export function hasStoredSession() {
+  if (!isCloudConfigured) return false;
+  try {
+    const raw = window.localStorage.getItem("pocketbase_auth");
+    if (!raw) return false;
+    const token = JSON.parse(raw)?.token;
+    if (typeof token !== "string" || token.split(".").length !== 3) return false;
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return !payload.exp || payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+}
+
 // The authenticated user id (profiles/users record id) — the owner key for
 // gallery rows / room ownership. null when signed out / unconfigured.
 export async function getProfileId() {

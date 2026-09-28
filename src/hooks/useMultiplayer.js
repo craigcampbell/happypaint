@@ -70,7 +70,9 @@ function clientInfoPayload() {
   }
 }
 
-export function useMultiplayer(roomId, onMessage, token) {
+// `enabled` = false holds the socket closed (the studio waits for a stored
+// sign-in to load, so a signed-in person never joins as a guest first).
+export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -207,6 +209,7 @@ export function useMultiplayer(roomId, onMessage, token) {
   }, [roomId, token]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     connect();
     return () => {
       shouldReconnectRef.current = false;
@@ -216,7 +219,7 @@ export function useMultiplayer(roomId, onMessage, token) {
       wsRef.current = null;
       closing?.close();
     };
-  }, [connect]);
+  }, [connect, enabled]);
 
   const send = useCallback((payload) => {
     const ws = wsRef.current;
@@ -371,6 +374,11 @@ export function useMultiplayer(roomId, onMessage, token) {
   // it into your own private room before it resets.
   const sendWipeKeep = useCallback(() => send({ type: "wipe_keep" }), [send]);
   const sendForkPrivate = useCallback(() => send({ type: "fork_private" }), [send]);
+  // Member wipes: ASK to wipe the mural (optionally for a fresh coloring
+  // sheet) — the server runs the countdown, or a room vote at 3+ people.
+  const sendWipeRequest = useCallback((sheetId) => send(sheetId ? { type: "wipe_request", sheetId } : { type: "wipe_request" }), [send]);
+  const sendWipeVote = useCallback((id, yes) => send({ type: "wipe_vote", id, yes: !!yes }), [send]);
+  const sendWipeCancel = useCallback((id) => send({ type: "wipe_cancel", id }), [send]);
   // Draw Phone (telephone): a private-room host toggles it / starts a game; each
   // player submits their page (a drawn PNG or a text guess) per round; the host
   // can force-advance. Incoming phone_* messages auto-forward to the dispatcher.
@@ -395,7 +403,7 @@ export function useMultiplayer(roomId, onMessage, token) {
     sendQuestNominate, sendQuestReset, sendStorybookCaption, sendStorybookLock, sendStorybookMove,
     sendGameSkip, sendSetGame,
     sendSetPhone, sendPhoneStart, sendPhoneSubmit, sendPhoneSkip,
-    sendWipeKeep, sendForkPrivate,
+    sendWipeKeep, sendForkPrivate, sendWipeRequest, sendWipeVote, sendWipeCancel,
     sendSetAnimation, sendFrameAdd, sendFrameDel, sendFrameMove, sendFrameDuration,
     sendLayerAdd, sendLayerDel, sendLayerMove, sendLayerPatch, sendLayerDup, sendLayerMerge, sendLayerFlatten,
     sendSceneFetch, sendSceneAdd, sendSceneDel, sendSceneSet, sendSoundtrack,

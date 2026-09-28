@@ -124,142 +124,244 @@ export default function FilmStrip({
 
   return (
     <section className="film-strip" aria-label="Animation film strip">
-      <div className="fs-transport">
-        <button
-          type="button"
-          className="fs-onion"
-          onClick={onToggleOnion}
-          aria-pressed={onionSkin}
-          title="Onion skin — see neighbour frames faintly"
-        >
-          🧅
-        </button>
-        <button
-          type="button"
-          onClick={onTogglePlay}
-          disabled={!multiFrame}
-          aria-pressed={isPlaying}
-          title={multiFrame ? "Play / pause" : "Add a frame to preview"}
-        >
-          {isPlaying ? "⏸" : "▶"}
-        </button>
-        <span className="fs-counter" aria-live="off">
-          {displayIndex + 1}/{frames.length}
-        </span>
-        {otherSceneCrew > 0 ? (
-          <span className="fs-elsewhere" title={`${otherSceneCrew} friend${otherSceneCrew > 1 ? "s" : ""} painting in other scenes`}>
-            👥 {otherSceneCrew} elsewhere
-          </span>
-        ) : null}
-        {onBeacon ? (
-          <button type="button" className="fs-beacon" onClick={onBeacon} title="Call your friends over to this frame">
-            🔎 Come look!
+      {/* Transport + frame detail travel together. They share a line with the
+          reel only while the reel still gets real room; otherwise the reel takes
+          its own full-width line (a Cintiq at 2x, tablets, a host's scene tools
+          used to squeeze the cels down to nothing). See .fs-controls CSS. */}
+      <div className="fs-controls">
+        <div className="fs-transport">
+          <button
+            type="button"
+            className="fs-onion"
+            onClick={onToggleOnion}
+            aria-pressed={onionSkin}
+            title="Onion skin — see neighbour frames faintly"
+          >
+            🧅
           </button>
-        ) : null}
-        {onCheer ? (
-          <div className="fs-cheer">
-            <button
-              type="button"
-              className="fs-cheer-toggle"
-              onClick={() => setCheerOpen((o) => !o)}
-              aria-label="Cheer this frame"
-              title="Cheer this frame — everyone sees it pop!"
-            >
-              🎉
-            </button>
-            {cheerOpen ? (
-              <div className="fs-cheer-menu" role="menu">
-                {["⭐", "❤️", "🎉", "👏", "🌟", "🥳"].map((e) => (
-                  <button
-                    key={e}
-                    type="button"
-                    onClick={() => {
-                      onCheer(e);
-                      setCheerOpen(false);
-                    }}
-                    aria-label={`Cheer ${e}`}
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {scenes.length > 1 || canManageScenes ? (
-          <div className="fs-scenes" role="group" aria-label="Scenes">
-            <button
-              type="button"
-              onClick={() => onSelectScene?.(scenes[sceneIndex - 1]?.id)}
-              disabled={sceneIndex <= 0}
-              aria-label="Previous scene"
-              title="Previous scene"
-            >
-              ⏮
-            </button>
-            <span className="fs-scene-label" title={scenes[sceneIndex]?.name || "Scene"}>
-              🎬 {Math.max(1, sceneIndex + 1)}/{Math.max(1, scenes.length)}
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            disabled={!multiFrame}
+            aria-pressed={isPlaying}
+            title={multiFrame ? "Play / pause" : "Add a frame to preview"}
+          >
+            {isPlaying ? "⏸" : "▶"}
+          </button>
+          <span className="fs-counter" aria-live="off">
+            {displayIndex + 1}/{frames.length}
+          </span>
+          {otherSceneCrew > 0 ? (
+            <span className="fs-elsewhere" title={`${otherSceneCrew} friend${otherSceneCrew > 1 ? "s" : ""} painting in other scenes`}>
+              👥 {otherSceneCrew} elsewhere
             </span>
-            <button
-              type="button"
-              onClick={() => onSelectScene?.(scenes[sceneIndex + 1]?.id)}
-              disabled={sceneIndex < 0 || sceneIndex >= scenes.length - 1}
-              aria-label="Next scene"
-              title="Next scene"
-            >
-              ⏭
+          ) : null}
+          {onBeacon ? (
+            <button type="button" className="fs-beacon" onClick={onBeacon} title="Call your friends over to this frame">
+              🔎 Come look!
             </button>
-            {canManageScenes ? (
+          ) : null}
+          {onCheer ? (
+            <div className="fs-cheer">
               <button
                 type="button"
-                className="fs-scene-add"
-                onClick={onAddScene}
-                aria-label="New scene"
-                title="New scene (a fresh page of frames)"
+                className="fs-cheer-toggle"
+                onClick={() => setCheerOpen((o) => !o)}
+                aria-label="Cheer this frame"
+                title="Cheer this frame — everyone sees it pop!"
               >
-                +🎬
+                🎉
               </button>
-            ) : null}
-            {activeScene ? (
-              <span className="fs-scene-timing" title="This scene's runtime (frames × loops)">
-                ⏱ {formatRuntime(sceneRuntimeMs(activeScene))}
-                {scenes.length > 1 ? ` · film ${formatRuntime(scenes.reduce((sum, s) => sum + sceneRuntimeMs(s), 0))}` : ""}
+              {cheerOpen ? (
+                <div className="fs-cheer-menu" role="menu">
+                  {["⭐", "❤️", "🎉", "👏", "🌟", "🥳"].map((e) => (
+                    <button
+                      key={e}
+                      type="button"
+                      onClick={() => {
+                        onCheer(e);
+                        setCheerOpen(false);
+                      }}
+                      aria-label={`Cheer ${e}`}
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {scenes.length > 1 || canManageScenes ? (
+            <div className="fs-scenes" role="group" aria-label="Scenes">
+              <button
+                type="button"
+                onClick={() => onSelectScene?.(scenes[sceneIndex - 1]?.id)}
+                disabled={sceneIndex <= 0}
+                aria-label="Previous scene"
+                title="Previous scene"
+              >
+                ⏮
+              </button>
+              <span className="fs-scene-label" title={scenes[sceneIndex]?.name || "Scene"}>
+                🎬 {Math.max(1, sceneIndex + 1)}/{Math.max(1, scenes.length)}
               </span>
-            ) : null}
-            {activeScene && canManageScenes ? (
-              <>
-                <label className="fs-scene-loops" title="Play this scene this many times (a walk cycle, rain, a candle flicker…)">
-                  🔁
-                  <select
-                    value={normalizeLoops(activeScene.loops)}
-                    onChange={(event) => onSceneSet?.(activeScene.id, { loops: Number(event.target.value) })}
-                    aria-label="Scene loops"
-                  >
-                    {Array.from({ length: MAX_SCENE_LOOPS }, (_, i) => i + 1).map((n) => (
-                      <option key={n} value={n}>×{n}</option>
-                    ))}
-                  </select>
+              <button
+                type="button"
+                onClick={() => onSelectScene?.(scenes[sceneIndex + 1]?.id)}
+                disabled={sceneIndex < 0 || sceneIndex >= scenes.length - 1}
+                aria-label="Next scene"
+                title="Next scene"
+              >
+                ⏭
+              </button>
+              {canManageScenes ? (
+                <button
+                  type="button"
+                  className="fs-scene-add"
+                  onClick={onAddScene}
+                  aria-label="New scene"
+                  title="New scene (a fresh page of frames)"
+                >
+                  +🎬
+                </button>
+              ) : null}
+              {activeScene ? (
+                <span className="fs-scene-timing" title="This scene's runtime (frames × loops)">
+                  ⏱ {formatRuntime(sceneRuntimeMs(activeScene))}
+                  {scenes.length > 1 ? ` · film ${formatRuntime(scenes.reduce((sum, s) => sum + sceneRuntimeMs(s), 0))}` : ""}
+                </span>
+              ) : null}
+              {activeScene && canManageScenes ? (
+                <>
+                  <label className="fs-scene-loops" title="Play this scene this many times (a walk cycle, rain, a candle flicker…)">
+                    🔁
+                    <select
+                      value={normalizeLoops(activeScene.loops)}
+                      onChange={(event) => onSceneSet?.(activeScene.id, { loops: Number(event.target.value) })}
+                      aria-label="Scene loops"
+                    >
+                      {Array.from({ length: MAX_SCENE_LOOPS }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>×{n}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="fs-scene-camera" title="Camera move across the whole scene (a slow pan or zoom over a still)">
+                    <select
+                      value={normalizeCamera(activeScene.camera)}
+                      onChange={(event) => onSceneSet?.(activeScene.id, { camera: event.target.value })}
+                      aria-label="Camera move"
+                    >
+                      {CAMERA_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>{preset.emoji} {preset.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : activeScene && (normalizeLoops(activeScene.loops) > 1 || normalizeCamera(activeScene.camera) !== "none") ? (
+                <span className="fs-scene-timing" title="Scene timing set by the host">
+                  {normalizeLoops(activeScene.loops) > 1 ? `🔁 ×${normalizeLoops(activeScene.loops)} ` : ""}
+                  {normalizeCamera(activeScene.camera) !== "none" ? CAMERA_PRESETS.find((c) => c.id === activeScene.camera)?.emoji : ""}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="fs-detail">
+          {onOpenStoryboard ? (
+            <button
+              type="button"
+              className={`fs-storyboard${inProduction ? " is-on" : ""}`}
+              onClick={onOpenStoryboard}
+              title={inProduction ? "Open the storyboard — your film's parts" : "Storyboard — link rooms into one film"}
+              aria-label="Storyboard"
+            >
+              📋
+            </button>
+          ) : null}
+          {activeFrame ? (
+            <label className="fs-duration" title="How long this frame shows (hold it for up to 10 seconds)">
+              <input
+                type="range"
+                min="0"
+                max={HOLD_STEPS.length - 1}
+                step="1"
+                value={holdStepIndex(activeFrame.durationMs)}
+                onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
+              />
+              <output>{formatHold(activeFrame.durationMs)}</output>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="fs-menu-toggle"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-expanded={menuOpen}
+            aria-label="Frame actions"
+            title="Frame actions"
+          >
+            ⋯
+          </button>
+          {menuOpen ? (
+            <div className="fs-menu" role="menu">
+              {activeFrame ? (
+                <label className="fs-menu-hold" title="How long this frame shows (hold it for up to 10 seconds)">
+                  <span>⏱ Hold {formatHold(activeFrame.durationMs)}</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={HOLD_STEPS.length - 1}
+                    step="1"
+                    value={holdStepIndex(activeFrame.durationMs)}
+                    onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
+                  />
                 </label>
-                <label className="fs-scene-camera" title="Camera move across the whole scene (a slow pan or zoom over a still)">
-                  <select
-                    value={normalizeCamera(activeScene.camera)}
-                    onChange={(event) => onSceneSet?.(activeScene.id, { camera: event.target.value })}
-                    aria-label="Camera move"
-                  >
-                    {CAMERA_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>{preset.emoji} {preset.label}</option>
-                    ))}
-                  </select>
-                </label>
-              </>
-            ) : activeScene && (normalizeLoops(activeScene.loops) > 1 || normalizeCamera(activeScene.camera) !== "none") ? (
-              <span className="fs-scene-timing" title="Scene timing set by the host">
-                {normalizeLoops(activeScene.loops) > 1 ? `🔁 ×${normalizeLoops(activeScene.loops)} ` : ""}
-                {normalizeCamera(activeScene.camera) !== "none" ? CAMERA_PRESETS.find((c) => c.id === activeScene.camera)?.emoji : ""}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
+              ) : null}
+              <button
+                type="button"
+                onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, -1))}
+                disabled={activeFrameIndex === 0}
+              >
+                ◀ Move left
+              </button>
+              <button
+                type="button"
+                onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, 1))}
+                disabled={activeFrameIndex === frames.length - 1}
+              >
+                Move right ▶
+              </button>
+              <button type="button" onClick={closeMenuThen(() => onDuplicateFrame(activeFrameIndex))}>
+                Duplicate
+              </button>
+              <button
+                type="button"
+                onClick={closeMenuThen(() => onDeleteFrame(activeFrameIndex))}
+                disabled={frames.length <= 1}
+              >
+                Delete
+              </button>
+              <button type="button" onClick={closeMenuThen(onExportVideo)} disabled={isExportingVideo}>
+                {isExportingVideo ? "Encoding…" : scenes.length > 1 ? "Export film" : "Export video"}
+              </button>
+              <button type="button" onClick={closeMenuThen(onExportGif)} disabled={isExporting}>
+                {isExporting ? "Encoding…" : "Export GIF"}
+              </button>
+              <button type="button" onClick={closeMenuThen(onSaveLoop)}>
+                Save loop
+              </button>
+              {canManageScenes && scenes.length > 1 ? (
+                <button
+                  type="button"
+                  className="fs-menu-danger"
+                  onClick={closeMenuThen(() => onDeleteScene?.(activeSceneId))}
+                >
+                  Delete scene
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="fs-reel" role="list" ref={reelRef}>
@@ -336,102 +438,6 @@ export default function FilmStrip({
         >
           +
         </button>
-      </div>
-
-      <div className="fs-detail">
-        {onOpenStoryboard ? (
-          <button
-            type="button"
-            className={`fs-storyboard${inProduction ? " is-on" : ""}`}
-            onClick={onOpenStoryboard}
-            title={inProduction ? "Open the storyboard — your film's parts" : "Storyboard — link rooms into one film"}
-            aria-label="Storyboard"
-          >
-            📋
-          </button>
-        ) : null}
-        {activeFrame ? (
-          <label className="fs-duration" title="How long this frame shows (hold it for up to 10 seconds)">
-            <input
-              type="range"
-              min="0"
-              max={HOLD_STEPS.length - 1}
-              step="1"
-              value={holdStepIndex(activeFrame.durationMs)}
-              onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
-            />
-            <output>{formatHold(activeFrame.durationMs)}</output>
-          </label>
-        ) : null}
-        <button
-          type="button"
-          className="fs-menu-toggle"
-          onClick={() => setMenuOpen((open) => !open)}
-          aria-expanded={menuOpen}
-          aria-label="Frame actions"
-          title="Frame actions"
-        >
-          ⋯
-        </button>
-        {menuOpen ? (
-          <div className="fs-menu" role="menu">
-            {activeFrame ? (
-              <label className="fs-menu-hold" title="How long this frame shows (hold it for up to 10 seconds)">
-                <span>⏱ Hold {formatHold(activeFrame.durationMs)}</span>
-                <input
-                  type="range"
-                  min="0"
-                  max={HOLD_STEPS.length - 1}
-                  step="1"
-                  value={holdStepIndex(activeFrame.durationMs)}
-                  onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
-                />
-              </label>
-            ) : null}
-            <button
-              type="button"
-              onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, -1))}
-              disabled={activeFrameIndex === 0}
-            >
-              ◀ Move left
-            </button>
-            <button
-              type="button"
-              onClick={closeMenuThen(() => onMoveFrame(activeFrameIndex, 1))}
-              disabled={activeFrameIndex === frames.length - 1}
-            >
-              Move right ▶
-            </button>
-            <button type="button" onClick={closeMenuThen(() => onDuplicateFrame(activeFrameIndex))}>
-              Duplicate
-            </button>
-            <button
-              type="button"
-              onClick={closeMenuThen(() => onDeleteFrame(activeFrameIndex))}
-              disabled={frames.length <= 1}
-            >
-              Delete
-            </button>
-            <button type="button" onClick={closeMenuThen(onExportVideo)} disabled={isExportingVideo}>
-              {isExportingVideo ? "Encoding…" : scenes.length > 1 ? "Export film" : "Export video"}
-            </button>
-            <button type="button" onClick={closeMenuThen(onExportGif)} disabled={isExporting}>
-              {isExporting ? "Encoding…" : "Export GIF"}
-            </button>
-            <button type="button" onClick={closeMenuThen(onSaveLoop)}>
-              Save loop
-            </button>
-            {canManageScenes && scenes.length > 1 ? (
-              <button
-                type="button"
-                className="fs-menu-danger"
-                onClick={closeMenuThen(() => onDeleteScene?.(activeSceneId))}
-              >
-                Delete scene
-              </button>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       <div

@@ -1,11 +1,28 @@
 // Room Finder: browse every open public room and jump into one. Reuses the live
 // /api/rooms/public feed (featured prompt rooms first, then any active ad-hoc rooms).
+// Signed in, it opens with YOUR rooms first ("pick up where you left off") —
+// logging in lands here, so a returning artist is one tap from their work.
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
+import MyRooms from "./MyRooms";
+import { getSession, onAuthStateChange } from "../utils/auth";
+import { getRecentRooms } from "../utils/recentRooms";
 
 export default function RoomFinderPage({ onNavigate }) {
   const [rooms, setRooms] = useState([]);
   const [code, setCode] = useState("");
+  const [session, setSession] = useState(null);
+  const [hasRecent] = useState(() => getRecentRooms().length > 0);
+
+  useEffect(() => {
+    let active = true;
+    getSession().then((value) => active && setSession(value));
+    const unsubscribe = onAuthStateChange((value) => active && setSession(value));
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -35,7 +52,14 @@ export default function RoomFinderPage({ onNavigate }) {
     <div className="site-page">
       <SiteNav onNavigate={onNavigate} current="/rooms" />
       <main className="site-page-body">
-        <h1>Find a room</h1>
+        {session || hasRecent ? (
+          <section className="myrooms-section" aria-labelledby="myrooms-title">
+            <h1 id="myrooms-title">{session ? "Pick up where you left off" : "Your recent rooms"}</h1>
+            <MyRooms variant="grid" token={session?.access_token || null} onJoin={(c) => onNavigate(`/join/${c}`)} />
+          </section>
+        ) : null}
+
+        <h1>{session || hasRecent ? "Or find a live room" : "Find a room"}</h1>
         <p className="site-lead">Pick a room and paint with whoever shows up. New prompts every day.</p>
 
         <form

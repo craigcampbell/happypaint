@@ -4,6 +4,7 @@
 // chosen sheet via onApply({id, title}).
 
 import { useEffect, useMemo, useState } from "react";
+import { sheetThumbUrl } from "../utils/sheetAssets";
 
 let cachedSheets = null; // module-level cache so reopening is instant
 
@@ -22,6 +23,16 @@ const CATEGORIES = [
   { key: "learning", label: "ABC & 123", emoji: "🔤" },
   { key: "other", label: "More", emoji: "🎨" },
 ];
+
+// "medium · ages 6-9 · 64 areas" for the preview panel. Returns "" when the
+// index has no metadata yet (an older index.json), so the UI degrades quietly.
+function metaLine(s) {
+  return [
+    s?.difficulty ? `${s.difficulty}` : null,
+    s?.age ? `ages ${s.age}` : null,
+    s?.areas ? `${s.areas} areas to colour` : null,
+  ].filter(Boolean).join(" · ");
+}
 
 // Deterministic shuffle so the default browse view is varied (not a wall of
 // alphabetical birthdays) but stable within a session.
@@ -142,7 +153,7 @@ export default function ColoringSheetModal({ onClose, onApply }) {
               title={s.title}
             >
               <img
-                src={`/coloring-sheets/thumbs/${encodeURIComponent(s.id)}.webp`}
+                src={sheetThumbUrl(s.id)}
                 alt={s.title}
                 // First screenful pops immediately; the rest stream in as the
                 // kid scrolls. A missing thumb collapses to a placeholder
@@ -162,8 +173,20 @@ export default function ColoringSheetModal({ onClose, onApply }) {
           {selected ? (
             <>
               <div className="sheet-preview">
-                <img src={`/coloring-sheets/thumbs/${encodeURIComponent(selected.id)}.webp`} alt={selected.title} />
-                <span className="sheet-selected-name">{selected.title}</span>
+                <img src={sheetThumbUrl(selected.id)} alt={selected.title} />
+                <div className="sheet-preview-text">
+                  <span className="sheet-selected-name">{selected.title}</span>
+                  {/*
+                    sheet metadata from coloring-library/index.json (built by
+                    scripts/enrich-index.py): the measured number of enclosed
+                    areas is the honest difficulty signal for a colouring page.
+                  */}
+                  {metaLine(selected) ? (
+                    <span className="sheet-meta" title={selected.desc || undefined}>
+                      {metaLine(selected)}
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <div className="sheet-footer-actions">
                 <button type="button" onClick={onClose}>

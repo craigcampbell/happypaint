@@ -23,6 +23,7 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 import { gzip } from 'zlib';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
+import { createEconomy } from './server/economy.js';
 import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
 import { pickWordChoices } from './server/gameWords.js';
@@ -197,6 +198,18 @@ const billing = createBilling({
   onEntitlementChange: refreshFamilyRoomEntitlement,
 });
 billing.registerWebhook(app);
+
+// Server-authoritative Drops wallet + append-only ledger. Balances used to
+// live only in the browser (IndexedDB), which made them forgeable; real money
+// needs a balance the user cannot edit. Like billing, the webhook registers
+// BEFORE the app-wide JSON parser so Stripe can verify the raw bytes, while
+// the JSON routes register after it (below).
+const economy = createEconomy({
+  dataDir: DATA_DIR,
+  resolveOwner: resolveArtOwner,
+  resolveOwnerOptional: resolveArtOwner,
+});
+economy.registerWebhook(app);
 const server = createServer(app);
 const wss = new WebSocketServer({
   server,
@@ -295,6 +308,12 @@ function blankAnalytics() {
     // see seriesBump / recordPageView below.
     series: { rooms: {}, site: {} },
     traffic: {},
+    // Persisted dedupe set for the CURRENT day's page-view uniques
+    // (day -> [hash]). Without it every restart re-counts a returning
+    // visitor as a new unique, and the stored counter only ever rises,
+    // so the day is permanently inflated. Only the current day is kept;
+    // see trimTraffic. Hashes are 16 chars and carry no PII.
+    uniqueHashes: {},
   };
 }
 
@@ -314,6 +333,7 @@ try {
     ? { rooms: loaded.series.rooms && typeof loaded.series.rooms === 'object' ? loaded.series.rooms : {}, site: loaded.series.site && typeof loaded.series.site === 'object' ? loaded.series.site : {} }
     : { rooms: {}, site: {} };
   analytics.traffic = loaded.traffic && typeof loaded.traffic === 'object' ? loaded.traffic : {};
+  analytics.uniqueHashes = loaded.uniqueHashes && typeof loaded.uniqueHashes === 'object' ? loaded.uniqueHashes : {};
 } catch {
   analytics = blankAnalytics();
 }
@@ -420,6 +440,15 @@ function seriesSnapshot() {
 const TRAFFIC_DAYS = 60;
 const BOT_UA = /^node$|^undici|bot|crawl|spider|slurp|preview|fetch|monitor|headless|lighthouse|pagespeed|python|curl|wget|httpclient|java\/|okhttp|facebookexternalhit|whatsapp|telegram|discord|skype|slack|embedly|pinterest|vkshare|validator|uptime|semrush|ahrefs|mj12|dotbot|petalbot|bytespider|gptbot|claudebot|anthropic|ccbot|applebot|yandex|baidu|bingpreview|duckduck/i;
 const trafficUniques = new Map(); // day -> Set(hash)
+// Bound on the persisted set: a day with more distinct visitors than
+// this stops growing the file (the day's `uniques` counter still counts).
+const UNIQUE_SET_CAP = Number(process.env.ANALYTICS_UNIQUE_SET_CAP || 20000);
+// Restore today's dedupe set, or a restart re-counts returning visitors.
+try {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const restored = analytics.uniqueHashes && analytics.uniqueHashes[todayKey];
+  if (Array.isArray(restored) && restored.length) trafficUniques.set(todayKey, new Set(restored));
+} catch {}
 function routeClassOf(path) {
   if (path === '/' || path === '') return 'home';
   if (path.startsWith('/studio')) return 'studio';
@@ -442,7 +471,7 @@ function recordPageView(req) {
   bumpBag(bag.routes, route);
   let seen = trafficUniques.get(day);
   if (!seen) {
-    seen = new Set();
+    seen = new Set(Array.isArray(analytics.uniqueHashes[day]) ? analytics.uniqueHashes[day] : []);
     trafficUniques.set(day, seen);
     for (const key of [...trafficUniques.keys()]) if (key !== day) trafficUniques.delete(key);
   }
@@ -450,6 +479,8 @@ function recordPageView(req) {
   if (!seen.has(hash)) {
     seen.add(hash);
     bag.uniques = (Number(bag.uniques) || 0) + 1;
+    // Mirror into the persisted, bounded set so it survives a restart.
+    if (seen.size <= UNIQUE_SET_CAP) analytics.uniqueHashes[day] = [...seen];
   }
   seriesBump(null, SERIES_VIEWS, 1);
   scheduleAnalyticsPersist();
@@ -457,6 +488,13 @@ function recordPageView(req) {
 function trimTraffic() {
   const days = Object.keys(analytics.traffic).sort();
   while (days.length > TRAFFIC_DAYS) delete analytics.traffic[days.shift()];
+  // Only the current day's dedupe set is still growing, and only its
+  // loss corrupts a live counter - drop the rest to bound the file.
+  const todayTrim = new Date().toISOString().slice(0, 10);
+  for (const key of Object.keys(analytics.uniqueHashes || {})) {
+    const set = analytics.uniqueHashes[key];
+    if (key !== todayTrim || !Array.isArray(set) || set.length > UNIQUE_SET_CAP) delete analytics.uniqueHashes[key];
+  }
 }
 function trafficSnapshot() {
   return Object.entries(analytics.traffic)
@@ -1082,7 +1120,7 @@ function opRateOk(user) {
 // Ops appended since the last full room write, merged back on load. Only ops
 // NEWER than the base file's last opId count (a crash between "write base" and
 // "truncate log" leaves duplicates behind; a torn last line is skipped).
-function mergeOpLog(roomId, base) {
+function mergeOpLog(roomId, base, cap = MAX_HISTORY) {
   let text;
   try { text = readFileSync(opLogFile(roomId), 'utf8'); } catch { return base; }
   const history = base.slice();
@@ -1095,12 +1133,12 @@ function mergeOpLog(roomId, base) {
     history.push(op);
     last = op.opId;
   }
-  return history.length > MAX_HISTORY ? history.slice(-MAX_HISTORY) : history;
+  return history.length > cap ? history.slice(-cap) : history;
 }
 // The persisted history: the `.history.json` base (newest) wins; a legacy room
 // file that still carries `history` inline is the fallback; the op log is
 // merged on top of either.
-function loadRoomHistory(roomId, inline) {
+function loadRoomHistory(roomId, inline, cap) {
   let base = null;
   try {
     const parsed = JSON.parse(readFileSync(historyFile(roomId), 'utf8'));
@@ -1110,7 +1148,7 @@ function loadRoomHistory(roomId, inline) {
   }
   const onDisk = !!base;
   if (!base) base = Array.isArray(inline) ? inline : [];
-  return { history: mergeOpLog(roomId, base), onDisk };
+  return { history: mergeOpLog(roomId, base, cap), onDisk };
 }
 
 // ---- Rendered-snapshot catch-up -------------------------------------------
@@ -1310,7 +1348,13 @@ function loadRoom(roomId) {
   // Recover files written by the experimental settings-once transport.
   // Each op must stand alone when moderation, previews or paging select
   // only part of a stroke. Never borrow settings from another author/cel.
-  const stored = loadRoomHistory(roomId, data ? data.history : null);
+  // Same audience default + multi-frame test getRoom applies, so a big film
+  // (animation, or frames preserved with the toggle off) is never front-trimmed.
+  const loadAudience = (data && data.audience) || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
+  const loadMultiFrame = ANIMATION_ROOM_CODES.has(roomId)
+    || (loadAudience !== 'kid_safe' && !!(data && data.animation))
+    || (Array.isArray(data && data.frames) && data.frames.length > 1);
+  const stored = loadRoomHistory(roomId, data ? data.history : null, historyCeiling(loadAudience, loadMultiFrame));
   const history = hydrateHistorySettings(stored.history);
   try {
     if (!data) throw new Error('no room file');
@@ -1605,13 +1649,18 @@ function storybookPayload(room) {
 // relayed + persisted, and rejoiners replay the whole flipbook exactly like the
 // mural. Caps REJECT at ingest (frame_full) rather than FIFO-trim, which would
 // silently rot the earliest frames of an animation.
-// Frame caps are a MEMORY budget, not just server disk: every client holds a
-// full-res canvas per frame (~40MB at 4000x2500), so 12 frames ≈ 480MB on an
-// iPad. Raise these only after frames move to the smaller animation doc size.
-const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 8);
-// Private rooms: clients keep only the active frame (+ neighbours) as live
-// canvases and hold the rest as ops + a WebP raster (src/utils/frameRasters.js),
-// so a scene can run to 60 frames (5s at 12fps, minutes with holds/loops).
+// Frame caps used to be a MEMORY budget (every client held a ~40MB full-res
+// canvas per frame, so 8 frames). Every server-synced animation room — the
+// public FLIPBOOK included — now keeps only the active frame (+ neighbours) as
+// live canvases and the rest as ops + a ~100KB WebP raster
+// (src/utils/frameRasters.js), so the ceiling is the OP budget below instead.
+// Public: 240 frames ≈ 30s at the default 120ms (~8fps), 24s at 10fps — a real
+// short film. FLIPBOOK is hostless, so it is one scene: this IS its length.
+const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 240);
+// Private rooms: 60 frames a scene (5s at 12fps), minutes with scenes, holds
+// and loops. (A fork of a longer FLIPBOOK film copies whole — this caps adding.
+// Per-scene length for private rooms is a pricing-tier lever: see
+// docs/pricing-tiers.md before raising it.)
 const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 60);
 // Bound a single op's serialized weight (image ops embed dataURLs — a photo
 // import is a few MB; nothing legitimate approaches this).
@@ -1622,9 +1671,9 @@ const MAX_DRAW_MESSAGE_CHARS = Number(process.env.MAX_DRAW_MESSAGE_CHARS || 128_
 const MAX_DRAW_POINTS_PER_OP = Number(process.env.MAX_DRAW_POINTS_PER_OP || 2048);
 const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
 // Scenes break the per-room frame ceiling without breaking the memory budget:
-// an animation room is one ~30-second SEGMENT — up to MAX_SCENES scenes of up
-// to 8 frames each (20 x 8 = 160 frames) — but clients only ever HYDRATE one
-// scene's frames, so RAM stays at a scene's worth. Scene creation is
+// an animation room is one SEGMENT of up to MAX_SCENES scenes (each capped by
+// MAX_ANIM_FRAMES_*) — but clients only ever HYDRATE one scene's frames (and
+// only the active few as canvases), so RAM stays small. Scene creation is
 // host-only — which also means the public FLIPBOOK playground (hostless by
 // design) stays single-scene. Multi-segment "productions" (several linked
 // rooms stitched into one film) build on top of this: see
@@ -1633,6 +1682,22 @@ const MAX_SCENES = Number(process.env.MAX_SCENES || 40);
 // A whole segment's op budget (protects the room file + join/fetch payloads;
 // per-frame caps alone would allow 160 x 1500 = 240k ops ≈ 260MB JSON).
 const MAX_ANIM_ROOM_OPS = Number(process.env.MAX_ANIM_ROOM_OPS || 120000);
+// The public FLIPBOOK's whole-film budget. A public joiner downloads every op
+// of the (single) scene, so this is sized for a phone on school wifi: ~100 ops
+// a frame across 240 frames (real FLIPBOOK frames average ~20; an op is ~1.5KB
+// raw and the socket deflates ~10x). Rejected at ingest like the private cap.
+const MAX_PUBLIC_ANIM_OPS = Number(process.env.MAX_PUBLIC_ANIM_OPS || 24000);
+function animOpBudget(audience) {
+  return audience === 'kid_safe' ? MAX_PUBLIC_ANIM_OPS : MAX_ANIM_ROOM_OPS;
+}
+// The most ops a room may hold after a reload. Multi-frame rooms are capped at
+// INGEST (per frame + animOpBudget) and must never be FIFO-trimmed on load: a
+// front trim deletes the FIRST frames' drawings. Single-canvas rooms keep the
+// rolling mural cap.
+function historyCeiling(audience, multiFrame) {
+  if (multiFrame) return animOpBudget(audience);
+  return audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+}
 // Film timing (mirrors src/utils/filmPlan.js): a frame can HOLD up to 10s, a
 // scene can LOOP up to 20x and carry a camera move — minutes of film without
 // minutes of frames.
@@ -2025,8 +2090,9 @@ function getRoom(roomId) {
     // film strip, so the animation cap only ever applies to a private room.
     const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
     // Public rooms carry a lower cap than the global file cap — apply it on load
-    // too, so a file written under the old cap doesn't reload oversized.
-    const loadCap = audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
+    // too, so a file written under the old cap doesn't reload oversized. Films
+    // use their ingest budget instead (a front trim would erase frame 1).
+    const loadCap = historyCeiling(audience, animEnabled || (Array.isArray(saved.frames) && saved.frames.length > 1));
     if (saved.history.length > loadCap) saved.history = saved.history.slice(-loadCap);
     // Recover the op-id counter from persisted history so ids stay monotonic
     // across restarts (selective moderation hides/restores by opId).
@@ -2481,6 +2547,7 @@ function ensureDailyFresh() {
   if (room.dailyDate === fresh.date) return;
   room.dailyDate = fresh.date;
   room.customPrompt = null; // a theme vote never outlives the day
+  cancelWipeRequest(room, 'cleared'); // the new day already blanked it
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
@@ -2488,6 +2555,7 @@ function ensureDailyFresh() {
   room.lastCleared = null;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   // Yesterday's ops are gone — stale moderation state on them is pure liability
   // (recycled opIds would silently hide innocent new-day strokes).
   room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
@@ -2583,6 +2651,7 @@ function ensureRoomFresh(roomId) {
   }
   if (Date.now() < room.wipeAt) return;
 
+  cancelWipeRequest(room, 'cleared'); // the refresh beat the countdown to it
   room.history = [];
   invalidateRoomSnapshot(room);
   // An uploaded trace photo belongs to the mural being retired — free the image
@@ -2600,6 +2669,7 @@ function ensureRoomFresh(roomId) {
   room.lastCleared = null; // the refresh is not undoable — it IS the reset
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   // The old ops are gone; stale moderation state on recycled opIds would
   // silently hide innocent new strokes (same reasoning as the daily wipe).
   room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
@@ -2627,6 +2697,232 @@ const roomWipeTimer = setInterval(sweepRoomWipes, 60_000);
 const roomThumbTimer = setInterval(sweepRoomThumbs, THUMB_SWEEP_MS);
 roomThumbTimer.unref?.();
 if (roomWipeTimer.unref) roomWipeTimer.unref();
+
+// ---- Member wipes: a countdown, and a room vote at 3+ ----------------------
+// Wiping the shared mural is the most destructive thing a member can do, so a
+// member's Clear is a REQUEST, never an instant wipe:
+//   alone          -> a 10s countdown
+//   two people     -> a 30s countdown (no vote — the pair just get warned)
+//   three or more  -> a 30s room vote; it wipes only if MORE THAN HALF of the
+//                     people in the room say yes. Not voting is not a yes: the
+//                     kids busy drawing are exactly who this protects.
+// The asker can cancel until the last WIPE_CANCEL_LOCK_MS. The countdown IS the
+// undo window, so members can't "Bring it back" afterwards (one kid could
+// overturn the room's vote); a moderator's Undo still can. The chat stays —
+// only a moderator's reset (moderateResetRoom) starts a room over completely.
+//
+// A host's Clear (host panel) and the Draw & Guess drawer scrapping their own
+// turn stay instant — see the `clear` case. In-memory only on purpose: a
+// restart mid-countdown drops the request, which fails safe (nothing wiped).
+const WIPE_SOLO_MS = 10_000;
+const WIPE_COUNTDOWN_MS = 30_000;
+const WIPE_CANCEL_LOCK_MS = 3_000; // the client greys Cancel for the last 3s
+const WIPE_VOTE_MIN_PEOPLE = 3;
+const WIPE_VOTE_COOLDOWN_MS = 30_000; // a room that just said no isn't re-asked at once
+
+// A person, not a tab: two tabs of one browser (or one account) are one head
+// and one vote. Falls back to the socket — never the IP, which would fold a
+// whole classroom behind one NAT into a single "person".
+function wipePersonKey(user) {
+  if (user.profileId) return `pb_${user.profileId}`;
+  if (user.deviceKey) return `dk:${user.deviceKey}`;
+  return `u:${user.id}`;
+}
+
+function wipePeople(room) {
+  const keys = new Set();
+  room.users.forEach((u) => keys.add(wipePersonKey(u)));
+  return keys;
+}
+
+// Only people still in the room count — a voter who leaves takes their vote
+// with them, and a joiner raises the bar (and gets a vote).
+function wipeTally(room) {
+  const req = room.wipeReq;
+  const people = wipePeople(room);
+  let yes = 0;
+  let no = 0;
+  for (const k of req.yes) if (people.has(k)) yes += 1;
+  for (const k of req.no) if (people.has(k)) no += 1;
+  return { yes, no, people: people.size, needed: Math.floor(people.size / 2) + 1 };
+}
+
+// Why a wipe can't be asked for (or carried out) right now; null = it can.
+// Re-checked when the countdown fires, so a game round, phone game or
+// flipbook that started meanwhile is never wiped by a stale request.
+function wipeRequestBlock(room, user) {
+  if (phoneActive(room)) return 'game';
+  if (room.gameEnabled && room.game && room.game.phase === 'playing') return 'game';
+  if (room.animationEnabled) return 'animation'; // flipbooks clear one frame at a time
+  if (user.muted) return 'muted';
+  const host = isHost(room, user);
+  if (room.ownerProfileId && !host) return 'host_only';
+  if (room.storybook?.enabled && !host) return 'host_only';
+  if (room.locked && !host) return 'locked';
+  return null;
+}
+
+function denyWipeRequest(user, reason) {
+  if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'wipe_req_denied', reason }));
+}
+
+// What one member sees. Clocks travel as ms-left (never a server timestamp),
+// so a kid's skewed device clock can't make the countdown lie.
+function wipeReqPayload(room, user) {
+  const req = room.wipeReq;
+  if (!req) return null;
+  const payload = {
+    id: req.id,
+    byId: req.byId,
+    byName: req.byName,
+    mode: req.mode,
+    msLeft: Math.max(0, req.endsAt - Date.now()),
+    totalMs: req.totalMs,
+    cancelLockMs: WIPE_CANCEL_LOCK_MS,
+    sheet: !!req.sheetId,
+  };
+  if (req.mode === 'vote') {
+    Object.assign(payload, wipeTally(room));
+    const key = wipePersonKey(user);
+    payload.myVote = req.yes.has(key) ? 'yes' : req.no.has(key) ? 'no' : null;
+  }
+  return payload;
+}
+
+// One send per member (not a broadcast) because each copy carries that
+// member's own vote. Members only — homepage spectators never see it.
+function sendWipeReq(room, ended = null) {
+  room.users.forEach((u) => {
+    if (u.ws.readyState !== 1) return;
+    u.ws.send(JSON.stringify({ type: 'wipe_req', req: wipeReqPayload(room, u), ...(ended ? { ended } : {}) }));
+  });
+}
+
+function endWipeRequest(room, outcome, detail = {}) {
+  const req = room.wipeReq;
+  if (!req) return;
+  clearTimeout(req.timer);
+  room.wipeReq = null;
+  sendWipeReq(room, { id: req.id, outcome, byId: req.byId, byName: req.byName, mode: req.mode, ...detail });
+}
+
+// Anything else that blanks the mural first (a host's Clear, a moderator, the
+// daily/3-day refresh, a game round) calls off a pending request.
+function cancelWipeRequest(room, reason) {
+  if (room && room.wipeReq) endWipeRequest(room, reason);
+}
+
+function scheduleWipeRequest(room) {
+  const req = room.wipeReq;
+  clearTimeout(req.timer);
+  const reqId = req.id;
+  req.timer = setTimeout(() => resolveWipeRequest(room.code, reqId), Math.max(0, req.endsAt - Date.now()));
+  req.timer.unref?.();
+}
+
+function startWipeRequest(room, id, user, sheetId) {
+  const block = wipeRequestBlock(room, user);
+  if (block) return denyWipeRequest(user, block);
+  if (room.wipeReq) return denyWipeRequest(user, 'busy');
+  const key = wipePersonKey(user);
+  if (!rateOk(`wipereq:${room.code}:${key}`, 4, 5 * 60_000)) return denyWipeRequest(user, 'slow_down');
+  const people = wipePeople(room).size;
+  // A host runs their own room: they get the countdown (nobody is surprised)
+  // but not a vote.
+  const mode = people <= 1 ? 'solo' : people < WIPE_VOTE_MIN_PEOPLE || isHost(room, user) ? 'countdown' : 'vote';
+  if (mode === 'vote' && Date.now() < (room.wipeVoteCooldownUntil || 0)) return denyWipeRequest(user, 'cooldown');
+  const totalMs = mode === 'solo' ? WIPE_SOLO_MS : WIPE_COUNTDOWN_MS;
+  room.wipeReqSeq = (room.wipeReqSeq || 0) + 1;
+  room.wipeReq = {
+    id: room.wipeReqSeq,
+    byId: id,
+    byName: user.name,
+    mode,
+    totalMs,
+    endsAt: Date.now() + totalMs,
+    sheetId: sheetId || null, // "fresh page with this coloring sheet"
+    yes: new Set([key]), // asking is a yes
+    no: new Set(),
+    timer: null,
+  };
+  scheduleWipeRequest(room);
+  sendWipeReq(room);
+}
+
+function failWipeVote(room, tally) {
+  room.wipeVoteCooldownUntil = Date.now() + WIPE_VOTE_COOLDOWN_MS;
+  if (!room.fingerPaint) {
+    pushSystemChat(room, room.code, `The room voted to keep the canvas (${tally.yes} of ${tally.needed} yes votes needed). 🎨`);
+  }
+  endWipeRequest(room, 'failed', { yes: tally.yes, no: tally.no, needed: tally.needed });
+}
+
+// Settle a vote early once its outcome is fixed: yes can no longer reach a
+// majority (fail now), or EVERYONE has voted and it passed (skip to the final
+// locked seconds rather than make the room sit out the clock). A plain
+// majority with people still undecided waits — the countdown is their warning.
+function settleWipeVote(room) {
+  const req = room.wipeReq;
+  if (!req || req.mode !== 'vote') return;
+  const tally = wipeTally(room);
+  const undecided = tally.people - tally.yes - tally.no;
+  if (tally.yes + undecided < tally.needed) return failWipeVote(room, tally);
+  if (undecided === 0 && req.endsAt - Date.now() > WIPE_CANCEL_LOCK_MS) {
+    req.endsAt = Date.now() + WIPE_CANCEL_LOCK_MS;
+    scheduleWipeRequest(room);
+  }
+  sendWipeReq(room);
+}
+
+function voteWipeRequest(room, user, reqId, yes) {
+  const req = room.wipeReq;
+  if (!req || req.mode !== 'vote' || req.id !== reqId) return denyWipeRequest(user, 'no_request');
+  if (user.muted) return denyWipeRequest(user, 'muted');
+  const key = wipePersonKey(user);
+  // One vote per person, and final: no flip-flopping, so an early "can't
+  // pass" really can't pass.
+  if (req.yes.has(key) || req.no.has(key)) return denyWipeRequest(user, 'already_voted');
+  (yes ? req.yes : req.no).add(key);
+  settleWipeVote(room);
+}
+
+function cancelOwnWipeRequest(room, id, user, reqId) {
+  const req = room.wipeReq;
+  if (!req || req.id !== reqId) return denyWipeRequest(user, 'no_request');
+  if (req.byId !== id) return denyWipeRequest(user, 'not_yours');
+  // The last seconds are locked (the client greys the button); one second of
+  // grace covers a tap that was already in flight when the lock started.
+  if (req.endsAt - Date.now() < WIPE_CANCEL_LOCK_MS - 1000) return denyWipeRequest(user, 'too_late');
+  endWipeRequest(room, 'cancelled');
+}
+
+function resolveWipeRequest(roomId, reqId) {
+  const room = rooms.get(roomId);
+  const req = room && room.wipeReq;
+  if (!req || req.id !== reqId) return;
+  const asker = room.users.get(req.byId);
+  if (!asker) return endWipeRequest(room, 'left');
+  if (wipeRequestBlock(room, asker)) return endWipeRequest(room, 'blocked');
+  let tally = null;
+  if (req.mode === 'vote') {
+    tally = wipeTally(room);
+    if (tally.yes < tally.needed) return failWipeVote(room, tally);
+    if (!room.fingerPaint) {
+      pushSystemChat(room, roomId, `The room voted to wipe the canvas (${tally.yes} of ${tally.people} said yes). 🧽`);
+    }
+  }
+  clearTimeout(req.timer);
+  room.wipeReq = null;
+  // Everyone gets the clear, the asker included — their canvas waited for the room.
+  wipeMural(room, memberActor(req.byId, asker), {
+    undoable: false,
+    message: { final: true, wipeMode: req.mode },
+    nextSheet: req.sheetId,
+    note: req.mode === 'vote' ? 'wipe_vote' : 'wipe_countdown',
+    detail: tally ? `${tally.yes}/${tally.people} yes` : null,
+  });
+  sendWipeReq(room, { id: req.id, outcome: 'wiped', byId: req.byId, byName: req.byName, mode: req.mode });
+}
 
 // Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
 // lewd" that an image flag implicates.
@@ -2784,8 +3080,10 @@ function broadcast(roomId, message, exceptId = null) {
   // filter) — ops/clears for other frames would smear onto their one canvas.
   if (room.spectators && room.spectators.size) {
     const t = message.type;
+    // (chat_history rides only a moderator's reset/undo — the same projection
+    // a spectator already gets on join.)
     if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history'
-      && t !== 'chat' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
+      && t !== 'chat' && t !== 'chat_history' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed') return;
     if (room.animationEnabled) {
       // A history rebuild carries every frame's ops — a spectator's single
       // canvas would smear them together. Skip it; the tile catches up on hop.
@@ -2945,6 +3243,7 @@ function startGameRound(roomId) {
   // Blank the canvas for the fresh drawing (reuse the clear semantics). Reset
   // the undo-clear backup too, or "Bring it back" would resurrect a previous
   // round's drawing onto the live canvas.
+  cancelWipeRequest(room, 'cleared');
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
@@ -2952,6 +3251,7 @@ function startGameRound(roomId) {
   room.lastCleared = null;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
+  room.lastClearedChat = null;
   broadcast(roomId, { type: 'clear', userId: 'system', name: 'Draw & Guess', gameRound: true });
   broadcast(roomId, { type: 'sheet', sheetId: null });
   // Secret word to the DRAWER ONLY (send-to-one); everyone else gets guesser.
@@ -3191,6 +3491,7 @@ function startPhoneGame(roomId) {
     return { ownerKey: k, ownerName: names[k], pages: [{ type: 'prompt', by: 'system', byName: 'Prompt', content: seed }] };
   });
   room.phone = { phase: 'starting', round: 0, totalRounds, players, names, books, deadline: 0, submitted: new Set() };
+  cancelWipeRequest(room, 'blocked'); // the game owns the canvas now
   // The shared canvas is off for the whole game — clear its server state so any
   // pre-game doodles don't resurrect for a late joiner (ops are dropped while
   // the game runs; see the `op` case).
@@ -3676,8 +3977,9 @@ wss.on('connection', async (ws, req) => {
       // boundary that counts.
       switch (data.type) {
         case 'clear':
+          // A moderator's Wipe resets the room — mural AND chat, as if new.
           // The Draw Phone engine owns the canvas mid-game; don't fight it.
-          if (!phoneActive(watched)) moderateClear(watched, MOD_ACTOR);
+          if (!phoneActive(watched)) moderateResetRoom(watched, MOD_ACTOR);
           break;
         case 'undo_clear':
           if (!phoneActive(watched)) moderateUndoClear(watched, MOD_ACTOR);
@@ -3880,7 +4182,11 @@ wss.on('connection', async (ws, req) => {
   // Where accounts are not configured there is nothing to sign in to, so the
   // rule is skipped and private rooms keep working anonymously.
   if (room.audience === 'friends' && !identity && ACCOUNTS_CONFIGURED) {
-    ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience }));
+    // tokenRejected: a token WAS sent but didn't check out (expired, revoked,
+    // or PocketBase unreachable). The browser still believes it's signed in,
+    // so without this it sent the person to /signup, which said "signed in",
+    // which sent them back here — the sign-in loop.
+    ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience, tokenRejected: !!token }));
     ws.close(1008, 'signin required');
     return;
   }
@@ -4081,6 +4387,9 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify(chatHistoryMsg(room))); // catch the late joiner up on the conversation
   }
   broadcast(roomId, { type: 'userJoined', user: { id, name, color }, userList: userListOf(room) }, id);
+  // A wipe counting down: the joiner sees it (and gets a vote); everyone's
+  // tally gains a head.
+  if (room.wipeReq) sendWipeReq(room);
   if (room.quests) {
     broadcast(roomId, { type: 'quest_state', quest: questPayload(room) });
   }
@@ -4247,7 +4556,7 @@ wss.on('connection', async (ws, req) => {
         const multiFrame = room.animationEnabled || room.frames.length > 1;
         const countKey = frameId || room.frames[0].id;
         const frameCount = room.frameOpCounts.get(countKey) || 0;
-        if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= MAX_ANIM_ROOM_OPS)) {
+        if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= animOpBudget(room.audience))) {
           if (data.op.kind === 'draw' && data.op.end) {
             // Relay the end marker so peers close their stroke buffers, but
             // don't grow history/counts — the cap is a hard ceiling for EVERY
@@ -4528,21 +4837,54 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'clear': {
-        // In an owned room only a host may wipe the shared mural; unowned public
-        // rooms keep the original free-for-all behavior.
-        if (room.ownerProfileId && !isHost(room, user)) break;
         // Draw Phone: each player's page is private and independent — a shared
         // clear would wipe everyone's in-progress drawing. Only the engine blanks.
         if (phoneActive(room)) break;
-        if (room.storybook?.enabled && !isHost(room, user)) break;
+        const host = isHost(room, user);
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
-        moderateClear(room, memberActor(id, user), clearFrameId);
+        // One shared FRAME of a flipbook: instant, as ever — it's one cel, not
+        // the room. In an owned room only a host may clear it.
+        if (clearFrameId && room.animationEnabled && room.frames.some((f) => f.id === clearFrameId)) {
+          if (room.ownerProfileId && !host) break;
+          if (room.storybook?.enabled && !host) break;
+          moderateClear(room, memberActor(id, user), clearFrameId);
+          break;
+        }
+        // The whole mural. A host's Clear is a moderation action and stays
+        // instant (and undoable); so does the Draw & Guess drawer scrapping
+        // their own turn's drawing. Anyone else's Clear — including an older
+        // client still sending this bare message — becomes a wipe REQUEST, so
+        // the countdown/vote can't be skipped by speaking the old protocol.
+        const drawerScrap = room.gameEnabled && room.game && room.game.phase === 'playing' && room.game.drawerId === id;
+        if (host || drawerScrap) {
+          moderateClear(room, memberActor(id, user), clearFrameId);
+          break;
+        }
+        startWipeRequest(room, id, user, null);
         break;
       }
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
         if (phoneActive(room)) break; // no resurrecting the pre-game canvas mid-game
+        // A countdown/vote wipe or a moderator's reset is final for members —
+        // the countdown was the undo window (see startWipeRequest).
+        if (room.clearUndoable === false) break;
         moderateUndoClear(room, memberActor(id, user));
+        break;
+      // ---- Member wipes: ask / vote / call it off (see startWipeRequest) ----
+      case 'wipe_request': {
+        const nextSheet = typeof data.sheetId === 'string' && data.sheetId ? data.sheetId.slice(0, 200) : null;
+        // Same rule as set_sheet: trace photos and Draw Phone pages are only
+        // ever set by their own minting handlers.
+        if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
+        startWipeRequest(room, id, user, nextSheet);
+        break;
+      }
+      case 'wipe_vote':
+        voteWipeRequest(room, user, Number(data.id), data.yes === true);
+        break;
+      case 'wipe_cancel':
+        cancelOwnWipeRequest(room, id, user, Number(data.id));
         break;
       case 'chat': {
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
@@ -4958,7 +5300,9 @@ wss.on('connection', async (ws, req) => {
         if (!rateOk(`fork:${user.ip}`, 3, 10 * 60_000)) { denyFork(user, 'slow_down'); break; }
         const source = visibleHistory(room);
         if (!source.length) { denyFork(user, 'empty'); break; }
-        if (source.length > FORK_MAX_OPS) { denyFork(user, 'too_big'); break; }
+        // A public FILM may run to its whole budget — rescuing a 30-second
+        // FLIPBOOK short before the 3-day refresh is exactly what this is for.
+        if (source.length > (room.animationEnabled ? MAX_PUBLIC_ANIM_OPS : FORK_MAX_OPS)) { denyFork(user, 'too_big'); break; }
         const forkCode = genRoomCode();
         const fork = getRoom(forkCode);
         fork.audience = 'friends';
@@ -5199,7 +5543,7 @@ wss.on('connection', async (ws, req) => {
           // Duplicates count against the room's op budget too — otherwise
           // repeated Duplicate taps grow history past the ceiling ordinary
           // draws are already being rejected at.
-          if (room.history.length + copies.length > MAX_ANIM_ROOM_OPS) {
+          if (room.history.length + copies.length > animOpBudget(room.audience)) {
             ws.send(JSON.stringify({ type: 'frame_denied', reason: 'This segment is out of drawing space — start a new one!' }));
             break;
           }
@@ -5436,7 +5780,7 @@ wss.on('connection', async (ws, req) => {
         const copies = visibleHistory(room)
           .filter((op) => opFrameId(room, op) === target.id && (op.layerId || target.layers[0].id) === srcId)
           .map((op) => ({ ...op, layerId: copy.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
-        if (room.history.length + copies.length > (room.animationEnabled ? MAX_ANIM_ROOM_OPS : historyCapFor(room))) {
+        if (room.history.length + copies.length > (room.animationEnabled ? animOpBudget(room.audience) : historyCapFor(room))) {
           ws.send(JSON.stringify({ type: 'layer_denied', reason: 'This canvas is out of room to duplicate a layer' }));
           break;
         }
@@ -5769,6 +6113,11 @@ wss.on('connection', async (ws, req) => {
     analyticsEndSession(user);
     room.users.delete(id);
     if (room.snapshotRequest?.userId === id) room.snapshotRequest = null;
+    // The asker leaving calls their wipe off; anyone else leaving may settle a vote.
+    if (room.wipeReq) {
+      if (room.wipeReq.byId === id) endWipeRequest(room, 'left');
+      else if (room.wipeReq.mode === 'vote') settleWipeVote(room);
+    }
     room.presence.delete(id); // drop their cel-presence so no dot ghosts on a frame
     if (room.quests) {
       for (const voters of room.quests.nominations.values()) voters.delete(id);
@@ -5892,6 +6241,7 @@ async function resolveArtOwner(req) {
 
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
+economy.registerRoutes(app);
 
 app.get('/api/artworks', async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -6142,30 +6492,72 @@ function moderateClear(room, actor, frameId = null) {
     persistRoom(roomId);
     return true;
   }
+  return wipeMural(room, actor, { except });
+}
+
+// The full-mural wipe every path shares — a host's Clear, a room's countdown
+// or vote, a moderator's reset — so they can never drift apart. Keeps a backup
+// for undo; `undoable` says whether MEMBERS may "Bring it back" (a moderator's
+// Undo always can). `resetChat` also empties the room's chat for everyone (the
+// durable .chatlog audit trail is never touched).
+function wipeMural(room, actor, { except = null, undoable = true, resetChat = false, message = {}, nextSheet = null, note = 'clear', detail = null } = {}) {
+  const roomId = room.code;
+  cancelWipeRequest(room, 'cleared');
   room.lastCleared = room.history;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = room.sheetId; // undo brings the sheet back too
+  room.lastClearedChat = null;
+  room.clearUndoable = undoable;
   room.history = [];
   invalidateRoomSnapshot(room);
   recountFrameOps(room);
   analyticsRecordClear(roomId, actor.user || null, actor.user ? 'user' : 'admin');
-  broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name }, except);
+  broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name, ...message }, except);
   // A full clear blanks the canvas completely — drop the coloring sheet too
-  // (it would otherwise reload for everyone on every visit). Echoed to the
-  // clearer as well, hence no sender exclusion.
-  if (room.sheetId) {
-    room.sheetId = null;
-    broadcast(roomId, { type: 'sheet', sheetId: null });
+  // (it would otherwise reload for everyone on every visit), unless the wipe
+  // was for a fresh sheet. Echoed to the clearer as well, hence no sender
+  // exclusion.
+  if ((room.sheetId || null) !== nextSheet) {
+    room.sheetId = nextSheet;
+    broadcast(roomId, { type: 'sheet', sheetId: nextSheet });
   }
-  noteMod(room, 'clear', actor);
+  if (resetChat) {
+    room.lastClearedChat = room.chat.length ? room.chat : null; // for the moderator's Undo
+    room.chat = [];
+    // Every chat surface (studio, homepage tile, RoomWatch) treats
+    // chat_history as REPLACE, so an empty one empties them all.
+    broadcast(roomId, { type: 'chat_history', messages: [] });
+  }
+  noteMod(room, note, actor, detail);
   persistRoom(roomId);
+  return true;
+}
+
+// A moderator's Wipe is a RESET: the room comes back as if brand new — no
+// mural, no sheet, no chat, a fresh 3-day clock — and nobody in the room can
+// "Bring it back". Only the moderator's own Undo (RoomWatch) restores it.
+function moderateResetRoom(room, actor = MOD_ACTOR) {
+  const roomId = room.code;
+  if (wipesOnCycle(room, roomId)) {
+    room.wipeAt = Date.now() + ROOM_WIPE_MS;
+    if (room.keepVotes) room.keepVotes.clear();
+  }
+  wipeMural(room, actor, { undoable: false, resetChat: true, message: { modReset: true }, note: 'reset' });
+  broadcastWipeState(roomId);
   return true;
 }
 
 // Put back the most recently cleared mural/frame AND any sheet that wipe removed.
 function moderateUndoClear(room, actor) {
   const roomId = room.code;
-  if (!((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet)) return false;
+  if (!((room.lastCleared && room.lastCleared.length) || room.lastClearedSheet || room.lastClearedChat)) return false;
+  // A moderator's reset took the chat too: put the old conversation back in
+  // front of anything said since.
+  if (room.lastClearedChat) {
+    room.chat = room.lastClearedChat.concat(room.chat).slice(-CHAT_BUFFER_MAX);
+    room.lastClearedChat = null;
+    broadcast(roomId, chatHistoryMsg(room));
+  }
   if (room.lastCleared && room.lastCleared.length) {
     if (room.lastClearedFrameId) {
       // Per-frame restore: merge the backup in and re-sort by opId so replay
@@ -6477,7 +6869,7 @@ app.get('/api/admin/rooms', (req, res) => {
     id,
     users: room.users.size,
     strokes: room.history.length,
-    lastActivity: room.lastActivity || 0,
+    lastActivity: roomRecency(room, id),
     chats: (room.chat || []).length,
     thumbAt: Math.round(thumbBakedAt(room)) || 0, // 0 = no thumbnail baked yet
     audience: room.audience || null,
@@ -6597,6 +6989,17 @@ function radarDormantRoom(meta) {
   };
 }
 
+// Admin-facing room recency. `room.lastActivity` is an IN-MEMORY clock: a
+// bare visit (join with no drawing) bumps it but is never written to disk,
+// so after a restart a recently-visited room reads as untouched since the
+// last canvas save - "last visited" silently meant "last drawn". The
+// analytics store records every join durably, so report the newer of the two.
+function roomRecency(room, roomId) {
+  const live = Number(room && room.lastActivity) || 0;
+  const joined = Number(analytics.rooms && analytics.rooms[roomId] && analytics.rooms[roomId].lastSeen) || 0;
+  return Math.max(live, joined);
+}
+
 // Per-room moderation row. `digest` costs a stat (cached) per room per poll.
 function radarRoom(id, room) {
   const now = Date.now();
@@ -6611,7 +7014,7 @@ function radarRoom(id, room) {
     users: room.users.size,
     strokes: room.history.length,
     chats: Array.isArray(room.chat) ? room.chat.length : 0,
-    lastActivity: room.lastActivity || 0,
+    lastActivity: roomRecency(room, id),
     createdAt: room.createdAt || 0,
     thumbAt: Math.round(thumbBakedAt(room)) || 0,
     hiddenOps: room.hiddenOpIds ? room.hiddenOpIds.size : 0,
@@ -6798,7 +7201,7 @@ app.get('/api/admin/users-index', (req, res) => {
       dormant: false,
       users: room.users.size,
       strokes: room.history.length,
-      lastActivity: room.lastActivity || 0,
+      lastActivity: roomRecency(room, id),
       expiresInMs: room.users.size > 0 || (room.productionId && getProduction(room.productionId))
         ? null
         : Math.max(0, allowedIdleMs(room) - (nowTs - (room.lastActivity || nowTs))),
@@ -7142,16 +7545,8 @@ app.post('/api/admin/rooms/:id/clear', (req, res) => {
   if (!adminGuard(req, res)) return;
   const id = String(req.params.id).toUpperCase().slice(0, 16);
   const room = rooms.get(id);
-  if (room) {
-    room.lastCleared = room.history;
-    room.lastClearedFrameId = null;
-    room.history = [];
-    invalidateRoomSnapshot(room);
-    recountFrameOps(room);
-    analyticsRecordClear(id, null, 'admin');
-    broadcast(id, { type: 'clear', userId: 'admin', name: 'a moderator' });
-    persistRoom(id);
-  }
+  // Same reset as the RoomWatch Wipe: mural, sheet and chat, as if new.
+  if (room) moderateResetRoom(room, MOD_ACTOR);
   res.json({ ok: true });
 });
 
@@ -7863,6 +8258,142 @@ function bearerToken(req) {
 // Create a room with an explicit audience. Public (kid_safe) rooms require a
 // signed-in owner; adult_18 is disabled; friends rooms don't need this (an
 // invite code lazily creates a private room on connect).
+// ---- "My rooms": a signed-in person's own rooms ------------------------------
+// The explorer behind /rooms and the studio's Rooms modal: rooms this account
+// OWNS (or co-hosts), plus rooms it has been in, newest first — each with its
+// liveness, size, and the person's OWN last chat line there (never anyone
+// else's words: a private room's conversation stays in the room). Private room
+// codes are passwords, so a room only ever appears here if this account owns
+// it or has already been inside it. Expired rooms simply drop out (a stale
+// "Continue" would otherwise mint a fresh empty room under the same code).
+const MY_ROOMS_MAX = 30;
+async function myRoomsIdentity(req, res) {
+  const token = bearerToken(req);
+  if (!token) { res.status(401).json({ error: 'signin_required' }); return null; }
+  if (!rateOk(`merooms:${clientIp(req)}`, 60, 60_000)) { res.status(429).json({ error: 'rate_limited' }); return null; }
+  const identity = await verifyAccessToken(token);
+  if (!identity || !identity.profileId) { res.status(401).json({ error: 'signin_required' }); return null; }
+  return String(identity.profileId);
+}
+// A card grid asks for the list and then a dozen thumbnails, each re-checking
+// membership — so remember one account's answer briefly (a stat per dormant
+// room adds up across a grid).
+const myRoomsCache = new Map(); // pid -> { at, rooms }
+function myRoomsFor(pid) {
+  const hit = myRoomsCache.get(pid);
+  if (hit && Date.now() - hit.at < 10_000) return hit.rooms;
+  const rooms = computeMyRooms(pid);
+  if (myRoomsCache.size > 500) myRoomsCache.clear();
+  myRoomsCache.set(pid, { at: Date.now(), rooms });
+  return rooms;
+}
+function computeMyRooms(pid) {
+  const now = Date.now();
+  const record = analytics.users[`pb:${pid}`] || null;
+  const visits = (record && record.rooms) || {};
+  // Last time we saw this account in each room (the session log is capped, so
+  // older visits fall back to the room's own activity).
+  const lastVisit = new Map();
+  for (const s of analytics.sessions) {
+    if (!s || String(s.profileId || '') !== pid || !s.room) continue;
+    const at = Number(s.lastSeen || s.leftAt || s.joinedAt) || 0;
+    if (at > (lastVisit.get(s.room) || 0)) lastVisit.set(s.room, at);
+  }
+  const info = new Map(); // code -> facts about a room that still exists
+  rooms.forEach((room, code) => {
+    if (isPhantomRoom(room, code)) return;
+    info.set(code, {
+      title: room.title || null,
+      audience: room.audience,
+      owned: String(room.ownerProfileId || '') === pid,
+      coHost: (room.coHosts || []).map(String).includes(pid),
+      users: room.users.size,
+      strokes: room.history.length,
+      lastActivity: roomRecency(room, code),
+      animation: !!room.animationEnabled,
+      expiresInMs: room.users.size > 0 || room.audience === 'kid_safe' || (room.productionId && getProduction(room.productionId))
+        ? null
+        : Math.max(0, allowedIdleMs(room) - (now - (room.lastActivity || now))),
+    });
+  });
+  for (const meta of dormantRoomMetas()) {
+    const lastSaved = roomLastSavedMs(meta.id, meta);
+    info.set(meta.id, {
+      title: meta.title,
+      audience: meta.audience,
+      owned: String(meta.ownerProfileId || '') === pid,
+      coHost: false,
+      users: 0,
+      strokes: meta.opCount,
+      lastActivity: lastSaved,
+      animation: meta.animation,
+      expiresInMs: meta.audience === 'kid_safe' || (meta.productionId && getProduction(meta.productionId))
+        ? null
+        : Math.max(0, allowedIdleMs(meta) - (now - lastSaved)),
+    });
+  }
+  const codes = new Set(Object.keys(visits));
+  for (const [code, facts] of info) if (facts.owned || facts.coHost) codes.add(code);
+  const out = [];
+  for (const code of codes) {
+    const facts = info.get(code);
+    if (!facts) continue; // expired / deleted — nothing to continue
+    // The person's own most recent line here (the durable log carries the
+    // profileId; the tail cache keeps this to a stat per room).
+    let myLastChat = null;
+    const tail = chatTail(chatLogFile(code));
+    for (let i = tail.length - 1; i >= 0; i -= 1) {
+      const line = tail[i];
+      if (String(line.profileId || '') !== pid || line.blocked) continue;
+      myLastChat = { message: String(line.message || '').slice(0, 140), doodle: !!line.doodle, ts: Number(line.ts) || 0 };
+      break;
+    }
+    const featured = FEATURED_ROOMS.find((r) => r.code === code);
+    let thumb = false;
+    try { thumb = statSync(thumbFile(code)).size > 0; } catch { thumb = false; }
+    out.push({
+      code,
+      title: facts.title || (featured ? featured.title : null),
+      emoji: featured ? featured.emoji : null,
+      private: facts.audience !== 'kid_safe',
+      role: facts.owned ? 'owner' : facts.coHost ? 'cohost' : 'visited',
+      visits: Number(visits[code]) || 0,
+      users: facts.users,
+      strokes: facts.strokes,
+      animation: facts.animation,
+      lastActivity: facts.lastActivity,
+      lastVisit: lastVisit.get(code) || null,
+      expiresInMs: facts.expiresInMs,
+      myLastChat,
+      thumb,
+    });
+  }
+  // Most recently touched by THIS person first; your own rooms break ties.
+  const touched = (r) => Math.max(r.lastVisit || 0, r.myLastChat ? r.myLastChat.ts : 0, r.role !== 'visited' ? r.lastActivity : 0);
+  out.sort((a, b) => touched(b) - touched(a) || Number(b.role !== 'visited') - Number(a.role !== 'visited'));
+  return out.slice(0, MY_ROOMS_MAX);
+}
+app.get('/api/me/rooms', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pid = await myRoomsIdentity(req, res);
+  if (!pid) return;
+  res.json({ rooms: myRoomsFor(pid) });
+});
+// A room's card picture — only for a room that is in this person's own list
+// (the same gate as the list itself; admin thumbnails stay admin-only).
+app.get('/api/me/rooms/:code/thumb', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  const pid = await myRoomsIdentity(req, res);
+  if (!pid) return;
+  const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  if (!myRoomsFor(pid).some((r) => r.code === code)) return res.status(404).json({ error: 'not_found' });
+  try {
+    res.type('image/jpeg').send(readFileSync(thumbFile(code)));
+  } catch {
+    res.status(404).json({ error: 'no_thumbnail' });
+  }
+});
+
 app.post('/api/rooms', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const body = req.body || {};

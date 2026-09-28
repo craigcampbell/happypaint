@@ -280,7 +280,7 @@ export default function LiveAdmin({ onNavigate }) {
   };
 
   const clearRoom = async (id) => {
-    if (!window.confirm(`Clear room "${id}" for everyone in it?`)) return;
+    if (!window.confirm(`Reset room "${id}"? The drawing AND the chat are wiped for everyone in it — as if brand new. (The chat log here in /admin is kept.)`)) return;
     await fetch(`/api/admin/rooms/${id}/clear`, { method: "POST", headers: { "x-admin-key": adminKey } });
     refresh();
   };

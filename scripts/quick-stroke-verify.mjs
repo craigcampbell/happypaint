@@ -118,14 +118,22 @@ async function regions(page) {
 const mid = (b) => ({ x: Math.round(b.x + b.w / 2), y: Math.round(b.y + b.h / 2) });
 
 // ---- CDP input ----------------------------------------------------------------
-const tp = (x, y, id = 1) => [{ x, y, radiusX: 6, radiusY: 6, force: 0.8, id }];
+// `r` = contact radius; PointerEvent width/height = 2r. Chromium on a phone
+// reports a fingertip at ~10-25px wide, but iPad/iPhone Safari reports
+// 2 × UITouch.majorRadius — a real fingertip there is ~40-85px wide (a kid
+// pressing the pad of a finger flat sits at the top of that). IPAD_FINGER_R
+// and KID_FINGER_R reproduce those widths; a resting palm is far larger.
+const IPAD_FINGER_R = 21;
+const KID_FINGER_R = 42;
+const PALM_R = 75;
+const tp = (x, y, id = 1, r = 6) => [{ x, y, radiusX: r, radiusY: r, force: 0.8, id }];
 
-async function touchDrag(cdp, from, to, { steps = 10, gapMs = 18, holdEndMs = 0 } = {}) {
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: tp(from.x, from.y) });
+async function touchDrag(cdp, from, to, { steps = 10, gapMs = 18, holdEndMs = 0, radius = 6 } = {}) {
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: tp(from.x, from.y, 1, radius) });
   for (let i = 1; i <= steps; i += 1) {
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove",
-      touchPoints: tp(Math.round(from.x + (to.x - from.x) * i / steps), Math.round(from.y + (to.y - from.y) * i / steps)),
+      touchPoints: tp(Math.round(from.x + (to.x - from.x) * i / steps), Math.round(from.y + (to.y - from.y) * i / steps), 1, radius),
     });
     await sleep(gapMs);
   }
@@ -245,12 +253,33 @@ async function runPalm(page, cdp, shot) {
     const lTo = { x: Math.round(L.x + L.w * 0.8), y: Math.round(L.y + L.h * 0.7) };
     const rFrom = { x: Math.round(R.x + R.w * 0.2), y: Math.round(R.y + R.h * 0.3) };
     const rTo = { x: Math.round(R.x + R.w * 0.8), y: Math.round(R.y + R.h * 0.7) };
+    // Fresh, non-overlapping lines in L for the contact-size checks (re-tracing
+    // an inked line adds no ink and would read as "didn't draw").
+    const lLine = (fx, fy, tx, ty) => [
+      { x: Math.round(L.x + L.w * fx), y: Math.round(L.y + L.h * fy) },
+      { x: Math.round(L.x + L.w * tx), y: Math.round(L.y + L.h * ty) },
+    ];
 
     // B1: no pen has been near — a finger draws at once.
     let l0 = (await inkIn(page, L)).ink;
     await touchDrag(cdp, lFrom, lTo);
     let l1 = await settledInk(page, L, l0, true);
     check("B1 a finger draws when no pen is in play", l1.ink > l0 + 2, `ink ${l0} → ${l1.ink}`);
+
+    // B1b/c: the same with iPad-Safari-sized contacts (42px / 84px wide) — a
+    // real fingertip, and a 5-year-old's flat finger pad. These used to be
+    // thrown away as "palms" (the old 45px palm cut-off), so fingers on an
+    // iPad mostly drew nothing at all.
+    for (const [name, radius, line] of [
+      ["B1b an iPad-sized fingertip (42px contact) draws", IPAD_FINGER_R, lLine(0.1, 0.05, 0.9, 0.05)],
+      ["B1c a kid's flat finger pad (84px contact) draws", KID_FINGER_R, lLine(0.1, 0.95, 0.9, 0.95)],
+    ]) {
+      l0 = (await inkIn(page, L)).ink;
+      await touchDrag(cdp, line[0], line[1], { radius });
+      l1 = await settledInk(page, L, l0, true);
+      check(name, l1.ink > l0 + 2, `ink ${l0} → ${l1.ink}`);
+      await sleep(200);
+    }
 
     // B2: the pen draws (and opens the pen session).
     let r0 = (await inkIn(page, R)).ink;
@@ -259,6 +288,22 @@ async function runPalm(page, cdp, shot) {
     check("B2 the pen draws", r1.ink > r0 + 2, `ink ${r0} → ${r1.ink}`);
 
     // The pen-priority window (1.5s) must lapse; the pen SESSION (60s) stays.
+    await sleep(1700);
+
+    // B2b: in a pen session a palm-sized contact (150px) is the drawing hand.
+    l0 = (await inkIn(page, L)).ink;
+    const palmLine = lLine(0.05, 0.1, 0.05, 0.9);
+    await touchDrag(cdp, palmLine[0], palmLine[1], { steps: 12, gapMs: 25, radius: PALM_R });
+    await sleep(500);
+    l1 = await inkIn(page, L);
+    check("B2b a palm-sized contact in a pen session paints nothing", l1.ink <= l0 + 2, `ink ${l0} → ${l1.ink}`);
+
+    // B2c: …but a kid-sized finger in the same pen session still draws.
+    l0 = l1.ink;
+    const penSessionLine = lLine(0.95, 0.1, 0.95, 0.9);
+    await touchDrag(cdp, penSessionLine[0], penSessionLine[1], { steps: 12, gapMs: 25, radius: KID_FINGER_R });
+    l1 = await settledInk(page, L, l0, true);
+    check("B2c a kid-sized finger (84px) in a pen session still draws", l1.ink > l0 + 2, `ink ${l0} → ${l1.ink}`);
     await sleep(1700);
 
     // B3: a 300ms finger drag in a pen session is held, then replayed: it draws.
@@ -328,7 +373,7 @@ async function runPalm(page, cdp, shot) {
     await shot("palm-after");
 
     // B8: Pen only mode — a finger never paints, two fingers still zoom.
-    await page.evaluate(() => localStorage.setItem("happypaint:input-prefs:v1", JSON.stringify({ hand: "right", touch: "pen", palmTipShown: true })));
+    await page.evaluate(() => localStorage.setItem("happypaint:input-prefs:v1", JSON.stringify({ hand: "right", touch: "pen", penSeen: true, palmTipShown: true })));
     await openRoom(page);
     const rg2 = await regions(page);
     const L2 = rg2.L;
@@ -364,6 +409,37 @@ async function runPalm(page, cdp, shot) {
     await penDrag(cdp, { x: Math.round(rg2.R.x + 10), y: Math.round(rg2.R.y + 10) }, { x: Math.round(rg2.R.x + rg2.R.w - 10), y: Math.round(rg2.R.y + rg2.R.h - 10) });
     const penOnlyInk1 = await settledInk(page, rg2.R, penOnlyInk0, true);
     check("B8d Pen only: the pen still draws", penOnlyInk1.ink > penOnlyInk0 + 2, `ink ${penOnlyInk0} → ${penOnlyInk1.ink}`);
+
+    // B9: Pen only saved on a device that has never seen a pen (a kid tapped
+    // it on an iPad with no Pencil) must not strand fingers: they paint.
+    await page.evaluate(() => localStorage.setItem("happypaint:input-prefs:v1", JSON.stringify({ hand: "right", touch: "pen", palmTipShown: true })));
+    await openRoom(page);
+    const rg3 = await regions(page);
+    l0 = (await inkIn(page, rg3.L)).ink;
+    await touchDrag(cdp, { x: Math.round(rg3.L.x + 10), y: Math.round(rg3.L.y + 10) }, { x: Math.round(rg3.L.x + rg3.L.w - 10), y: Math.round(rg3.L.y + rg3.L.h - 10) }, { radius: IPAD_FINGER_R });
+    l1 = await settledInk(page, rg3.L, l0, true);
+    check("B9 Pen only with no pen ever seen: fingers still paint", l1.ink > l0 + 2, `ink ${l0} → ${l1.ink}`);
+
+    // B10: pen-only settings stay out of a finger painter's way until a pen
+    // actually shows up; the first pen stroke reveals them (and says so).
+    await page.evaluate(() => localStorage.removeItem("happypaint:input-prefs:v1"));
+    await openRoom(page);
+    const penRows = () => page.evaluate(() => ({
+      fingers: !!document.querySelector(".input-prefs .pref-touch"),
+      pressure: !!document.querySelector(".pref-pressure"),
+      hint: !!document.querySelector(".input-prefs .pen-hint"),
+    }));
+    const before = await penRows();
+    check("B10a no pen yet: Fingers + Pressure rows hidden, a 'got a pen?' hint shown", !before.fingers && !before.pressure && before.hint, JSON.stringify(before));
+    const rg4 = await regions(page);
+    await penDrag(cdp, { x: Math.round(rg4.R.x + 10), y: Math.round(rg4.R.y + 10) }, { x: Math.round(rg4.R.x + rg4.R.w - 10), y: Math.round(rg4.R.y + rg4.R.h - 10) });
+    await sleep(400);
+    const after = await penRows();
+    check("B10b after a pen stroke: the pen rows appear", after.fingers && after.pressure && !after.hint, JSON.stringify(after));
+    const penToast = await text(page, ".toast, .studio-toast, [class*='toast']");
+    check("B10c a pen-found toast says where they are", !!penToast && /pen/i.test(penToast), penToast ? penToast.slice(0, 90) : "no toast");
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("happypaint:input-prefs:v1") || "{}").penSeen);
+    check("B10d penSeen is remembered for this device", stored === true, String(stored));
     await page.evaluate(() => localStorage.removeItem("happypaint:input-prefs:v1"));
   });
 }
