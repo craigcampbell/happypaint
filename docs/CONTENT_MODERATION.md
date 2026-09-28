@@ -132,7 +132,7 @@ Existing protocol is in [ARCHITECTURE.md](../ARCHITECTURE.md). Additions:
 ### Client → Server
 | Type | Who | Payload | Effect |
 |---|---|---|---|
-| `flag` | any client (acted on only in `kid_safe`) | `{ kind:'image'\|'text', score, sinceOpId, toOpId }` | record a moderation flag; corroboration may trigger Tier 1/2 |
+| `flag` | any client (acted on only in `kid_safe`) | `{ kind:'image'\|'text', score, sinceOpId, toOpId, evidence? }` | record a moderation flag; corroboration may trigger Tier 1/2. `evidence` (image flags only): `{ image:dataURL, w, h, model, threshold, capturedAt }` — the frozen classifier frame, accepted only from an elected watcher, only when the flag produces a report, only as a validated small PNG/JPEG |
 | `mod_hide` | host/admin | `{ opIds:number[] }` | hide ops (reversible) → rebroadcast filtered history |
 | `mod_restore` | host/admin | `{ opIds:number[] }` | unhide ops → rebroadcast history |
 | `mod_remove` | host/admin | `{ opIds:number[] }` | permanently splice ops from history |
@@ -199,6 +199,49 @@ delta that turned a clean canvas lewd). The watcher tracks `lastCleanOpId`.
 
 All actions append to an in-memory `room.modLog` (capped) and the global reports
 store gains a `source` field. Reversible by design end-to-end.
+
+### Immutable flag evidence (frozen classifier pixels)
+
+Before this, an image-flag report carried only a score in free text — by review
+time the room (and its rotating thumbnail) had moved on, so there was nothing to
+review. Now, when a watcher's scan crosses the threshold:
+
+1. The **worker** seals its scan canvas (scan generation guard) and encodes the
+   EXACT frame the classifier read as **PNG** (lossless — the stored pixels are
+   bit-identical to the analyzed ones; JPEG was rejected because it is not).
+   The sampling loop pauses until the encode resolves, and any encode answer
+   whose generation no longer matches is dropped, so a newer frame can never be
+   bound to an older score. If the encode fails or times out, the flag still
+   goes out — without pixels.
+2. The evidence rides the `flag` WS frame. The server accepts it **only** when
+   the flag produces a report (Tier 1/2), **only** from a server-elected watcher
+   (any client may still flag for corroboration, but pixel upload is a watcher
+   privilege — otherwise the server becomes anonymous image hosting), and
+   **only** after hard validation: allowlisted data URL, strict base64, size
+   caps (chars + decoded bytes), magic-byte sniff that must match the claimed
+   type, real dimensions that must match the declared `w`/`h`, and a
+   classifier-sized frame (≤ `WATCH_MAX_DIM` + margin). SVG/GIF/WEBP/URLs are
+   refused — no format spoofing, no stored XSS, no SSRF.
+3. Bytes are written to `DATA_DIR/.evidence/<reportId>.png|jpg` (tmp + rename;
+   server-minted name, traversal-proof) with a sha256 recorded in the report
+   alongside the op watermark (`sinceOpId`/`toOpId`), score, model, watcher
+   (profile id or hashed IP — never raw), `receivedAt` (server-authoritative),
+   and `trust:'client-captured'`. The report also gains `opIds`.
+4. **Trust framing:** the snapshot is client-supplied corroboration, NOT proof —
+   a tampered client can forge pixels. The admin UI labels it exactly so and
+   attributes the image to "the room canvas between op N–M", never to a person;
+   authorship stays "suspected — review required" (Tier 3 remains human-only).
+5. **Lifecycle:** per-room cap (12) and global caps (400 files / 40 MB) evict
+   the oldest evidence (the report survives, marked `dropped:'quota'`);
+   report-queue eviction unlinks the file; `closeRoom` (idle or moderator
+   delete) drops the room's evidence; resolved reports keep evidence 30 days
+   then the file is swept (`expired:true`, text record stays); account deletion
+   nulls `evidence.watcher` for that profile — the pixels are the room's shared
+   canvas, not the watcher's data.
+6. **Retrieval:** `GET /api/admin/evidence/:reportId` — admin key only,
+   `no-store`, `nosniff`, served with the sniffed Content-Type; 404 when
+   missing/refused/evicted/expired. Evidence never appears in any non-admin
+   payload.
 
 ---
 

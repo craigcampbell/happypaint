@@ -25,6 +25,11 @@
 const DEFAULT_INTERVAL_MS = 8000;
 const DEFAULT_MAX_DIM = 256;
 const DEFAULT_THRESHOLD = 0.7;
+// Evidence encoding happens entirely in the worker, only after a flag. PNG is
+// the default: lossless, so the stored frame decodes to pixels bit-identical
+// to what the classifier read. If the encode never comes back (worker died,
+// stale generation) the flag still goes out — without pixels — after this.
+const DEFAULT_EVIDENCE_TIMEOUT_MS = 2500;
 
 /**
  * Capability gate (HARD RULE 6). A client should decline watcher election unless it
@@ -102,10 +107,14 @@ function cancelIdle(token) {
  * @param {() => (HTMLCanvasElement|OffscreenCanvas|null)} opts.getCanvas  source canvas
  * @param {() => boolean} opts.isDrawing  true while a local stroke is live (defer)
  * @param {() => number}  opts.getLastOpId  latest server opId seen by this client
- * @param {(flag:{kind:'image',score:number,sinceOpId:number,toOpId:number}) => void} opts.onFlag
+ * @param {(flag:{kind:'image',score:number,sinceOpId:number,toOpId:number,evidence?:object}) => void} opts.onFlag
  * @param {number} [opts.intervalMs=8000]
  * @param {number} [opts.maxDim=256]
  * @param {number} [opts.threshold=0.7]
+ * @param {'png'|'jpeg'} [opts.evidenceFormat='png']  frozen-frame encoding (png is lossless)
+ * @param {number} [opts.evidenceQuality=0.92]  jpeg-only
+ * @param {number} [opts.evidenceTimeoutMs=2500]  flag goes out pixel-less after this
+ * @param {() => object} [opts.workerFactory]  test seam — defaults to the real Worker
  * @returns {{ setActive:(b:boolean)=>void, markDirty:()=>void, destroy:()=>void }}
  */
 export function createNsfwWatcher({
@@ -116,11 +125,20 @@ export function createNsfwWatcher({
   intervalMs = DEFAULT_INTERVAL_MS,
   maxDim = DEFAULT_MAX_DIM,
   threshold = DEFAULT_THRESHOLD,
+  evidenceFormat = "png",
+  evidenceQuality = 0.92,
+  evidenceTimeoutMs = DEFAULT_EVIDENCE_TIMEOUT_MS,
+  workerFactory = null,
 }) {
   let active = false;
   let destroyed = false;
   let dirty = false;
   let scanning = false;
+  // True while a flagged frame's evidence encode is in flight. The scan canvas
+  // inside the worker is SEALED for that frame — if we sampled again now, the
+  // next scan would overwrite the exact pixels we are about to freeze. So the
+  // sampling loop pauses until the encode resolves (or times out).
+  let sealing = false;
   let lastSampleAt = 0;
   // The newest opId we have confirmed "clean" (score < threshold). The next flag's
   // sinceOpId is this value; toOpId is the opId at sample time. Together they
@@ -131,6 +149,9 @@ export function createNsfwWatcher({
   let worker = null;
   let nextMsgId = 1;
   const pending = new Map(); // msgId -> { toOpId }
+  // Evidence encode follow-ups: encodeId -> { generation, timer, finish }.
+  // Ids come from the same counter as scans; the maps disambiguate replies.
+  const pendingEncodes = new Map();
 
   // A single reused offscreen snapshot canvas (the only canvas we own here).
   let snap = null;
@@ -150,10 +171,12 @@ export function createNsfwWatcher({
       return worker;
     }
     try {
-      worker = new Worker(
-        new URL("../workers/nsfwWatcher.worker.js", import.meta.url),
-        { type: "module" }
-      );
+      worker = workerFactory
+        ? workerFactory()
+        : new Worker(
+          new URL("../workers/nsfwWatcher.worker.js", import.meta.url),
+          { type: "module" }
+        );
       worker.onmessage = onWorkerMessage;
       worker.onerror = () => {
         // Worker death must never affect drawing; just stop scanning quietly.
@@ -185,7 +208,13 @@ export function createNsfwWatcher({
   }
 
   function onWorkerMessage(event) {
-    const { id, ok, score } = event.data || {};
+    const msg = event.data || {};
+    const { id, ok, score } = msg;
+    // An encode reply shares the id counter with scans; route by map first.
+    if (pendingEncodes.has(id)) {
+      handleEncodeReply(msg);
+      return;
+    }
     const entry = pending.get(id);
     pending.delete(id);
     scanning = false;
@@ -198,11 +227,10 @@ export function createNsfwWatcher({
         const toOpId = entry.toOpId;
         // Only flag if there is actually a delta to implicate.
         if (toOpId > sinceOpId) {
-          try {
-            onFlag?.({ kind: "image", score, sinceOpId, toOpId });
-          } catch {
-            // host callback errors are not our problem to crash on
-          }
+          // Freeze the frame BEFORE flagging: the worker still holds the exact
+          // canvas the classifier read. Seal it, ask the worker to encode it,
+          // and only then fire onFlag with the pixels attached.
+          requestEvidenceAndFlag({ score, sinceOpId, toOpId, generation: msg.generation });
         }
         // Leave lastCleanOpId where it was — the dirty delta is still suspect until
         // a host acts. We do, however, advance past this sample so we don't refire
@@ -218,10 +246,97 @@ export function createNsfwWatcher({
     scheduleNext();
   }
 
+  // A scan crossed the threshold. Ask the worker to encode ITS scan canvas
+  // (sealed by generation — a stale answer or a mismatched generation is
+  // dropped) and fire the flag once the pixels come back. If anything goes
+  // wrong the flag still fires, just without evidence: moderation must never
+  // depend on the encode succeeding.
+  function requestEvidenceAndFlag(flag) {
+    sealing = true; // pause sampling so the next scan can't overwrite the frame
+    const finish = (evidence) => {
+      if (destroyed) {
+        return;
+      }
+      sealing = false;
+      pendingEncodes.delete(encId);
+      clearTimeout(entry.timer);
+      try {
+        onFlag?.({
+          kind: "image",
+          score: flag.score,
+          sinceOpId: flag.sinceOpId,
+          toOpId: flag.toOpId,
+          ...(evidence ? { evidence } : {}),
+        });
+      } catch {
+        // host callback errors are not our problem to crash on
+      }
+      scheduleNext(0);
+    };
+    const encId = nextMsgId++;
+    const entry = {
+      generation: flag.generation,
+      timer: setTimeout(() => finish(null), evidenceTimeoutMs),
+      finish,
+    };
+    if (typeof entry.timer.unref === "function") {
+      entry.timer.unref();
+    }
+    pendingEncodes.set(encId, entry);
+    let posted = false;
+    try {
+      if (worker && typeof worker.postMessage === "function") {
+        worker.postMessage({
+          type: "encode",
+          id: encId,
+          generation: flag.generation,
+          format: evidenceFormat,
+          quality: evidenceQuality,
+        });
+        posted = true;
+      }
+    } catch {
+      posted = false;
+    }
+    if (!posted) {
+      finish(null);
+    }
+  }
+
+  function handleEncodeReply(msg) {
+    const entry = pendingEncodes.get(msg.id);
+    if (!entry) {
+      return;
+    }
+    const ev = msg.ok ? msg.evidence : null;
+    // Bind pixels to THIS flag only when they provably came from the same scan
+    // generation the score came from — anything else could be a newer frame.
+    const valid =
+      ev &&
+      msg.generation === entry.generation &&
+      typeof ev.dataUrl === "string" &&
+      Number.isFinite(ev.w) &&
+      Number.isFinite(ev.h);
+    entry.finish(
+      valid
+        ? {
+            image: ev.dataUrl,
+            w: ev.w,
+            h: ev.h,
+            model: typeof ev.model === "string" ? ev.model : null,
+            threshold,
+            intervalMs,
+            maxDim,
+            capturedAt: Date.now(),
+          }
+        : null
+    );
+  }
+
   // Take a downscaled snapshot and hand it to the worker. Async only because of
   // createImageBitmap; no heavy synchronous work runs on the main thread.
   async function sample() {
-    if (destroyed || !active || scanning) {
+    if (destroyed || !active || scanning || sealing) {
       return;
     }
     // HARD RULE 2: a live stroke always wins.
@@ -314,7 +429,7 @@ export function createNsfwWatcher({
     if (destroyed || !active) {
       return;
     }
-    if (scanning) {
+    if (scanning || sealing) {
       scheduleNext();
       return;
     }
@@ -367,9 +482,14 @@ export function createNsfwWatcher({
     destroy() {
       destroyed = true;
       active = false;
+      sealing = false;
       cancelIdle(idleToken);
       idleToken = null;
       pending.clear();
+      for (const entry of pendingEncodes.values()) {
+        clearTimeout(entry.timer);
+      }
+      pendingEncodes.clear();
       if (worker && typeof worker.terminate === "function") {
         try {
           worker.terminate();

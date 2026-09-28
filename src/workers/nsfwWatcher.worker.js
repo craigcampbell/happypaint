@@ -17,16 +17,35 @@
 //   back to the dependency-free `heuristicDetect`, so a failed load can never
 //   stall moderation or touch the canvas.
 
+import { createEvidenceGuard } from "./evidenceGuard.js";
+
 let canvas = null;
 let ctx = null;
 
 // Lazy detector promise — created on first scan, reused thereafter.
 let detectorPromise = null;
+// Which detector actually produced the scores ('nsfwjs-mobilenetv2' once the
+// model loads, 'heuristic' on the fallback) — rides along with evidence so a
+// reviewer knows what judged these pixels.
+let detectorName = "heuristic";
+
+// Scan-generation guard: see evidenceGuard.js. An encode request for any
+// generation but the newest is dropped so newer pixels can never be bound to
+// an older score.
+const evidenceGuard = createEvidenceGuard();
 
 // Load NSFWJS once, on the first real scan. Returns an async (imageData)=>score.
 function loadDetector() {
   if (!detectorPromise) {
-    detectorPromise = buildNsfwDetector().catch(() => heuristicDetect);
+    detectorPromise = buildNsfwDetector()
+      .then((detect) => {
+        detectorName = "nsfwjs-mobilenetv2";
+        return detect;
+      })
+      .catch(() => {
+        detectorName = "heuristic";
+        return heuristicDetect;
+      });
   }
   return detectorPromise;
 }
@@ -234,6 +253,10 @@ async function scan(bitmap) {
   const width = bitmap.width;
   const height = bitmap.height;
 
+  // Claim a generation BEFORE touching the canvas: from this instant the
+  // previous frame's pixels are gone and any encode for them must drop.
+  const generation = evidenceGuard.beginScan();
+
   // Reuse a single OffscreenCanvas sized to the incoming bitmap.
   if (!canvas || canvas.width !== width || canvas.height !== height) {
     canvas = new OffscreenCanvas(width, height);
@@ -247,17 +270,64 @@ async function scan(bitmap) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const detect = await loadDetector();
   const score = await detect(imageData);
-  return clamp01(Number(score) || 0);
+  return { score: clamp01(Number(score) || 0), generation };
+}
+
+// Encode the scan canvas as evidence. PNG by default: lossless, so the stored
+// bytes decode to pixels bit-identical to what the classifier read (JPEG q0.8
+// from the old research notes is NOT bit-identical and is only kept as an
+// option for size). The canvas is untouched since the scan that produced
+// `generation` — the guard proves it, or we drop the request.
+async function encodeEvidence(generation, format, quality) {
+  const result = await evidenceGuard.encodeIfCurrent(generation, async () => {
+    const opts =
+      format === "jpeg"
+        ? { type: "image/jpeg", quality: typeof quality === "number" ? quality : 0.92 }
+        : { type: "image/png" };
+    const blob = await canvas.convertToBlob(opts);
+    const dataUrl = await blobToDataUrl(blob);
+    return { dataUrl, w: canvas.width, h: canvas.height, model: detectorName };
+  });
+  return result; // null when a newer scan already overwrote the canvas
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 self.onmessage = async (event) => {
-  const { id, bitmap } = event.data || {};
+  const data = event.data || {};
+  // Evidence encode follow-up: the main thread only sends this after a scan
+  // crossed the flag threshold, referencing that scan's generation.
+  if (data.type === "encode") {
+    const { id, generation, format, quality } = data;
+    if (typeof id !== "number") {
+      return;
+    }
+    try {
+      const evidence = await encodeEvidence(generation, format, quality);
+      if (evidence) {
+        self.postMessage({ id, ok: true, evidence, generation });
+      } else {
+        self.postMessage({ id, ok: false, error: "stale", generation });
+      }
+    } catch (error) {
+      self.postMessage({ id, ok: false, error: String(error?.message || error), generation });
+    }
+    return;
+  }
+  const { id, bitmap } = data;
   if (typeof id !== "number" || !bitmap) {
     return;
   }
   try {
-    const score = await scan(bitmap);
-    self.postMessage({ id, ok: true, score });
+    const { score, generation } = await scan(bitmap);
+    self.postMessage({ id, ok: true, score, generation });
   } catch (error) {
     // A worker failure must never propagate to the canvas; report and move on.
     try {

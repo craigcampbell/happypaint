@@ -26,6 +26,7 @@ export class SimClient {
     // on socket open instead.
     this.spectate = !!opts.spectate;
     this.binaryFrames = 0; // gzip history frames received (scenarios assert on it)
+    this.binaryBytes = 0; // wire bytes of those frames (perf scenarios)
     this.messages = []; // every parsed server->client message, in order
     this.ws = null;
     this._waiters = []; // { test, resolve, reject, timer }
@@ -50,6 +51,7 @@ export class SimClient {
       try {
         if (isBinary) {
           this.binaryFrames += 1;
+          this.binaryBytes += raw.length;
           msg = JSON.parse(gunzipSync(raw).toString('utf8'));
         } else {
           msg = JSON.parse(raw.toString());

@@ -126,6 +126,68 @@ function RoomThumb({ id, thumbAt, adminKey }) {
   return <img className="admin-room-thumb" src={src} alt={`Room ${id} right now`} title={`baked ${timeAgo(thumbAt)}`} />;
 }
 
+// The frozen classifier snapshot bound to a report (server.js: case 'flag' +
+// GET /api/admin/evidence/:reportId). Fetched with the admin header — an
+// <img src> can't carry one — exactly like RoomThumb. Unlike the room thumb
+// this NEVER goes stale: these are the pixels at flag time, not the live room.
+function EvidenceThumb({ reportId, adminKey }) {
+  const [src, setSrc] = useState(null);
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    let url = null;
+    setSrc(null);
+    setMissing(false);
+    fetch(`/api/admin/evidence/${encodeURIComponent(reportId)}`, { headers: { "x-admin-key": adminKey }, cache: "no-store" })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((blob) => {
+        if (cancelled) return;
+        if (!blob) {
+          setMissing(true);
+          return;
+        }
+        url = URL.createObjectURL(blob);
+        setSrc(url);
+      })
+      .catch(() => {
+        if (!cancelled) setMissing(true);
+      });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [reportId, adminKey]);
+  if (missing) {
+    return <div className="admin-room-thumb is-empty">evidence unavailable</div>;
+  }
+  if (!src) {
+    return <div className="admin-room-thumb is-empty">loading…</div>;
+  }
+  return (
+    <img
+      className="admin-room-thumb"
+      src={src}
+      alt="Watcher-captured canvas snapshot from flag time"
+      style={{ imageRendering: "pixelated" }}
+    />
+  );
+}
+
+// The exact trust framing required for watcher evidence: it is client-supplied
+// corroboration, never proof, and must never be read as an identity accusation.
+function EvidenceNote({ ev }) {
+  return (
+    <p className="admin-muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+      <strong>Watcher-captured snapshot — client-supplied corroboration, NOT proof.</strong>{" "}
+      A modified client can forge pixels; verify against the op-history replay. It shows the room
+      canvas between ops {ev.sinceOpId}–{ev.toOpId}, attributed to no one — authorship stays
+      “suspected — review required”. Score {typeof ev.score === "number" ? ev.score.toFixed(2) : "?"} ·{" "}
+      {ev.model || "unknown model"} · {ev.w}×{ev.h} {ev.mime === "image/png" ? "PNG" : "JPEG"} ·
+      captured {ev.capturedAt ? timeAgo(ev.capturedAt) : "?"} · watcher {ev.watcher || "(scrubbed)"}
+    </p>
+  );
+}
+
 export default function LiveAdmin({ onNavigate }) {
   const [adminKey, setAdminKey] = useState(() => {
     try {
@@ -572,6 +634,25 @@ export default function LiveAdmin({ onNavigate }) {
                   <strong>Room {r.room}</strong>
                   <span className="admin-muted">· by {r.reporterName} · {timeAgo(r.ts)}</span>
                   <p className="admin-reason">{r.reason || "(no reason given)"}</p>
+                  {r.opIds?.length ? (
+                    <span className="admin-muted" style={{ fontSize: 12 }}>
+                      implicated ops: {r.opIds.join(", ")}
+                    </span>
+                  ) : null}
+                  {r.evidence?.file ? (
+                    <div className="admin-evidence" aria-label="Frozen watcher evidence from flag time">
+                      <EvidenceThumb reportId={r.id} adminKey={adminKey} />
+                      <EvidenceNote ev={r.evidence} />
+                    </div>
+                  ) : r.evidence?.refused ? (
+                    <span className="admin-muted" style={{ fontSize: 12 }}>
+                      evidence refused ({r.evidence.refused})
+                    </span>
+                  ) : r.evidence?.dropped || r.evidence?.expired ? (
+                    <span className="admin-muted" style={{ fontSize: 12 }}>
+                      evidence {r.evidence.expired ? "expired (TTL)" : `dropped (${r.evidence.dropped})`} — text record only
+                    </span>
+                  ) : null}
                   {r.chatContext?.length ? (
                     <div className="admin-report-chat" aria-label="Recent chat around this report">
                       {r.chatContext.slice(-8).map((c, i) => (

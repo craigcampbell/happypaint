@@ -16,11 +16,11 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, openSync, readSync, closeSync, promises as fsp } from 'fs';
-import { randomBytes, randomInt, createHash, timingSafeEqual } from 'crypto';
+import { randomBytes, randomInt, createHash, createHmac, timingSafeEqual } from 'crypto';
 import { isIP } from 'net';
 import { promises as dnsPromises } from 'dns';
 import { monitorEventLoopDelay } from 'perf_hooks';
-import { gzip } from 'zlib';
+import { buildGzippedHistoryFrame } from './server/historyFrame.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { createEconomy } from './server/economy.js';
@@ -80,6 +80,14 @@ const OP_RATE_BURST = Number(process.env.OP_RATE_BURST || 120);
 // ~400 ops instead of one per joiner.
 const HISTORY_CACHE_MIN_OPS = Number(process.env.HISTORY_CACHE_MIN_OPS || 200);
 const HISTORY_CACHE_TAIL_MAX = Number(process.env.HISTORY_CACHE_TAIL_MAX || 400);
+// Frame rebuilds are sliced: the stringify yields to the event loop whenever a
+// slice exceeds this budget, so a cold rebuild of a cap-full room no longer
+// stalls every room on the box for up to ~1.8s (see server/historyFrame.js).
+const HISTORY_CACHE_BUILD_BUDGET_MS = Number(process.env.HISTORY_CACHE_BUILD_BUDGET_MS || 8);
+// Rebuild the shared frame PROACTIVELY once this many ops have landed past the
+// cached frame, so the next joiner finds a warm cache instead of awaiting a
+// cold rebuild. 0 disables (join-time lazy rebuild only).
+const HISTORY_CACHE_PREBUILD_TAIL = Number(process.env.HISTORY_CACHE_PREBUILD_TAIL || 200);
 const SPECTATOR_HISTORY_OPS = 1500; // newest ops a read-only homepage viewer gets
 // Append-only persistence: draw ops append to `.rooms/<CODE>.ops.jsonl`; the
 // full room JSON is rewritten (and the log truncated) only when non-op state
@@ -166,7 +174,7 @@ const ARTIST_REQUEST_MAX = Number(process.env.ARTIST_REQUEST_MAX || 25);
 // the new one does not, so a move blocked by a locked file finishes next time).
 const LEGACY_ROOT_DATA = ['.rooms', '.chatlog', '.thumbs', '.productions', '.artworks', '.wall', '.audio',
   '.admin-key', '.metrics.json', '.analytics.json', '.reports.json', '.blocked.json', '.sheets.json',
-  '.sheet-theme.json', '.billing.json'];
+  '.sheet-theme.json', '.billing.json', '.evidence'];
 function resolveDataDir() {
   if (process.env.DATA_DIR) return process.env.DATA_DIR;
   const dir = join(__dirname, '.data');
@@ -2434,11 +2442,39 @@ function buildHistoryCache(room, variant) {
   const hiddenGen = room.hiddenGen || 0;
   const framesKey = framesKeyOf(room);
   const msg = historyMessageFor(room, variant);
-  const lastOpId = msg.ops.length ? (msg.ops[msg.ops.length - 1].opId || 0) : 0;
-  const json = JSON.stringify(msg); // the one synchronous cost per window
-  return new Promise((resolve, reject) => {
-    gzip(json, { level: 6 }, (err, gz) => (err ? reject(err) : resolve({ variant, gen, hiddenGen, framesKey, lastOpId, gz, opCount: msg.ops.length })));
-  });
+  // Sliced async stringify + threadpool gzip (server/historyFrame.js): the
+  // frame bytes are identical to JSON.stringify(msg) but a cold rebuild of a
+  // cap-full room no longer stalls the event loop. The ops array is
+  // snapshotted inside the builder — ops appended (or a front-trim splice)
+  // DURING the async build can't leak past the lastOpId watermark (which would
+  // double-deliver them via the tail) or corrupt the frame.
+  return buildGzippedHistoryFrame({ variant, gen, hiddenGen, framesKey, msg, budgetMs: HISTORY_CACHE_BUILD_BUDGET_MS });
+}
+// Proactive refresh: once the tail past a cached frame crosses
+// HISTORY_CACHE_PREBUILD_TAIL, rebuild in the background so the NEXT joiner
+// finds a warm frame instead of triggering (and awaiting) a cold rebuild.
+// O(1) guard on the per-op hot path; correctness never depends on this — a
+// stale or absent cache just falls back to the lazy join-time build.
+function maybePrebuildHistoryCache(room) {
+  if (!HISTORY_CACHE_PREBUILD_TAIL || room.animationEnabled) return;
+  const cache = room.historyCache;
+  if (!cache) return;
+  for (const variant of ['full', 'spectator']) {
+    const entry = cache[variant];
+    if (!historyCacheUsable(room, entry)) continue;
+    if (cache[`${variant}Building`]) continue;
+    if ((room.opSeq || 0) - entry.lastOpId < HISTORY_CACHE_PREBUILD_TAIL) continue;
+    const key = `${variant}Building`;
+    // The promise must resolve to the ENTRY — joiners landing mid-build await
+    // the same slot in sendHistoryCatchUp.
+    cache[key] = buildHistoryCache(room, variant)
+      .then((built) => {
+        if (historyCacheUsable(room, built)) cache[variant] = built;
+        return built;
+      })
+      .catch(() => null) // next join rebuilds lazily
+      .finally(() => { cache[key] = null; });
+  }
 }
 async function sendHistoryCatchUp(ws, room, variant) {
   const sendText = () => {
@@ -2544,6 +2580,7 @@ function closeRoom(roomId, reason) {
   try { unlinkSync(opLogFile(roomId)); } catch { /* no op log */ }
   try { unlinkSync(snapshotFile(roomId)); } catch { /* no snapshot */ }
   try { unlinkSync(thumbFile(roomId)); } catch { /* no thumbnail */ }
+  dropRoomEvidence(roomId); // frozen flag-evidence images die with their room
 }
 
 // Periodic cleanup of idle rooms: in-memory empties + abandoned files on disk.
@@ -3074,6 +3111,11 @@ function opIdsInRange(room, sinceOpId, toOpId) {
 // a public room (prefer signed-in, then earliest joined). Only the elected few
 // scan, so the cost never multiplies across everyone painting. Idempotent — only
 // emits watcher_role when a client's status actually changes.
+// TRUST LEVEL: capability is SELF-DECLARED (watcher_ack) and guests are
+// eligible — election is a resource/abuse-control decision (who spends CPU
+// scanning, who may deposit quota-bounded evidence), never an identity or
+// integrity guarantee. Everything an elected watcher can do is validated and
+// quota-bounded server-side on that basis.
 function electWatchers(room) {
   if (!room) return;
   for (const wid of Array.from(room.watchers)) {
@@ -4835,6 +4877,7 @@ wss.on('connection', async (ws, req) => {
         }
         broadcast(roomId, { type: 'op', op }, id);
         persistOp(roomId, op);
+        maybePrebuildHistoryCache(room); // keep the join frame warm (O(1) guard)
         break;
       }
       // Only the elected member may answer one live request. Never accept a
@@ -6316,10 +6359,19 @@ wss.on('connection', async (ws, req) => {
         // profileId when signed in, else by client IP. Two tabs / two sockets
         // from one machine can no longer self-corroborate a reversible auto-hide.
         const flaggerKey = user.profileId || `ip:${rawClientIp(req)}`;
+        // Never take a watermark beyond the room's real history: clamp to the
+        // newest op the server has actually seen so every recorded op range
+        // (flag overlap, evidence watermark) is a REAL range.
+        const roomLastOpId = room.history.length ? room.history[room.history.length - 1].opId : 0;
+        const toOpIdEff = Math.min(toOpId, roomLastOpId);
+        // A watermark entirely beyond the room's history clamps to an
+        // empty/inverted range — reject it outright instead of recording a
+        // non-range that would still count toward Tier-2 corroboration.
+        if (toOpIdEff <= sinceOpId) break;
         room.flags = room.flags.filter((f) => now - f.ts < FLAG_WINDOW_MS);
-        room.flags.push({ clientId: id, flaggerKey, kind, sinceOpId, toOpId, ts: now });
+        room.flags.push({ clientId: id, flaggerKey, kind, sinceOpId, toOpId: toOpIdEff, ts: now });
 
-        const implicated = opIdsInRange(room, sinceOpId, toOpId);
+        const implicated = opIdsInRange(room, sinceOpId, toOpIdEff);
         if (!implicated.length) break;
         const culpritOp = room.history.find((op) => implicated.includes(op.opId));
         const offender = culpritOp ? room.users.get(culpritOp.userId) : null;
@@ -6328,12 +6380,53 @@ wss.on('connection', async (ws, req) => {
         const firstAlert = implicated.some((opId) => !room.flaggedOps.has(opId));
         implicated.forEach((opId) => room.flaggedOps.add(opId));
         if (firstAlert) {
-          autoModerate(room, offender, `possible lewd image (score ${score.toFixed(2)})`, implicated);
+          const report = autoModerate(room, offender, `possible lewd image (score ${score.toFixed(2)})`, implicated);
+          // Name the implicated ops on the report itself — before this, an
+          // image-flag report couldn't even say which ops it concerned.
+          report.opIds = implicated.slice(0, 200);
+          // Frozen classifier pixels ride the flag frame as `evidence`. They
+          // are accepted ONLY bound to this real moderation event, ONLY from a
+          // server-elected watcher, and ONLY as a validated small PNG/JPEG.
+          // TRUST LEVEL, stated plainly: watcher election is a capability
+          // election, not an identity check — the election input is the
+          // client's own watcher_ack, any guest is eligible, and MAX_WATCHERS
+          // prefers signed-in then earliest-joined, so a tampered client that
+          // joins early CAN be elected and CAN deposit forged (validated)
+          // pixels. That is bounded abuse, not anonymous image hosting: the
+          // 6/window flag throttle, firstAlert-only binding, per-room/global
+          // count + byte quotas, admin-only re-sniffed retrieval, and the
+          // recorded trust:'client-captured' marker all hold regardless.
+          if (kind === 'image' && data.evidence != null) {
+            if (!room.watchers.has(id)) {
+              report.evidence = { refused: 'not-watcher' };
+            } else {
+              const decoded = decodeEvidenceImage(data.evidence);
+              if (!decoded) {
+                report.evidence = { refused: 'invalid' };
+              } else {
+                try {
+                  attachEvidence(report, decoded, data.evidence, {
+                    score, sinceOpId, toOpId: toOpIdEff,
+                    // Keyed identity — never a raw IP, and (since SEC-1) never
+                    // a reversible unsalted hash either. See watcherIpIdentity.
+                    watcher: user.profileId
+                      ? `profile:${user.profileId}`
+                      : watcherIpIdentity(rawClientIp(req)),
+                  });
+                } catch {
+                  report.evidence = { refused: 'store' };
+                }
+              }
+            }
+          }
+          persistReports();
         }
 
         // Tier 2: corroborated (>=2 independent flaggers, or 1 flag + 1 human
         // report) -> reversible auto-hide of the implicated ops + mute author.
-        const overlapping = room.flags.filter((f) => f.kind === kind && f.sinceOpId < toOpId && sinceOpId < f.toOpId);
+        // Overlap is judged on the CLAMPED range (toOpIdEff): a forged raw
+        // toOpId of 1e9 must not overlap flags it has no real history behind.
+        const overlapping = room.flags.filter((f) => f.kind === kind && f.sinceOpId < toOpIdEff && sinceOpId < f.toOpId);
         const flaggers = new Set(overlapping.map((f) => f.flaggerKey || `c:${f.clientId}`));
         const humanReports = reports.filter(
           (r) => r.room === roomId && r.source === 'user' && r.status === 'open' && now - r.ts < FLAG_WINDOW_MS,
@@ -6706,6 +6799,9 @@ if (!ADMIN_KEY) {
 }
 
 const REPORTS_FILE = join(DATA_DIR, '.reports.json');
+// Reports are a bounded queue; the cap is env-tunable so tests can exercise
+// eviction without filing hundreds of reports.
+const REPORTS_MAX = Number(process.env.REPORTS_MAX || 500);
 let reports = [];
 try {
   const parsed = JSON.parse(readFileSync(REPORTS_FILE, 'utf8'));
@@ -6714,7 +6810,201 @@ try {
   reports = [];
 }
 function persistReports() {
-  try { writeFileSync(REPORTS_FILE, JSON.stringify(reports.slice(0, 500))); } catch { /* ignore */ }
+  // Atomic via tmp+rename: a crash mid-write must never truncate the store —
+  // a corrupted .reports.json would orphan EVERY evidence file at once.
+  try {
+    writeFileSync(`${REPORTS_FILE}.tmp`, JSON.stringify(reports.slice(0, REPORTS_MAX)));
+    renameSync(`${REPORTS_FILE}.tmp`, REPORTS_FILE);
+  } catch { /* ignore */ }
+}
+
+// Watcher identity for unsigned-in (guest) watchers is an HMAC of the client
+// IP keyed by a PERSISTED server secret — never a bare sha256: the ~2^32 IPv4
+// space is trivially brute-forceable against an unsalted hash, so the old
+// `ip-sha256:` identity was pseudonymous-but-reversible for anyone who could
+// read the reports store. The key lives only in a 0600 file next to the
+// reports (env-overridable for deploys that manage secrets themselves), is
+// never logged and never shipped to clients. Being keyed, the identity is
+// irreversible without the server secret — and it carries no account link,
+// so the account-deletion scrub has nothing further to erase for guests.
+const EVIDENCE_KEY_FILE = join(DATA_DIR, '.evidence-key');
+let EVIDENCE_HMAC_KEY = process.env.EVIDENCE_HMAC_KEY || '';
+if (!EVIDENCE_HMAC_KEY) {
+  try { EVIDENCE_HMAC_KEY = readFileSync(EVIDENCE_KEY_FILE, 'utf8').trim(); } catch { EVIDENCE_HMAC_KEY = ''; }
+}
+if (!EVIDENCE_HMAC_KEY) {
+  EVIDENCE_HMAC_KEY = randomBytes(32).toString('hex');
+  try { writeFileSync(EVIDENCE_KEY_FILE, EVIDENCE_HMAC_KEY, { mode: 0o600 }); } catch { /* ignore */ }
+}
+function watcherIpIdentity(ip) {
+  return `ip-hmac:${createHmac('sha256', EVIDENCE_HMAC_KEY).update(String(ip)).digest('hex').slice(0, 16)}`;
+}
+
+// ---- Immutable moderation evidence -----------------------------------------
+// When an elected watcher's NSFW scan crosses the flag threshold, the client
+// encodes the EXACT downscaled bitmap the classifier read (PNG — lossless, so
+// the stored pixels are bit-identical to the analyzed ones) and attaches it to
+// the flag frame. The server binds those bytes to the resulting auto-report,
+// frozen: a later repaint changes the live room and its rotating thumbnail,
+// but never this snapshot. Trust posture: the pixels are CLIENT-SUPPLIED
+// corroboration, never proof — a tampered client can forge them (recorded as
+// trust:'client-captured'). The hard boundary here is abuse control: only an
+// elected watcher may deposit evidence, it must decode to a real small
+// PNG/JPEG whose bytes match their claimed type and declared dimensions, and
+// storage is quota-bounded per room and globally.
+const EVIDENCE_DIR = join(DATA_DIR, '.evidence');
+const EVIDENCE_MAX_CHARS = Number(process.env.EVIDENCE_MAX_CHARS || 220_000); // ~160KB decoded ceiling
+const EVIDENCE_MAX_BYTES = Number(process.env.EVIDENCE_MAX_BYTES || 160 * 1024);
+const EVIDENCE_PER_ROOM_MAX = Number(process.env.EVIDENCE_PER_ROOM_MAX || 12);
+const EVIDENCE_GLOBAL_MAX = Number(process.env.EVIDENCE_GLOBAL_MAX || 400);
+const EVIDENCE_GLOBAL_BYTES = Number(process.env.EVIDENCE_GLOBAL_BYTES || 40 * 1024 * 1024);
+// Resolved reports keep evidence this long, then the file is deleted and the
+// text record remains (expired flag). Swept like the chat logs.
+const EVIDENCE_TTL_MS = Number(process.env.EVIDENCE_TTL_MS || 30 * 86_400_000);
+const EVIDENCE_SWEEP_MS = Number(process.env.EVIDENCE_SWEEP_MS || 6 * 3_600_000);
+// The watcher's snapshot is <= WATCH_MAX_DIM on its longest side; a small
+// margin absorbs rounding on odd aspect ratios. Anything bigger is not a
+// classifier frame.
+const EVIDENCE_DIM_CAP = WATCH_MAX_DIM + 32;
+
+function evidenceFileName(reportId, mime) {
+  return `${reportId}${mime === 'image/png' ? '.png' : '.jpg'}`;
+}
+function dropEvidenceFile(file) {
+  if (typeof file !== 'string' || !/^rep_[a-z0-9]{1,40}\.(png|jpg)$/.test(file)) return;
+  try { unlinkSync(join(EVIDENCE_DIR, file)); } catch { /* already gone */ }
+}
+function writeEvidenceFile(file, bytes) {
+  mkdirSync(EVIDENCE_DIR, { recursive: true });
+  writeFileSync(join(EVIDENCE_DIR, `${file}.tmp`), bytes);
+  renameSync(join(EVIDENCE_DIR, `${file}.tmp`), join(EVIDENCE_DIR, file));
+}
+
+// Validate a client-supplied evidence frame HARD: allowlisted data URL, strict
+// base64, decoded size cap, magic-byte sniff that must MATCH the claimed type
+// (no format spoofing; SVG/GIF/WEBP/URLs refused by the regex+sniff pair), real
+// dimensions that must match the declared w/h, and a classifier-sized frame.
+// Returns { bytes, mime, w, h } or null.
+function decodeEvidenceImage(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const dataUrl = ev.image;
+  if (typeof dataUrl !== 'string' || dataUrl.length > EVIDENCE_MAX_CHARS || dataUrl.length < 40) return null;
+  const m = /^data:image\/(png|jpe?g);base64,([a-z0-9+/]+={0,2})$/i.exec(dataUrl);
+  if (!m) return null;
+  let bytes;
+  try { bytes = Buffer.from(m[2], 'base64'); } catch { return null; }
+  if (!bytes.length || bytes.length > EVIDENCE_MAX_BYTES) return null;
+  const claimed = m[1].toLowerCase().startsWith('jp') ? 'image/jpeg' : 'image/png';
+  const sniffed = sniffWallImage(bytes);
+  if (sniffed !== claimed) return null; // claimed one type, bytes are another
+  const dims = rasterDimensions(bytes);
+  if (!dims || dims.w < 1 || dims.h < 1) return null;
+  if (dims.w > EVIDENCE_DIM_CAP || dims.h > EVIDENCE_DIM_CAP) return null;
+  if (Number(ev.w) !== dims.w || Number(ev.h) !== dims.h) return null;
+  return { bytes, mime: sniffed, w: dims.w, h: dims.h };
+}
+
+// Evict the oldest evidence past quota. The flag/report was already accepted —
+// quota costs the image, never the moderation event; the report keeps the
+// metadata with dropped:'quota' where the file reference was.
+function enforceEvidenceQuotas(roomCode) {
+  const withFile = () => reports.filter((r) => r.evidence && r.evidence.file);
+  const evict = (r, why) => {
+    dropEvidenceFile(r.evidence.file);
+    r.evidence = { ...r.evidence, file: null, sha256: null, dropped: why };
+  };
+  const inRoom = withFile().filter((r) => r.room === roomCode).sort((a, b) => a.ts - b.ts);
+  while (inRoom.length > EVIDENCE_PER_ROOM_MAX) evict(inRoom.shift(), 'quota');
+  let all = withFile().sort((a, b) => a.ts - b.ts);
+  while (all.length > EVIDENCE_GLOBAL_MAX) { evict(all.shift(), 'quota'); all = withFile().sort((a, b) => a.ts - b.ts); }
+  let bytes = withFile().reduce((n, r) => n + (Number(r.evidence.bytes) || 0), 0);
+  all = withFile().sort((a, b) => a.ts - b.ts);
+  while (bytes > EVIDENCE_GLOBAL_BYTES && all.length) {
+    const victim = all.shift();
+    bytes -= Number(victim.evidence.bytes) || 0;
+    evict(victim, 'quota');
+  }
+}
+
+// Delete every evidence file tied to reports for a room (room closed/deleted).
+// The text reports survive; their image references are marked dropped.
+function dropRoomEvidence(roomCode) {
+  let changed = false;
+  for (const r of reports) {
+    if (r.room === roomCode && r.evidence && r.evidence.file) {
+      dropEvidenceFile(r.evidence.file);
+      r.evidence = { ...r.evidence, file: null, sha256: null, dropped: 'room-closed' };
+      changed = true;
+    }
+  }
+  if (changed) persistReports();
+}
+
+// TTL sweep: resolved reports keep evidence for EVIDENCE_TTL_MS, then the file
+// is deleted and the text record stays with expired:true.
+function sweepEvidence() {
+  const cutoff = Date.now() - EVIDENCE_TTL_MS;
+  let changed = false;
+  for (const r of reports) {
+    const ev = r.evidence;
+    if (!ev || !ev.file) continue;
+    if (r.status === 'resolved' && (r.ts || 0) < cutoff) {
+      dropEvidenceFile(ev.file);
+      r.evidence = { ...ev, file: null, sha256: null, expired: true };
+      changed = true;
+    }
+  }
+  if (changed) persistReports();
+}
+setInterval(() => { sweepEvidence(); }, EVIDENCE_SWEEP_MS).unref();
+sweepEvidence();
+
+// Startup reconciliation: evidence bytes outside the reports store are
+// unreachable and sit outside EVERY quota (quotas count only referenced
+// files). Delete leftover `.tmp` staging files (crash between write and
+// rename) and any minted evidence file no loaded report references (crash
+// between the file write and persistReports, or a reports store that failed
+// to load). Only minted filename shapes are touched — anything else in the
+// dir is left alone.
+function reconcileEvidenceDir() {
+  let names;
+  try { names = readdirSync(EVIDENCE_DIR); } catch { return; } // no dir yet
+  const referenced = new Set(reports.map((r) => r.evidence && r.evidence.file).filter(Boolean));
+  for (const name of names) {
+    if (/^rep_[a-z0-9]{1,40}\.(png|jpg)\.tmp$/.test(name)) {
+      try { unlinkSync(join(EVIDENCE_DIR, name)); } catch { /* ignore */ }
+    } else if (/^rep_[a-z0-9]{1,40}\.(png|jpg)$/.test(name) && !referenced.has(name)) {
+      try { unlinkSync(join(EVIDENCE_DIR, name)); } catch { /* ignore */ }
+    }
+  }
+}
+reconcileEvidenceDir();
+
+// Bind a validated evidence frame to its moderation report: write the bytes
+// (tmp + rename), hash them, and record the metadata sidecar IN the report —
+// never burned into the pixels. `receivedAt` is the authoritative server
+// timestamp; capturedAt is the watcher's claim.
+function attachEvidence(report, decoded, ev, { score, sinceOpId, toOpId, watcher }) {
+  const file = evidenceFileName(report.id, decoded.mime);
+  writeEvidenceFile(file, decoded.bytes);
+  report.evidence = {
+    file,
+    sha256: createHash('sha256').update(decoded.bytes).digest('hex'),
+    bytes: decoded.bytes.length,
+    w: decoded.w,
+    h: decoded.h,
+    mime: decoded.mime,
+    model: typeof ev.model === 'string' ? ev.model.slice(0, 40) : null,
+    score,
+    threshold: Number.isFinite(Number(ev.threshold)) ? Number(ev.threshold) : null,
+    sinceOpId,
+    toOpId,
+    capturedAt: Number.isFinite(Number(ev.capturedAt)) ? Number(ev.capturedAt) : null,
+    receivedAt: Date.now(),
+    watcher,
+    trust: 'client-captured',
+  };
+  enforceEvidenceQuotas(report.room);
 }
 
 // Single entry point for the reports store so both human reports (/api/report)
@@ -6759,7 +7049,13 @@ function fileReport({ room, reason, reporterName, source }) {
   }
   // Keep urgent reports pinned above non-urgent within the cap.
   reports.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || b.ts - a.ts);
-  if (reports.length > 500) reports.length = 500;
+  if (reports.length > REPORTS_MAX) {
+    const evicted = reports.splice(REPORTS_MAX);
+    // An evicted report's evidence image goes with it — never orphan files.
+    for (const r of evicted) {
+      if (r.evidence && r.evidence.file) dropEvidenceFile(r.evidence.file);
+    }
+  }
   persistReports();
   return report;
 }
@@ -6778,10 +7074,11 @@ function alertHosts(room, payload) {
 // jot it in the room's moderation log. Used by the text filter and the image
 // flag path. Destructive actions (hide/kick) stay a human decision.
 function autoModerate(room, offender, reason, opIds) {
-  fileReport({ room: room.code, reason: `auto: ${reason}`, reporterName: 'auto-mod', source: 'auto' });
+  const report = fileReport({ room: room.code, reason: `auto: ${reason}`, reporterName: 'auto-mod', source: 'auto' });
   alertHosts(room, { level: 'warn', reason, author: offender ? offender.name : null, opIds: opIds || null, source: 'auto' });
   room.modLog.unshift({ ts: Date.now(), reason, author: offender ? offender.profileId : null });
   if (room.modLog.length > 100) room.modLog.length = 100;
+  return report;
 }
 
 // Mask individual profane tokens (mild hits) while leaving the rest readable.
@@ -7242,8 +7539,22 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       }
     }
   } catch { /* no room dir yet */ }
+  // 7) moderation evidence identity: the frozen PIXELS are the room's shared
+  //    canvas (not the watcher's data), so the image itself stays — but the
+  //    watcher's identity is scrubbed from every report that carries it.
+  //    Guest (`ip-hmac:`) identities need no scrub: they are keyed-HMAC
+  //    pseudonyms with no account link and are irreversible without the
+  //    server secret (see watcherIpIdentity).
+  let evidenceScrubbed = 0;
+  for (const r of reports) {
+    if (r.evidence && r.evidence.watcher === `profile:${pid}`) {
+      r.evidence = { ...r.evidence, watcher: null };
+      evidenceScrubbed += 1;
+    }
+  }
+  if (evidenceScrubbed) persistReports();
   forgetProfileTokens(pid); // the account is gone — its cached sign-in must not outlive it
-  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed });
+  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, evidenceScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
@@ -7992,6 +8303,31 @@ app.post('/api/admin/rooms/:id/flag', (req, res) => {
 app.get('/api/admin/reports', (req, res) => {
   if (!adminGuard(req, res)) return;
   res.json({ reports });
+});
+
+// The frozen classifier snapshot bound to a report (see case 'flag'). Admin
+// key required, no-store (adminGuard), bytes re-sniffed and served with the
+// SNIFFED type — never the upload's claimed type — plus nosniff so the image
+// can never be reinterpreted as anything else. The report id and stored
+// filename are both validated against their minted shapes before either
+// touches the filesystem, so a crafted :reportId cannot traverse out of
+// EVIDENCE_DIR. 404 when there is no evidence (none captured, refused,
+// quota-evicted, room-closed, or TTL-expired).
+app.get('/api/admin/evidence/:reportId', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const id = String(req.params.reportId || '');
+  if (!/^rep_[a-z0-9]{1,40}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const report = reports.find((r) => r.id === id);
+  const ev = report && report.evidence;
+  if (!ev || !ev.file || !/^rep_[a-z0-9]{1,40}\.(png|jpg)$/.test(ev.file)) {
+    return res.status(404).json({ error: 'no evidence' });
+  }
+  let bytes;
+  try { bytes = readFileSync(join(EVIDENCE_DIR, ev.file)); } catch { return res.status(404).json({ error: 'no evidence' }); }
+  const mime = sniffWallImage(bytes);
+  if (mime !== 'image/png' && mime !== 'image/jpeg') return res.status(404).json({ error: 'no evidence' });
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.type(mime).send(bytes);
 });
 
 app.post('/api/admin/reports/:id/resolve', (req, res) => {
