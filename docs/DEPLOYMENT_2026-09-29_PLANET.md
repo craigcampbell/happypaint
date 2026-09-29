@@ -3,7 +3,7 @@
 Released from hp-dev-one, UTC 2026-09-29 (local CDT Sep 28 evening).
 
 ## Source and artifact
-- Feature commit: 5684cb6 on branch `planet` in /home/craig/Projects/happypaint-release (NOT yet merged to main, NOT pushed).
+- Feature commit: 5684cb6 (+ ab3f704 release note), fast-forward merged to main and pushed; `git ls-remote origin main` matches. Canonical repo: git@github.com:craigcampbell/happypaint.git.
 - Production source: /home/craig/Projects/happypaint — synced paths: server.js, src/App.jsx, src/Router.jsx, src/components/SiteNav.jsx, src/components/PlanetPage.jsx (new), src/components/planet.css (new), src/data/world-paths.json (new), public/flags-lineart/*.png (257, new), scripts/planet-verify.mjs (new), scripts/seasonal-marketing-verify.mjs; removed src/components/PaintJarPage.jsx. Pre-sync drift check: every touched prod path matched main byte-for-byte.
 - New running image: sha256:acb7d861eda1d2c320b6569355143cd58ee7699297ff84fd19593ae0a87ca967
 - Previous image / rollback tag: happypaint-app:pre-planet-20260929T031051Z -> sha256:3314ce12c1af8964c43f2368aec96febe2507abd6c6afdf0fb69ea42882beba5 (earlier rollback tags untouched)
