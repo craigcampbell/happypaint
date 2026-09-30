@@ -11,6 +11,8 @@ import './homepage-redesign.css'
 import './studio-layout.css'
 import './quick-stroke.css'
 import './route-status.css'
+import './site-nav.css'
+
 
 // iOS Safari: the studio handles its own canvas gestures. Marketing and guide
 // pages retain native browser zoom and context menus for accessibility.

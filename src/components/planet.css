@@ -11,10 +11,17 @@
 }
 .planet-main { max-width: 1120px; }
 .planet-hero p strong { color: #0f2c22; }
+.planet-hero h1 { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.planet-globe { flex: none; filter: drop-shadow(2px 3px 0 rgba(33, 95, 125, 0.25)); }
+/* a loose brush-stroke underline under the title */
+.planet-hero h1 span {
+  padding-bottom: 6px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 12' preserveAspectRatio='none'%3E%3Cpath d='M3 7 C40 2 70 10 110 6 S190 3 225 7 S275 8 297 4' fill='none' stroke='%23e0606b' stroke-width='5' stroke-linecap='round' opacity='.75'/%3E%3C/svg%3E") no-repeat left bottom / 100% 10px;
+}
 
 .planet-panel {
-  background: rgba(255, 255, 255, 0.88);
-  border: 2px solid #dbe7df;
+  background: rgba(255, 252, 244, 0.92);
+  border: 2px solid #e7dcc4;
   border-radius: 22px;
   padding: 18px 16px 16px;
   margin: 0 0 18px;
@@ -25,35 +32,50 @@
 
 /* ---- Map ---- */
 .planet-map-wrap { position: relative; }
-.planet-map {
+.planet-map-wrap {
+  padding: 8px;
+  border-radius: 10px;
+  background: #fffaf0;
+  box-shadow: 0 1px 0 rgba(90, 58, 36, 0.18), 0 14px 34px rgba(58, 36, 20, 0.18), inset 0 0 0 1px rgba(122, 74, 42, 0.16);
+}
+.planet-map-wrap { position: relative; }
+.planet-art {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 18px;
+  border-radius: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.planet-art-stack { position: relative; }
+.planet-art-stack > .planet-art { width: 100%; height: auto; }
+/* the interaction layer sits exactly over the painting: it is a child of .planet-art-stack,
+   which is the same box as the art, and shares its viewBox */
+.planet-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: visible;
 }
+/* Pencil outline that the watercolour filter then pools into a darker wet edge.
+   Hover is drawn by .planet-hover-ring, NOT by restyling these (they sit inside
+   an SVG filter, and a restyle would re-render the whole watercolour). */
 .planet-country {
-  stroke: rgba(40, 60, 50, 0.45);
-  stroke-width: 0.6;
-  stroke-linejoin: round;
-  transition: fill 240ms ease, transform 160ms ease;
+  stroke: none;
   outline: none;
 }
 .planet-country.is-clickable { cursor: pointer; }
-.planet-country.is-painted { stroke: rgba(70, 30, 20, 0.55); }
-.planet-country.is-hover,
-.planet-country:focus-visible {
-  stroke: #0f2c22;
-  stroke-width: 1.6;
-  filter: brightness(1.08);
+.planet-country:focus-visible { stroke: #2a1b12; stroke-width: 1.7; stroke-dasharray: 5 2.5; fill: rgba(255, 255, 255, 0.2); }
+.planet-hover-ring {
+  stroke: #2a1b12;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  stroke-dasharray: 5 2.5;
 }
-.planet-dot {
-  stroke: rgba(70, 30, 20, 0.7);
-  stroke-width: 1;
-  cursor: pointer;
-  outline: none;
-}
-.planet-dot.is-hover, .planet-dot:focus-visible { stroke: #0f2c22; stroke-width: 2; r: 6; }
+.planet-dot { stroke: none; cursor: pointer; outline: none; }
+.planet-dot.is-hover, .planet-dot:focus-visible { stroke: #2a1b12; stroke-width: 2; }
 .planet-live-ring { transform-origin: center; animation: planet-pulse 1.8s ease-out infinite; }
 @keyframes planet-pulse {
   0% { transform: scale(0.5); opacity: 0.7; }
@@ -84,7 +106,7 @@
   display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: center;
   margin-top: 10px; font-size: 0.82rem; font-weight: 700; color: #4b6a5d;
 }
-.planet-legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 4px; border: 1px solid rgba(70,30,20,0.4); }
+.planet-legend i { display: inline-block; width: 16px; height: 14px; border-radius: 45% 55% 50% 50% / 55% 45% 55% 45%; vertical-align: -2px; margin-right: 4px; border: 1px solid rgba(74,31,42,0.4); box-shadow: inset -2px -2px 0 rgba(74,31,42,0.14); }
 .planet-legend-live { background: #22c55e; border-radius: 50% !important; border-color: #15803d !important; }
 
 .planet-active {
@@ -113,8 +135,8 @@
 /* ---- Growing scene ---- */
 .scene-wrap { max-width: 820px; margin: 0 auto; }
 .scene {
-  display: block; width: 100%; height: auto; border-radius: 18px;
-  border: 8px solid #fff; box-shadow: 0 8px 26px rgba(15, 44, 34, 0.14);
+  display: block; width: 100%; height: auto; border-radius: 6px;
+  border: 8px solid #fffaf0; box-shadow: 0 14px 34px rgba(58, 36, 20, 0.18), inset 0 0 0 1px rgba(122, 74, 42, 0.16);
   background: #fbf8f0;
 }
 .scene-layer { transition: opacity 900ms ease; }

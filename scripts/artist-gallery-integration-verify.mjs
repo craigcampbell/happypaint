@@ -262,7 +262,7 @@ const run = async () => {
     && /Ink Corner/.test(await page.locator(".ag-card").first().innerText()), page.url());
 
   // site nav link
-  await page.locator(".site-nav-links a", { hasText: "Gallery" }).click();
+  await page.locator(".sn-menu a", { hasText: "Gallery" }).click();
   await page.waitForTimeout(1000);
   check("site nav 'Gallery' link routes to /gallery (unfiltered, both studios)",
     page.url().endsWith("/gallery") && (await page.locator(".ag-card").count()) === 2, page.url());

@@ -14,10 +14,12 @@
 // when it can't be reached we show an error, not placeholder numbers. All
 // motion stops under prefers-reduced-motion.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import world from "../data/world-paths.json";
+import { OceanArt, PaintDefs, PaintedGlobe } from "./planetArt";
+import { hashCode, jitter, mix, rng } from "./paintUtils";
 import "../seasonal.css";
 import "./planet.css";
 
@@ -25,14 +27,19 @@ const fmt = (n) => (Number.isFinite(n) ? n.toLocaleString() : "0");
 const flagEmoji = (code) => String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 const nameOf = (code) => world.names[code] || code;
 
-// Paint palette for painted countries: warm → hot with activity, on a 4-step
-// sqrt ramp so the long tail is still visibly "painted", not one flat colour.
-const PAINT = ["#ffd166", "#f4a261", "#ef6f4c", "#d62839"];
-const UNPAINTED = "#e6ead9";
-function paintFor(count, top) {
-  if (!count || !top) return UNPAINTED;
+// Paint palette for painted countries: marigold -> coral -> berry with activity, on a
+// 4-step sqrt ramp so the long tail is still visibly "painted", not one flat colour.
+// Each country is then nudged a little (jitter) so it reads as its own pot of paint.
+const PAINT = ["#f4b71f", "#ee8a3c", "#dc4f63", "#a02f86"];
+const UNPAINTED = "#efe6d3"; // bare paper
+function rampFor(count, top) {
+  if (!count || !top) return null;
   const t = Math.sqrt(count / top);
-  return PAINT[Math.min(PAINT.length - 1, Math.floor(t * PAINT.length))];
+  return { color: PAINT[Math.min(PAINT.length - 1, Math.floor(t * PAINT.length))], t };
+}
+function paintFor(code, count, top) {
+  const r = rampFor(count, top);
+  return r ? jitter(r.color, hashCode(code), 0.12) : jitter(UNPAINTED, hashCode(code), 0.05);
 }
 
 // ---- The growing scene -----------------------------------------------------
@@ -191,6 +198,10 @@ function GrowingScene({ strokes, reduced }) {
           ))}
         </g>
         <rect width="800" height="450" fill="transparent" filter="url(#sc-paper)" pointerEvents="none" />
+        {/* brush drag + paper tooth, static (the animated layers below are never filtered) */}
+        <rect width="800" height="450" filter="url(#pm-bristle-light)" opacity="0.22" pointerEvents="none" />
+        <rect width="800" height="450" filter="url(#pm-bristle-dark)" opacity="0.12" pointerEvents="none" style={{ mixBlendMode: "multiply" }} />
+        <rect width="800" height="450" filter="url(#pm-paper)" pointerEvents="none" />
       </svg>
       <div className="scene-meter" aria-live="polite">
         {next ? (
@@ -216,6 +227,236 @@ function GrowingScene({ strokes, reduced }) {
 }
 
 // ---- The map -----------------------------------------------------------------
+// Painted like a watercolour on a torn sheet: a washed ocean with ships and a whale,
+// countries as wobbly wet-edged shapes with bristle drag, per-country second coats
+// and brush pulls, and paint splatter thrown off wherever people have painted.
+// All of the decoration is deterministic and derives from the same per-country
+// counts as the fills — busier country, more coats and more splatter.
+const PAD = 14; // room around the sheet so its torn edge shows
+
+// Each painted country gets 1-3 glazes of dry-brush strokes (busier country -> more
+// glazes, denser strokes, more splatter), each glaze at its own angle and in a shifted
+// tint, so the colour varies inside the shape like real paint instead of one flat fill.
+function tint(fill, r) {
+  const k = r();
+  if (k < 0.3) return mix(fill, "#ffffff", 0.35 + r() * 0.2);
+  if (k < 0.55) return mix(fill, "#4a1f2a", 0.2 + r() * 0.15);
+  if (k < 0.8) return mix(fill, "#f7d16a", 0.35);
+  return mix(fill, "#b03a86", 0.28);
+}
+
+function paintwork(countries, top) {
+  const counts = new Map(countries.map((c) => [c.code, c.count || 0]));
+  const out = [];
+  for (const c of world.countries) {
+    const count = counts.get(c.code) || 0;
+    const ramp = rampFor(count, top);
+    if (!ramp) continue;
+    const fill = paintFor(c.code, count, top);
+    const r = rng(hashCode(`coat-${c.code}`));
+    const [x0, y0, x1, y1] = c.bbox;
+    const w = Math.max(6, x1 - x0);
+    const h = Math.max(6, y1 - y0);
+    const glazes = 1 + Math.round(ramp.t * 2);
+    const strokes = [];
+    for (let g = 0; g < glazes; g += 1) {
+      const angle = ((r() - 0.5) * 70 + (g % 2 ? 62 : -14)) * (Math.PI / 180);
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+      // Strokes run along `angle` across the whole bbox, laid side by side.
+      const diag = Math.hypot(w, h) + 14;
+      const rows = Math.max(3, Math.min(34, Math.round((Math.abs(cosA) * h + Math.abs(sinA) * w) / 4.2)));
+      const step = (Math.abs(cosA) * h + Math.abs(sinA) * w + 10) / rows;
+      const mx = (x0 + x1) / 2;
+      const my = (y0 + y1) / 2;
+      for (let i = 0; i < rows; i += 1) {
+        const off = -((rows - 1) / 2) * step + i * step + (r() - 0.5) * step * 0.5;
+        const sx = mx - (diag / 2) * cosA - off * sinA + (r() - 0.5) * 6;
+        const sy = my - (diag / 2) * sinA + off * cosA + (r() - 0.5) * 6;
+        const len = diag * (0.55 + r() * 0.5);
+        const wob = (r() - 0.5) * 0.16; // each pull drifts a few degrees off its glaze angle
+        const ex = sx + len * Math.cos(angle + wob);
+        const ey = sy + len * Math.sin(angle + wob);
+        const bend = (r() - 0.5) * Math.min(16, step * 3.2);
+        strokes.push({
+          d: `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${((sx + ex) / 2 - sinA * bend).toFixed(1)} ${((sy + ey) / 2 + cosA * bend).toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}`,
+          stroke: tint(fill, r),
+          width: (step * (1.2 + r() * 0.8)).toFixed(1),
+          opacity: (0.32 + r() * 0.3 + ramp.t * 0.1).toFixed(2),
+        });
+      }
+    }
+    // thick paint: a few light ridge highlights along the strokes of the busiest countries
+    const ridges = [];
+    const nr = ramp.t > 0.35 ? 3 + Math.round(ramp.t * 9) : 0;
+    for (let i = 0; i < nr; i += 1) {
+      const sx = x0 + r() * w * 0.7;
+      const sy = y0 + r() * h;
+      ridges.push({ d: `M${sx.toFixed(1)} ${sy.toFixed(1)} q ${(w * 0.12).toFixed(1)} ${((r() - 0.5) * 6).toFixed(1)} ${(w * (0.16 + r() * 0.2)).toFixed(1)} ${((r() - 0.5) * 8).toFixed(1)}`, opacity: 0.3 + r() * 0.25 });
+    }
+    const R = Math.max(w, h) * 0.55 + 6;
+    const splats = [];
+    const ns = 4 + Math.round(ramp.t * 12);
+    for (let i = 0; i < ns; i += 1) {
+      const ang = r() * Math.PI * 2;
+      const dist = R * (0.7 + r() * 0.9);
+      splats.push({
+        cx: c.c[0] + Math.cos(ang) * dist,
+        cy: c.c[1] + Math.sin(ang) * dist * 0.75,
+        r: 0.7 + Math.pow(r(), 2) * 3.4,
+        opacity: 0.5 + r() * 0.35,
+      });
+    }
+    out.push({ code: c.code, d: c.d, fill, strokes, ridges, splats });
+  }
+  return out;
+}
+
+// Live SVG filters get re-rasterised by the browser far more often than they need to,
+// which made hovering a country janky (2x slower than the old flat map in a CPU-raster
+// test). The painting only changes when the data refreshes, so it is rendered once as an
+// inline <svg>, drawn into a canvas at retina size, and swapped for a PNG <img> of itself:
+// the filters run exactly once and hover just blits a cached bitmap. If any step fails
+// (old browser, blocked canvas) the inline SVG simply stays — same picture, just slower.
+const BAKE_WIDTH = 2240;
+function PaintingLayer({ children, ...props }) {
+  const svgRef = useRef(null);
+  const [png, setPng] = useState(null);
+  const { work, fills, byCode, top, vbW, vbH } = props;
+  useEffect(() => {
+    let cancelled = false;
+    let made = null;
+    setPng(null);
+    // let the inline copy paint (and webfonts settle) first, then bake it
+    const t = setTimeout(() => {
+      const node = svgRef.current;
+      if (cancelled || !node) return;
+      try {
+        const clone = node.cloneNode(true);
+        clone.setAttribute("width", String(BAKE_WIDTH));
+        clone.setAttribute("height", String(Math.round((BAKE_WIDTH * vbH) / vbW)));
+        const xml = new XMLSerializer().serializeToString(clone);
+        const svgUrl = URL.createObjectURL(new Blob([xml], { type: "image/svg+xml;charset=utf-8" }));
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(svgUrl);
+          if (cancelled) return;
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = BAKE_WIDTH;
+            canvas.height = Math.round((BAKE_WIDTH * vbH) / vbW);
+            canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+            canvas.toBlob((blob) => {
+              if (cancelled || !blob) return;
+              made = URL.createObjectURL(blob);
+              setPng(made);
+            }, "image/png");
+          } catch { /* keep the inline svg */ }
+        };
+        img.onerror = () => URL.revokeObjectURL(svgUrl);
+        img.src = svgUrl;
+      } catch { /* keep the inline svg */ }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); if (made) URL.revokeObjectURL(made); };
+  }, [work, fills, byCode, top, vbW, vbH]);
+  return (
+    <div className="planet-art-stack">
+      {png ? (
+        <img className="planet-art" src={png} alt="" draggable="false" width={vbW} height={vbH} />
+      ) : (
+        <PaintingSvg {...props} svgRef={svgRef} />
+      )}
+      {children}
+    </div>
+  );
+}
+
+// The static painting: ocean, then land in layers (shadow -> wet-edged base coat ->
+// pencil -> glazes -> bristle drag -> splatter -> paper tooth). Memoised on its data.
+const PaintingSvg = memo(function PaintingSvg({ work, fills, byCode, top, vbW, vbH, svgRef }) {
+  return (
+    <svg ref={svgRef} className="planet-art" xmlns="http://www.w3.org/2000/svg" viewBox={`${-PAD} ${-PAD} ${vbW} ${vbH}`} aria-hidden="true" focusable="false">
+      <PaintDefs />
+      <defs>
+        <pattern id="pm-strokes" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(-24)">
+          <rect width="7" height="7" fill="transparent" />
+          <path d="M0 3.5 H 7" stroke="#7a5a3a" strokeOpacity="0.2" strokeWidth="1.1" strokeLinecap="round" />
+        </pattern>
+        <mask id="pm-land-mask" maskUnits="userSpaceOnUse" x="0" y="0" width={world.width} height={world.height}>
+          <g filter="url(#pm-warp)">
+            {world.countries.map((c) => <path key={`m-${c.code}`} d={c.d} fill="#fff" />)}
+          </g>
+        </mask>
+        {work.map((w) => (
+          <clipPath id={`pm-clip-${w.code}`} key={`cp-${w.code}`}><path d={w.d} /></clipPath>
+        ))}
+      </defs>
+
+      <OceanArt width={world.width} height={world.height} />
+
+      {/* a soft shadow under the land, like pigment sitting on the paper */}
+      <g filter="url(#pm-warp)" transform="translate(2.5 3.5)" opacity="0.22">
+        {world.countries.map((c) => <path key={`sh-${c.code}`} d={c.d} fill="#3d2a1f" />)}
+      </g>
+
+      {/* base coat — pooled wet edges + paper grain via the pm-wc filter */}
+      <g filter="url(#pm-wc)">
+        {world.countries.map((c) => <path key={c.code} d={c.d} className="planet-country-base" fill={fills.get(c.code)} />)}
+      </g>
+
+      {/* pencil shading on the countries nobody has painted yet */}
+      <g filter="url(#pm-warp)">
+        {world.countries.filter((c) => !(byCode.get(c.code) > 0)).map((c) => (
+          <path key={`pen-${c.code}`} d={c.d} fill="url(#pm-strokes)" />
+        ))}
+      </g>
+
+      {/* a loose pencil outline drawn a second time, slightly off the paint */}
+      <g filter="url(#pm-sketch)" fill="none" stroke="#3a2418" strokeWidth="0.55" strokeOpacity="0.5" strokeLinejoin="round">
+        {world.countries.map((c) => <path key={`ol-${c.code}`} d={c.d} />)}
+      </g>
+
+      {/* glazes of dry-brush strokes, clipped to each painted country (and warped with the
+          land so they stop where the paint's wobbly edge does) */}
+      <g filter="url(#pm-warp)">
+        {work.map((w) => (
+          <g key={`coat-${w.code}`} clipPath={`url(#pm-clip-${w.code})`}>
+            <g filter="url(#pm-dry)">
+              {w.strokes.map((p, i) => <path key={i} d={p.d} fill="none" stroke={p.stroke} strokeWidth={p.width} strokeLinecap="round" opacity={p.opacity} />)}
+            </g>
+            {w.ridges.map((rd, i) => <path key={`r${i}`} d={rd.d} fill="none" stroke="#fffbe6" strokeWidth="1.4" strokeLinecap="round" opacity={rd.opacity} />)}
+          </g>
+        ))}
+      </g>
+
+      {/* bristle drag over all the land, like a flat brush pulled across it */}
+      <g mask="url(#pm-land-mask)" style={{ mixBlendMode: "multiply" }} opacity="0.4">
+        <rect width={world.width} height={world.height} filter="url(#pm-bristle-dark)" />
+      </g>
+      <g mask="url(#pm-land-mask)" opacity="0.4">
+        <rect width={world.width} height={world.height} filter="url(#pm-bristle-light)" />
+      </g>
+
+      {/* splatter thrown off by the busy countries */}
+      <g>
+        {work.map((w) => (
+          <g key={`sp-${w.code}`} fill={w.fill}>
+            {w.splats.map((sp, i) => <circle key={i} cx={sp.cx} cy={sp.cy} r={sp.r} opacity={sp.opacity} />)}
+          </g>
+        ))}
+      </g>
+
+      {/* tiny nations too small to draw at this scale: dabs of paint when active */}
+      {world.dots.filter((d) => byCode.get(d.code) > 0).map((d) => (
+        <circle key={`dab-${d.code}`} cx={d.c[0]} cy={d.c[1]} r={4.5} fill={paintFor(d.code, byCode.get(d.code) || 0, top)} stroke="rgba(74,31,42,0.75)" strokeWidth="1" />
+      ))}
+
+      {/* paper tooth over the whole sheet */}
+      <rect x={-PAD} y={-PAD} width={vbW} height={vbH} filter="url(#pm-paper)" />
+    </svg>
+  );
+});
+
 function PaintedMap({ countries, flags, live, sessions, onOpen }) {
   const [hover, setHover] = useState(null); // { code, x, y }
   const coarsePointer = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)")?.matches;
@@ -224,6 +465,11 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
   const top = countries.reduce((m, c) => Math.max(m, c.count || 0), 0);
   const flagSet = useMemo(() => new Set(flags), [flags]);
   const total = Math.max(sessions || 0, countries.reduce((s, c) => s + (c.count || 0), 0));
+  const work = useMemo(() => paintwork(countries, top), [countries, top]);
+  const fills = useMemo(() => new Map(world.countries.map((c) => [c.code, paintFor(c.code, byCode.get(c.code) || 0, top)])), [byCode, top]);
+  const hoverPath = hover ? world.countries.find((k) => k.code === hover.code)?.d : null;
+  const vbW = world.width + PAD * 2;
+  const vbH = world.height + PAD * 2;
 
   const place = useCallback((code, evt) => {
     const svg = svgRef.current;
@@ -235,10 +481,10 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
     } else {
       const c = world.countries.find((k) => k.code === code)?.c || world.dots.find((k) => k.code === code)?.c;
       if (!c) return;
-      x = (c[0] / world.width) * box.width; y = (c[1] / world.height) * box.height;
+      x = ((c[0] + PAD) / vbW) * box.width; y = ((c[1] + PAD) / vbH) * box.height;
     }
     setHover({ code, x, y, w: box.width });
-  }, []);
+  }, [vbW, vbH]);
 
   // Touch: the first tap selects (shows the card, since there is no hover);
   // the second tap on the same country opens its flag room. Mouse/keyboard
@@ -270,52 +516,41 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
 
   return (
     <div className="planet-map-wrap" onMouseLeave={() => setHover(null)}>
+      {/* Layer 1 — the painting: static and baked to a bitmap, so hovering never re-runs the
+          heavy watercolour filters. Layer 2 (its children) is the transparent interaction
+          svg + hover card, laid over it inside the SAME box so they can never drift apart. */}
+      <PaintingLayer work={work} fills={fills} byCode={byCode} top={top} vbW={vbW} vbH={vbH}>
       <svg
         ref={svgRef}
         className="planet-map"
-        viewBox={`0 0 ${world.width} ${world.height}`}
+        viewBox={`${-PAD} ${-PAD} ${vbW} ${vbH}`}
         role="group"
         aria-label="World map painted by country. Countries with recorded activity are coloured; select one to open its flag colouring room."
       >
-        <defs>
-          <filter id="pm-brush" x="-5%" y="-5%" width="110%" height="110%">
-            <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="3" seed="7" result="n" />
-            <feDisplacementMap in="SourceGraphic" in2="n" scale="3.5" xChannelSelector="R" yChannelSelector="G" />
-          </filter>
-          <pattern id="pm-strokes" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(-18)">
-            <rect width="10" height="10" fill="transparent" />
-            <path d="M0 5 H 10" stroke="#000" strokeOpacity="0.07" strokeWidth="2.6" strokeLinecap="round" />
-          </pattern>
-        </defs>
-        <rect width={world.width} height={world.height} rx="18" fill="#dcefff" />
-        <g filter="url(#pm-brush)">
-          {world.countries.map((c) => {
-            const count = byCode.get(c.code) || 0;
-            const fill = paintFor(count, top);
-            const clickable = flagSet.has(c.code);
-            return (
-              <path
-                key={c.code}
-                d={c.d}
-                className={`planet-country ${count > 0 ? "is-painted" : ""} ${clickable ? "is-clickable" : ""} ${hover?.code === c.code ? "is-hover" : ""}`}
-                fill={fill}
-                tabIndex={clickable ? 0 : -1}
-                role={clickable ? "button" : undefined}
-                aria-label={`${nameOf(c.code)}${count > 0 ? `, ${fmt(count)} recorded sessions` : ""}${clickable ? ". Open flag colouring room" : ""}`}
-                onMouseMove={(e) => place(c.code, e)}
-                onMouseEnter={(e) => place(c.code, e)}
-                onFocus={() => place(c.code, null)}
-                onBlur={() => setHover(null)}
-                onClick={(e) => tap(c.code, clickable, e)}
-                onKeyDown={(e) => { if (clickable && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(c.code); } }}
-              />
-            );
-          })}
-          {world.countries.map((c) => (
-            <path key={`s-${c.code}`} d={c.d} fill="url(#pm-strokes)" pointerEvents="none" />
-          ))}
-        </g>
-        {/* tiny nations too small to draw at this scale: painted dots when active */}
+        {world.countries.map((c) => {
+          const count = byCode.get(c.code) || 0;
+          const clickable = flagSet.has(c.code);
+          return (
+            <path
+              key={c.code}
+              d={c.d}
+              className={`planet-country ${count > 0 ? "is-painted" : ""} ${clickable ? "is-clickable" : ""}`}
+              fill="transparent"
+              tabIndex={clickable ? 0 : -1}
+              role={clickable ? "button" : undefined}
+              aria-label={`${nameOf(c.code)}${count > 0 ? `, ${fmt(count)} recorded sessions` : ""}${clickable ? ". Open flag colouring room" : ""}`}
+              onMouseMove={(e) => place(c.code, e)}
+              onMouseEnter={(e) => place(c.code, e)}
+              onFocus={() => place(c.code, null)}
+              onBlur={() => setHover(null)}
+              onClick={(e) => tap(c.code, clickable, e)}
+              onKeyDown={(e) => { if (clickable && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(c.code); } }}
+            />
+          );
+        })}
+
+        {/* tiny nations too small to draw at this scale: painted dabs (drawn in the painting
+            layer) get a bigger transparent hit target here */}
         {world.dots.filter((d) => byCode.get(d.code) > 0).map((d) => {
           const count = byCode.get(d.code) || 0;
           const clickable = flagSet.has(d.code);
@@ -324,9 +559,9 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
               key={`d-${d.code}`}
               cx={d.c[0]}
               cy={d.c[1]}
-              r={4.5}
+              r={7}
               className={`planet-dot ${clickable ? "is-clickable" : ""} ${hover?.code === d.code ? "is-hover" : ""}`}
-              fill={paintFor(count, top)}
+              fill="transparent"
               tabIndex={clickable ? 0 : -1}
               role={clickable ? "button" : undefined}
               aria-label={`${nameOf(d.code)}, ${fmt(count)} recorded sessions${clickable ? ". Open flag colouring room" : ""}`}
@@ -339,6 +574,10 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
             />
           );
         })}
+
+        {/* the hovered / focused country gets a dashed ink outline */}
+        {hoverPath ? <path className="planet-hover-ring" d={hoverPath} fill="rgba(255,255,255,0.18)" pointerEvents="none" /> : null}
+
         {/* live painters: a pulsing brush tip over countries with someone in their flag room */}
         {Object.entries(live).filter(([, v]) => v.painting > 0).map(([code, v]) => {
           const c = world.countries.find((k) => k.code === code)?.c || world.dots.find((k) => k.code === code)?.c;
@@ -353,6 +592,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
         })}
       </svg>
       {card}
+      </PaintingLayer>
       <div className="planet-legend" aria-hidden="true">
         <span><i style={{ background: UNPAINTED }} /> not painted yet</span>
         {PAINT.map((c, i) => <span key={c}><i style={{ background: c }} /> {["a little", "some", "lots", "the most"][i]}</span>)}
@@ -417,10 +657,12 @@ export default function PlanetPage({ onNavigate }) {
 
   return (
     <div className="jar-page planet-page">
+      {/* filters shared by the map and the scene (ids are document-global) */}
+      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true" focusable="false"><PaintDefs /></svg>
       <SiteNav onNavigate={onNavigate} current="/planet" />
       <main className="jar-main jar-page planet-main" aria-labelledby="planet-title">
         <header className="jar-hero planet-hero">
-          <h1 id="planet-title">🌍 The Painted Planet</h1>
+          <h1 id="planet-title"><PaintedGlobe size={56} /> <span>The Painted Planet</span></h1>
           <p>
             One little planet, painted by everyone who draws here. Hover or tap a country to see how much it has painted,
             <strong> open it to colour that country&rsquo;s flag together</strong>, and watch the scene below grow with every stroke.

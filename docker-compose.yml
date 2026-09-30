@@ -46,6 +46,12 @@ services:
     environment:
       - PORT=8787
       - DATA_DIR=/data
+      # Bounded analytics stores. The 1000-user default silently dropped the
+      # oldest users on every trim, so the split-brain recovery (1217 distinct
+      # users) would be discarded on the first persist after the merge.
+      - ANALYTICS_USER_CAP=2500
+      - ANALYTICS_SESSION_CAP=3000
+      - ANALYTICS_ROOM_CAP=800
       # Whose cf-connecting-ip header is believed: only the tunnel container's.
       # Every other peer (another container, the published port) is keyed by its
       # own socket address, so the header can't be used to dodge rate limits,

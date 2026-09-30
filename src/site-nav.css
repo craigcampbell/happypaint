@@ -1,0 +1,284 @@
+/* Site navigation — mobile/tablet first.
+   Loaded LAST from main.jsx: the older nav rules in App.css / drawesome-theme.css
+   are layered themes on the same header, so this file restates what it needs with
+   `.site-nav …` (two-class) selectors instead of fighting them with !important.
+
+   < 900px  : bar = brand | Sign in | Draw now | menu button.
+              Menu button opens a full-width sheet (grouped, 48px rows).
+   >= 900px : bar = brand | Live rooms  Gallery  Explore ▾  For parents ▾ | actions.
+   Keep the 900px breakpoint in sync with DESKTOP_QUERY in SiteNav.jsx. */
+
+/* ---- Bar (all sizes) ------------------------------------------------------ */
+.site-nav {
+  z-index: 30;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.site-nav .site-nav-actions {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.site-nav .site-nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.site-nav .sn-burger {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+/* ---- Sheet (phones + tablets) -------------------------------------------- */
+.site-nav .sn-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: none;
+  max-height: calc(100vh - 68px);
+  max-height: calc(100dvh - 68px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px clamp(12px, 4vw, 28px) max(20px, env(safe-area-inset-bottom));
+  background: #fff;
+  border-bottom: 2px solid var(--snap-black, #17212b);
+  box-shadow: 0 18px 30px rgba(23, 19, 31, 0.18);
+}
+
+.site-nav .sn-menu.is-open {
+  display: grid;
+  gap: 14px;
+  animation: sn-drop 0.16s ease-out;
+}
+
+@keyframes sn-drop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-nav .sn-menu.is-open { animation: none; }
+}
+
+/* The two main destinations: big side-by-side tiles. */
+.site-nav .sn-primary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.site-nav .sn-primary .sn-link {
+  min-height: 56px;
+  justify-content: center;
+  border: 2px solid var(--snap-black, #17212b);
+  border-radius: 14px;
+  background: var(--brand-blue-soft, #eaf1ff);
+  font-size: 1.02rem;
+}
+
+.site-nav .sn-group-btn { display: none; }
+
+.site-nav .sn-group { padding-top: 12px; border-top: 2px solid #e4ebf0; }
+
+.site-nav .sn-group-title {
+  margin: 0 0 4px;
+  padding: 0 4px;
+  color: #46515c;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.site-nav .sn-pop {
+  display: grid;
+  gap: 2px;
+}
+
+.site-nav .sn-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  color: var(--snap-black, #17212b);
+  font-size: 1rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.site-nav .sn-link:hover,
+.site-nav .sn-link:focus-visible {
+  background: var(--brand-blue-soft, #eaf1ff);
+  color: var(--brand-blue-ink, #174c8f);
+}
+
+.site-nav .sn-link.is-current {
+  background: var(--brand-blue-soft, #eaf1ff);
+  color: var(--brand-blue-ink, #174c8f);
+  box-shadow: inset 4px 0 0 var(--brand-blue, #2d6cdf);
+}
+
+.site-nav .sn-save {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border-radius: 12px;
+  background: #fff0f4;
+  color: #a91845;
+  font-size: 0.96rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+/* Tablet sheet: sections side by side. */
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .site-nav .sn-menu.is-open {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    column-gap: 22px;
+  }
+  .site-nav .sn-primary,
+  .site-nav .sn-save { grid-column: 1 / -1; }
+}
+
+/* Dim + lock the page behind the open sheet. */
+.sn-scrim { display: none; }
+
+@media (max-width: 899.98px) {
+  .sn-scrim.is-on {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    background: rgba(23, 19, 31, 0.38);
+  }
+  html.sn-lock { overflow: hidden; }
+}
+
+/* Phone bar: brand mark + Sign in + Draw now + menu must fit at 320-390px. */
+@media (max-width: 620px) {
+  .site-nav .site-nav-actions { gap: 6px; }
+  .site-nav .site-nav-toggle { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+}
+
+@media (max-width: 359.98px) {
+  .site-nav .site-nav-signin,
+  .site-nav .site-nav-account-cta { padding-inline: 9px; font-size: 0.82rem; }
+  .site-nav .site-nav-paint { padding-inline: 10px; }
+}
+
+/* ---- Desktop / large tablet ---------------------------------------------- */
+@media (min-width: 900px) {
+  .site-nav {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 18px;
+  }
+
+  .site-nav .site-nav-actions { grid-column: 3; }
+  .site-nav .site-nav-toggle,
+  .sn-scrim { display: none; }
+
+  .site-nav .sn-menu {
+    position: static;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .site-nav .sn-primary { display: flex; gap: 2px; }
+
+  .site-nav .sn-primary .sn-link,
+  .site-nav .sn-group-btn {
+    min-height: 42px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--snap-black, #17212b);
+    font: inherit;
+    font-size: 0.92rem;
+    font-weight: 800;
+    box-shadow: none;
+  }
+
+  .site-nav .sn-primary .sn-link:hover,
+  .site-nav .sn-primary .sn-link.is-current,
+  .site-nav .sn-group-btn:hover,
+  .site-nav .sn-group-btn.is-current,
+  .site-nav .sn-group.is-open .sn-group-btn {
+    background: var(--brand-blue-soft, #eaf1ff);
+    color: var(--brand-blue-ink, #174c8f);
+  }
+
+  .site-nav .sn-group { position: relative; padding-top: 0; border-top: 0; }
+
+  .site-nav .sn-group-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+  .site-nav .sn-group-btn::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    margin-top: -3px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+  }
+
+  .site-nav .sn-group.is-open .sn-group-btn::after {
+    margin-top: 3px;
+    transform: rotate(-135deg);
+  }
+
+  .site-nav .sn-group-title { display: none; }
+
+  .site-nav .sn-pop {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 220px;
+    padding: 8px;
+    border: 2px solid var(--snap-black, #17212b);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 5px 5px 0 var(--snap-black, #17212b);
+  }
+
+  .site-nav .sn-group.is-open .sn-pop { display: grid; }
+
+  .site-nav .sn-pop .sn-link { min-height: 44px; font-size: 0.95rem; white-space: nowrap; }
+
+  .site-nav .sn-save { display: none; }
+}

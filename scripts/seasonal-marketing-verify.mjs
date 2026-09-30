@@ -467,7 +467,7 @@ const run = async () => {
   // ============================== nav / mobile ===============================
   await page.goto(UI + "/", { waitUntil: "domcontentloaded" });
   await page.locator(".site-nav-toggle").click();
-  const menuText = await page.locator(".site-nav-links").innerText();
+  const menuText = await page.locator(".sn-menu").innerText();
   check("mobile nav menu contains Inktober and Planet", /Inktober/.test(menuText) && /Planet/.test(menuText));
   await page.locator(".site-nav-toggle").click(); // close the menu
 

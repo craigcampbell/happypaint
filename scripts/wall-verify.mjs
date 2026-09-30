@@ -219,7 +219,7 @@ const run = async () => {
   check("wall page renders the masonry", await page.locator(".wall-masonry").isVisible().catch(() => false));
   check("wall shows post cards", (await page.locator(".wall-card:not(.wall-cta)").count()) >= 1);
   check("CTA 'add your own' cards are mixed in", (await page.locator(".wall-cta").count()) >= 1);
-  check("nav has The Wall link highlighted", await page.locator(".site-nav-links .is-current", { hasText: "The Wall" }).isVisible().catch(() => false));
+  check("nav has The Wall link highlighted", await page.locator(".sn-group-btn.is-current", { hasText: "Explore" }).isVisible().catch(() => false));
 
   // Heart from the browser.
   const heart = page.locator(".wall-card:not(.wall-cta) .wall-heart").first();

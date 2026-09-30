@@ -68,6 +68,16 @@ try {
   await page.goto(API + "/planet", { waitUntil: "domcontentloaded" });
   await page.locator("main.planet-main h1").waitFor({ timeout: 15000 });
   await page.locator(".planet-map").waitFor({ timeout: 15000 });
+  // the transparent hit layer must sit EXACTLY over the painting, or clicks land on the wrong country
+  await page.waitForFunction(() => document.querySelector("img.planet-art") || document.querySelector("svg.planet-art"), null, { timeout: 15000 });
+  const align = await page.evaluate(() => {
+    const art = (document.querySelector("img.planet-art") || document.querySelector("svg.planet-art")).getBoundingClientRect();
+    const hit = document.querySelector("svg.planet-map").getBoundingClientRect();
+    return { dx: Math.abs(art.x - hit.x), dy: Math.abs(art.y - hit.y), dw: Math.abs(art.width - hit.width), dh: Math.abs(art.height - hit.height) };
+  });
+  check("hit layer is pixel-aligned with the painting", Object.values(align).every((n) => n < 1.5), JSON.stringify(align));
+  await page.waitForFunction(() => !!document.querySelector("img.planet-art"), null, { timeout: 15000 }).catch(() => {});
+  check("painting is baked to a bitmap (filters run once)", (await page.locator("img.planet-art").count()) === 1);
   const nCountries = await page.locator("path.planet-country").count();
   check("map renders 170+ country paths", nCountries >= 170, String(nCountries));
   const clickable = await page.locator("path.planet-country.is-clickable").count();
