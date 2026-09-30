@@ -30,6 +30,18 @@ import { isInlineRaster, remoteOpImage } from "./safeImage";
 // stroke #5 falls back to the legacy direct per-segment path.
 export const MAX_STROKE_BUFFERS = 4;
 
+// The ONE randomness policy for the direct (unbuffered) eraser path, shared by
+// this interpreter and the studio's local + remote eraser branches: a stroke
+// whose settings carry a seed rolls pointRand(seed, x, y) — the same dice for
+// the same point on the painter, every live remote, history replay, spectator
+// and cold-frame raster. Legacy ops WITHOUT a seed keep Math.random:
+// reseeding them would repaint saved history, so seedless erasers stay a
+// documented divergence (every stroke penned since seeds ride the wire
+// carries one).
+export function eraserRand(settings, point) {
+  return settings?.seed != null ? pointRand(settings.seed, point.x, point.y) : Math.random;
+}
+
 // Apply one op to a full-res offscreen context. `lastMap` threads each
 // stroke's previous point across op batches; `strokes` holds the per-strokeId
 // in-progress buffers; `deferred` queues v3 stamp strokes until tips load.
@@ -95,8 +107,10 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
     let last = lastMap.get(op.strokeId);
     if (settings.brush === "eraser") {
       // Eraser keeps cutting the paper directly (destination-out can't buffer).
+      // Seeded ops roll the shared per-point dice so every consumer cuts the
+      // same holes; seedless legacy ops keep Math.random (documented).
       for (const point of op.points || []) {
-        drawBrushSegment(dest, last || point, point, settings);
+        drawBrushSegment(dest, last || point, point, settings, eraserRand(settings, point));
         last = point;
       }
       if (op.end) lastMap.delete(op.strokeId);
@@ -206,12 +220,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // caller-owned and reusable so a 500-frame film never stacks allocations.
 // `docW`/`docH` default to the canvas's own size; callers using a scaled target
 // can explicitly preserve the source world's symmetry axes and mix map.
-export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = canvas.height, targetFor = null) {
+export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = canvas.height, targetFor = null, options = {}) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!options.preservePixels) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Decode embedded images up front, then paint them synchronously in op
   // order below. A warm cache still dispatches Image.onload asynchronously:
@@ -232,6 +246,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
   );
 
   const mix = createMixMap(() => canvas, docW, docH);
+  if (options.mixState) mix.restoreState(options.mixState);
   const lastMap = new Map();
   const strokes = new Map();
   const deferred = new Map();
@@ -239,7 +254,11 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
     if (op.kind === "image") {
       const img = decodedImages.get(op.dataUrl);
       if (img) {
-        ctx.drawImage(img, op.x, op.y, op.w, op.h);
+        // Route through targetFor like every other op kind: an image tagged
+        // L1 (a per-layer checkpoint, a pasted cel) must land on L1, not the
+        // flat base — cold hydration and layered composites pass a router.
+        const dest = targetFor ? (targetFor(op) || ctx) : ctx;
+        dest.drawImage(img, op.x, op.y, op.w, op.h);
         mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
       }
       continue;
@@ -260,6 +279,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
     }
     strokes.delete(id);
   }
+  options.onMixState?.(mix.captureState());
   return canvas;
 }
 
@@ -274,7 +294,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
 // layer it was tagged with — the same "no end op" edge the flat consumer has.
 export async function replayFrameComposite(target, layersMeta, ops, docW = target.width, docH = target.height, scratch = []) {
   const metas = Array.isArray(layersMeta) && layersMeta.length ? layersMeta : null;
-  if (!metas || metas.length <= 1) {
+  if (!metas || (metas.length === 1 && metas[0].visible !== false && metas[0].opacity === 1)) {
     await replayFrameOnto(target, ops, docW, docH);
     return target;
   }

@@ -21,6 +21,8 @@ import { isIP } from 'net';
 import { promises as dnsPromises } from 'dns';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { buildGzippedHistoryFrame } from './server/historyFrame.js';
+import { createCatchup } from './server/catchup.js';
+import { createCheckpointService } from './server/checkpoints.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
 import { createEconomy } from './server/economy.js';
@@ -88,6 +90,35 @@ const HISTORY_CACHE_BUILD_BUDGET_MS = Number(process.env.HISTORY_CACHE_BUILD_BUD
 // cached frame, so the next joiner finds a warm cache instead of awaiting a
 // cold rebuild. 0 disables (join-time lazy rebuild only).
 const HISTORY_CACHE_PREBUILD_TAIL = Number(process.env.HISTORY_CACHE_PREBUILD_TAIL || 200);
+// Scene histories (animation joins / scene_fetch / modwatch) share the same
+// gzipped-frame treatment: one frame per scene, one in-flight build, warm
+// fetches served by binary-search tail. Bounded per room (entries + bytes,
+// LRU). SCENE_CACHE_MIN_OPS keeps tiny scenes on the plain text path.
+const SCENE_CACHE_MIN_OPS = Number(process.env.SCENE_CACHE_MIN_OPS || 200);
+const SCENE_CACHE_MAX_ENTRIES = Number(process.env.SCENE_CACHE_MAX_ENTRIES || 8);
+const SCENE_CACHE_MAX_BYTES = Number(process.env.SCENE_CACHE_MAX_BYTES || 32 * 1024 * 1024);
+// While a join/scene-fetch catch-up is in flight, canvas/structure broadcasts
+// to that socket queue up (see server/catchup.js). The queue is bounded; on
+// overflow the socket is bounced (1013) so the client resyncs from durable
+// history rather than silently losing ops. Sized so a legitimately busy room
+// mid-join never trips it.
+const CATCHUP_QUEUE_MAX_MESSAGES = Number(process.env.CATCHUP_QUEUE_MAX_MESSAGES || 2048);
+const CATCHUP_QUEUE_MAX_BYTES = Number(process.env.CATCHUP_QUEUE_MAX_BYTES || 16 * 1024 * 1024);
+// Bounded OUTGOING queues (independent of the catch-up gate): a stalled or
+// slow consumer must never grow ws.bufferedAmount without bound. Once a
+// socket's send buffer passes the soft limit, DURABLE traffic (ops, history,
+// structure, chat) queues per-socket — bounded; overflow bounces the socket
+// with 1013 so the client resyncs from durable history rather than losing
+// messages silently. EPHEMERAL traffic (cursors, presence pips, hype) may
+// simply drop under backpressure: the next one supersedes it anyway.
+const WS_SEND_SOFT_LIMIT_BYTES = Number(process.env.WS_SEND_SOFT_LIMIT_BYTES || 1024 * 1024);
+const WS_SEND_QUEUE_MAX_MESSAGES = Number(process.env.WS_SEND_QUEUE_MAX_MESSAGES || 2048);
+const WS_SEND_QUEUE_MAX_BYTES = Number(process.env.WS_SEND_QUEUE_MAX_BYTES || 32 * 1024 * 1024);
+const EPHEMERAL_BROADCAST_TYPES = new Set(['cursor', 'frame_presence', 'hype']);
+// Per-member scene_fetch token window: normal paging/resync/export bursts fit
+// easily; a scripted socket churning scenes to force rebuilds does not.
+const SCENE_FETCH_MAX = Number(process.env.SCENE_FETCH_MAX || 24);
+const SCENE_FETCH_WINDOW_MS = Number(process.env.SCENE_FETCH_WINDOW_MS || 10_000);
 const SPECTATOR_HISTORY_OPS = 1500; // newest ops a read-only homepage viewer gets
 // Append-only persistence: draw ops append to `.rooms/<CODE>.ops.jsonl`; the
 // full room JSON is rewritten (and the log truncated) only when non-op state
@@ -131,6 +162,47 @@ const SNAPSHOT_STALE_OPS = Number(process.env.SNAPSHOT_STALE_OPS || 800);
 const SNAPSHOT_MAX_CHARS = 14 * 1024 * 1024; // dataURL cap, under the 16MB ws maxPayload
 const SNAPSHOT_REQUEST_COOLDOWN_MS = Number(process.env.SNAPSHOT_REQUEST_COOLDOWN_MS || 60_000);
 const SNAPSHOT_REQUEST_TTL_MS = 30_000;
+
+// Trusted single-frame checkpoints (phase 3, CHECKPOINT-CONTRACT.md): a
+// trusted renderer worker replays a frozen, closed-stroke, seeded prefix of a
+// single-frame room into per-layer full-res PNGs + the layer-0 mix state, and
+// capable joiners (cp=<renderer fingerprint>) receive them as the optional
+// history.checkpoint of the ordinary gzipped history frame with only the
+// exact tail as ops. OFF by default: no worker, no Chromium, no startup or
+// join cost. Every failure mode (missing executable, version mismatch, worker
+// timeout, corrupt/oversize result, mutation mid-build) falls back to the
+// ordinary full-history catch-up.
+const TRUSTED_CHECKPOINTS_ENABLED = process.env.ENABLE_TRUSTED_CHECKPOINTS === '1';
+// Explicit host Chromium/Chrome executable for the renderer worker. Never
+// auto-installed at request time; a missing binary just disables checkpoints.
+const CHECKPOINT_CHROME_PATH = process.env.CHECKPOINT_CHROME_PATH || '';
+const CHECKPOINT_MIN_OPS = Number(process.env.CHECKPOINT_MIN_OPS || 600);
+// Rebuild the cached frame in the background once this many ops landed past
+// its watermark (keeps the NEXT join warm; tail appends never invalidate).
+const CHECKPOINT_REBUILD_TAIL = Number(process.env.CHECKPOINT_REBUILD_TAIL || 400);
+const CHECKPOINT_TAIL_MAX = Number(process.env.CHECKPOINT_TAIL_MAX || 800);
+// Bounded derived cache: per-room entries + a GLOBAL byte ceiling (LRU).
+// Memory-only by design — a restart replays full history and rebuilds lazily,
+// and no new durable account-deletion store appears.
+const CHECKPOINT_CACHE_MAX_ENTRIES = Number(process.env.CHECKPOINT_CACHE_MAX_ENTRIES || 12);
+const CHECKPOINT_CACHE_MAX_BYTES = Number(process.env.CHECKPOINT_CACHE_MAX_BYTES || 192 * 1024 * 1024);
+// Frozen job budgets (validated again inside the worker child).
+const CHECKPOINT_JOB_MAX_OPS = Number(process.env.CHECKPOINT_JOB_MAX_OPS || 20000);
+const CHECKPOINT_JOB_MAX_POINTS = Number(process.env.CHECKPOINT_JOB_MAX_POINTS || 4_000_000);
+const CHECKPOINT_JOB_MAX_BYTES = Number(process.env.CHECKPOINT_JOB_MAX_BYTES || 96 * 1024 * 1024);
+const CHECKPOINT_JOB_TIMEOUT_MS = Number(process.env.CHECKPOINT_JOB_TIMEOUT_MS || 45_000);
+// The checkpoint history frame is ONE ws message: cap it under the 16MB
+// maxPayload with headroom; an oversize build is dropped, never served.
+const CHECKPOINT_SERVE_MAX_BYTES = Number(process.env.CHECKPOINT_SERVE_MAX_BYTES || 14 * 1024 * 1024);
+// Phase 4: per-frame animation checkpoints (PHASE4-CONTRACT.md). A scene
+// baseline may carry a SUBSET of its frames as checkpoint descriptors (every
+// other frame rides its full ops); builds are LAZY — join/scene_fetch warm
+// exactly the requested frame through a small bounded priority queue, and
+// the op hot path only re-warms frames that already hold an entry. No eager
+// whole-film renders, ever.
+const CHECKPOINT_FRAME_MIN_OPS = Number(process.env.CHECKPOINT_FRAME_MIN_OPS || CHECKPOINT_MIN_OPS);
+const CHECKPOINT_SCENE_MAX_FRAMES = Number(process.env.CHECKPOINT_SCENE_MAX_FRAMES || 8);
+const CHECKPOINT_WORKER_MAX_QUEUE = Number(process.env.CHECKPOINT_WORKER_MAX_QUEUE || 3);
 
 // Auto-close idle rooms. The allowed idle time scales with the room's complexity
 // (op count) and engagement (cumulative user-seconds), so a rich, well-loved mural
@@ -1390,12 +1462,16 @@ function loadRoom(roomId) {
   // Each op must stand alone when moderation, previews or paging select
   // only part of a stroke. Never borrow settings from another author/cel.
   // Same audience default + multi-frame test getRoom applies, so a big film
-  // (animation, or frames preserved with the toggle off) is never front-trimmed.
+  // (animation, or frames preserved with the toggle off) is never front-trimmed:
+  // films are capped at INGEST (per-frame caps + the anim op budget), so a
+  // persisted history that exceeds a REDUCED budget/config still loads whole —
+  // a front trim would silently erase the first frames' artwork. Single-canvas
+  // rooms keep the rolling mural cap.
   const loadAudience = (data && data.audience) || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
   const loadMultiFrame = ANIMATION_ROOM_CODES.has(roomId)
     || (loadAudience !== 'kid_safe' && !!(data && data.animation))
     || (Array.isArray(data && data.frames) && data.frames.length > 1);
-  const stored = loadRoomHistory(roomId, data ? data.history : null, historyCeiling(loadAudience, loadMultiFrame));
+  const stored = loadRoomHistory(roomId, data ? data.history : null, loadMultiFrame ? Infinity : historyCeiling(loadAudience, false));
   const history = hydrateHistorySettings(stored.history);
   try {
     if (!data) throw new Error('no room file');
@@ -1819,8 +1895,28 @@ function historyCeiling(audience, multiFrame) {
 const MAX_FRAME_HOLD_MS = 10000;
 const MAX_SCENE_LOOPS = 20;
 const CAMERA_PRESETS = new Set(['none', 'pan-right', 'pan-left', 'pan-down', 'pan-up', 'zoom-in', 'zoom-out']);
+// Phase-4 timing handshake (PHASE4-CONTRACT.md): the public FLIPBOOK room
+// holds each frame 1–3 SECONDS (default 1s); every other room — public,
+// private animation, local — keeps the ordinary 40..10000ms range with the
+// 120ms default. The server ENFORCES the FLIPBOOK band on new/duplicate
+// frames, frame_duration and persisted loads; clients filter their hold
+// steps inside it. Never 30s a frame.
+const FLIPBOOK_ROOM_CODE = 'FLIPBOOK';
+const ORDINARY_FRAME_TIMING = Object.freeze({ minMs: 40, maxMs: MAX_FRAME_HOLD_MS, defaultMs: 120 });
+const FLIPBOOK_FRAME_TIMING = Object.freeze({ minMs: 1000, maxMs: 3000, defaultMs: 1000 });
+function frameTimingFor(roomId) {
+  const t = roomId === FLIPBOOK_ROOM_CODE ? FLIPBOOK_FRAME_TIMING : ORDINARY_FRAME_TIMING;
+  return { minMs: t.minMs, maxMs: t.maxMs, defaultMs: t.defaultMs };
+}
 function clampHold(value) {
   return Math.max(40, Math.min(MAX_FRAME_HOLD_MS, Number(value) || 120));
+}
+// Room-aware hold clamp: FLIPBOOK frames are pinned to the 1–3s band
+// (malicious or legacy values normalize into it), everything else is the
+// ordinary clamp above.
+function clampHoldFor(roomId, value) {
+  if (roomId !== FLIPBOOK_ROOM_CODE) return clampHold(value);
+  return Math.max(FLIPBOOK_FRAME_TIMING.minMs, Math.min(FLIPBOOK_FRAME_TIMING.maxMs, Number(value) || FLIPBOOK_FRAME_TIMING.defaultMs));
 }
 function clampLoops(value) {
   const n = Math.round(Number(value));
@@ -1965,13 +2061,15 @@ function collapseFrameLayers(room, frame, intoId) {
   return dropped;
 }
 
-function sanitizeFrames(list, layerCap = MAX_ROOM_LAYERS) {
+function sanitizeFrames(list, layerCap = MAX_ROOM_LAYERS, roomId = null) {
   if (!Array.isArray(list)) return null;
   const frames = list
     .filter((f) => f && typeof f.id === 'string' && f.id.length <= 24)
     .map((f) => ({
       id: f.id,
-      durationMs: clampHold(f.durationMs),
+      // Legacy FLIPBOOK films persisted out-of-band holds: the canonical
+      // server meta normalizes them into the 1–3s band on load.
+      durationMs: clampHoldFor(roomId, f.durationMs),
       sceneId: typeof f.sceneId === 'string' && f.sceneId.length <= 24 ? f.sceneId : null,
       layers: sanitizeLayers(f.layers, layerCap) || defaultLayers(),
     }));
@@ -2214,8 +2312,10 @@ function getRoom(roomId) {
     const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
     // Public rooms carry a lower cap than the global file cap — apply it on load
     // too, so a file written under the old cap doesn't reload oversized. Films
-    // use their ingest budget instead (a front trim would erase frame 1).
-    const loadCap = historyCeiling(audience, animEnabled || (Array.isArray(saved.frames) && saved.frames.length > 1));
+    // are capped at INGEST instead: a front trim would erase frame 1, so a
+    // persisted film that exceeds a REDUCED budget/config loads whole.
+    const filmLoad = animEnabled || (Array.isArray(saved.frames) && saved.frames.length > 1);
+    const loadCap = filmLoad ? Infinity : historyCeiling(audience, false);
     if (saved.history.length > loadCap) saved.history = saved.history.slice(-loadCap);
     // Recover the op-id counter from persisted history so ids stay monotonic
     // across restarts (selective moderation hides/restores by opId).
@@ -2247,7 +2347,7 @@ function getRoom(roomId) {
       users: new Map(),
       history: saved.history,
       hiddenGen: 0, // bumps with every hiddenOpIds change (join cache key)
-      historyCache: {}, // gzipped join frames per variant (see sendHistoryCatchUp)
+      historyCache: {}, // gzipped join frames per variant (see server/catchup.js)
       pendingOps: [], // ops awaiting the append-only log
       opLogCount: 0, // ops in the on-disk log since the last full write
       baseDirty: true, // the small meta file is (re)written on the first save
@@ -2325,8 +2425,8 @@ function getRoom(roomId) {
       // in — only FLIPBOOK ships the strip. Every frame also carries its own
       // shared layer stack; a room written before shared layers materializes
       // the single layer its ops already lived on.
-      frames: sanitizeFrames(saved.frames, animEnabled ? MAX_ROOM_LAYERS_ANIM : MAX_ROOM_LAYERS)
-        || [{ id: 'f0', durationMs: 120, sceneId: null, layers: defaultLayers() }],
+      frames: sanitizeFrames(saved.frames, animEnabled ? MAX_ROOM_LAYERS_ANIM : MAX_ROOM_LAYERS, roomId)
+        || [{ id: 'f0', durationMs: clampHoldFor(roomId, null), sceneId: null, layers: defaultLayers() }],
       scenes: sanitizeScenes(saved.scenes) || [{ id: 's0', name: 'Scene 1' }],
       animationEnabled: animEnabled,
       // Finger-paint mode: smudge allowed despite kid_safe, chat disabled,
@@ -2486,8 +2586,12 @@ function historyTailAfter(room, variant, lastOpId) {
   return tail;
 }
 function historyCacheUsable(room, entry) {
+  // The spectator exemption used to skip the framesKey check, but spectator
+  // op SELECTION depends on frame structure (animation rooms filter to
+  // frames[0]; untagged ops bind to it) — a frame move/add mid-build would
+  // otherwise serve ops filtered for a frame that is no longer first.
   return !!entry && entry.gen === room.historyGen && entry.hiddenGen === (room.hiddenGen || 0)
-    && (entry.variant === 'spectator' || entry.framesKey === framesKeyOf(room));
+    && entry.framesKey === framesKeyOf(room);
 }
 function buildHistoryCache(room, variant) {
   const gen = room.historyGen;
@@ -2518,7 +2622,7 @@ function maybePrebuildHistoryCache(room) {
     if ((room.opSeq || 0) - entry.lastOpId < HISTORY_CACHE_PREBUILD_TAIL) continue;
     const key = `${variant}Building`;
     // The promise must resolve to the ENTRY — joiners landing mid-build await
-    // the same slot in sendHistoryCatchUp.
+    // the same slot in the gated catch-up (server/catchup.js).
     cache[key] = buildHistoryCache(room, variant)
       .then((built) => {
         if (historyCacheUsable(room, built)) cache[variant] = built;
@@ -2528,34 +2632,54 @@ function maybePrebuildHistoryCache(room) {
       .finally(() => { cache[key] = null; });
   }
 }
-async function sendHistoryCatchUp(ws, room, variant) {
-  const sendText = () => {
-    if (ws.readyState === 1) ws.send(JSON.stringify(historyMessageFor(room, variant)));
-  };
-  if (!ws.acceptsGzip || room.animationEnabled || visibleHistory(room).length < HISTORY_CACHE_MIN_OPS) {
-    sendText();
-    return;
-  }
-  const cache = room.historyCache || (room.historyCache = {});
-  let entry = cache[variant];
-  let tail = historyCacheUsable(room, entry) ? historyTailAfter(room, variant, entry.lastOpId) : null;
-  if (!tail) {
-    // Rebuild once, shared by every joiner that lands while it's in flight.
-    const key = `${variant}Building`;
-    if (!cache[key]) {
-      cache[key] = buildHistoryCache(room, variant).finally(() => { cache[key] = null; });
-    }
-    try { entry = await cache[key]; } catch { entry = null; }
-    if (!entry) { sendText(); return; }
-    cache[variant] = entry;
-    tail = historyCacheUsable(room, entry) ? historyTailAfter(room, variant, entry.lastOpId) : null;
-    if (!tail) { sendText(); return; } // the mural changed shape while gzipping
-  }
-  if (ws.readyState !== 1) return;
-  // Pre-compressed → tell ws not to deflate it again.
-  ws.send(entry.gz, { binary: true, compress: false });
-  for (const op of tail) ws.send(JSON.stringify({ type: 'op', op }));
-}
+// Atomic catch-up delivery (server/catchup.js): while a join/scene-fetch
+// baseline is being prepared, canvas/structure broadcasts to that socket are
+// gated into a bounded queue and flushed in order AFTER the baseline lands —
+// no live op can precede the history frame or repeat inside the tail.
+// sendRoomCatchUp covers full/spectator joins; sendSceneCatchUp covers
+// animation joins, scene_fetch and modwatch scene pushes.
+const catchup = createCatchup({
+  rooms,
+  config: {
+    HISTORY_CACHE_MIN_OPS, HISTORY_CACHE_TAIL_MAX, HISTORY_CACHE_BUILD_BUDGET_MS,
+    SCENE_CACHE_MIN_OPS, SCENE_CACHE_MAX_ENTRIES, SCENE_CACHE_MAX_BYTES,
+    CATCHUP_QUEUE_MAX_MESSAGES, CATCHUP_QUEUE_MAX_BYTES,
+  },
+  visibleHistory, historyMessageFor, historyCacheUsable, historyTailAfter, buildHistoryCache,
+  sceneHistoryMsg, scenesMeta, framesOfScene, opFrameId, opIndexOf,
+  sendReliable,
+});
+
+// Phase-3 trusted checkpoints (server/checkpoints.js): background prefix
+// renders into a bounded memory-only cache; capable joiners get
+// history.checkpoint + the exact tail, everyone else the ordinary catch-up.
+const checkpoints = createCheckpointService({
+  rooms,
+  config: {
+    enabled: TRUSTED_CHECKPOINTS_ENABLED,
+    chromePath: CHECKPOINT_CHROME_PATH,
+    minOps: CHECKPOINT_MIN_OPS,
+    rebuildTail: CHECKPOINT_REBUILD_TAIL,
+    tailMax: CHECKPOINT_TAIL_MAX,
+    maxEntries: CHECKPOINT_CACHE_MAX_ENTRIES,
+    maxBytes: CHECKPOINT_CACHE_MAX_BYTES,
+    jobMaxOps: CHECKPOINT_JOB_MAX_OPS,
+    jobMaxPoints: CHECKPOINT_JOB_MAX_POINTS,
+    jobMaxBytes: CHECKPOINT_JOB_MAX_BYTES,
+    jobTimeoutMs: CHECKPOINT_JOB_TIMEOUT_MS,
+    serveMaxBytes: CHECKPOINT_SERVE_MAX_BYTES,
+    buildBudgetMs: HISTORY_CACHE_BUILD_BUDGET_MS,
+    frameMinOps: CHECKPOINT_FRAME_MIN_OPS,
+    sceneMaxFrames: CHECKPOINT_SCENE_MAX_FRAMES,
+    workerMaxQueue: CHECKPOINT_WORKER_MAX_QUEUE,
+    // Test seam (integration corrupt-response fixture): the real renderer is
+    // always server/checkpointRenderer.mjs in production.
+    workerEntry: process.env.CHECKPOINT_WORKER_ENTRY || undefined,
+  },
+  visibleHistory, opIndexOf, catchup, sendReliable,
+  opFrameId, framesOfScene, scenesMeta,
+  log: (line) => console.log(line),
+});
 
 // Allowed idle time before an EMPTY room is auto-closed. Scales with complexity
 // (op count) and engagement (cumulative user-seconds), capped — so a rich, busy
@@ -2625,6 +2749,7 @@ function closeRoom(roomId, reason) {
     dropRoomChatDoodles(room); // free the room's chat-doodle images
     dropRoomTracePhoto(room); // free any uploaded trace photo when the room dies
     dropRoomSoundtrack(room); // and its soundtrack file
+    checkpoints.evictRoom(roomId); // derived checkpoint bytes die with the room
     rooms.delete(roomId);
   }
   try { unlinkSync(roomFile(roomId)); } catch { /* no file / already gone */ }
@@ -2878,7 +3003,7 @@ function ensureRoomFresh(roomId) {
   // pinned at the cap would hand the next kids a blank film strip they can't
   // grow. Reset the structure the way a fresh room starts.
   if (room.animationEnabled) {
-    room.frames = [{ id: 'f0', durationMs: 120, sceneId: 's0', layers: defaultLayers() }];
+    room.frames = [{ id: 'f0', durationMs: clampHoldFor(roomId, null), sceneId: 's0', layers: defaultLayers() }];
     room.scenes = [{ id: 's0', name: 'Scene 1' }];
   }
   recountFrameOps(room);
@@ -3317,13 +3442,84 @@ function chatHistoryMsg(room) {
   };
 }
 
+// True wire size of an outbound frame (UTF-8 bytes for text, length for binary).
+function wireBytes(data) {
+  return typeof data === 'string' ? Buffer.byteLength(data) : (data ? data.length : 0);
+}
+// Drain a stalled socket's durable outbox while its send buffer has room.
+function flushOutbox(ws) {
+  const outbox = ws.outbox;
+  if (!outbox) return;
+  outbox.timer = null;
+  if (ws.readyState !== 1) { ws.outbox = null; return; }
+  // Below the soft limit, drain freely. Above it, keep draining only while the
+  // socket makes PROGRESS (bufferedAmount shrinks between ticks — a recovering
+  // consumer), in bounded 256KB bursts; a still-stalled socket gets nothing
+  // more, so recovery never costs one message per tick and a dead consumer
+  // never grows memory past the (bounded) queue.
+  const progress = outbox.lastBuffered == null || ws.bufferedAmount < outbox.lastBuffered;
+  let sentBytes = 0;
+  while (outbox.queue.length
+    && (ws.bufferedAmount <= WS_SEND_SOFT_LIMIT_BYTES || (progress && sentBytes < 256 * 1024))) {
+    const next = outbox.queue.shift();
+    outbox.bytes -= next.size;
+    sentBytes += next.size;
+    try { ws.send(next.data, next.opts); } catch { ws.outbox = null; return; }
+  }
+  outbox.lastBuffered = ws.bufferedAmount;
+  if (outbox.queue.length) {
+    outbox.timer = setTimeout(() => flushOutbox(ws), 50);
+    if (outbox.timer.unref) outbox.timer.unref();
+  } else {
+    ws.outbox = null;
+  }
+}
+// Bounded reliable send. Below the soft buffer limit (and with nothing
+// queued) this is a plain ws.send. Above it, DURABLE traffic queues in order
+// (bounded — overflow bounces the socket with 1013 so the client resyncs from
+// durable history instead of silently losing messages); EPHEMERAL traffic
+// drops. Returns false when the message was NOT put on the wire now (dropped,
+// queued, or socket gone) — callers that only care about delivery don't need
+// the distinction.
+function sendReliable(ws, data, { binary = false, compress, durable = true } = {}) {
+  if (ws.readyState !== 1) return false;
+  const opts = binary ? { binary: true, compress: compress === undefined ? false : compress } : undefined;
+  if (!ws.outbox && ws.bufferedAmount <= WS_SEND_SOFT_LIMIT_BYTES) {
+    try { ws.send(data, opts); } catch { return false; }
+    return true;
+  }
+  if (!durable) return false; // ephemeral: droppable under backpressure
+  const size = wireBytes(data);
+  const outbox = ws.outbox || (ws.outbox = { queue: [], bytes: 0, timer: null });
+  if (outbox.queue.length >= WS_SEND_QUEUE_MAX_MESSAGES || outbox.bytes + size > WS_SEND_QUEUE_MAX_BYTES) {
+    // Never discard durable traffic silently: bounce the socket; the client's
+    // reconnect re-runs the catch-up against the durable history.
+    ws.outbox = null;
+    try { ws.close(1013, 'send queue overflow'); } catch { /* already gone */ }
+    return false;
+  }
+  outbox.queue.push({ data, opts, size });
+  outbox.bytes += size;
+  if (!outbox.timer) {
+    outbox.timer = setTimeout(() => flushOutbox(ws), 50);
+    if (outbox.timer.unref) outbox.timer.unref();
+  }
+  return true;
+}
+
 function broadcast(roomId, message, exceptId = null) {
   const room = rooms.get(roomId);
   if (!room) return;
   const data = JSON.stringify(message);
   room.users.forEach((u) => {
     if (u.id !== exceptId && u.ws.readyState === 1) {
-      u.ws.send(data);
+      // A socket mid-catch-up gets canvas/structure traffic queued (flushed in
+      // order after its baseline) — never ahead of it, never duplicated.
+      // Ungated sends still respect the bounded outgoing queue: durable
+      // traffic queues (overflow = 1013 resync), ephemeral may drop.
+      if (!catchup.routeGatedBroadcast(u.ws, room, message, data)) {
+        sendReliable(u.ws, data, { durable: !EPHEMERAL_BROADCAST_TYPES.has(message.type) });
+      }
     }
   });
   // Read-only homepage viewers see the live mural too, but never draw/count.
@@ -3353,7 +3549,9 @@ function broadcast(roomId, message, exceptId = null) {
       if (t === 'clear' && message.frameId && message.frameId !== firstId) return;
     }
     room.spectators.forEach((sws) => {
-      if (sws.readyState === 1) sws.send(data);
+      if (sws.readyState === 1 && !catchup.routeGatedBroadcast(sws, room, message, data)) {
+        sendReliable(sws, data, { durable: !EPHEMERAL_BROADCAST_TYPES.has(message.type) });
+      }
     });
   }
   // Moderator watchers ("glass room") are the operator's eyes: they get everything
@@ -3376,14 +3574,21 @@ function broadcast(roomId, message, exceptId = null) {
     }
     if (deliver) {
       room.mods.forEach((mws) => {
-        if (mws.readyState === 1) mws.send(data);
+        if (mws.readyState === 1 && !catchup.routeGatedBroadcast(mws, room, message, data)) {
+          sendReliable(mws, data, { durable: !EPHEMERAL_BROADCAST_TYPES.has(message.type) });
+        }
       });
     }
     if (room.animationEnabled && (t === 'history' || t === 'resync')) {
       const sceneId = room.scenes[0] && room.scenes[0].id;
-      room.mods.forEach((mws) => {
-        if (mws.readyState === 1) mws.send(JSON.stringify(sceneHistoryMsg(room, sceneId)));
-      });
+      // The watcher follows the first scene: hand it back through the gated
+      // scene cache (shared build — a moderation refetch wave of watchers
+      // costs one build, not one stringify per watcher on the hot path).
+      if (sceneId) {
+        room.mods.forEach((mws) => {
+          if (mws.readyState === 1) void catchup.sendSceneCatchUp(mws, room, sceneId);
+        });
+      }
     }
   }
 }
@@ -4048,6 +4253,12 @@ wss.on('connection', async (ws, req) => {
   // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
   // everything else — old builds, the test harness by default — gets text.
   ws.acceptsGzip = url.searchParams.get('gz') === '1';
+  // Trusted-checkpoint capability: the client's compile-time renderer
+  // fingerprint (Vite define). Anything but a 64-hex string is no capability
+  // at all — legacy clients and garbage params take the ordinary path.
+  const cpParam = url.searchParams.get('cp') || '';
+  ws.checkpointVersion = /^[a-f0-9]{64}$/.test(cpParam) ? cpParam : null;
+  ws.checkpointsDisabled = false; // per-connection, set by checkpoint_nack
 
   // Notify mode: a lightweight cross-room mention watcher. It joins NO room for
   // drawing/presence — it just subscribes to a set of rooms' chat and receives
@@ -4126,6 +4337,10 @@ wss.on('connection', async (ws, req) => {
     if (roomId === INKTOBER_ROOM) ensureInktoberFresh();
     const specFeatured = FEATURED_CODES.has(roomId) ? FEATURED_ROOMS[FEATURED_INDEX.get(roomId)] : null;
     const specPrompt = live.customPrompt || (specFeatured ? dailyPromptFor(specFeatured) : null) || (flagCodeOf(roomId) ? flagRoomPrompt(flagCodeOf(roomId)) : null);
+    // Gate canvas traffic BEFORE the socket joins the spectator set: its
+    // catch-up build is async, and no live op may precede (or repeat after)
+    // the history frame it is about to receive.
+    catchup.beginGate(ws);
     live.spectators.add(ws);
     ws.isSpectator = true;
     ws.roomId = roomId;
@@ -4140,6 +4355,7 @@ wss.on('connection', async (ws, req) => {
       wetCanvas: !!live.wetCanvas,
       moderated: live.audience === 'kid_safe',
       watched: live.watchers.size > 0,
+      frameTiming: frameTimingFor(roomId),
     }));
     // Spectators (homepage viewers) get a headcount only — never painter names,
     // so a leaked/guessed room code can't be used to harvest who's in a room.
@@ -4151,7 +4367,7 @@ wss.on('connection', async (ws, req) => {
     // Animation rooms: spectators watch the FIRST frame only (their single
     // canvas would otherwise overdraw the whole flipbook into one smear).
     // (Chat catch-up rides along below — the banter is part of the show.)
-    void sendHistoryCatchUp(ws, live, 'spectator');
+    void catchup.sendRoomCatchUp(ws, live, 'spectator');
     // Don't point a spectator at a trace-photo id whose in-memory image is gone
     // (e.g. after a restart) — same guard as the member join path.
     if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
@@ -4215,6 +4431,9 @@ wss.on('connection', async (ws, req) => {
         if (live.mods.size >= MAX_MOD_WATCHERS) return deny('too_many');
         clearTimeout(authTimer);
         watched = live;
+        // Gate canvas traffic before the watcher joins the mod set: its
+        // history catch-up is async and must stay atomically ordered.
+        catchup.beginGate(ws);
         live.mods.add(ws);
         // Handshake — the same facts a member gets, minus an identity of our own.
         ws.send(JSON.stringify({
@@ -4232,6 +4451,7 @@ wss.on('connection', async (ws, req) => {
           prompt: live.customPrompt || null,
           wipe: wipeState(live, roomId),
           animation: !!live.animationEnabled,
+          frameTiming: frameTimingFor(roomId),
         }));
         // The full roster — names included. This is the moderation job, and the
         // socket is authenticated as the owner; the count-only rule that protects
@@ -4240,9 +4460,9 @@ wss.on('connection', async (ws, req) => {
         // The mural as members see it (animation rooms page by scene, like a
         // member's join), plus the conversation and the moderation trail.
         if (live.animationEnabled) {
-          ws.send(JSON.stringify(sceneHistoryMsg(live, live.scenes[0].id)));
+          void catchup.sendSceneCatchUp(ws, live, live.scenes[0].id);
         } else {
-          void sendHistoryCatchUp(ws, live, 'full');
+          void catchup.sendRoomCatchUp(ws, live, 'full');
         }
         if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
           ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
@@ -4518,6 +4738,12 @@ wss.on('connection', async (ws, req) => {
     // for a guest who has no account. Null for older clients.
     deviceKey: deviceKey || null,
   };
+  // Gate canvas-mutating broadcasts BEFORE the socket enters the roster: the
+  // history catch-up below is async (shared gz build), and no live op, clear
+  // or structure change may reach this socket ahead of its baseline or repeat
+  // inside the computed tail. The gate queue flushes in order once the
+  // catch-up lands (server/catchup.js).
+  catchup.beginGate(ws);
   room.users.set(id, user);
   room.lastActivity = Date.now();
   room.everJoined = true; // no longer a phantom (see sweepPhantomRooms)
@@ -4596,6 +4822,9 @@ wss.on('connection', async (ws, req) => {
     mentionKey: issueMentionKey(room, name),
     // Shared animation: whether this room has the film strip, and its frames.
     animation: !!room.animationEnabled,
+    // Per-room frame-hold band (FLIPBOOK pins 1000–3000ms/default 1000; every
+    // other room keeps 40–10000/default 120). Server-enforced either way.
+    frameTiming: frameTimingFor(roomId),
     // The per-scene frame cap the strip should enforce locally (server-authoritative).
     animMaxFrames: room.audience === 'kid_safe' ? MAX_ANIM_FRAMES_PUBLIC : MAX_ANIM_FRAMES_PRIVATE,
     // Finger-paint room: smudge-friendly, always wet, chat-free (pre-readers).
@@ -4632,7 +4861,11 @@ wss.on('connection', async (ws, req) => {
   // Animation rooms deliver ONE scene at a time (the first, on join) — clients
   // page between scenes with scene_fetch, keeping memory at a scene's worth.
   if (room.animationEnabled) {
-    ws.send(JSON.stringify(sceneHistoryMsg(room, room.scenes[0].id)));
+    // Trusted checkpoints: a capable joiner gets the first scene's history
+    // with per-frame checkpoint assets for the frames that have them (plus
+    // full ops for the rest); everyone else — and every failure mode — takes
+    // the ordinary scene catch-up inside the same gate.
+    void checkpoints.sendSceneCatchUp(ws, room, room.scenes[0].id);
     // Catch the joiner up on WHERE everyone already is (presence is otherwise
     // only broadcast at send-time, so a late joiner would see no pips).
     if (room.presence.size) {
@@ -4652,14 +4885,16 @@ wss.on('connection', async (ws, req) => {
     }
     if (room.snapshot && !snapshotWatermarkInHistory(room, room.snapshot.opId)) invalidateRoomSnapshot(room);
     if (room.snapshot && room.snapshot.opId === room.snapshotOpId && room.snapshot.dataUrl) {
-      ws.send(JSON.stringify({ type: 'snapshot', opId: room.snapshotOpId, dataUrl: room.snapshot.dataUrl }));
-      ws.send(JSON.stringify({
+      sendReliable(ws, JSON.stringify({ type: 'snapshot', opId: room.snapshotOpId, dataUrl: room.snapshot.dataUrl }));
+      sendReliable(ws, JSON.stringify({
         type: 'history',
         ops: visibleHistory(room).filter((op) => (op.opId || 0) > room.snapshotOpId),
         frames: room.frames,
       }));
+      // Synchronous complete baseline — close the join gate with a fresh outcome.
+      catchup.finishSyncCatchUp(ws, room);
     } else {
-      void sendHistoryCatchUp(ws, room, 'full');
+      void catchup.sendRoomCatchUp(ws, room, 'full');
     }
     // Elect one connected member to refresh the snapshot if it's due (the room
     // crossed the min-op threshold, or enough new ops landed since the last one).
@@ -4682,7 +4917,10 @@ wss.on('connection', async (ws, req) => {
       }
     }
   } else {
-    void sendHistoryCatchUp(ws, room, 'full');
+    // Trusted checkpoints: a capable joiner (cp=<renderer fingerprint>) with a
+    // ready cached frame gets history.checkpoint + the exact tail; everyone
+    // else — and any failure mode — takes the ordinary full catch-up inside.
+    void checkpoints.sendJoinCatchUp(ws, room);
   }
   // A persisted trace-photo id whose in-memory image is gone (server restart)
   // resolves to nothing — drop it rather than pointing joiners at a 404.
@@ -4759,6 +4997,15 @@ wss.on('connection', async (ws, req) => {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     user.lastActivity = Date.now();
     room.lastActivity = Date.now();
+
+    // checkpoint_nack is read-only (it only re-requests THIS socket's full
+    // baseline) and must stay open to read-only roles, so it is handled before
+    // the artist-viewer allowlist gate below. It disables checkpoints for this
+    // connection only — no retry loop — and resends the ordinary full history.
+    if (data.type === 'checkpoint_nack') {
+      checkpoints.handleNack(ws, room);
+      return;
+    }
 
     // Artist studios, broad defense: a member without canPaint (guests,
     // strangers, revoked painters) may ONLY use the explicit read/social/
@@ -4931,6 +5178,7 @@ wss.on('connection', async (ws, req) => {
         broadcast(roomId, { type: 'op', op }, id);
         persistOp(roomId, op);
         maybePrebuildHistoryCache(room); // keep the join frame warm (O(1) guard)
+        checkpoints.noteOp(room, countKey); // same for the trusted-checkpoint frame(s)
         break;
       }
       // Only the elected member may answer one live request. Never accept a
@@ -5567,7 +5815,7 @@ wss.on('connection', async (ws, req) => {
         }
         // Scenes ride along so the strip knows its active scene (and its
         // timing) the moment it unlocks, before any frame/scene mutation lands.
-        broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled, scenes: scenesMeta(room) });
+        broadcast(roomId, { type: 'room_animation', enabled: room.animationEnabled, scenes: scenesMeta(room), frameTiming: frameTimingFor(roomId) });
         persistRoom(roomId);
         break;
       }
@@ -5584,7 +5832,7 @@ wss.on('connection', async (ws, req) => {
         // canvas wipe would desync a flipbook.
         if (room.gameEnabled && room.animationEnabled) {
           room.animationEnabled = false;
-          broadcast(roomId, { type: 'room_animation', enabled: false });
+          broadcast(roomId, { type: 'room_animation', enabled: false, frameTiming: frameTimingFor(roomId) });
         }
         // Only one game mode at a time: turning Draw & Guess on stops Draw Phone.
         if (room.gameEnabled && room.phoneEnabled) {
@@ -5719,7 +5967,7 @@ wss.on('connection', async (ws, req) => {
         room.phoneEnabled = !!data.enabled;
         if (room.phoneEnabled && room.animationEnabled) {
           room.animationEnabled = false;
-          broadcast(roomId, { type: 'room_animation', enabled: false });
+          broadcast(roomId, { type: 'room_animation', enabled: false, frameTiming: frameTimingFor(roomId) });
         }
         if (room.phoneEnabled && room.gameEnabled) {
           room.gameEnabled = false;
@@ -5801,7 +6049,35 @@ wss.on('connection', async (ws, req) => {
         if (!room.animationEnabled) break;
         const fetchId = String(data.sceneId || '').slice(0, 24);
         if (!room.scenes.some((s) => s.id === fetchId)) break;
-        ws.send(JSON.stringify(sceneHistoryMsg(room, fetchId)));
+        // Storm backstop: the shared cache makes repeat fetches cheap, but a
+        // scripted socket churning scenes could still force rebuilds. Normal
+        // paging, resync refetches and whole-film export bursts fit the window.
+        // Never drop SILENTLY: the client holds a scene waiter per fetch, so a
+        // quiet discard wedges a scene switch (or an export) until its 30s
+        // timeout. Answer with `resync` — the existing client handler refetches
+        // its pending/active scene; retryAfterMs lets it back off bounded
+        // instead of looping at RTT pace until the token window has room.
+        if (!rateOk(`scenefetch:${user.id}`, SCENE_FETCH_MAX, SCENE_FETCH_WINDOW_MS)) {
+          sendReliable(ws, JSON.stringify({
+            type: 'resync',
+            reason: 'rate_limited',
+            retryAfterMs: rateRetryAfterMs(`scenefetch:${user.id}`, SCENE_FETCH_MAX, SCENE_FETCH_WINDOW_MS),
+          }));
+          break;
+        }
+        // Optional preferred frame: its checkpoint build jumps the worker
+        // queue (PHASE4-CONTRACT.md). Old clients without frameId are valid —
+        // the scene's first frame takes priority instead. Trusted-checkpoint
+        // capable fetches get per-frame assets + tails; everyone else the
+        // ordinary scene gzip path — both gated + superseding, so ops/
+        // structure queue behind the new baseline and a newer fetch cancels
+        // delivery of an in-flight older one.
+        let fetchFrameId = null;
+        if (data.frameId != null) {
+          const fid = String(data.frameId).slice(0, 24);
+          if (framesOfScene(room, fetchId).some((f) => f.id === fid)) fetchFrameId = fid;
+        }
+        void checkpoints.sendSceneCatchUp(ws, room, fetchId, { frameId: fetchFrameId });
         break;
       }
       // Scenes are HOST-only: the host directs the film's structure ("you take
@@ -5816,7 +6092,7 @@ wss.on('connection', async (ws, req) => {
           break;
         }
         const scene = { id: `s${(room.opSeq = (room.opSeq || 0) + 1)}`, name: `Scene ${room.scenes.length + 1}`, loops: 1, camera: 'none' };
-        const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId: scene.id, layers: defaultLayers() };
+        const firstFrame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: clampHoldFor(roomId, null), sceneId: scene.id, layers: defaultLayers() };
         room.scenes.push(scene);
         room.frames.push(firstFrame); // scene blocks stay contiguous: appended at the end
         room.frameOpCounts.set(firstFrame.id, 0);
@@ -5898,7 +6174,7 @@ wss.on('connection', async (ws, req) => {
           ws.send(JSON.stringify({ type: 'frame_denied', reason: `Scenes are capped at ${maxFrames} frames — add a new scene!` }));
           break;
         }
-        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: 120, sceneId, layers: dupFrame ? dupFrame.layers.map((l) => ({ ...l })) : defaultLayers() };
+        const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: clampHoldFor(roomId, null), sceneId, layers: dupFrame ? dupFrame.layers.map((l) => ({ ...l })) : defaultLayers() };
         // Duplicate: copy the source frame's visible ops under fresh opIds so
         // rejoiners replay the copy identically (the engine is deterministic —
         // same ops, same seeds, same pixels). Clients clone pixels locally.
@@ -6014,7 +6290,7 @@ wss.on('connection', async (ws, req) => {
         const durId = String(data.frameId || '').slice(0, 24);
         const target = room.frames.find((f) => f.id === durId);
         if (!target) break;
-        target.durationMs = clampHold(data.durationMs);
+        target.durationMs = clampHoldFor(roomId, data.durationMs);
         broadcast(roomId, { type: 'frame_duration', frameId: durId, durationMs: target.durationMs, sceneId: target.sceneId, scenes: scenesMeta(room), byUserId: id });
         persistRoom(roomId);
         break;
@@ -9169,6 +9445,15 @@ function rateOk(key, max = 8, windowMs = 60_000) {
   createHits.set(key, arr);
   return true;
 }
+// How long until a rate-limited key has a token again — lets a client back
+// off bounded instead of refetching in an RTT-paced retry storm (phase-2
+// resync-loop finding; the server MAY include this, clients may ignore it).
+function rateRetryAfterMs(key, max = 8, windowMs = 60_000) {
+  const now = Date.now();
+  const arr = (createHits.get(key) || []).filter((t) => now - t < windowMs);
+  if (arr.length < max) return 0;
+  return Math.max(1, windowMs - (now - arr[0]));
+}
 // The wall's per-IP/per-voter buckets mint many short-lived keys; without a
 // sweep createHits would grow unbounded. Every 5 min, drop keys whose newest
 // hit is older than 10 min (past any window we use).
@@ -10236,6 +10521,12 @@ app.get('/api/admin/metrics', (req, res) => {
     loopLag: loop,
     rooms: rooms.size,
     strokes: totalStrokes,
+    // Catch-up pipeline observability: shared scene-frame builds vs warm hits,
+    // fresh-state fallbacks (mutation mid-build) and gate-queue overflows.
+    catchup: catchup.metrics(),
+    // Trusted-checkpoint pipeline: worker builds/failures, warm-join hits,
+    // invalidations (mutation mid-build) and the bounded cache footprint.
+    checkpoints: checkpoints.metrics(),
     reports: { open: reports.filter((r) => r.status === 'open').length, total: reports.length },
     sheets: sheets.length,
   });
@@ -10676,6 +10967,7 @@ async function shutdown() {
     // final engagement/unlock save. Stop those timers before draining writes.
     stopRoomTimers();
     await flushRoomPersistence();
+    await checkpoints.close(); // take the renderer worker (and Chromium) down too
     clearTimeout(analyticsPersistTimer);
     analyticsPersistTimer = null;
     persistAnalyticsNow();

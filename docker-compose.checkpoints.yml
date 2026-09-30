@@ -1,0 +1,12 @@
+# Optional trusted renderer. No extra public ports, service credentials or
+# external renderer endpoint. The app forks the bounded worker over local IPC.
+# Enable only after checkpoint/browser fidelity gates pass for the deployment.
+# docker compose -f docker-compose.yml -f docker-compose.checkpoints.yml up -d --build app
+services:
+  app:
+    build:
+      target: checkpoint-runtime
+    environment:
+      ENABLE_TRUSTED_CHECKPOINTS: "1"
+      CHECKPOINT_CHROME_PATH: /usr/bin/chromium-browser
+    shm_size: 256mb

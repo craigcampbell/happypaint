@@ -38,6 +38,8 @@ COPY server.js ./server.js
 COPY server ./server
 # The server and the gallery use the same verified seasonal prompt list.
 COPY src/data ./src/data
+# Replay source is fingerprinted and reused by the optional trusted worker.
+COPY src/utils ./src/utils
 EXPOSE 8787
 # The server runs as the unprivileged `node` user. The container still STARTS as
 # root, for one job: a bind-mounted ./app_data arrives owned by whoever made it
@@ -46,3 +48,11 @@ EXPOSE 8787
 # than a .sh file so a CRLF checkout on Windows can't break the shebang.
 ENTRYPOINT ["/bin/sh", "-c", "if [ \"$(id -u)\" = 0 ]; then mkdir -p \"$DATA_DIR\"; su-exec node test -w \"$DATA_DIR\" || chown -R node:node \"$DATA_DIR\" || true; exec su-exec node \"$@\"; fi; exec \"$@\"", "--"]
 CMD ["node", "server.js"]
+
+# Explicit opt-in target; the normal image does not install or launch a browser.
+FROM runtime AS checkpoint-runtime
+RUN apk add --no-cache chromium font-noto
+ENV CHECKPOINT_CHROME_PATH=/usr/bin/chromium-browser
+
+# Keep plain `docker build .` equivalent to the original lightweight runtime.
+FROM runtime AS default

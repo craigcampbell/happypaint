@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
+import { checkpointClientSupport } from "../utils/checkpointClient";
 
 // Realtime multiplayer client. Connects to the server's /ws relay, scoped to a
 // room. The consumer supplies an `onMessage(data)` handler for canvas-affecting
@@ -16,9 +17,15 @@ function resolveSocketUrl(roomId) {
   // socket's first frame ({type:'auth', token}) instead; see onopen below.
   // `gz=1` opts into the server's shared gzipped history frame (wsInflate.js).
   const gz = supportsGzipFrames() ? "&gz=1" : "";
+  // `cp=<renderer fingerprint>` opts into trusted checkpoint baselines — ONLY
+  // when this bundle can actually verify them (compile-time fingerprint +
+  // WebCrypto + bitmap decode, see utils/checkpointClient.js). Without it the
+  // server sends the ordinary full history.
+  const cpVersion = checkpointClientSupport();
+  const cp = cpVersion ? `&cp=${cpVersion}` : "";
   const override = import.meta.env.VITE_WS_URL;
   if (override) {
-    return `${override}?room=${encodeURIComponent(roomId)}${gz}`;
+    return `${override}?room=${encodeURIComponent(roomId)}${gz}${cp}`;
   }
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   let host = window.location.host;
@@ -30,7 +37,7 @@ function resolveSocketUrl(roomId) {
       host = `${pageUrl.hostname}:8787`;
     }
   }
-  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${gz}`;
+  return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${gz}${cp}`;
 }
 
 // The browser-local device key the wall already uses. Sent with client_info so
@@ -284,6 +291,11 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   }, []);
 
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
+  // A received checkpoint failed verification: turn checkpoints off for THIS
+  // connection and ask the server for the ordinary full-history baseline
+  // instead (one-shot — the App guards against re-sending so a bad server
+  // can't loop us).
+  const sendCheckpointNack = useCallback(() => send({ type: "checkpoint_nack" }), [send]);
   // Upload a client-rendered mural snapshot for late-joiner catch-up (the
   // server elects one member via snapshot_request; see the join handler).
   const sendSnapshot = useCallback((opId, dataUrl) => send({ type: "snapshot", opId, dataUrl }), [send]);
@@ -356,8 +368,13 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendFrameMove = useCallback((frameId, toIndex) => send({ type: "frame_move", frameId, toIndex }), [send]);
   const sendFrameDuration = useCallback((frameId, durationMs) => send({ type: "frame_duration", frameId, durationMs }), [send]);
   // Scenes: page one scene's frames+ops in (memory stays at a scene's worth);
-  // scene creation/deletion is host-only (enforced server-side).
-  const sendSceneFetch = useCallback((sceneId) => send({ type: "scene_fetch", sceneId }), [send]);
+  // scene creation/deletion is host-only (enforced server-side). An optional
+  // `frameId` tells the server which cel we'll land on first (checkpoint build
+  // priority); older servers simply ignore it, and old call shapes stay valid.
+  const sendSceneFetch = useCallback(
+    (sceneId, frameId) => send(frameId ? { type: "scene_fetch", sceneId, frameId } : { type: "scene_fetch", sceneId }),
+    [send],
+  );
   const sendSceneAdd = useCallback(() => send({ type: "scene_add" }), [send]);
   const sendSceneDel = useCallback((sceneId) => send({ type: "scene_del", sceneId }), [send]);
   // Scene timing: loop count + camera move (host-only, server-enforced).
@@ -447,7 +464,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
 
   return {
     connected, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
-    sendOp, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
+    sendOp, sendCheckpointNack, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendPaintRequest, sendPaintApprove, sendPaintRevoke,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,
     sendSetWet, sendSetBrushMode, sendVoteStart, sendVote, sendReaction, sendSetSymmetry,

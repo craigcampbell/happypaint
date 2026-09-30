@@ -158,5 +158,33 @@ export function createMixMap(getSource, worldWidth, worldHeight) {
     return SAMPLE;
   };
 
-  return { markDirty, markAllDirty, clear, sample, flush, invalidatePrefetch };
+  // A checkpoint must preserve the sampling ledger, not just layer pixels:
+  // unmarked direct writes intentionally leave previously sampled cells stale.
+  const captureState = () => ({
+    version: 1, width: w, height: h, data: data.slice(),
+    dirty: dirty ? { ...dirty } : null,
+    prefetched: prefetched ? { ...prefetched } : null,
+  });
+  const restoreState = (state) => {
+    const rect = (value) => {
+      if (value === null) return null;
+      if (!value || ![value.x0, value.y0, value.w, value.h].every(Number.isFinite)
+        || value.w < 0 || value.h < 0) throw new Error("Invalid checkpoint mix bounds");
+      return { x0: value.x0, y0: value.y0, w: value.w, h: value.h };
+    };
+    if (state?.version !== 1 || state.width !== w || state.height !== h
+      || !(state.data instanceof Uint8ClampedArray) || state.data.length !== data.length) {
+      throw new Error("Invalid checkpoint mix state");
+    }
+    // Validate before mutating any state. refresh() only reads the rectangle
+    // it first clears/repaints, so unsampled backing pixels need not be copied.
+    const nextDirty = rect(state.dirty);
+    const nextPrefetched = rect(state.prefetched);
+    data.set(state.data);
+    ctx.clearRect(0, 0, w, h);
+    dirty = nextDirty;
+    prefetched = nextPrefetched;
+  };
+
+  return { markDirty, markAllDirty, clear, sample, flush, invalidatePrefetch, captureState, restoreState };
 }

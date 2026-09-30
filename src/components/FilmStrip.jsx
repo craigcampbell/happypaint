@@ -8,7 +8,8 @@
 // host enabled it) — there, every frame is shared state like a document.
 
 import { useEffect, useRef, useState } from "react";
-import { CAMERA_PRESETS, HOLD_STEPS, MAX_SCENE_LOOPS, formatHold, formatRuntime, holdStepIndex, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "../utils/filmPlan";
+import { CAMERA_PRESETS, MAX_SCENE_LOOPS, formatHold, formatRuntime, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "../utils/filmPlan";
+import { holdStepsForTiming, holdStepIndexFor, normalizeFrameTiming } from "../utils/frameTiming";
 
 export default function FilmStrip({
   frames,
@@ -20,6 +21,7 @@ export default function FilmStrip({
   isExportingVideo,
   hiddenFrameIds,
   maxFrames,
+  frameTiming = null, // server-negotiated hold bounds (FLIPBOOK 1000..3000); null = local defaults
   scenes = [],
   activeSceneId = null,
   canManageScenes = false,
@@ -77,6 +79,14 @@ export default function FilmStrip({
   const displayIndex = scrubIndex == null ? activeFrameIndex : scrubIndex;
   const sceneIndex = scenes.findIndex((scene) => scene.id === activeSceneId);
   const activeScene = sceneIndex >= 0 ? scenes[sceneIndex] : scenes[0] || null;
+  // Server-negotiated hold bounds (FLIPBOOK rooms: 1–3s per cel): the slider
+  // only offers steps inside the room's range. Private/local films keep the
+  // full 40ms–10s ladder.
+  const holdSteps = holdStepsForTiming(frameTiming);
+  const timingBounds = normalizeFrameTiming(frameTiming);
+  const holdTitle = timingBounds
+    ? `How long this frame shows (this room: ${formatHold(timingBounds.minMs)}–${formatHold(timingBounds.maxMs)})`
+    : "How long this frame shows (hold it for up to 10 seconds)";
 
   const indexFromEvent = (event) => {
     const rect = railRef.current?.getBoundingClientRect();
@@ -280,14 +290,14 @@ export default function FilmStrip({
             </button>
           ) : null}
           {activeFrame ? (
-            <label className="fs-duration" title="How long this frame shows (hold it for up to 10 seconds)">
+            <label className="fs-duration" title={holdTitle}>
               <input
                 type="range"
                 min="0"
-                max={HOLD_STEPS.length - 1}
+                max={holdSteps.length - 1}
                 step="1"
-                value={holdStepIndex(activeFrame.durationMs)}
-                onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
+                value={holdStepIndexFor(activeFrame.durationMs, holdSteps)}
+                onChange={(event) => onDurationChange(activeFrameIndex, holdSteps[Number(event.target.value)])}
               />
               <output>{formatHold(activeFrame.durationMs)}</output>
             </label>
@@ -305,15 +315,15 @@ export default function FilmStrip({
           {menuOpen ? (
             <div className="fs-menu" role="menu">
               {activeFrame ? (
-                <label className="fs-menu-hold" title="How long this frame shows (hold it for up to 10 seconds)">
+                <label className="fs-menu-hold" title={holdTitle}>
                   <span>⏱ Hold {formatHold(activeFrame.durationMs)}</span>
                   <input
                     type="range"
                     min="0"
-                    max={HOLD_STEPS.length - 1}
+                    max={holdSteps.length - 1}
                     step="1"
-                    value={holdStepIndex(activeFrame.durationMs)}
-                    onChange={(event) => onDurationChange(activeFrameIndex, HOLD_STEPS[Number(event.target.value)])}
+                    value={holdStepIndexFor(activeFrame.durationMs, holdSteps)}
+                    onChange={(event) => onDurationChange(activeFrameIndex, holdSteps[Number(event.target.value)])}
                   />
                 </label>
               ) : null}

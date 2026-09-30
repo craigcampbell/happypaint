@@ -146,6 +146,21 @@ function gzipPartsSliced(parts, { level = 6, budgetMs = 8 } = {}) {
 export async function buildGzippedHistoryFrame({ variant, gen, hiddenGen, framesKey, msg, level = 6, budgetMs = 8 }) {
   const ops = Array.isArray(msg.ops) ? msg.ops.slice() : [];
   const snapshot = { ...msg, ops };
+  // Freeze the NESTED metadata too (frames / scenes / layer stacks): the async
+  // build spans many loop turns while the live structures mutate IN PLACE
+  // (layer_add pushes into a live layers array, frame_duration writes a live
+  // frame). Serializing the live references tears the frame — part old, part
+  // new — and the after-the-fact key check can't always see it (an add+remove
+  // pair or a set-and-set-back restores the key while the bytes straddle the
+  // edit). These payloads are a few KB next to the ops, so a synchronous deep
+  // copy at snapshot time is cheap and makes the build's input immutable.
+  for (const key of Object.keys(snapshot)) {
+    if (key === 'ops') continue;
+    const value = snapshot[key];
+    if (value !== null && typeof value === 'object') {
+      snapshot[key] = JSON.parse(JSON.stringify(value));
+    }
+  }
   const lastOpId = ops.length ? (ops[ops.length - 1].opId || 0) : 0;
   const parts = await stringifyJsonSlicedParts(snapshot, { budgetMs });
   const gz = await gzipPartsSliced(parts, { level, budgetMs });

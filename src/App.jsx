@@ -47,23 +47,46 @@ import {
 } from "./utils/frames";
 import {
   HYDRATED_RADIUS,
+  coldRasterStale,
+  createBitmapCache,
+  dropFrameBitmap,
   encodeRaster,
+  layerRenderSig,
   paintFrameInto,
   paintFrameSync,
   peekFrameBitmap,
   prefetchFrameBitmaps,
   getFrameBitmap,
+  rasterTicket,
+  rasterTicketCurrent,
   rasterizeOps,
 } from "./utils/frameRasters";
 import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
-import { applyOp, replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
+import { applyOp, eraserRand, replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
 import { replayInSlices } from "./utils/replayQueue";
 import { createSharedOpLog } from "./utils/sharedOpLog";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, hasStoredSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
 import { isInlineRaster, remoteOpImage } from "./utils/safeImage";
+import {
+  CheckpointError,
+  checkpointClientSupport,
+  checkpointTailOnlyFrame,
+  decodeCheckpoint,
+  freshMixState,
+  installCheckpointLayers,
+  releaseCheckpoint,
+} from "./utils/checkpointClient";
+import { clampHoldWithTiming, normalizeFrameTiming } from "./utils/frameTiming";
+import { hydrationWindow, releaseUnselectedFrames } from "./utils/frameHydration";
+
+// The hydrated window is budgeted in BYTES, not just cels: 5 frames × 3
+// layers × 40MB was ~600MB before extras. The active frame is always
+// preserved; everything else cools farthest-first once the live canvases
+// exceed the budget.
+const HYDRATED_FRAME_BUDGET_BYTES = 240 * 1024 * 1024;
 
 // A private room's film export needs the same identity its socket does.
 const filmAuthHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : undefined);
@@ -136,7 +159,7 @@ import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
 import WallPostModal from "./components/WallPostModal";
-import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "./utils/filmPlan";
+import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops, scenePassMs, sceneRuntimeMs } from "./utils/filmPlan";
 import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, renderSoundtrackSlice } from "./utils/soundtrack";
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
 import ShareInviteSheet from "./components/ShareInviteSheet";
@@ -685,6 +708,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const framesRef = useRef([]);
   const activeFrameIndexRef = useRef(0);
   const playTimerRef = useRef(null);
+  // Whole-film playback entry point, assigned after its definition (it needs
+  // switchScene, which is declared later than startPlayback).
+  const startFilmPlaybackRef = useRef(null);
   const onionSkinRef = useRef(false);
 
   // Onion-skin proxy cache: frameId -> { canvas (half-res composite), stamp }.
@@ -808,6 +834,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // A `snapshot` frame arrives right before a tail `history`; hold its dataURL
   // so the history handler can bake it onto layer 0 before replaying the tail.
   const pendingSnapshotRef = useRef(null);
+  // A verified-BAD checkpoint asks the server for the full baseline instead
+  // (checkpoint_nack). One-shot per connection: a nacked connection never
+  // trusts or re-nacks a second checkpoint, so a bad server can't loop us.
+  const checkpointNackSentRef = useRef(false);
+  // A post-nack / unsupported checkpoint whose op list is tail-only for one of
+  // its frames must be REFUSED (replaying the bare tail paints truncated ink):
+  // the client re-requests the full scene instead. Bounded so a buggy server
+  // can't wedge the room in a refuse/refetch loop.
+  const baselineRefusalsRef = useRef(0);
   const sentStampIdsRef = useRef(new Set()); // imported brush tips already sent with full data this session
   // Stage-1 brush engine (#62): the local in-progress NON-eraser stroke paints
   // into a bbox-capped offscreen buffer and lands on its layer once, at the
@@ -1035,6 +1070,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [textSize, setTextSize] = useState(64);
   const [gallery, setGallery] = useState([]);
   const [status, setStatus] = useState("Ready");
+  const statusRef = useRef("Ready");
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
   const [historyCount, setHistoryCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
   // Economy state (mock wallet, ledger, store ownership, entitlements). Loaded
@@ -1116,6 +1155,30 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // than a timer — 0 opening the socket, 1 socket open, 2 handshake in,
   // 3 the shared history is on the canvas. RoomLoadingCurtain paints the bar.
   const [joinStep, setJoinStep] = useState(0);
+  const joinStepRef = useRef(0);
+  useEffect(() => {
+    joinStepRef.current = joinStep;
+  }, [joinStep]);
+  // Dev/test-only introspection for the checkpoint fixture harness (the
+  // scripts/checkpoint-client-realtime-verify suite reads layer pixels +
+  // join progress). import.meta.env.DEV is statically false in production
+  // builds, so this compiles out — it is never a runtime surface.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return undefined;
+    window.__drawesomeCheckpoint = {
+      layers: () => layersRef.current,
+      mixMap: () => mixMapRef.current,
+      joinStep: () => joinStepRef.current,
+      // Phase 4 harness extras (same DEV-only surface): the doc canvas for
+      // pixel sampling, playback/export state, and the status line.
+      docCanvas: () => docContextRef.current?.canvas || null,
+      playback: () => ({ film: !!filmPlaybackRef.current, raf: !!playTimerRef.current }),
+      scene: () => activeSceneIdRef.current,
+      status: () => statusRef.current,
+      frameTiming: () => frameTimingRef.current,
+    };
+    return () => { delete window.__drawesomeCheckpoint; };
+  }, []);
   // Only ever true for the FIRST join of this room instance. A later reconnect
   // (or a scene switch) re-runs the handshake, and throwing a curtain over
   // someone mid-drawing would be worse than the blank canvas this fixes.
@@ -1268,6 +1331,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [activeSceneId, setActiveSceneId] = useState(null);
   const activeSceneIdRef = useRef(null);
   const sceneWaitersRef = useRef(new Map());
+  // Server-negotiated per-frame hold bounds (FLIPBOOK: 1000..3000ms, default
+  // 1000). Null everywhere else — private/local films keep the 40..10000ms
+  // ladder. Rides `connected` and `room_animation` (see utils/frameTiming).
+  const frameTimingRef = useRef(null);
+  const [roomFrameTiming, setRoomFrameTiming] = useState(null);
+  // Bounded backoff for `resync` reason=rate_limited scene refetches (Phase 2
+  // retried on the next RTT — a self-made storm). One pending timer at a time;
+  // attempts reset when the scene's history actually lands.
+  const resyncBackoffRef = useRef({ timer: 0, target: null, attempts: 0 });
+  // Whole-film playback across scenes (Phase 4): an async plan walker that
+  // pages scenes in the background and paints snapshot bitmaps. Null while
+  // stopped; `token.cancelled` is THE stop signal every await checks.
+  const filmPlaybackRef = useRef(null);
   // Our own session id (from the connected handshake) — used to recognise our
   // echoed frame mutations without depending on the mp hook object.
   const myUserIdRef = useRef(null);
@@ -1394,6 +1470,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [commitLayersToFrame, pruneOnionCache, renderFrameThumbnail],
   );
 
+  // A COLD frame's raster is a composite of its layer stack — the ordered
+  // ids, visibility and opacity are part of its identity (layerRenderSig).
+  // When the server syncs a render-affecting layer change onto a cold cel the
+  // raster stops matching even though the op count never moved: drop the
+  // raster AND its decoded bitmap, bump the build generation (so an in-flight
+  // rasterizeOps can't install the now-stale blob), and queue a rebuild.
+  // Name/lock-only changes don't reach here (the sig is unchanged) and a
+  // hydrated frame repaints from its live layers, so neither rebuilds.
+  const invalidateColdRaster = useCallback((frame) => {
+    if (!frame || frame.layers) return;
+    frame.raster = null;
+    frame.rasterCount = -1;
+    frame.rasterGen = (frame.rasterGen || 0) + 1;
+    dropFrameBitmap(frame);
+    coldFramesRef.current?.scheduleRasterQueue?.();
+  }, []);
+
   // Snap ONE frame's live layer stack to the server's canonical list. Pixels are
   // preserved for every layer whose id survives; a local layer the server doesn't
   // know about is RE-KEYED onto the matching slot when that slot is otherwise
@@ -1406,7 +1499,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     const existing = Array.isArray(frame.layers) ? frame.layers : null;
     if (!existing) {
+      const before = layerRenderSig(frame.layerMeta);
       frame.layerMeta = serverLayers; // cold cel: built from this meta on hydrate
+      if (layerRenderSig(serverLayers) !== before) {
+        invalidateColdRaster(frame); // the stack's pixels changed under a cold raster
+      }
       return false;
     }
     const byId = new Map(existing.map((layer) => [layer.id, layer]));
@@ -1453,7 +1550,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncLayerState();
     }
     return true;
-  }, [syncLayerState]);
+  }, [invalidateColdRaster, syncLayerState]);
 
   // Snap the local frame list to the server's authoritative metadata (ids,
   // order, durations) — the Google-Docs invariant: everyone runs the same
@@ -1478,7 +1575,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             if (existing.layers) {
               if (reconcileFrameLayers(existing, meta.layers, false)) layersChanged = true;
             } else {
+              const before = layerRenderSig(existing.layerMeta);
               existing.layerMeta = meta.layers; // cold cel — hydrate builds from it
+              if (layerRenderSig(meta.layers) !== before) {
+                invalidateColdRaster(existing); // render-affecting sync under a cold raster
+              }
             }
           }
           return existing;
@@ -1497,9 +1598,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       framesRef.current = next;
       const keptIndex = next.findIndex((frame) => frame.id === activeId);
       activeFrameIndexRef.current = keptIndex >= 0 ? keptIndex : Math.max(0, Math.min(activeFrameIndexRef.current, next.length - 1));
-      const lo = Math.max(0, activeFrameIndexRef.current - HYDRATED_RADIUS);
-      const hi = Math.min(next.length - 1, activeFrameIndexRef.current + HYDRATED_RADIUS);
-      for (let i = lo; i <= hi; i += 1) allocateFrameLayers(next[i]);
+      const admitted = hydrationWindow(next, activeFrameIndexRef.current, HYDRATED_FRAME_BUDGET_BYTES, HYDRATED_RADIUS);
+      releaseUnselectedFrames(next, admitted);
+      for (const index of admitted) allocateFrameLayers(next[index]);
       const active = next[activeFrameIndexRef.current];
       if (!active.layers.some((layer) => layer.id === active.activeLayerId)) {
         active.activeLayerId = active.layers[active.layers.length - 1].id;
@@ -1515,7 +1616,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         renderDisplayRef.current();
       }
     },
-    [commitLayersToFrame, reconcileFrameLayers, syncFrameState, syncLayerState],
+    [commitLayersToFrame, invalidateColdRaster, reconcileFrameLayers, syncFrameState, syncLayerState],
   );
 
   // Queue a frame's thumbnail regen for idle time. Dirty ids are tracked per
@@ -2086,6 +2187,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const renderDisplay = useCallback(() => {
     const context = docContextRef.current;
     if (!context) {
+      return;
+    }
+    // Whole-film playback owns the display: recomposites from editing signals
+    // (history finalizes of prefetched scenes, cold hydrates, remote ops)
+    // must not clobber the projected cel mid-hold. The walker's finally-block
+    // repaints the editable composite when the film stops.
+    if (filmPlaybackRef.current) {
       return;
     }
     // Mid-scrub the display shows a transient frame preview; the editable
@@ -3712,18 +3820,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         let wirePoint = null;
         const nx = Math.round(point.x * 4) / 4;
         const ny = Math.round(point.y * 4) / 4;
-        const prev = net ? net.last : null;
+        const prevWirePoint = net ? net.last : null;
         // Pen tilt (Stage 5 reads it): quantized ints, and a lean change of
         // >= 10° survives the dedupe so a twist mid-stroke isn't lost.
         const tiltTx = nativeEvent.pointerType === "pen" ? Math.round(pointerEvent.tiltX || 0) : 0;
         const tiltTy = nativeEvent.pointerType === "pen" ? Math.round(pointerEvent.tiltY || 0) : 0;
         if (
-          !prev ||
-          prev.x !== nx ||
-          prev.y !== ny ||
-          Math.abs(prev.pressure - point.pressure) >= 0.01 ||
-          Math.abs((prev.tx || 0) - tiltTx) >= 10 ||
-          Math.abs((prev.ty || 0) - tiltTy) >= 10
+          !prevWirePoint ||
+          prevWirePoint.x !== nx ||
+          prevWirePoint.y !== ny ||
+          Math.abs(prevWirePoint.pressure - point.pressure) >= 0.01 ||
+          Math.abs((prevWirePoint.tx || 0) - tiltTx) >= 10 ||
+          Math.abs((prevWirePoint.ty || 0) - tiltTy) >= 10
         ) {
           wirePoint = { x: nx, y: ny, pressure: point.pressure };
           // Pen tilt rides the wire as small ints (the Stage-5 tilt dabs
@@ -3739,7 +3847,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         // What the painter is fed: the wire object for dab walks, the raw
         // point for legacy segments. Null = deduped, nothing to paint.
-        const walkPoint = dabWalk ? wirePoint : point;
+        // The SEEDED ERASER is wired too: it paints the exact wire point
+        // sequence (quantized, deduped) so the local cut is the op every
+        // remote / history replay / cold-frame raster derives — a deduped
+        // point paints nothing, because remotes never see it either.
+        const wiredEraser = !stroke && net?.settings?.brush === "eraser" && net.settings.seed != null;
+        const walkPoint = (dabWalk || wiredEraser) ? wirePoint : point;
         if (walkPoint) {
           const activeSymmetry = normalizeSymmetry(net?.settings?.symmetry || "none");
           const symmetricPoints = transformPointBySymmetry(walkPoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -3785,8 +3898,29 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               drawBrushSegment(stroke.buf.getCtx(), lastPoint, walkPoint, stroke.drawSettings, pointRand(stroke.seed, walkPoint.x, walkPoint.y));
             }
           } else {
+            // Seeded eraser: each segment starts at the PREVIOUS WIRE point
+            // (the exact from/to the remote replay walks) and rolls the
+            // stroke seed's per-point dice, so the local cut is byte-
+            // identical to what every remote, history replay and cold-frame
+            // raster derives (the #62 wire-point rule, extended to the
+            // direct eraser path). A stroke's first wired point starts and
+            // ends on itself — the remote's `last || point` tap. The OTHER
+            // legacy direct brushes (spray / custom) keep raw points +
+            // Math.random: reseeding them would repaint saved history
+            // (documented divergence).
+            const fromPoints = wiredEraser
+              ? (prevWirePoint
+                ? transformPointBySymmetry(prevWirePoint, activeSymmetry, CANVAS_WIDTH, CANVAS_HEIGHT)
+                : symmetricPoints)
+              : symmetricLastPoints;
             symmetricPoints.forEach((copyPoint, copyIndex) => {
-              drawBrushSegment(context, symmetricLastPoints[copyIndex] || copyPoint, copyPoint, settings);
+              drawBrushSegment(
+                context,
+                fromPoints[copyIndex] || copyPoint,
+                copyPoint,
+                settings,
+                wiredEraser ? pointRand(net.settings.seed, copyPoint.x, copyPoint.y) : Math.random,
+              );
             });
             invalidateMixPrefetch(active); // eraser / spray / custom draw the layer directly
           }
@@ -5374,6 +5508,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       window.cancelAnimationFrame(playTimerRef.current);
       playTimerRef.current = null;
     }
+    // Whole-film playback: signal the async plan walker; its finally-block
+    // restores the original scene and repaints (idempotent with this call).
+    if (filmPlaybackRef.current) {
+      filmPlaybackRef.current.token.cancelled = true;
+      filmPlaybackRef.current.token.cancelWaiters?.();
+    }
     setIsPlaying(false);
     soundtrackRef.current.stop?.();
     soundtrackRef.current.stop = null;
@@ -5387,6 +5527,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // utils/frameRasters.js). One idle rasterizer fills rasters nearest the
   // artist first; frames re-hydrate by replaying their ops when activated.
   const rasterQueueRef = useRef({ pending: false, running: false, run: null });
+  // A cold frame's retained checkpoint failed to restore (corrupt descriptor,
+  // a drifted layer stack): poison it and pull the CURRENT scene in full —
+  // the contract's fallback, never a bare tail painted over blank canvases.
+  const refetchSceneFull = useCallback(() => {
+    if (!roomAnimationRef.current) return;
+    const target = activeSceneIdRef.current;
+    if (target) {
+      setStatus("A saved frame snapshot didn't check out — refreshing the scene…");
+      mpRef.current?.sendSceneFetch?.(target);
+    }
+  }, []);
+
   const scheduleRasterQueue = useCallback(() => {
     const q = rasterQueueRef.current;
     if (q.pending || !roomAnimationRef.current) return;
@@ -5401,7 +5553,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (q.running || !roomAnimationRef.current) return;
     q.running = true;
     try {
-      const stale = (frame) => !frame.layers && (frame.ops || []).length > 0 && frame.rasterCount !== (frame.ops || []).length;
+      const stale = (frame) => coldRasterStale(frame);
       const active = activeFrameIndexRef.current;
       // Nearest-to-active first: the strip fills in around the artist.
       const next = framesRef.current
@@ -5412,16 +5564,38 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const { frame } = next;
         const ops = frame.ops || [];
         const count = ops.length;
-        const blob = await rasterizeOps(ops);
-        if (framesRef.current.includes(frame) && !frame.layers) {
+        const sig = layerRenderSig(frame.layerMeta);
+        // Capture the inputs BEFORE the async build: an op arrival, a clear,
+        // or a render-affecting layer sync while we replay + encode makes the
+        // blob stale — even when the op count is UNCHANGED (a hidden layer, a
+        // reorder), which the old count-only check could never catch.
+        const ticket = rasterTicket(frame);
+        let blob = null;
+        try {
+          // A retained frame checkpoint restores INSIDE the rasterizer
+          // (baseline + mix state, then the tail) — never a bare-tail raster.
+          blob = await rasterizeOps(ops, frame.layerMeta, frame.checkpoint || null);
+        } catch (error) {
+          if (frame.checkpoint && error?.reason !== "cancelled") {
+            frame.checkpoint = null; // poisoned descriptor — full scene refetch
+            frame.rasterGen = (frame.rasterGen || 0) + 1;
+            q.running = false;
+            refetchSceneFull();
+            return;
+          }
+          blob = null;
+        }
+        if (framesRef.current.includes(frame) && !frame.layers && rasterTicketCurrent(frame, ticket)) {
           if (blob) {
             frame.raster = blob;
             frame.rasterCount = count;
+            frame.rasterSig = sig;
             bumpFrameStamp(frame.id);
             queueThumbnailRefresh(frame.id);
             renderDisplay(); // it may be an onion neighbour
           } else {
             frame.rasterCount = count; // encode unsupported here — don't spin
+            frame.rasterSig = sig;
           }
         }
       }
@@ -5430,7 +5604,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     } catch {
       q.running = false;
     }
-  }, [bumpFrameStamp, queueThumbnailRefresh, renderDisplay, scheduleRasterQueue]);
+  }, [bumpFrameStamp, queueThumbnailRefresh, refetchSceneFull, renderDisplay, scheduleRasterQueue]);
   useEffect(() => {
     rasterQueueRef.current.run = runRasterQueue;
   }, [runRasterQueue]);
@@ -5445,20 +5619,27 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     (frame.ops || (frame.ops = [])).push(op);
     if (!frame.layers) {
       frame.rasterCount = -1;
+      frame.rasterGen = (frame.rasterGen || 0) + 1; // an in-flight raster build must not install
       scheduleRasterQueue();
     }
   }, [scheduleRasterQueue]);
 
   // Give a cold frame live canvases NOW and replay its ops into layer 0 in the
   // background (the parity-tested offline interpreter — the same pixels every
-  // peer sees). Resolves when the replay lands.
+  // peer sees). A frame carrying a retained checkpoint restores its verified
+  // baseline (re-decoded, bounded, cancellable) + mix continuation state
+  // BEFORE the tail replays. Resolves when the replay lands.
   const hydrateFrame = useCallback((frame) => {
     if (!frame) return Promise.resolve();
     if (frame.layers) return frame.hydrating || Promise.resolve();
+    const admitted = hydrationWindow(framesRef.current, activeFrameIndexRef.current, HYDRATED_FRAME_BUDGET_BYTES, HYDRATED_RADIUS);
+    if (!admitted.has(framesRef.current.indexOf(frame))) return Promise.resolve();
+    releaseUnselectedFrames(framesRef.current, admitted);
     allocateFrameLayers(frame);
     const layers = frame.layers;
     const ops = frame.ops || [];
-    if (!ops.length) {
+    const descriptor = frame.checkpoint || null;
+    if (!ops.length && !descriptor) {
       frame.hydrating = null;
       return Promise.resolve();
     }
@@ -5467,27 +5648,72 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // comes back with its real stack — not everything piled onto layer 0.
     const layerIndex = new Map(layers.map((layer, index) => [layer.id, index]));
     const targetFor = (op) => layers[layerIndex.has(op.layerId) ? layerIndex.get(op.layerId) : 0].canvas.getContext("2d");
-    const job = replayFrameOnto(layers[0].canvas, ops, CANVAS_WIDTH, CANVAS_HEIGHT, targetFor)
-      .catch(() => {})
-      .then(() => {
-        if (frame.hydrateGen !== gen || frame.layers !== layers) return;
-        frame.hydrating = null;
-        bumpFrameStamp(frame.id);
-        queueThumbnailRefresh(frame.id);
-        if (isActiveFrame(frame)) {
+    const isCurrent = () => frame.hydrateGen === gen && frame.layers === layers;
+    const job = (async () => {
+      let prefixMixState = null;
+      let captured = null;
+      try {
+        if (descriptor) {
+          const decoded = await decodeCheckpoint(
+            { schemaVersion: 1, rendererVersion: checkpointClientSupport(), frames: [descriptor] },
+            {
+              rendererVersion: checkpointClientSupport(),
+              expectedFrames: [{ id: frame.id, layers: frame.layerMeta || [] }],
+              tailOps: ops,
+              tailLocalOps: true, // the retained tail may hold locally-originated ops
+              isCancelled: () => !isCurrent(),
+            },
+          );
+          if (!isCurrent()) {
+            releaseCheckpoint(decoded);
+            return;
+          }
+          installCheckpointLayers(decoded.frames[0], layers);
+          prefixMixState = decoded.frames[0].mixState;
+          releaseCheckpoint(decoded);
+        }
+        await replayFrameOnto(layers[0].canvas, ops, CANVAS_WIDTH, CANVAS_HEIGHT, targetFor, {
+          ...(descriptor ? { preservePixels: true, mixState: prefixMixState } : {}),
+          onMixState: (state) => { captured = state; },
+        });
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (descriptor && error?.reason !== "cancelled") {
+          frame.checkpoint = null; // poisoned — full scene refetch rebuilds this cel
+          frame.rasterGen = (frame.rasterGen || 0) + 1;
+          frame.hydrating = null;
+          refetchSceneFull();
+        }
+        return;
+      }
+      if (!isCurrent()) return;
+      frame.hydrating = null;
+      bumpFrameStamp(frame.id);
+      queueThumbnailRefresh(frame.id);
+      if (isActiveFrame(frame)) {
+        // Restore the replay's exact end ledger (birth/prefix + these ops in
+        // order) into the shared wet-mix map — the same parity rule as the
+        // join finalize; a blanket re-read would only approximate it. Fall
+        // back to a full re-mirror only if the capture can't apply.
+        try {
+          if (captured) ensureMixMap().restoreState(captured);
+          else mixMapRef.current?.markAllDirty();
+        } catch {
           mixMapRef.current?.markAllDirty();
         }
-        renderDisplay(); // the active frame filled in, or an onion neighbour did
-      });
+      }
+      renderDisplay(); // the active frame filled in, or an onion neighbour did
+    })();
     frame.hydrating = job;
     return job;
-  }, [bumpFrameStamp, isActiveFrame, queueThumbnailRefresh, renderDisplay]);
+  }, [bumpFrameStamp, ensureMixMap, isActiveFrame, queueThumbnailRefresh, refetchSceneFull, renderDisplay]);
 
   // Drop a far-away frame's canvases after snapshotting them into its raster
   // (exact pixels). Local layer stacks flatten on the way back — the shared
   // truth (ops) is flat anyway. Skipped while the frame is mid-hydration or
-  // took edits while we were encoding.
-  const coolFrame = useCallback(async (frame) => {
+  // took edits while we were encoding. `force` (the byte-budget enforcer)
+  // overrides the radius keep-alive — but NEVER the active frame.
+  const coolFrame = useCallback(async (frame, { force = false } = {}) => {
     if (!roomAnimationRef.current || !frame?.layers || frame.hydrating || isActiveFrame(frame)) return;
     const layers = frame.layers;
     const count = (frame.ops || []).length;
@@ -5497,16 +5723,25 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if ((frame.ops || []).length !== count) return; // edited meanwhile — next sweep
       frame.raster = blob;
       frame.rasterCount = count;
+      frame.rasterSig = layerRenderSig(frame.layerMeta); // same contract as the cold rasterizer
     } else {
       frame.raster = null;
       frame.rasterCount = 0;
+      frame.rasterSig = layerRenderSig(frame.layerMeta);
     }
     const index = framesRef.current.indexOf(frame);
-    if (index < 0 || isActiveFrame(frame) || Math.abs(index - activeFrameIndexRef.current) <= HYDRATED_RADIUS) return;
+    if (index < 0 || isActiveFrame(frame) || (!force && Math.abs(index - activeFrameIndexRef.current) <= HYDRATED_RADIUS)) return;
     frame.layers = null;
     frame.activeLayerId = null;
     onionCacheRef.current.delete(frame.id);
   }, [isActiveFrame]);
+
+  const enforceHydratedBudget = useCallback(() => {
+    const frames = framesRef.current;
+    const admitted = hydrationWindow(frames, activeFrameIndexRef.current, HYDRATED_FRAME_BUDGET_BYTES, HYDRATED_RADIUS);
+    if (roomAnimationRef.current) releaseUnselectedFrames(frames, admitted);
+    return admitted;
+  }, []);
 
   // Keep the hydrated window centred on the active frame: warm one neighbour
   // per idle pass, cool everything outside the radius, then let the rasterizer
@@ -5522,24 +5757,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!roomAnimationRef.current || isExportingVideoRef.current || historyReplayActiveRef.current) return;
       const frames = framesRef.current;
       const active = activeFrameIndexRef.current;
+      const admitted = enforceHydratedBudget(); // reserve BEFORE allocating
       let warmed = false;
-      for (let d = 1; d <= HYDRATED_RADIUS && !warmed; d += 1) {
-        for (const index of [active - d, active + d]) {
-          const frame = frames[index];
-          if (frame && !frame.layers && !warmed) {
-            hydrateFrame(frame);
-            warmed = true;
-          }
+      for (const index of admitted) {
+        const frame = frames[index];
+        if (!frame.layers && !warmed) {
+          hydrateFrame(frame);
+          warmed = true;
         }
       }
       for (let index = 0; index < frames.length; index += 1) {
         const frame = frames[index];
         if (frame.layers && index !== active && Math.abs(index - active) > HYDRATED_RADIUS) void coolFrame(frame);
       }
+      enforceHydratedBudget(); // the byte cap outranks the radius
       if (warmed) scheduleFrameWindow();
       scheduleRasterQueue();
     }, { timeout: 800 });
-  }, [coolFrame, hydrateFrame, scheduleRasterQueue]);
+  }, [coolFrame, enforceHydratedBudget, hydrateFrame, scheduleRasterQueue]);
   useEffect(() => {
     coldFramesRef.current = { noteFrameOp, hydrateFrame, scheduleFrameWindow, scheduleRasterQueue };
     // Read-only diagnostics for the verify harnesses / devtools: which frames
@@ -5553,7 +5788,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         hydrating: !!frame.hydrating,
         ops: (frame.ops || []).length,
         raster: !!frame.raster,
-        rasterFresh: !!frame.raster && frame.rasterCount === (frame.ops || []).length,
+        rasterGen: frame.rasterGen || 0,
+        rasterFresh: !!frame.raster && !coldRasterStale(frame),
+        checkpoint: !!frame.checkpoint, // retained trusted baseline (Phase 4)
+        hydratedBytes: frame.layers ? frame.layers.length * CANVAS_WIDTH * CANVAS_HEIGHT * 4 : 0,
       }));
     return () => {
       delete window.__drawesomeFrames;
@@ -5565,8 +5803,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // elapsed time, so authored per-frame durations are honoured even when the
   // tab was just unthrottled, and timers don't pile up in background tabs.
   const startPlayback = useCallback(() => {
-    if (historyReplayActiveRef.current || isExportingVideoRef.current) return;
+    if (historyReplayActiveRef.current || isExportingVideoRef.current || filmPlaybackRef.current) return;
     if (framesRef.current.length <= 1) {
+      return;
+    }
+    // A multi-scene film plays the WHOLE plan across scenes (Phase 4) — the
+    // async walker owns the display from here; the rAF loop below stays the
+    // single-scene path.
+    if (roomAnimationRef.current && scenesRef.current.length > 1 && startFilmPlaybackRef.current) {
+      void startFilmPlaybackRef.current(scenesRef.current);
       return;
     }
     commitLayersToFrame();
@@ -5654,7 +5899,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [blitToDisplay, commitLayersToFrame]);
 
   const handleTogglePlay = useCallback(() => {
-    if (playTimerRef.current) {
+    if (playTimerRef.current || filmPlaybackRef.current) {
       stopPlayback();
     } else {
       startPlayback();
@@ -5779,6 +6024,254 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [switchScene],
   );
 
+  // A cold frame's raster, built on demand when the idle rasterizer hasn't got
+  // there yet (whole-film playback + export both await this — a missing raster
+  // must never become a silently blank exported/played cel). Retained frame
+  // checkpoints restore inside rasterizeOps; a poisoned one refetches the
+  // scene in full (handled by the caller's catch).
+  const ensureFrameRasterBlob = useCallback(async (frame) => {
+    if (!frame || frame.layers) return null;
+    if (frame.raster && !coldRasterStale(frame)) return frame.raster;
+    const ticket = rasterTicket(frame);
+    const blob = await rasterizeOps(frame.ops || [], frame.layerMeta, frame.checkpoint || null);
+    if (blob && framesRef.current.includes(frame) && !frame.layers && rasterTicketCurrent(frame, ticket)) {
+      frame.raster = blob;
+      frame.rasterCount = (frame.ops || []).length;
+      frame.rasterSig = layerRenderSig(frame.layerMeta);
+    }
+    return blob;
+  }, []);
+
+  // ---- Whole-film playback (Phase 4) -----------------------------------------
+  // A multi-scene film plays the SHARED film plan end to end: the async walker
+  // pages each scene in the background (the history handler does NOT stop
+  // playback — playback owns no rAF timer, and its scene fetches are its own),
+  // snapshots the scene's cels as cheap raster blobs, and paints decoded
+  // bitmaps from a byte-bounded LRU with the same camera math as the
+  // exporters. Async scene hydration PAUSES the walker (last good frame stays
+  // on screen) — it can never skip cels or paint blank ones: a cel whose
+  // raster can't be produced aborts playback loudly instead.
+  // Cancellation: stopPlayback / unmount / animation-off flip token.cancelled;
+  // every await checks it and the finally-block returns to the artist's scene.
+  const startFilmPlayback = useCallback(async (planScenes) => {
+    if (filmPlaybackRef.current || isExportingVideoRef.current || historyReplayActiveRef.current) return;
+    commitLayersToFrame();
+    setIsPlaying(true);
+    const pendingFetches = new Set();
+    const requestedScenes = new Set();
+    const token = { cancelled: false, requestedScenes, cancelWaiters: () => {
+      for (const cancel of [...pendingFetches]) cancel();
+    } };
+    const cache = createBitmapCache(48, 96 * 1024 * 1024); // decoded 1600x1000 bitmaps, ~6.4MB each
+    filmPlaybackRef.current = { token, cache };
+    const context = docContextRef.current;
+    const originalSceneId = activeSceneIdRef.current;
+    // Eyeball-hidden cels sit out (local preview mute), unless that's everything.
+    const hidden = hiddenFramesRef.current;
+    let plan = buildFilmPlan(planScenes).filter((shot) => !hidden.has(shot.frameId));
+    if (!plan.length) plan = buildFilmPlan(planScenes);
+    if (!plan.length || !context) {
+      filmPlaybackRef.current = null;
+      cache.clear();
+      setIsPlaying(false);
+      return;
+    }
+    // sceneId -> Promise<Map(frameId -> blob|null)>, memoized so the walker
+    // and the prefetcher share one fetch+snapshot per scene. Scenes behind the
+    // playhead are dropped so a long film doesn't pile up blobs.
+    const sceneSnapshots = new Map();
+    let blobSeed = 0;
+    const blobIds = new WeakMap();
+    const bitmapFor = (sceneId, frameId, blob) => {
+      let id = blobIds.get(blob);
+      if (!id) {
+        blobSeed += 1;
+        id = blobSeed;
+        blobIds.set(blob, id);
+      }
+      return cache.load(`${sceneId}:${frameId}:${id}`, blob);
+    };
+    const fetchScene = (sceneId) => new Promise((resolve) => {
+      if (token.cancelled) { resolve(false); return; }
+      const waiters = sceneWaitersRef.current;
+      let timer;
+      const finish = (ok) => {
+        window.clearTimeout(timer);
+        pendingFetches.delete(cancel);
+        requestedScenes.delete(sceneId);
+        const current = waiters.get(sceneId);
+        if (current) {
+          const at = current.indexOf(done);
+          if (at >= 0) current.splice(at, 1);
+          if (!current.length) waiters.delete(sceneId);
+        }
+        resolve(ok);
+      };
+      const done = () => finish(true);
+      const cancel = () => finish(false);
+      pendingFetches.add(cancel);
+      requestedScenes.add(sceneId);
+      const list = waiters.get(sceneId) || [];
+      list.push(done);
+      waiters.set(sceneId, list);
+      timer = window.setTimeout(cancel, 30000);
+      mpRef.current?.sendSceneFetch?.(sceneId, plan.find((shot) => shot.sceneId === sceneId)?.frameId || null);
+    });
+    // Snapshot every planned cel of the loaded scene: hydrated cels encode
+    // from their live stack, cold cels reuse/build their raster (checkpoint
+    // included). Two workers, serialized inside rasterizeOps — bounded.
+    const snapshotScene = (sceneId) => {
+      if (!sceneSnapshots.has(sceneId)) {
+        sceneSnapshots.set(sceneId, (async () => {
+          const map = new Map();
+          const frameIds = [...new Set(plan.filter((shot) => shot.sceneId === sceneId).map((shot) => shot.frameId))];
+          const worker = async () => {
+            for (;;) {
+              if (token.cancelled) return;
+              const frameId = frameIds.shift();
+              if (frameId === undefined) return;
+              const frame = framesRef.current.find((item) => item.id === frameId);
+              if (!frame || activeSceneIdRef.current !== sceneId) {
+                map.set(frameId, null);
+                continue;
+              }
+              try {
+                if (frame.layers) {
+                  map.set(frameId, await encodeRaster((ctx, w, h) => compositeLayers(ctx, frame.layers, { width: w, height: h })));
+                } else {
+                  map.set(frameId, await ensureFrameRasterBlob(frame));
+                }
+              } catch {
+                map.set(frameId, null);
+              }
+            }
+          };
+          await Promise.all([worker(), worker()]);
+          return map;
+        })());
+      }
+      return sceneSnapshots.get(sceneId);
+    };
+    // Reserve the fetch promise immediately, not only after its history
+    // arrives. Otherwise every cel in a scene requests the next scene again.
+    const sceneLoads = new Map();
+    const loadScene = (sceneId) => {
+      if (!sceneLoads.has(sceneId)) {
+        sceneLoads.set(sceneId, (async () => {
+          if (sceneId !== activeSceneIdRef.current && !(await fetchScene(sceneId))) {
+            throw new Error("scene unavailable during film playback");
+          }
+          if (token.cancelled) return null;
+          return snapshotScene(sceneId);
+        })());
+      }
+      return sceneLoads.get(sceneId);
+    };
+    const paint = (shot, bitmap, t) => {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      if (shot.camera && shot.camera !== "none") {
+        applyCameraTransform(context, shot.camera, shot.cameraT0 + (shot.cameraT1 - shot.cameraT0) * t, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+      if (bitmap) context.drawImage(bitmap, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      blitToDisplay();
+    };
+    // One shot on screen for its authored hold (rAF-driven; a hidden tab just
+    // pauses the film). Camera moves repaint every tick. false = cancelled.
+    const playShot = (shot, bitmap) => new Promise((resolve) => {
+      const duration = Math.max(40, shot.durationMs);
+      const started = performance.now();
+      const tick = (now) => {
+        if (token.cancelled) {
+          resolve(false);
+          return;
+        }
+        const t = (now - started) / duration;
+        if (t >= 1) {
+          resolve(true);
+          return;
+        }
+        if (shot.camera && shot.camera !== "none") paint(shot, bitmap, t);
+        window.requestAnimationFrame(tick);
+      };
+      paint(shot, bitmap, 0);
+      window.requestAnimationFrame(tick);
+    });
+    // Soundtrack: restart per scene-pass at the exact film-time offset, so a
+    // looped scene's picture and sound stay lined up (same rule the
+    // single-scene player uses per wrap).
+    const sceneFilmStartMs = (sceneId) => planScenes
+      .slice(0, Math.max(0, planScenes.findIndex((s) => s.id === sceneId)))
+      .reduce((sum, s) => sum + sceneRuntimeMs(s), 0);
+    const scenePass = (sceneId) => Math.max(1, scenePassMs(planScenes.find((s) => s.id === sceneId)));
+    let lastAudioKey = null;
+    const syncAudio = (shot, filmCursorMs) => {
+      const passIndex = Math.floor(Math.max(0, filmCursorMs - sceneFilmStartMs(shot.sceneId)) / scenePass(shot.sceneId));
+      const key = `${shot.sceneId}:${passIndex}`;
+      if (key === lastAudioKey) return;
+      lastAudioKey = key;
+      soundtrackRef.current.stop?.();
+      soundtrackRef.current.stop = soundtrackRef.current.buffer ? playSoundtrack(soundtrackRef.current.buffer, filmCursorMs) : null;
+    };
+    try {
+      let filmCursor = 0;
+      for (let i = 0; i < plan.length; i += 1) {
+        if (token.cancelled) break;
+        const shot = plan[i];
+        // Load this scene (awaiting in-flight prefetches), then drop scenes
+        // the playhead has passed for good.
+        const map = await loadScene(shot.sceneId);
+        if (token.cancelled) break;
+        // Bounded prefetch: kick the NEXT scene's fetch+snapshot while this
+        // one plays (memoized — never more than one extra scene in flight).
+        const upcoming = plan.slice(i + 1).find((item) => item.sceneId !== shot.sceneId);
+        if (upcoming && !sceneLoads.has(upcoming.sceneId)) {
+          // The awaited load on entry reports a failure; don't leak an
+          // unhandled rejection from speculative prefetch.
+          void loadScene(upcoming.sceneId).catch(() => {});
+        }
+        if (i % 16 === 0) {
+          const remaining = new Set(plan.slice(i).map((item) => item.sceneId));
+          for (const key of [...sceneSnapshots.keys()]) {
+            if (!remaining.has(key)) {
+              sceneSnapshots.delete(key);
+              sceneLoads.delete(key);
+            }
+          }
+        }
+        const blob = map.get(shot.frameId);
+        const bitmap = blob ? await bitmapFor(shot.sceneId, shot.frameId, blob) : null;
+        if (token.cancelled) break;
+        if (!bitmap) {
+          // A planned cel we cannot show — NEVER skip or blank it silently.
+          throw new Error("cel raster unavailable during film playback");
+        }
+        syncAudio(shot, filmCursor);
+        filmCursor += Math.max(40, shot.durationMs);
+        if (!(await playShot(shot, bitmap))) break;
+      }
+    } catch {
+      if (!token.cancelled) {
+        setStatus("Couldn't keep playing the film — stopped at the last good frame.");
+        showToast("Couldn't play the whole film on this device.");
+      }
+    } finally {
+      filmPlaybackRef.current = null;
+      cache.clear();
+      setIsPlaying(false);
+      soundtrackRef.current.stop?.();
+      soundtrackRef.current.stop = null;
+      token.cancelWaiters();
+      if (!token.unmounted && originalSceneId && activeSceneIdRef.current !== originalSceneId) {
+        void switchScene(originalSceneId); // land back where the artist was working
+      } else {
+        renderDisplay(); // restore the editable composite over the last frame
+      }
+    }
+  }, [blitToDisplay, commitLayersToFrame, ensureFrameRasterBlob, renderDisplay, showToast, switchScene]);
+  startFilmPlaybackRef.current = startFilmPlayback;
+
   // Frame structure edits: in an animation room these are SHARED mutations.
   // The request goes to the server, which validates caps/locks and echoes it.
   const handleAddFrame = useCallback(() => {
@@ -5898,7 +6391,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!frame) {
         return;
       }
-      frame.durationMs = clampHold(durationMs);
+      // FLIPBOOK rooms clamp holds to the server-negotiated 1–3s band; every
+      // other room keeps the local 40ms–10s ladder (utils/frameTiming).
+      frame.durationMs = clampHoldWithTiming(durationMs, frameTimingRef.current);
       setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
       dirtyRef.current = true;
       syncVideoTraceRef.current?.(); // holds move every later cel's moment in the clip
@@ -6133,7 +6628,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (!(await gateExport())) {
       return;
     }
-    if (playTimerRef.current) {
+    if (playTimerRef.current || filmPlaybackRef.current) {
       stopPlayback();
     }
     commitLayersToFrame();
@@ -6141,10 +6636,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // pages scenes in via switchScene (memory stays at a scene's worth) and
     // frames resolve by id after each hydration. Single-scene exports snapshot
     // the frame list so remote edits mid-export can't shrink or reorder it.
-    // (The real-time MediaRecorder fallback can't pause for scene switches, so
-    // browsers without WebCodecs export the current scene only.)
-    const multiScene =
-      roomAnimationRef.current && scenesRef.current.length > 1 && typeof window.VideoEncoder === "function";
+    // The real-time MediaRecorder fallback can't pause for scene hydration —
+    // so a multi-scene film on a browser WITHOUT WebCodecs is REFUSED up
+    // front, before a single byte is encoded: no quietly-truncated
+    // current-scene-only file with a whole-film label (Phase 4 contract).
+    const wantsWholeFilm = roomAnimationRef.current && scenesRef.current.length > 1;
+    if (wantsWholeFilm && typeof window.VideoEncoder !== "function") {
+      setStatus("Whole-film video needs a newer browser (WebCodecs) — export one scene at a time here.");
+      showToast("This browser can't encode the whole film. Export each scene, or try a newer browser.", 6000);
+      return;
+    }
+    const multiScene = wantsWholeFilm;
     const originalSceneId = activeSceneIdRef.current;
     let plan;
     if (multiScene) {
@@ -6205,6 +6707,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (multiScene && !frame) {
             throw new Error("frame missing after scene switch");
           }
+          // A cold cel whose raster the idle queue hasn't built yet must be
+          // rendered NOW (checkpoint restore included) — never encoded blank.
+          if (frame && !frame.layers && (!frame.raster || coldRasterStale(frame))) {
+            await ensureFrameRasterBlob(frame);
+          }
           await renderPaper(context, { width, height, textureId: selectedTexture });
           if (frame) {
             if (item.camera && item.camera !== "none") {
@@ -6225,11 +6732,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         onProgress: (pct) => setStatus(`Encoding film… ${Math.round(pct * 100)}%`),
       });
       downloadBlob(blob, `drawesome-${Date.now()}.${ext}`);
-      if (!multiScene && roomAnimationRef.current && scenesRef.current.length > 1) {
-        setStatus(`Exported this scene (.${ext}) — full-film export needs a newer browser`);
-      } else {
-        setStatus(audio ? `Film exported with sound (.${ext}) 🎬🎵` : `Film exported (.${ext}) 🎬`);
+      if (import.meta.env.DEV) {
+        window.__drawesomeLastExport = { blob, ext, shots: plan.length, ms: exportMs }; // verify harness only
       }
+      setStatus(audio ? `Film exported with sound (.${ext}) 🎬🎵` : `Film exported (.${ext}) 🎬`);
     } catch {
       setStatus("Video export failed on this browser — try Export GIF");
     } finally {
@@ -6239,7 +6745,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         switchScene(originalSceneId); // land back where the artist was working
       }
     }
-  }, [commitLayersToFrame, gateExport, isExportingVideo, renderPaper, selectedTexture, stopPlayback, switchScene]);
+  }, [commitLayersToFrame, ensureFrameRasterBlob, gateExport, isExportingVideo, renderPaper, selectedTexture, showToast, stopPlayback, switchScene]);
 
   const exportStorybook = useCallback(async () => {
     if (!storybook || isExportingVideo) return;
@@ -7557,8 +8063,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         if (settings.brush === "eraser") {
           // Erasing must keep cutting the real layer live (a buffered
           // destination-out can't preview holes through committed art).
+          // Seeded ops roll the shared per-point dice (eraserRand) so the
+          // live cut matches the painter, history replay and cold-frame
+          // rasters; seedless legacy ops keep Math.random (documented).
           for (const point of op.points || []) {
-            drawBrushSegment(ctx, last || point, point, settings);
+            drawBrushSegment(ctx, last || point, point, settings, eraserRand(settings, point));
             last = point;
           }
           invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
@@ -7758,6 +8267,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       historyReplayActiveRef.current = false;
       deferredMpMessagesRef.current = [];
       pendingSnapshotRef.current = null;
+      window.clearTimeout(resyncBackoffRef.current.timer);
+      if (filmPlaybackRef.current) {
+        filmPlaybackRef.current.token.cancelled = true; // the walker's finally cleans up
+        filmPlaybackRef.current.token.unmounted = true;
+        filmPlaybackRef.current.token.cancelWaiters?.();
+        filmPlaybackRef.current = null;
+      }
       if (remoteSweepRef.current) {
         window.clearInterval(remoteSweepRef.current);
         remoteSweepRef.current = 0;
@@ -7777,6 +8293,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleMpMessage = useCallback(
     (data) => {
+      const film = filmPlaybackRef.current;
+      if (film && (
+        (data.type === "resync" && data.reason !== "rate_limited")
+        || data.type === "clear" || data.type.startsWith("layer_")
+        || data.type === "scene_del" || data.type === "frame_del"
+        || (data.type === "history" && !film.token.requestedScenes?.has(data.sceneId))
+      )) {
+        // Moderation/rebuilds cannot leave hidden ink playing from snapshots.
+        // Histories explicitly fetched by the walker are the only exception.
+        stopPlayback();
+      }
       // While a catch-up history frame is still applying in slices, defer the
       // canvas-mutating types so they land after it (stream order). They drain
       // when the replay settles — see replayHistoryChunked's completion.
@@ -7794,6 +8321,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           historyReplayActiveRef.current = false;
           deferredMpMessagesRef.current = [];
           pendingSnapshotRef.current = null;
+          checkpointNackSentRef.current = false; // a new connection may offer checkpoints again
+          baselineRefusalsRef.current = 0;
+          window.clearTimeout(resyncBackoffRef.current.timer);
+          resyncBackoffRef.current = { timer: 0, target: null, attempts: 0 };
+          // Per-frame hold bounds (FLIPBOOK: 1000..3000/default 1000; absent
+          // everywhere else — normalizeFrameTiming rejects malformed shapes).
+          frameTimingRef.current = normalizeFrameTiming(data.frameTiming);
+          setRoomFrameTiming(frameTimingRef.current);
           myUserIdRef.current = data.userId;
           // Join curtain: the room answered. Only the history frame that
           // follows actually puts art on the canvas, so this is not "done" yet.
@@ -8042,16 +8577,69 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (data.sceneId) {
             activeSceneIdRef.current = data.sceneId;
             setActiveSceneId(data.sceneId);
+            // This scene's refetch (if any) just answered — reset its backoff.
+            if (resyncBackoffRef.current.target === data.sceneId) {
+              window.clearTimeout(resyncBackoffRef.current.timer);
+              resyncBackoffRef.current = { timer: 0, target: null, attempts: 0 };
+            }
           }
           if (data.frames) {
             reconcileFrames(data.frames);
           }
+          // Trusted checkpoint baseline. Phase 3: ordinary single-frame rooms.
+          // Phase 4: animation rooms too — `checkpoint.frames` may cover a
+          // SUBSET of history.frames; those frames' ops here are tails above
+          // each frame's throughOpId, the rest stay full. EVERY asset is
+          // decoded/hashed/validated BEFORE one layer pixel is touched, so the
+          // wholesale clear below waits for a verified baseline; a bad
+          // checkpoint takes the nack path and the scene loads in full instead.
+          const checkpointOffered = !!data.checkpoint;
+          const checkpoint = !checkpointNackSentRef.current && checkpointOffered && checkpointClientSupport()
+            ? data.checkpoint
+            : null;
+          if (!checkpoint && checkpointOffered) {
+            // The checkpoint is being IGNORED (post-nack connection, or this
+            // bundle can't verify). That is only safe when the paired ops are
+            // still a FULL baseline for every checkpointed frame; a bare tail
+            // over a cleared canvas is truncated ink — refuse it and ask for
+            // the scene again (the nacked connection gets full history).
+            const tailOnly = checkpointTailOnlyFrame(data.checkpoint, incomingOps, data.frames?.[0]?.id || null);
+            if (tailOnly) {
+              historyReplayActiveRef.current = false;
+              baselineRefusalsRef.current += 1;
+              if (baselineRefusalsRef.current <= 3) {
+                setStatus("Fast-load data arrived incomplete — fetching the full scene…");
+                if (roomAnimationRef.current) {
+                  mpRef.current?.sendSceneFetch?.(data.sceneId || activeSceneIdRef.current);
+                } else {
+                  mpRef.current?.sendCheckpointNack?.();
+                }
+              } else {
+                setStatus("Couldn't load the full drawing. Reload the room to try again.");
+                showToast("Couldn't load the full drawing. Reload to try again.");
+              }
+              break;
+            }
+          }
           // Rebuild EVERY frame from a clean slate (join, moderation rebuilds,
           // undo-clear restores). Open live buffers are stale — the replay
-          // re-delivers their points.
-          framesRef.current.forEach((frame) =>
-            frame.layers?.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
-          );
+          // re-delivers their points. In the checkpoint path this clear runs
+          // AFTER the baseline verifies, inside the async block below.
+          if (!checkpoint) {
+            framesRef.current.forEach((frame) =>
+              frame.layers?.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
+            );
+          }
+          // The shared wet-mix map restarts from its BIRTH state with the
+          // replay (zeroed mirror, fully dirty, no prefetch ledger — see
+          // freshMixState): the old session's sampled cells must not survive a
+          // wholesale rebuild, and no blanket re-read is needed at the end
+          // because the ops re-dirty the map in op order as they replay.
+          // (The checkpoint path restores the frame's verified continuation
+          // state over this, before the first tail op samples.)
+          if (mixMapRef.current) {
+            try { mixMapRef.current.restoreState(freshMixState()); } catch { /* a fresh map self-heals dirty */ }
+          }
           if (roomAnimationRef.current) {
             // Each frame keeps its own op list (the shared truth) so a cold
             // frame can re-hydrate or re-raster without asking the server.
@@ -8061,6 +8649,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               frame.ops = [];
               frame.raster = null;
               frame.rasterCount = -1;
+              frame.rasterGen = (frame.rasterGen || 0) + 1; // in-flight raster builds die here
+              frame.checkpoint = null; // re-attached below only for verified frames
             }
             for (const op of incomingOps) {
               const target = op.frameId ? byFrameId.get(op.frameId) : framesRef.current[0];
@@ -8083,7 +8673,93 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // frame finalization below, THEN drains any live messages that were
           // deferred while the replay was in flight.
           void (async () => {
-            if (pendingSnapshot) {
+            // A checkpoint that fails verification must NOT release the join
+            // curtain or paint the bare tail over an empty canvas: disable
+            // checkpoints for this connection, ask for the full baseline, and
+            // stay in the loading state.
+            const declineCheckpoint = () => {
+              checkpointNackSentRef.current = true;
+              historyReplayActiveRef.current = false; // let the full baseline history straight in
+              // Live messages deferred during the decode are ALREADY inside
+              // the baseline the server builds in answer to the nack (its
+              // catch-up gates ops behind the new baseline) — draining them
+              // after that baseline's replay would paint every one twice.
+              deferredMpMessagesRef.current = [];
+              mpRef.current?.sendCheckpointNack?.();
+              setStatus("Fast-load data didn't check out — loading the full drawing instead…");
+            };
+            let decoded = null;
+            if (checkpoint) {
+              try {
+                decoded = await decodeCheckpoint(checkpoint, {
+                  rendererVersion: checkpointClientSupport(),
+                  expectedFrames: Array.isArray(data.frames) ? data.frames : [],
+                  tailOps: incomingOps,
+                  isCancelled: () => historyReplayEpochRef.current !== epoch,
+                });
+              } catch (error) {
+                if (historyReplayEpochRef.current !== epoch || error?.reason === "cancelled") return; // superseded — the newer baseline owns the canvas
+                declineCheckpoint();
+                return;
+              }
+              if (historyReplayEpochRef.current !== epoch) {
+                releaseCheckpoint(decoded);
+                return;
+              }
+              // Verified — NOW pixels may change. Per decoded frame, in order:
+              // retain the wire descriptor on COLD frames (their hydrate /
+              // raster / export restores the baseline + tail on demand), and
+              // INSTALL into hydrated frames. The ACTIVE checkpointed frame
+              // also restores its mix-map continuation state into the shared
+              // map BEFORE the first tail op samples it.
+              const activeFrame = framesRef.current[activeFrameIndexRef.current];
+              let activeMixState = null;
+              try {
+                // Validate EVERY install target BEFORE the wholesale clear: an
+                // install that throws mid-way (layer identity drift, a dead
+                // 2d context) must never leave a half-cleared flipbook that
+                // the tail then paints over. Validate-then-commit.
+                const installs = decoded.frames.map((decodedFrame) => {
+                  const targetFrame = framesRef.current.find((frame) => frame.id === decodedFrame.frameId);
+                  if (targetFrame?.layers) {
+                    if (targetFrame.layers.length !== decodedFrame.layers.length
+                      || targetFrame.layers.some((layer, i) => layer?.id !== decodedFrame.layers[i]?.id || !layer.canvas)) {
+                      throw new CheckpointError("layers", "live layer stack does not match the decoded frame");
+                    }
+                    return { decodedFrame, targetFrame };
+                  }
+                  return { decodedFrame, targetFrame: null }; // cold frame: descriptor retained, no pixels here
+                });
+                framesRef.current.forEach((frame) =>
+                  frame.layers?.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)),
+                );
+                for (const { decodedFrame, targetFrame } of installs) {
+                  const descriptor = (checkpoint.frames || []).find((entry) => entry?.frameId === decodedFrame.frameId) || null;
+                  if (targetFrame) {
+                    installCheckpointLayers(decodedFrame, targetFrame.layers);
+                    if (targetFrame === activeFrame) activeMixState = decodedFrame.mixState;
+                  }
+                  if (roomAnimationRef.current) {
+                    const holder = targetFrame || framesRef.current.find((frame) => frame.id === decodedFrame.frameId);
+                    if (holder && descriptor) holder.checkpoint = descriptor; // cold frames re-verify at hydrate/raster
+                  }
+                  if (decodedFrame.throughOpId > lastOpIdRef.current) {
+                    lastOpIdRef.current = decodedFrame.throughOpId;
+                  }
+                }
+                if (activeMixState) ensureMixMap().restoreState(activeMixState);
+              } catch {
+                // Clear+install is a transaction: ANY throw here means the
+                // canvas state is undefined — take the full-baseline path
+                // instead of letting a bare tail paint over a partial wipe.
+                releaseCheckpoint(decoded);
+                if (historyReplayEpochRef.current !== epoch) return;
+                declineCheckpoint();
+                return;
+              }
+              releaseCheckpoint(decoded); // bitmaps already landed/closed; no-op for those
+            }
+            if (!checkpoint && pendingSnapshot) {
               const snapFrame = framesRef.current[0];
               const snapLayer = snapFrame?.layers?.[0];
               if (snapFrame && snapLayer) {
@@ -8100,6 +8776,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   img.src = pendingSnapshot.dataUrl;
                 });
                 if (historyReplayEpochRef.current !== epoch) return;
+                // The baked PNG landed WITHOUT dirtying the wet-mix map in op
+                // order — the one path that still needs a full re-mirror.
+                mixMapRef.current?.markAllDirty();
                 touchFrame(snapFrame.id);
               }
             }
@@ -8110,9 +8789,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // Every cel was rebuilt wholesale: stale-mark all proxies + thumbs.
             framesRef.current.forEach((frame) => touchFrame(frame.id));
             nsfwWatcherRef.current?.markDirty();
-            // The active frame's layer 0 was rebuilt — re-mirror the wet-mix map
-            // on its next sample, and repaint the visible composite.
-            mixMapRef.current?.markAllDirty();
+            // The wet-mix ledger was rebuilt IN OP ORDER by the replay itself
+            // (it restarted from its birth state above; a checkpointed active
+            // frame continued from its verified prefix state). A blanket
+            // markAllDirty here would re-read every cell from the final pixels
+            // and destroy the deliberately-stale sampled cells the replay just
+            // reproduced — future wet dabs would diverge from every peer that
+            // stayed in the room, and from a checkpoint joiner. So: no blanket
+            // re-mirror on EITHER path (the snapshot PNG above is the only
+            // exception — it lands pixels no op accounts for).
             renderDisplay();
             // Join curtain: everyone's art is now ON the canvas. This is the real
             // "the experience has loaded" moment, so the bar finishes here.
@@ -8168,7 +8853,34 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             const pending = [...sceneWaitersRef.current.keys()];
             const target = pending.length ? pending[pending.length - 1] : activeSceneIdRef.current;
             if (target) {
-              mpRef.current?.sendSceneFetch?.(target);
+              if (data.reason === "rate_limited") {
+                // The server shed the fetch: retry with BOUNDED backoff, not on
+                // the next RTT (phase 2's immediate refetch was a self-made
+                // retry storm). The timer is cleaned up on unmount/reconnect,
+                // and attempts reset when the scene's history actually lands.
+                const backoff = resyncBackoffRef.current;
+                window.clearTimeout(backoff.timer);
+                if (backoff.target !== target) {
+                  backoff.target = target;
+                  backoff.attempts = 0;
+                }
+                const serverHint = Number.isFinite(data.retryAfterMs) ? Math.max(0, Math.min(30000, data.retryAfterMs)) : null;
+                if (backoff.attempts >= 6) {
+                  backoff.target = null;
+                  backoff.attempts = 0;
+                  setStatus("The room is busy — tap the scene again in a moment.");
+                } else {
+                  backoff.attempts += 1;
+                  const delay = serverHint ?? Math.min(400 * 2 ** (backoff.attempts - 1), 6000);
+                  backoff.timer = window.setTimeout(() => {
+                    if (resyncBackoffRef.current.target) {
+                      mpRef.current?.sendSceneFetch?.(resyncBackoffRef.current.target);
+                    }
+                  }, delay);
+                }
+              } else {
+                mpRef.current?.sendSceneFetch?.(target);
+              }
             }
           }
           if (data.restored) {
@@ -8376,6 +9088,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               frame.ops = [];
               frame.raster = null;
               frame.rasterCount = -1;
+              frame.rasterGen = (frame.rasterGen || 0) + 1; // in-flight raster builds die here
+              frame.checkpoint = null; // a wiped cel has no trusted baseline anymore
             }
           });
           // In-progress remote strokes on cleared frames are wiped with them;
@@ -8462,6 +9176,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         case "room_animation": {
           roomAnimationRef.current = !!data.enabled;
           setRoomAnimation(!!data.enabled);
+          // A mode change may re-negotiate the hold bounds (entering FLIPBOOK
+          // clamps cels to 1–3s; leaving restores the local ladder).
+          if (data.frameTiming !== undefined) {
+            frameTimingRef.current = normalizeFrameTiming(data.frameTiming);
+            setRoomFrameTiming(frameTimingRef.current);
+          }
           if (data.enabled && Array.isArray(data.scenes) && data.scenes.length) {
             // The strip unlocks with its scene list (+ timing) in hand; land on
             // the first scene so the pager and scene controls have a target.
@@ -8483,7 +9203,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               window.cancelAnimationFrame(scrub.raf);
               scrub.raf = 0;
             }
-            if (playTimerRef.current) {
+            if (playTimerRef.current || filmPlaybackRef.current) {
               stopPlayback();
             }
             if (activeFrameIndexRef.current !== 0) {
@@ -8524,6 +9244,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               frame.ops = (source.ops || []).slice();
               frame.raster = source.raster;
               frame.rasterCount = source.raster ? frame.ops.length : -1;
+              frame.rasterSig = source.rasterSig; // the copied raster wears the source's stack sig
               if (source.layers) {
                 allocateFrameLayers(frame);
                 // Clone each layer's pixels into the matching layer (the server
@@ -8638,6 +9359,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (Array.isArray(data.removedOpIds) && data.removedOpIds.length) {
             const gone = new Set(data.removedOpIds);
             frame.ops = (frame.ops || []).filter((op) => !gone.has(op.opId));
+            frame.rasterGen = (frame.rasterGen || 0) + 1; // a raster built from the old list is stale
           }
           if (data.type === "layer_del") {
             // Open remote strokes on the dead layer have nowhere to land — drop
@@ -9027,7 +9749,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
       }
     },
-    [abortActiveStroke, activateFrame, announcePresence, applyInkOnlyTools, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrameLayers, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, syncLayerState, touchFrame],
+    [abortActiveStroke, activateFrame, announcePresence, applyInkOnlyTools, applyRemoteOp, applySoundtrack, commitAllRemoteStrokes, commitLayersToFrame, dropRemoteStrokes, ensureMixMap, isActiveFrame, loadSheetImage, publishCrewPresence, reconcileFrameLayers, reconcileFrames, refreshActiveThumbnail, renderDisplay, replayHistoryChunked, resetReplay, roomId, roomOrchestra, scheduleRemoteRender, scheduleStrokeFrame, showBeacon, showClearBanner, showToast, stopPlayback, switchScene, syncFrameState, syncLayerState, touchFrame],
   );
 
   // Deferred messages drain by re-entering handleMpMessage, so it needs a
@@ -9228,6 +9950,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   useEffect(() => {
     mpRef.current = {
       sendOp: relayOp,
+      sendCheckpointNack: mp.sendCheckpointNack,
       sendSnapshot: mp.sendSnapshot,
       sendThumb: mp.sendThumb,
       sendCursor: mp.sendCursor,
@@ -9289,7 +10012,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       sendPhoneSubmit: mp.sendPhoneSubmit,
       sendPhoneSkip: mp.sendPhoneSkip,
     };
-  }, [relayOp, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate, mp.sendWipeRequest, mp.sendWipeVote, mp.sendWipeCancel]);
+  }, [relayOp, mp.sendCheckpointNack, mp.sendSnapshot, mp.sendThumb, mp.sendCursor, mp.sendClear, mp.sendRestore, mp.sendRename, mp.sendSheet, mp.sendTracePhoto, mp.disconnect, mp.sendWatcherAck, mp.sendFlag, mp.sendModHide, mp.sendModRestore, mp.sendModRemove, mp.sendSetWet, mp.sendSetBrushMode, mp.sendVoteStart, mp.sendVote, mp.sendReaction, mp.sendSetSymmetry, mp.sendQuestNominate, mp.sendQuestReset, mp.sendStorybookCaption, mp.sendStorybookLock, mp.sendStorybookMove, mp.sendSetAnimation, mp.sendFrameAdd, mp.sendFrameDel, mp.sendFrameMove, mp.sendFrameDuration, mp.sendLayerAdd, mp.sendLayerDel, mp.sendLayerMove, mp.sendLayerPatch, mp.sendLayerDup, mp.sendLayerMerge, mp.sendLayerFlatten, mp.sendSceneFetch, mp.sendSceneAdd, mp.sendSceneDel, mp.sendSceneSet, mp.sendSoundtrack, mp.sendProductionCreate, mp.sendProductionAddSegment, mp.sendProductionRename, mp.sendFramePresence, mp.sendBeacon, mp.sendCheer, mp.sendGameSkip, mp.sendSetGame, mp.sendSetPhone, mp.sendPhoneStart, mp.sendPhoneSubmit, mp.sendPhoneSkip, mp.sendWipeKeep, mp.sendForkPrivate, mp.sendWipeRequest, mp.sendWipeVote, mp.sendWipeCancel]);
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
@@ -11187,6 +11910,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               isExportingVideo={isExportingVideo}
               hiddenFrameIds={hiddenFrameIds}
               maxFrames={roomAnimation ? animMaxFrames : MAX_FRAMES}
+              frameTiming={roomFrameTiming}
               scenes={scenes}
               activeSceneId={activeSceneId}
               canManageScenes={isRoomHost}

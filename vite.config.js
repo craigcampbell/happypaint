@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { checkpointRendererVersion } from './server/checkpointVersion.js'
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __CHECKPOINT_RENDERER_VERSION__: JSON.stringify(checkpointRendererVersion()),
+  },
   // ES-format workers so the nsfwWatcher worker can code-split its dynamic
   // imports (tfjs + model) instead of inlining them into one 5.5MB IIFE.
   worker: {
