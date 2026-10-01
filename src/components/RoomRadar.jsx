@@ -603,7 +603,7 @@ export default function RoomRadar({ onNavigate }) {
                   {selectedRoom.dormant ? " · asleep on disk (Watch loads it)" : ""}
                 </span>
               ) : null}
-              {summaryLoading ? <p className="admin-muted">Summarising chat…</p> : null}
+              {summaryLoading ? <p className="admin-muted">Summarizing chat…</p> : null}
               {summary?.summary ? <p className="admin-reason">{summary.summary}</p> : null}
               {summary?.llm?.summary ? (
                 <p className="admin-reason">

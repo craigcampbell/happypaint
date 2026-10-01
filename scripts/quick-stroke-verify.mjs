@@ -1,10 +1,10 @@
 // Quick stroke controls + Hand & pen preferences + palm rejection.
 //
 // What it drives, on real engines (Chromium with CDP touch/pen, WebKit):
-//   A. The Size pill / Colour dot on the compact quick bar and the desktop
+//   A. The Size pill / Color dot on the compact quick bar and the desktop
 //      zoom cluster: present, the bar fits the viewport, tap opens the brush
-//      menu / the colour wheel, a chip switches the brush, a ring tap changes
-//      the colour, a drag on the pill resizes the brush.
+//      menu / the color wheel, a chip switches the brush, a ring tap changes
+//      the color, a drag on the pill resizes the brush.
 //   B. Palm rejection (Chromium only — CDP is the one way to dispatch a PEN):
 //      fingers still draw with no pen around; a pen draws; in a pen session a
 //      finger stroke is held then replayed (300ms drag + 90ms flick both
@@ -12,7 +12,7 @@
 //      cancels it; a pen landing on a LIVE finger stroke discards it; Pen
 //      only mode never paints with a finger but still pinch-zooms.
 //   C. Left-hand mode: the desktop rail docks on the left; the iPad side
-//      sheet slides in from the left and the quick bar re-centres right of it.
+//      sheet slides in from the left and the quick bar re-centers right of it.
 //
 // Screenshots land in the scratchpad `quick-stroke/` folder (or $QS_SHOTS).
 import { chromium, webkit, devices } from "playwright";
@@ -169,8 +169,8 @@ async function runControls(page, tier, tap, drag, shot) {
     const size = await rect(page, `${barSel} .qs-size`);
     const color = await rect(page, `${barSel} .qs-color`);
     const vw = await page.evaluate(() => window.innerWidth);
-    check("A1 size pill + colour dot on the bar", !!(size?.visible && color?.visible),
-      `size=${size ? Math.round(size.w) + "x" + Math.round(size.h) : "none"} colour=${color ? Math.round(color.w) + "x" + Math.round(color.h) : "none"}`);
+    check("A1 size pill + color dot on the bar", !!(size?.visible && color?.visible),
+      `size=${size ? Math.round(size.w) + "x" + Math.round(size.h) : "none"} color=${color ? Math.round(color.w) + "x" + Math.round(color.h) : "none"}`);
     check("A2 the bar fits the viewport", !!bar && bar.x >= 0 && bar.x + bar.w <= vw + 0.5,
       bar ? `bar ${Math.round(bar.x)}..${Math.round(bar.x + bar.w)} of ${vw}` : "no bar");
     if (tier !== "desktop") {
@@ -207,8 +207,8 @@ async function runControls(page, tier, tap, drag, shot) {
     await tap(mid(color));
     await sleep(350);
     const cw = await rect(page, ".qs-pop .cw");
-    check("A5 tap on the colour dot opens the wheel", !!cw?.visible, cw ? `${Math.round(cw.w)}x${Math.round(cw.h)} at y=${Math.round(cw.y)}` : "no .cw");
-    check("A5b colour picker stays on screen", !!cw && cw.y >= 0 && cw.x >= 0 && cw.x + cw.w <= vw + 0.5,
+    check("A5 tap on the color dot opens the wheel", !!cw?.visible, cw ? `${Math.round(cw.w)}x${Math.round(cw.h)} at y=${Math.round(cw.y)}` : "no .cw");
+    check("A5b color picker stays on screen", !!cw && cw.y >= 0 && cw.x >= 0 && cw.x + cw.w <= vw + 0.5,
       cw ? `x ${Math.round(cw.x)}..${Math.round(cw.x + cw.w)}, top ${Math.round(cw.y)}` : "");
     const wheel = await rect(page, ".cw-wheel");
     const hexShown = await text(page, ".cw-preview-hex");
@@ -218,10 +218,10 @@ async function runControls(page, tier, tap, drag, shot) {
       await sleep(400);
       const hexAfter = await text(page, ".cw-preview-hex");
       const dotAfter = await page.evaluate(() => document.querySelector(".qs-color .qs-color-fill")?.style.background || "");
-      check("A6 tapping the hue ring changes the colour (preview + bar dot)", hexAfter !== hexShown && dotAfter !== hexBefore,
+      check("A6 tapping the hue ring changes the color (preview + bar dot)", hexAfter !== hexShown && dotAfter !== hexBefore,
         `${hexShown} → ${hexAfter}; dot ${hexBefore} → ${dotAfter}`);
     }
-    await shot("colour-wheel");
+    await shot("color-wheel");
     // Done closes it.
     const done = await rect(page, ".cw-done");
     if (done) { await tap(mid(done)); await sleep(300); }
@@ -473,7 +473,7 @@ async function runHand(page, tier, tap, shot) {
       const vw = await page.evaluate(() => window.innerWidth);
       const bar = await rect(page, ".mobile-quickbar");
       check("C4 tablet: the side sheet slides in from the LEFT", !!rail && rail.x <= 1 && rail.w < vw / 2, rail ? `x=${Math.round(rail.x)} w=${Math.round(rail.w)}` : "no open rail");
-      check("C5 tablet: the quick bar re-centres right of the sheet", !!bar && !!rail && bar.x > rail.x + rail.w && bar.x + bar.w <= vw + 0.5,
+      check("C5 tablet: the quick bar re-centers right of the sheet", !!bar && !!rail && bar.x > rail.x + rail.w && bar.x + bar.w <= vw + 0.5,
         bar && rail ? `bar ${Math.round(bar.x)}..${Math.round(bar.x + bar.w)}, sheet ends ${Math.round(rail.x + rail.w)}` : "");
       const fab = await rect(page, ".studio-rooms-fab");
       check("C6 tablet: the rooms FAB is not under the sheet", !!fab && !!rail && fab.x >= rail.x + rail.w - 1, fab && rail ? `fab x=${Math.round(fab.x)}` : "");

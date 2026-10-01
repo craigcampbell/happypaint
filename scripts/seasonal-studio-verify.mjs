@@ -5,7 +5,7 @@
 // INKTOBER room handshake carries inkOnly:true + event, prompt updates ride
 // seasonal_prompt, and the server enforces ink/pencil ops at ingest (a v3
 // inline dab must describe the declared brush's native dab). These checks
-// drive the real studio in a browser and prove the CLIENT honours the room:
+// drive the real studio in a browser and prove the CLIENT honors the room:
 //
 //   1. Brush rail shows exactly Brushed ink / Pencil / Eraser (+ a hint).
 //   2. Non-brush tools, image import, trace-a-photo, coloring sheets, draft

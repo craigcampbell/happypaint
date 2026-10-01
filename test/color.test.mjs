@@ -42,9 +42,9 @@ test("primary hues land on the expected angles", () => {
   assert.deepEqual(rgbToHsv(255, 255, 0), { h: 60, s: 1, v: 1 });
   assert.deepEqual(rgbToHsv(0, 0, 0), { h: 0, s: 0, v: 0 });
   assert.deepEqual(rgbToHsv(255, 255, 255), { h: 0, s: 0, v: 1 });
-  const grey = rgbToHsv(128, 128, 128);
-  assert.equal(grey.s, 0);
-  assert.ok(Math.abs(grey.v - 128 / 255) < 1e-9);
+  const gray = rgbToHsv(128, 128, 128);
+  assert.equal(gray.s, 0);
+  assert.ok(Math.abs(gray.v - 128 / 255) < 1e-9);
 });
 
 test("hsv → rgb hits the corners and wraps hue", () => {

@@ -30,7 +30,7 @@ function metaLine(s) {
   return [
     s?.difficulty ? `${s.difficulty}` : null,
     s?.age ? `ages ${s.age}` : null,
-    s?.areas ? `${s.areas} areas to colour` : null,
+    s?.areas ? `${s.areas} areas to color` : null,
   ].filter(Boolean).join(" · ");
 }
 
@@ -179,7 +179,7 @@ export default function ColoringSheetModal({ onClose, onApply }) {
                   {/*
                     sheet metadata from coloring-library/index.json (built by
                     scripts/enrich-index.py): the measured number of enclosed
-                    areas is the honest difficulty signal for a colouring page.
+                    areas is the honest difficulty signal for a coloring page.
                   */}
                   {metaLine(selected) ? (
                     <span className="sheet-meta" title={selected.desc || undefined}>

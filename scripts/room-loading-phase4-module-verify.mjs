@@ -330,7 +330,7 @@ try {
   check('frameTiming: default clamps into bounds', result.timingClampDefault === true);
   check('frameTiming: FLIPBOOK steps are 1000/1500/2000/3000', result.flipbookSteps === true, JSON.stringify(result.flipbookSteps));
   check('frameTiming: private/local steps unchanged', result.privateStepsUnchanged === true);
-  check('frameTiming: clamp honours bounds + defaults', result.timingClamp === true, JSON.stringify(result.timingClamp));
+  check('frameTiming: clamp honors bounds + defaults', result.timingClamp === true, JSON.stringify(result.timingClamp));
   check('frameTiming: sub-step range still offers endpoints', result.timingEndpointsOnly === true);
   check('frameTiming: nearest index within filtered steps', result.timingIndex === true);
   check('freshMixState: restore accepted, equals map birth state', result.freshMix === true, JSON.stringify(result.freshMix));

@@ -623,7 +623,7 @@ async function scenarioJoinPlayCancel(film) {
       return !(left && right);
     });
     if (missing.length > systematic.length) {
-      note(`${tag}/PLAY: recorder starvation gaps (painted neighbours on both sides)`,
+      note(`${tag}/PLAY: recorder starvation gaps (painted neighbors on both sides)`,
         missing.filter((i) => !systematic.includes(i)).join(','));
     }
     const blanks = during.filter((s) => s.idx == null || s.sceneIdx == null).length;

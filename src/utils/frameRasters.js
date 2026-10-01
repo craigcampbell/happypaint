@@ -1,6 +1,6 @@
 // Cold frames. A hydrated frame owns full-size layer canvases (~40MB each);
 // that is why a scene used to cap at 8 frames. In a server-synced animation
-// room only the ACTIVE frame and its neighbours stay hydrated now — every
+// room only the ACTIVE frame and its neighbors stay hydrated now — every
 // other frame keeps its op list (the shared source of truth) plus a compressed
 // raster, and re-hydrates by replaying its ops through the parity-tested
 // offline interpreter when the artist steps onto it.
@@ -86,7 +86,7 @@ export async function encodeRaster(draw, width = RASTER_WIDTH, height = RASTER_H
 // the shared world canvas, then downscale + encode. `layersMeta` is the
 // frame's server-canonical layer stack (frame.layerMeta): with more than one
 // layer the ops route into per-layer surfaces and composite in stack order
-// honouring visibility + opacity — the same structure coolFrame encodes from
+// honoring visibility + opacity — the same structure coolFrame encodes from
 // the live layers, so a frame's raster no longer depends on whether THIS
 // client ever visited it. No metadata (legacy rooms) keeps flat replay;
 // the composite helper also preserves the opaque, visible single-layer path.

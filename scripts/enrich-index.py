@@ -7,7 +7,7 @@ Adds, for every sheet:
   desc         a one-line human description
   difficulty   easy | medium | detailed   (from the image itself)
   age          suggested age band
-  areas        number of enclosed areas to colour (measured, full resolution)
+  areas        number of enclosed areas to color (measured, full resolution)
   ink_ratio    fraction of the page that is line art
   size         "1080x1400" etc.
   ip           third-party character/brand the sheet depicts, else null
@@ -27,8 +27,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.environ.get("COLORING_LIB") or os.path.join(os.path.dirname(_HERE), "coloring-library")
 BIG = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])          # 4-connectivity
 
-STOP = set("coloring colouring page pages printable free print a an the of on in with and to "
-           "for kids kid children child color colour".split())
+STOP = set("coloring coloring page pages printable free print a an the of on in with and to "
+           "for kids kid children child color color".split())
 
 SYNONYM = {
     "xmas": "christmas", "santa": "christmas", "reindeer": "christmas",
@@ -223,11 +223,11 @@ def main():
             cats_txt = f"{cats[0]} and {cats[1]}"
         else:
             cats_txt = ", ".join(cats[:-1]) + f" and {cats[-1]}"
-        phrase = {"easy": "a simple, easy-to-colour",
+        phrase = {"easy": "a simple, easy-to-color",
                   "medium": "a moderately detailed",
                   "detailed": "a detailed"}[diff]
         r["desc"] = (f"{r['title']} — {phrase} {cats_txt} coloring page with "
-                     f"about {a_} areas to colour. Best for ages {r['age']}.")
+                     f"about {a_} areas to color. Best for ages {r['age']}.")
         r["ip"] = next((v for k, v in IP.items() if k in r["id"]), None)
         r.pop("tiny", None)
 

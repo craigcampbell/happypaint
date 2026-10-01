@@ -1,5 +1,5 @@
 // Wet-canvas mix map: a 1/8-scale offscreen mirror of LAYER 0 plus a cached
-// CPU pixel array, so wet strokes can sample "what colour is under this dab?"
+// CPU pixel array, so wet strokes can sample "what color is under this dab?"
 // for a few array reads per dab — NEVER a getImageData against the full
 // 4000x2500 layer on the draw hot path.
 //

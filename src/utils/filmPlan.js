@@ -114,7 +114,7 @@ function ease(t) {
 
 // The window of the full picture the camera shows at progress t, as fractions
 // of the source (x, y, w, h in 0..1). Pans glide a 75% window across; zooms
-// go between the full picture and a 55% centre crop.
+// go between the full picture and a 55% center crop.
 export function cameraWindow(camera, t) {
   const p = ease(t);
   switch (normalizeCamera(camera)) {

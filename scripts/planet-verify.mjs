@@ -32,7 +32,7 @@ try {
   const shell = await (await fetch(API + "/planet", { headers: { Accept: "text/html" } })).text();
   check("/planet SEO title", /Painted Planet/.test(shell));
   const joinShell = await (await fetch(API + "/join/FLAGBR", { headers: { Accept: "text/html" } })).text();
-  check("/join/FLAGBR unfurls as the Brazil flag room", /Colour the Brazil flag/.test(joinShell));
+  check("/join/FLAGBR unfurls as the Brazil flag room", /Color the Brazil flag/.test(joinShell));
   const pub = await (await fetch(API + "/api/rooms/public")).json();
   check("no flag rooms listed before anyone visits", !pub.rooms.some((r) => /^FLAG/.test(r.code)));
 
@@ -88,7 +88,7 @@ try {
   await sleep(150);
   const card = await page.locator(".planet-card").innerText().catch(() => "");
   check("hover card names the country", /Brazil/.test(card), card.replace(/\s+/g, " "));
-  check("hover card explains the click", /colour the Brazil flag/i.test(card));
+  check("hover card explains the click", /color the Brazil flag/i.test(card));
   const sceneOn = await page.locator(".scene-layer.is-on").count();
   const sceneOff = await page.locator(".scene-layer.is-off").count();
   check("scene has locked + unlocked layers (0 strokes → sky only)", sceneOn === 1 && sceneOff >= 10, `${sceneOn} on / ${sceneOff} off`);

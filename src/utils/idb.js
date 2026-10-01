@@ -8,7 +8,7 @@
 // work function) — they must never `throw`. A request's onerror fires long
 // after runTransaction's try/catch has returned, so a throw there escapes as an
 // uncaught page error even though the promise itself is handled. WebKit hits
-// this on every draft autosave it can't serialise ("Error preparing Blob/File
+// this on every draft autosave it can't serialize ("Error preparing Blob/File
 // data to be stored in object store").
 
 const DB_NAME = "happypaint";

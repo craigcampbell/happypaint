@@ -364,7 +364,7 @@ const run = async () => {
   check("create form submit disabled with empty title",
     await page.locator('.ag-create-form button[type="submit"]').isDisabled());
   await page.fill("#ag-new-title", "Night Trains");
-  await page.fill("#ag-new-desc", "Watercolour trains after dark.");
+  await page.fill("#ag-new-desc", "Watercolor trains after dark.");
   await page.fill("#ag-new-tags", "Trains!, pixel art, cats, trains");
   await page.locator(".ag-inktober-opt input").check();
   fx.createPosted = null;

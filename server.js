@@ -77,7 +77,7 @@ const OP_RATE_PER_SEC = Number(process.env.OP_RATE_PER_SEC || 30);
 const OP_RATE_BURST = Number(process.env.OP_RATE_BURST || 120);
 // Join catch-up cache: rooms past HISTORY_CACHE_MIN_OPS keep ONE gzipped
 // history frame that every joiner shares; only the ops newer than it (the
-// "tail") are serialised per join. The frame is rebuilt once the tail passes
+// "tail") are serialized per join. The frame is rebuilt once the tail passes
 // HISTORY_CACHE_TAIL_MAX — so a cap-full room costs one stringify+gzip per
 // ~400 ops instead of one per joiner.
 const HISTORY_CACHE_MIN_OPS = Number(process.env.HISTORY_CACHE_MIN_OPS || 200);
@@ -1730,7 +1730,7 @@ const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 const RETIRED_ROOM_CODES = new Set(['DINOS']);
 
 // ---- Flag rooms (the painted planet) ---------------------------------------
-// /planet lets anyone click a country and colour its flag together. Each flag
+// /planet lets anyone click a country and color its flag together. Each flag
 // is a public, kid-safe room whose code is FLAG + the ISO-3166 alpha-2 code
 // (FLAGUS, FLAGMX — 6 chars, inside the 8-char code rule) and whose coloring
 // sheet is PINNED to that flag's line-art (`flag:XX`, served from
@@ -1768,7 +1768,7 @@ function flagEmoji(code) {
   return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
 function flagRoomTitle(code) { return `${flagEmoji(code)} ${flagName(code)} flag`; }
-function flagRoomPrompt(code) { return `${flagEmoji(code)} Colour in the flag of ${flagName(code)} — together!`; }
+function flagRoomPrompt(code) { return `${flagEmoji(code)} Color in the flag of ${flagName(code)} — together!`; }
 // Re-assert the invariants a flag room can never lose (boot, wipe, sheet ops).
 function pinFlagRoom(room, roomId) {
   const code = flagCodeOf(roomId);
@@ -1842,7 +1842,7 @@ function storybookPayload(room) {
 // silently rot the earliest frames of an animation.
 // Frame caps used to be a MEMORY budget (every client held a ~40MB full-res
 // canvas per frame, so 8 frames). Every server-synced animation room — the
-// public FLIPBOOK included — now keeps only the active frame (+ neighbours) as
+// public FLIPBOOK included — now keeps only the active frame (+ neighbors) as
 // live canvases and the rest as ops + a ~100KB WebP raster
 // (src/utils/frameRasters.js), so the ceiling is the OP budget below instead.
 // Public: 240 frames ≈ 30s at the default 120ms (~8fps), 24s at 10fps — a real
@@ -3059,7 +3059,7 @@ if (roomWipeTimer.unref) roomWipeTimer.unref();
 // restart mid-countdown drops the request, which fails safe (nothing wiped).
 const WIPE_SOLO_MS = 10_000;
 const WIPE_COUNTDOWN_MS = 30_000;
-const WIPE_CANCEL_LOCK_MS = 3_000; // the client greys Cancel for the last 3s
+const WIPE_CANCEL_LOCK_MS = 3_000; // the client grays Cancel for the last 3s
 const WIPE_VOTE_MIN_PEOPLE = 3;
 const WIPE_VOTE_COOLDOWN_MS = 30_000; // a room that just said no isn't re-asked at once
 
@@ -3241,7 +3241,7 @@ function cancelOwnWipeRequest(room, id, user, reqId) {
   const req = room.wipeReq;
   if (!req || req.id !== reqId) return denyWipeRequest(user, 'no_request');
   if (req.byId !== id) return denyWipeRequest(user, 'not_yours');
-  // The last seconds are locked (the client greys the button); one second of
+  // The last seconds are locked (the client grays the button); one second of
   // grace covers a tap that was already in flight when the lock started.
   if (req.endsAt - Date.now() < WIPE_CANCEL_LOCK_MS - 1000) return denyWipeRequest(user, 'too_late');
   endWipeRequest(room, 'cancelled');
@@ -4387,7 +4387,7 @@ wss.on('connection', async (ws, req) => {
 
   // Moderator watch ("glass room"): the owner inspects a room WITHOUT being seen.
   // This socket is neither a member nor a homepage spectator — it never enters
-  // room.users, so it is absent from the roster, presence, headcount, colours,
+  // room.users, so it is absent from the roster, presence, headcount, colors,
   // analytics and every broadcast the room's own members receive. It is the ONE
   // watcher allowed into private rooms, which is exactly where abuse hides.
   //
@@ -8116,7 +8116,7 @@ app.get('/api/admin/radar', (req, res) => {
   });
 });
 
-// One room's chat, summarised for a moderator: the digest plus the actual
+// One room's chat, summarized for a moderator: the digest plus the actual
 // flagged lines. `llm` stays null unless MOD_SYNOPSIS_URL is configured — see
 // chatSynopsis() for why the deterministic layer ships first.
 app.get('/api/admin/rooms/:id/chat/summary', async (req, res) => {
@@ -8410,7 +8410,7 @@ function userBlockKeys(user) {
 
 // Block keys are prefixed (pb:/dev:/ip:), so the generic sanitizeKey — which
 // strips ':' — would silently rewrite `dev:abc` into `devabc` and the block
-// would match nothing. Keys are therefore normalised with their prefix intact.
+// would match nothing. Keys are therefore normalized with their prefix intact.
 function sanitizeBlockKey(raw) {
   const str = String(raw || '');
   const prefix = /^(pb|dev|ip):/.exec(str);
@@ -8795,7 +8795,7 @@ function deleteWallPost(id) {
 // (the origin reached directly by IP, another container, a future proxy) it is
 // attacker-chosen text, and every IP-keyed control — rate limits, wall votes and
 // the 3-report auto-hide, IP blocks, mod-auth throttles — would follow it. So
-// the header is honoured only when the TCP peer is the tunnel:
+// the header is honored only when the TCP peer is the tunnel:
 //   TRUSTED_PROXY_HOSTS=cloudflared   (compose sets this) → only the address(es)
 //       that name resolves to. Re-resolved on a timer, because a restarted
 //       container comes back on a new IP.
@@ -8953,7 +8953,7 @@ app.get('/api/inktober', (_req, res) => {
 const PAINTJAR_MIN_COUNTRY_COUNT = 5;
 // The painted planet: the same aggregate country groups as /api/paintjar plus,
 // per country, whether its flag room exists and is live right now — so the map
-// can show "3 colouring the Brazil flag" without the client opening a socket
+// can show "3 coloring the Brazil flag" without the client opening a socket
 // per country. Only headcounts, never names. `flags` is the list of countries
 // that HAVE a line-art sheet (i.e. can be clicked into a room).
 app.get('/api/planet', (_req, res) => {
@@ -9389,7 +9389,7 @@ app.get('/api/admin/wall', (req, res) => {
 app.post('/api/admin/wall/:id/delete', (req, res) => {
   if (!adminGuard(req, res)) return;
   // Only delete a post we actually know about — never let a crafted :id reach
-  // the filesystem (deleteWallPost also validates the id shape as defence in
+  // the filesystem (deleteWallPost also validates the id shape as defense in
   // depth).
   if (!wallPosts.has(req.params.id)) {
     return res.status(404).json({ error: 'not found' });
@@ -10705,8 +10705,8 @@ const PAGE_META = {
     description: 'Draw the official Inktober prompt of the day in ink and pencil on one big shared mural — a fresh prompt every day of October. Free, no account needed. Independent fan participation; not affiliated with or endorsed by Inktober.',
   },
   '/planet': {
-    title: 'The Painted Planet — colour the world’s flags together on Drawesome',
-    description: 'A world map painted by the Drawesome community: hover a country to see how much it has drawn, click it to colour that country’s flag together, and watch the shared nature scene grow with every stroke.',
+    title: 'The Painted Planet — color the world’s flags together on Drawesome',
+    description: 'A world map painted by the Drawesome community: hover a country to see how much it has drawn, click it to color that country’s flag together, and watch the shared nature scene grow with every stroke.',
   },
   '/paintjar': {
     title: 'The Painted Planet — Drawesome community impact',
@@ -10807,8 +10807,8 @@ function seoOverridesFor(reqPath) {
     if (flag) {
       const painting = room && room.users ? room.users.size : 0;
       return {
-        title: `Colour the ${flagName(flag)} flag together ${flagEmoji(flag)} — Drawesome`,
-        description: `${painting > 0 ? `${painting} colouring right now — ` : ''}a shared coloring page of the flag of ${flagName(flag)}. Free, no account needed.`,
+        title: `Color the ${flagName(flag)} flag together ${flagEmoji(flag)} — Drawesome`,
+        description: `${painting > 0 ? `${painting} coloring right now — ` : ''}a shared coloring page of the flag of ${flagName(flag)}. Free, no account needed.`,
         url: `${SITE_ORIGIN}/join/${code}`,
       };
     }

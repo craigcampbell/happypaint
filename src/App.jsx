@@ -229,7 +229,7 @@ const DEFERRED_MP_TYPES = new Set([
   "frame_add", "frame_del", "frame_move", "frame_duration", "scene_add", "scene_del",
 ]);
 
-// Avatar colour choices for the profile menu.
+// Avatar color choices for the profile menu.
 const AVATAR_COLORS = [
   "#FF6B6B", "#F8961E", "#FEE440", "#8AC926", "#06D6A0",
   "#4ECDC4", "#45B7D1", "#2D6CDF", "#9B5DE5", "#F15BB5",
@@ -273,7 +273,7 @@ const STORAGE_KEYS = {
 // existing localStorage draft (W3).
 const DRAFT_IDB_KEY = "draft:v4";
 
-// Some engines (WebKit most reliably) refuse to serialise a Blob into an object
+// Some engines (WebKit most reliably) refuse to serialize a Blob into an object
 // store — "Error preparing Blob/File data to be stored in object store". The
 // autosave retries the same draft as base64 dataURLs, which always store, so the
 // artwork is safe and the user sees nothing. Warn ONCE per session: the autosave
@@ -314,9 +314,9 @@ const WALL_POST_WIDTH = 384;
 const WALL_POST_HEIGHT = 240;
 const FRAME_THUMB_WIDTH = 96;
 const FRAME_THUMB_HEIGHT = 60;
-// Onion-skin neighbour proxies render at half the document resolution
+// Onion-skin neighbor proxies render at half the document resolution
 // (4000x2500 → 2000x1250): visually
-// identical at 20-28% alpha, but two warm neighbours cost a constant fraction
+// identical at 20-28% alpha, but two warm neighbors cost a constant fraction
 // of a full-res composite instead of a fresh full-res allocation per recomposite.
 
 // The toddler finger-paint room shows only chunky, wet, smeary brushes — no
@@ -381,7 +381,7 @@ const PALM_CONTACT_PX = 100;
 const PEN_SESSION_MS = 60000;
 const TOUCH_HOLD_MS = 160;
 // A held touch that lifts inside the hold window is dropped as a stray palm
-// tap unless it travelled this far — a real quick flick still draws.
+// tap unless it traveled this far — a real quick flick still draws.
 const TOUCH_HOLD_FLICK_PX = 12;
 // A palm-sized touch contact during a pen session (penAt = lastPenAtRef; 0 =
 // no pen yet this page load).
@@ -652,10 +652,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const displayDprRef = useRef(1);
 
   // Stroke-time composite caches (W1/W2). On stroke-start we pre-render the
-  // static content beneath the active layer (including onion-skin neighbours)
+  // static content beneath the active layer (including onion-skin neighbors)
   // and the static content above it into two offscreen canvases, so each move
   // blits below + activeLayer + above (3 draws) instead of recompositing the
-  // whole stack + neighbour frames every pointer move.
+  // whole stack + neighbor frames every pointer move.
   const belowCacheRef = useRef(null); // canvas: onion + visible layers under active
   const aboveCacheRef = useRef(null); // canvas: visible layers above active
   const compositeCacheValidRef = useRef(false);
@@ -715,7 +715,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Onion-skin proxy cache: frameId -> { canvas (half-res composite), stamp }.
   // A frame's stamp bumps on every edit; a proxy is valid while stamps match,
-  // so drawing 50 strokes on the active frame recomposites its neighbours zero
+  // so drawing 50 strokes on the active frame recomposites its neighbors zero
   // times (they haven't changed) instead of 40MB-per-recomposite churn.
   const onionCacheRef = useRef(new Map());
   const frameStampRef = useRef(new Map());
@@ -724,7 +724,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       frameStampRef.current.set(frameId, (frameStampRef.current.get(frameId) || 0) + 1);
     }
   }, []);
-  // Keep only the active frame's neighbours warm (all onion ever reads) and
+  // Keep only the active frame's neighbors warm (all onion ever reads) and
   // drop entries for removed frames — bounds the cache at ~2 x 10MB no matter
   // how the user hops around. Runs on every frame switch AND frame CRUD.
   const pruneOnionCache = useCallback(() => {
@@ -870,11 +870,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const focusTimerRef = useRef(null);
   const brushCursorRef = useRef(null); // the brush-size preview ring (DOM-positioned)
   const brushTipCanvasRef = useRef(null); // the ring's inner canvas: one dab of the brush
-  const brushTipSigRef = useRef(""); // brush|colour|size the tip was last drawn for
+  const brushTipSigRef = useRef(""); // brush|color|size the tip was last drawn for
   const brushCursorHideRef = useRef(null);
   // Last known hover point of a mouse/pen over the canvas (client coords), or
   // null when nothing is hovering. Lets a size change ([ / ] or the slider)
-  // resize the ring IN PLACE instead of yanking it to the canvas centre.
+  // resize the ring IN PLACE instead of yanking it to the canvas center.
   const brushHoverPointRef = useRef(null);
   const [remoteCursors, setRemoteCursors] = useState([]);
   const [reactions, setReactions] = useState([]); // transient floating emoji
@@ -999,10 +999,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   };
   const [reportReason, setReportReason] = useState("");
-  // Coloring sheet: a shared, locked line-art overlay artists colour under/over.
+  // Coloring sheet: a shared, locked line-art overlay artists color under/over.
   const sheetImageRef = useRef(null);
   const sheetRectRef = useRef(null);
-  const sheetModeRef = useRef("over"); // 'over' = lines on top (colour under)
+  const sheetModeRef = useRef("over"); // 'over' = lines on top (color under)
   const [sheetId, setSheetId] = useState(null);
   // Flag rooms pin their sheet server-side; the rail hides swap/remove for them.
   const pinnedFlagSheet = typeof sheetId === "string" && /^flag:[A-Z]{2}$/.test(sheetId);
@@ -1062,7 +1062,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // settings.gooiness so replay is deterministic.
   const [gooiness, setGooiness] = useState(0.5);
   // Smudge | Blend (brush engine Stage 4): "drag" pushes paint along with
-  // the finger and carries colour; "blend" softens in place. Rides the op as
+  // the finger and carries color; "blend" softens in place. Rides the op as
   // settings.smudgeMode (with v: 3) so every consumer renders the same mode.
   // Session-local on purpose — no localStorage.
   const [smudgeMode, setSmudgeMode] = useState("drag");
@@ -1344,7 +1344,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // pages scenes in the background and paints snapshot bitmaps. Null while
   // stopped; `token.cancelled` is THE stop signal every await checks.
   const filmPlaybackRef = useRef(null);
-  // Our own session id (from the connected handshake) — used to recognise our
+  // Our own session id (from the connected handshake) — used to recognize our
   // echoed frame mutations without depending on the mp hook object.
   const myUserIdRef = useRef(null);
   // Production (multi-room film) this room belongs to, + the storyboard modal.
@@ -1954,7 +1954,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     syncZoomLabel();
   };
 
-  // The first view people see: zoomed in past "fit" and centred, so there's a
+  // The first view people see: zoomed in past "fit" and centered, so there's a
   // comfortable drawing area instead of the whole tiny mural.
   const startView = () => {
     const { w, h } = getViewportSize();
@@ -2090,7 +2090,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (frame.layers) {
       canvas = compositeFrameToCanvas(frame, { width: CANVAS_WIDTH / 2, height: CANVAS_HEIGHT / 2 });
     } else {
-      // Cold neighbour: its raster (decoded or not yet — null skips this pass).
+      // Cold neighbor: its raster (decoded or not yet — null skips this pass).
       const bitmap = peekFrameBitmap(frame);
       if (!bitmap) return null;
       canvas = document.createElement("canvas");
@@ -2102,9 +2102,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     return canvas;
   }, []);
 
-  // Paint the onion-skin neighbour frames faintly onto the document context.
+  // Paint the onion-skin neighbor frames faintly onto the document context.
   // Shared by the full recomposite and the "below" stroke cache so the result
-  // is identical whether or not a stroke is in progress. Neighbours hidden via
+  // is identical whether or not a stroke is in progress. Neighbors hidden via
   // the film-strip eyeball are skipped (local preview mute).
   const paintOnionSkin = useCallback((context) => {
     if (!onionSkinRef.current || framesRef.current.length <= 1) {
@@ -2227,7 +2227,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
 
   // Pre-render the static content around the active layer once at stroke-start
-  // (W1/W2): "below" = onion neighbours + all visible layers under the active
+  // (W1/W2): "below" = onion neighbors + all visible layers under the active
   // layer; "above" = all visible layers above it. During the stroke each move
   // only blits below + activeLayer + above into the document canvas.
   const buildCompositeCache = useCallback(() => {
@@ -2538,7 +2538,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // markAllDirty so a wet dab in the replay samples the restored paper.
       replaySharedOpsSince(snapshot.sharedMark);
       // The active frame's pixels changed outside the stroke path — its onion
-      // proxy is stale for when it next becomes someone's neighbour.
+      // proxy is stale for when it next becomes someone's neighbor.
       bumpFrameStamp(framesRef.current[activeFrameIndexRef.current]?.id);
       invalidateCompositeCache();
       renderDisplay();
@@ -2739,7 +2739,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // cleared and "Autosaved" shown when the write actually SUCCEEDS; on any
   // failure (quota, IndexedDB unavailable) we keep `dirtyRef` true so the timer
   // retries and surface a clear "couldn't autosave" status. If IndexedDB is
-  // unavailable we fall back to localStorage with the same honest behaviour
+  // unavailable we fall back to localStorage with the same honest behavior
   // (this can still hit the ~5MB quota, hence the IndexedDB primary path).
   const saveDraft = useCallback(async () => {
     if (saveInFlightRef.current || layersRef.current.length === 0) {
@@ -2778,7 +2778,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               savedAt,
             });
           } catch (error) {
-            // The Blobs wouldn't serialise (see warnDraftBlobFallback). That's a
+            // The Blobs wouldn't serialize (see warnDraftBlobFallback). That's a
             // storage-SHAPE problem, not "out of room", so re-encode the same
             // layers as base64 dataURLs and try once more — restoreLayersFromDraft
             // reads either form. If this throws too, the outer catch reports it.
@@ -2859,7 +2859,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     // The studio ALWAYS opens on the brush. Restoring a saved fill/text/shape
     // tool means a kid's first touch does something other than draw — and on a
-    // phone there is no hover to tell them why. Brush, colour, size and the rest
+    // phone there is no hover to tell them why. Brush, color, size and the rest
     // below still persist; only the tool resets. (handTool is never persisted.)
     setSelectedTool("brush");
     setSelectedBrush(inkOnlyRef.current ? inkSafeBrush(draftSettings.brush) : draftSettings.brush || "marker");
@@ -3232,7 +3232,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const wy = pos.y * CANVAS_HEIGHT;
     const c = Math.cos(v.rot || 0);
     const s = Math.sin(v.rot || 0);
-    // Centre their world point in our viewport (keeping our own scale + rotation).
+    // Center their world point in our viewport (keeping our own scale + rotation).
     v.tx = w / 2 - v.scale * (c * wx - s * wy);
     v.ty = h / 2 - v.scale * (s * wx + c * wy);
     clampPan(v);
@@ -3414,7 +3414,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   // Import a GIF / image (open to everyone) and stamp it onto the active layer,
-  // centred in the current view, then broadcast it so friends see it too.
+  // centered in the current view, then broadcast it so friends see it too.
   const importImage = useCallback(
     async (file) => {
       if (!file) {
@@ -3757,7 +3757,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [invalidateCompositeCache, markMixDirty]);
 
   // Relay this pointer's position to the room as a live cursor (throttled to
-  // ~50ms). Coordinates are normalised 0..1 so each friend can place the cursor
+  // ~50ms). Coordinates are normalized 0..1 so each friend can place the cursor
   // correctly regardless of their own canvas size. `drawing` reflects whether a
   // stroke is in progress so the cursor can pulse while painting.
   const sendCursorThrottled = useCallback(
@@ -4233,7 +4233,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         netSettings.symmetry = strokeSymmetry;
       }
       // Smudge's Strength (per-dab blend alpha) rides the wire so the local
-      // renderer honours the slider AND every remote/replay/spectator client
+      // renderer honors the slider AND every remote/replay/spectator client
       // smears with the identical alpha — deterministic parity. Only smudge
       // reads it, so we don't bloat every other brush's op.
       if (brushId === "smudge") {
@@ -4506,9 +4506,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // ---- Brush-size preview ring --------------------------------------------
   // A hollow circle sized to the brush (brushSize x current zoom) + tinted with
-  // the colour, so you can see how big/what colour the paint will be BEFORE you
+  // the color, so you can see how big/what color the paint will be BEFORE you
   // commit. Follows the pointer on hover (desktop) and under the finger while
-  // drawing (touch); also flashed at canvas centre when the size/brush changes.
+  // drawing (touch); also flashed at canvas center when the size/brush changes.
   // Positioned by direct style mutation (no React state) to stay off the draw
   // hot path. Hidden for non-painting tools and while panning/pinching.
   const hideBrushCursor = () => {
@@ -4516,7 +4516,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   // Stamp one dab of the current brush into the ring's canvas at the ring's
-  // on-screen size. Called ONLY when brush / colour / size / zoom change (see
+  // on-screen size. Called ONLY when brush / color / size / zoom change (see
   // the signature check in updateBrushCursor) — never per pointer move.
   const renderBrushTip = (d) => {
     const tip = brushTipCanvasRef.current;
@@ -4533,7 +4533,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     tip.style.width = `${box}px`;
     tip.style.height = `${box}px`;
-    // Centred on the ring (50% = the ring's padding box, inside its border).
+    // Centered on the ring (50% = the ring's padding box, inside its border).
     tip.style.left = `calc(50% - ${box / 2}px)`;
     tip.style.top = `calc(50% - ${box / 2}px)`;
     // Translucent tip: the engine stamps the dab at its own flow alpha, the
@@ -4587,7 +4587,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   };
 
-  // Flash the ring at the canvas centre for a moment — the "before you paint"
+  // Flash the ring at the canvas center for a moment — the "before you paint"
   // size preview that works even on touch (no hover). Re-armed on size changes.
   // If a mouse/pen is hovering the canvas, the ring is resized under the
   // pointer instead (and stays put) — the cursor must never jump away from
@@ -4603,7 +4603,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
     const rect = canvas.getBoundingClientRect();
-    // Upper-centre, so the mobile tools drawer (bottom sheet) doesn't cover it
+    // Upper-center, so the mobile tools drawer (bottom sheet) doesn't cover it
     // while the size slider is being dragged.
     updateBrushCursor(rect.left + rect.width / 2, rect.top + rect.height * 0.22);
     if (brushCursorHideRef.current) {
@@ -4951,7 +4951,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         g.count = m.n;
         return;
       }
-      // Compose pan (+ for 2 fingers, zoom + rotate about the pinch centre) into
+      // Compose pan (+ for 2 fingers, zoom + rotate about the pinch center) into
       // the view, then repaint at most once per frame via scheduleViewFrame.
       const v = viewRef.current;
       v.tx += m.cx - g.lastMid.x; // pan follows the centroid for any finger count
@@ -5002,8 +5002,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const held = heldTouchRef.current;
     if (held && held.pointerId === event.pointerId) {
       pointersRef.current.delete(event.pointerId);
-      const travelled = Math.hypot(event.clientX - held.down.clientX, event.clientY - held.down.clientY);
-      if (travelled >= TOUCH_HOLD_FLICK_PX) {
+      const traveled = Math.hypot(event.clientX - held.down.clientX, event.clientY - held.down.clientY);
+      if (traveled >= TOUCH_HOLD_FLICK_PX) {
         releaseHeldTouch(snapshotPointerEvent(event)); // a real quick flick: draw it
       } else {
         cancelHeldTouch(); // a stray tap while the pen is in play
@@ -5592,7 +5592,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             frame.rasterSig = sig;
             bumpFrameStamp(frame.id);
             queueThumbnailRefresh(frame.id);
-            renderDisplay(); // it may be an onion neighbour
+            renderDisplay(); // it may be an onion neighbor
           } else {
             frame.rasterCount = count; // encode unsupported here — don't spin
             frame.rasterSig = sig;
@@ -5702,7 +5702,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           mixMapRef.current?.markAllDirty();
         }
       }
-      renderDisplay(); // the active frame filled in, or an onion neighbour did
+      renderDisplay(); // the active frame filled in, or an onion neighbor did
     })();
     frame.hydrating = job;
     return job;
@@ -5743,7 +5743,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     return admitted;
   }, []);
 
-  // Keep the hydrated window centred on the active frame: warm one neighbour
+  // Keep the hydrated window centered on the active frame: warm one neighbor
   // per idle pass, cool everything outside the radius, then let the rasterizer
   // fill in the rest of the strip.
   const frameWindowRef = useRef({ pending: false });
@@ -5800,7 +5800,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Playback uses a requestAnimationFrame loop with a timestamp accumulator
   // (W17) instead of a drifting setTimeout chain: each rAF advances by the real
-  // elapsed time, so authored per-frame durations are honoured even when the
+  // elapsed time, so authored per-frame durations are honored even when the
   // tab was just unthrottled, and timers don't pile up in background tabs.
   const startPlayback = useCallback(() => {
     if (historyReplayActiveRef.current || isExportingVideoRef.current || filmPlaybackRef.current) return;
@@ -5917,7 +5917,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       abortActiveStroke();
       const clamped = Math.max(0, Math.min(index, framesRef.current.length - 1));
       activeFrameIndexRef.current = clamped;
-      pruneOnionCache(); // keep only the NEW neighbours' proxies warm
+      pruneOnionCache(); // keep only the NEW neighbors' proxies warm
       const frame = framesRef.current[clamped];
       if (!frame.layers) coldFramesRef.current?.hydrateFrame(frame); // canvases now, ops replay in the background
       layersRef.current = frame.layers;
@@ -6439,7 +6439,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       hiddenFramesRef.current = next;
       setHiddenFrameIds(next);
-      // A neighbour may have joined/left the onion sandwich.
+      // A neighbor may have joined/left the onion sandwich.
       invalidateCompositeCache();
       renderDisplay();
     },
@@ -6654,7 +6654,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       plan = buildFilmPlan(scenesRef.current);
     } else {
       // This scene only: snapshot the frame list (remote edits mid-export can't
-      // shrink or reorder it), still honouring its loops + camera.
+      // shrink or reorder it), still honoring its loops + camera.
       const sceneMeta = scenesRef.current.find((s) => s.id === activeSceneIdRef.current);
       const snapshot = framesRef.current.slice();
       const byId = new Map(snapshot.map((frame) => [frame.id, frame]));
@@ -7556,7 +7556,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     async (asset) => {
       // Ink-only rooms: stickers/templates/loops paste pixels and brush
       // recipes carry non-native dabs — all of them would diverge from the
-      // room's ink/pencil op truth. Palettes (colour only) stay available.
+      // room's ink/pencil op truth. Palettes (color only) stay available.
       if (inkOnlyRef.current && asset.kind !== "palette") {
         setStatus("Paint Space stamps and recipes stay on the shelf in the Ink & Pencil room ✒️");
         setShowPaintSpace(false);
@@ -7712,7 +7712,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       // Flag rooms (/planet): "flag:US" is the pinned line-art of that flag,
-      // shipped with the build. Colour goes UNDER the lines like any sheet.
+      // shipped with the build. Color goes UNDER the lines like any sheet.
       if (/^flag:[A-Z]{2}$/.test(id)) {
         applySrc(`/flags-lineart/${id.slice(5)}.png`);
         return;
@@ -8333,7 +8333,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // Join curtain: the room answered. Only the history frame that
           // follows actually puts art on the canvas, so this is not "done" yet.
           setJoinStep((step) => Math.max(step, 2));
-          // Re-apply a saved name/colour so the artist keeps their identity
+          // Re-apply a saved name/color so the artist keeps their identity
           // across reconnects (and eventually, sign-in).
           const saved = profileRef.current;
           if (saved?.name && saved.name !== data.userName) {
@@ -9265,7 +9265,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             announcePresence(); // ...and tells the crew they're on the new cel
           } else if (insertIndex <= activeFrameIndexRef.current) {
             // Someone inserted before our spot — keep pointing at OUR frame or
-            // every subsequent local op mistags onto a neighbour.
+            // every subsequent local op mistags onto a neighbor.
             activeFrameIndexRef.current += 1;
           }
           // activateFrame doesn't mirror the frame LIST into React — always sync.
@@ -9286,7 +9286,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (wasActive) {
             // Terminate any in-flight stroke while the index still points at
             // the dying frame — the end marker goes out tagged with its id
-            // (harmlessly rejected server-side) instead of a neighbour's.
+            // (harmlessly rejected server-side) instead of a neighbor's.
             abortActiveStroke();
           }
           framesRef.current.splice(delIndex, 1);
@@ -10165,7 +10165,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [sheetId, historyCount, paintGate, showToast],
   );
 
-  // Load any saved profile (name/colour) once.
+  // Load any saved profile (name/color) once.
   useEffect(() => {
     try {
       profileRef.current = JSON.parse(window.localStorage.getItem(PROFILE_STORAGE_KEY) || "null");
@@ -10495,7 +10495,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setToolsOpen((open) => !open);
           break;
         case "Escape":
-          setQuickMenu(null); // the brush / colour popover off the bottom bar
+          setQuickMenu(null); // the brush / color popover off the bottom bar
           break;
         default:
           break;
@@ -10955,14 +10955,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const isPaintActive = !handTool && selectedTool === "brush" && selectedBrush !== "eraser";
   const isEraserActive = !handTool && selectedTool === "brush" && selectedBrush === "eraser";
   // Smudge blends the paint already on the canvas — it carries no pigment, so it
-  // shows a Strength control instead of a colour + opacity + variation. The
-  // eraser likewise ignores colour (it cuts to transparent).
+  // shows a Strength control instead of a color + opacity + variation. The
+  // eraser likewise ignores color (it cuts to transparent).
   const isSmudgeActive = selectedTool === "brush" && selectedBrush === "smudge";
   const isGooActive = selectedTool === "brush" && selectedBrush === "goo";
   const noColorBrush = selectedTool === "brush" && (selectedBrush === "smudge" || selectedBrush === "eraser");
 
   // Tapping Paint flips to the brush; tapping it again (already painting) opens
-  // the tools drawer and scrolls to the brush/colour section.
+  // the tools drawer and scrolls to the brush/color section.
   const onPaintButton = () => {
     const wasPainting = isPaintActive;
     activatePaint();
@@ -10973,7 +10973,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   // ---- Quick stroke controls (bottom bar / desktop zoom cluster) -----------
-  // The Size pill and Colour dot open their popovers here. The brush list is
+  // The Size pill and Color dot open their popovers here. The brush list is
   // gated exactly like the tool rail's (finger-paint rooms, private-only
   // smudge, Studio-tier brushes), so the two pickers never disagree.
   const closeQuickMenu = () => setQuickMenu(null);
@@ -11019,7 +11019,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           onChange={setSelectedColor}
           onOpacityChange={setBrushOpacity}
           onCommit={(hex) => {
-            // A picked colour means you want to paint with it: remember it and
+            // A picked color means you want to paint with it: remember it and
             // leave the pan / eraser / smudge behind.
             rememberColor(hex);
             handToolRef.current = false;
@@ -11483,7 +11483,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               onContextMenu={handleCanvasContextMenu}
             />
             {/* Brush-size preview ring — sized to brushSize x zoom, tinted with the
-                colour, following the pointer (and flashed when size/brush changes). */}
+                color, following the pointer (and flashed when size/brush changes). */}
             <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true">
               <canvas ref={brushTipCanvasRef} className="brush-cursor-tip" width={1} height={1} />
             </div>
@@ -11629,7 +11629,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 ✋
               </button>
               {/* Quick stroke: drag the size pill to resize, tap it for the
-                  brush menu; the colour dot opens the studio's own picker.
+                  brush menu; the color dot opens the studio's own picker.
                   (Desktop only — the compact tiers carry these on the quick
                   bar.) */}
               {layoutTier === "desktop" ? (
@@ -12576,7 +12576,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ) : null}
           </div>
           {pinnedFlagSheet ? (
-            <p className="tool-hint">🌍 This is a flag room from the Painted Planet — the flag stays on the page for everyone. Colour it in together!</p>
+            <p className="tool-hint">🌍 This is a flag room from the Painted Planet — the flag stays on the page for everyone. Color it in together!</p>
           ) : null}
           {!inkOnly && !pinnedFlagSheet ? (
             <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
@@ -12707,7 +12707,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           ) : null}
           {sheetId ? (
             <label className="color-picker sheet-toggle">
-              <span>Lines on top (colour under)</span>
+              <span>Lines on top (color under)</span>
               <input
                 type="checkbox"
                 checked={sheetMode === "over"}
@@ -12757,8 +12757,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <h2>Color</h2>
             <p className="tool-hint">
               {isSmudgeActive
-                ? "👉 Smudge works with the paint that's already on the canvas — no colour needed. Pick Smudge or Blend and set how hard it pushes with Strength below."
-                : "🧽 The eraser clears back to paper — no colour needed."}
+                ? "👉 Smudge works with the paint that's already on the canvas — no color needed. Pick Smudge or Blend and set how hard it pushes with Strength below."
+                : "🧽 The eraser clears back to paper — no color needed."}
             </p>
           </section>
         ) : (
@@ -12782,7 +12782,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               <input
                 type="color"
                 value={selectedColor}
-                // Live-preview the colour while dragging in the picker, but only
+                // Live-preview the color while dragging in the picker, but only
                 // add ONE swatch to recents when the pick is committed (on blur) —
                 // otherwise every intermediate shade spawned a duplicate swatch.
                 onChange={(event) => setSelectedColor(event.target.value)}
@@ -12870,7 +12870,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
               <p className="tool-hint">
                 {smudgeMode === "drag"
-                  ? "Smudge pulls paint along with your finger — colours travel and fade out."
+                  ? "Smudge pulls paint along with your finger — colors travel and fade out."
                   : "Blend softens the paint where you rub — edges melt without moving."}
               </p>
             </div>
@@ -13133,7 +13133,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           </button>
         )}
         {/* Quick stroke: drag the size pill to resize (right/up = bigger), tap
-            it for the brush menu; the colour dot opens the studio's own
+            it for the brush menu; the color dot opens the studio's own
             HSB picker. Both pop up from this bar. */}
         <SizePill
           className="qb-btn"

@@ -70,7 +70,7 @@ export function savePenCalibration(cal, storage = typeof window !== "undefined" 
   }
 }
 
-// Feed one raw pen pressure sample; returns the normalised 0.02..1 value. The
+// Feed one raw pen pressure sample; returns the normalized 0.02..1 value. The
 // calibration object is mutated in place (ceiling may rise; `dirty` flags that
 // it's worth persisting).
 export function mapPenPressure(cal, raw) {

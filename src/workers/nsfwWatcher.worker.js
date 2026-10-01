@@ -182,7 +182,7 @@ function heuristicDetect(imageData) {
       size += 1;
       const x = cur % width;
       const y = (cur - x) / width;
-      // 4-neighbourhood
+      // 4-neighborhood
       if (x > 0 && mask[cur - 1] === 1) {
         mask[cur - 1] = 2;
         stack[sp += 1] = cur - 1;
@@ -208,7 +208,7 @@ function heuristicDetect(imageData) {
   const largestRatio = largest / total;
 
   // Combine: overall skin coverage gates, a big connected flesh blob amplifies.
-  // Both are normalised against rough thresholds so the score saturates at 1.
+  // Both are normalized against rough thresholds so the score saturates at 1.
   const coverageScore = clamp01(skinRatio / 0.45);
   const blobScore = clamp01(largestRatio / 0.30);
   const score = clamp01(0.4 * coverageScore + 0.6 * blobScore);

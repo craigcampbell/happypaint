@@ -180,7 +180,7 @@ repaints every mural on the server. The rules that follow from that:
   once shipped. Prebuilt in idle time after the studio mounts (one piece per
   idle slice, deferred while a pointer is down), released on unmount / hidden.
 - **Pigment mixing** (`pigment.js`, dabs with `mixModel: "km"`): a dab's
-  colour is a Kubelka-Munk mix of what the bristles carry and the paint under
+  color is a Kubelka-Munk mix of what the bristles carry and the paint under
   it (sampled from the 1/8-scale layer-0 mix map, `mixMap.js`). Sample-free
   brushes (marker, ink, pencil, crayon, dry watercolor, glow) never touch the
   map; watercolor mixes by its multiply glaze instead.
@@ -246,9 +246,9 @@ pinned by goldens where noted rather than fixed):
   overflows, in copy order per point, while a replay consumer expands the op
   into per-copy strokes and walks them batch by batch, so overlapping chunks
   can commit in a different order (source-over shapes only).
-- Non-hex colour strings: the legacy vector branches paint whatever the canvas
+- Non-hex color strings: the legacy vector branches paint whatever the canvas
   parses, but sprite shapes tint through `parseColorRgb`, whose fallback is
-  near-black — deterministic on every consumer, just not the legacy colour.
+  near-black — deterministic on every consumer, just not the legacy color.
 
 ### WebSocket protocol (`/ws?room=CODE&token=…`)
 The optional `token` is a PocketBase access token; the server validates it to

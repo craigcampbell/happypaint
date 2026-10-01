@@ -3,7 +3,7 @@
 #
 # Mirrors RUNNING.md's local procedure over SSH: pre-flight, rollback image
 # tag, dated app_data backup, build, bounded swap, health verification, and
-# proof the pocketbase/tunnel neighbours were NOT restarted.
+# proof the pocketbase/tunnel neighbors were NOT restarted.
 #
 # Usage:
 #   DEPLOY_HOST=root@<ip> scripts/deploy-remote.sh
@@ -39,12 +39,12 @@ echo "==> Pre-flight: current state"
 $SSH "$HOST" "cd $REMOTE_DIR && docker compose ps" || {
   echo "ERROR: cannot reach $REMOTE_DIR on $HOST — is the droplet up?" >&2; exit 1; }
 
-echo "==> Capturing rollback image + neighbour container IDs"
+echo "==> Capturing rollback image + neighbor container IDs"
 $SSH "$HOST" "cd $REMOTE_DIR && \\
   prev=\\\$(docker inspect $APP_CONTAINER --format '{{.Image}}') && \\
   docker image tag \\\$prev happypaint-app:rollback-$STAMP && \\
   docker inspect -f '{{.Name}} {{.Id}} started={{.State.StartedAt}}' happypaint-pocketbase-1 happypaint-cloudflared-1 \\
-  > /tmp/deploy-neighbours-$STAMP.txt && cat /tmp/deploy-neighbours-$STAMP.txt"
+  > /tmp/deploy-neighbors-$STAMP.txt && cat /tmp/deploy-neighbors-$STAMP.txt"
 
 echo "==> Backing up app_data (dated tar on the droplet)"
 $SSH "$HOST" "cd $REMOTE_DIR && mkdir -p backups && \\
@@ -77,9 +77,9 @@ $SSH "$HOST" "curl -fsS http://127.0.0.1:8787/healthz && echo && \\
 echo "==> Public healthcheck"
 curl -fsS https://drawesome.art/healthz && echo
 
-echo "==> Neighbour proof (must be identical StartedAt to pre-flight)"
+echo "==> Neighbor proof (must be identical StartedAt to pre-flight)"
 $SSH "$HOST" "docker inspect -f '{{.Name}} {{.Id}} started={{.State.StartedAt}}' happypaint-pocketbase-1 happypaint-cloudflared-1; \\
-  echo '--- pre-flight was:'; cat /tmp/deploy-neighbours-$STAMP.txt"
+  echo '--- pre-flight was:'; cat /tmp/deploy-neighbors-$STAMP.txt"
 
 echo "==> DONE. Rollback if needed:"
 echo "    ssh $HOST 'cd $REMOTE_DIR && docker image tag happypaint-app:rollback-$STAMP happypaint-app:latest && docker compose up -d --no-deps --no-build --wait app'"

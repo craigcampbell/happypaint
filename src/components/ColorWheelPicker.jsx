@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hexToHsv, hsvToHex, isHexColor, normalizeHex, withAlpha } from "../utils/color";
 
-// The studio's own colour picker: a hue WHEEL (ring) with the live colour in
-// its centre, then Saturation / Brightness / Opacity bars, a hex field, and
+// The studio's own color picker: a hue WHEEL (ring) with the live color in
+// its center, then Saturation / Brightness / Opacity bars, a hex field, and
 // the palette + recent swatches for one-tap picks.
 //
 // Perf: dragging the ring or a bar re-renders only THIS component; the
@@ -11,7 +11,7 @@ import { hexToHsv, hsvToHex, isHexColor, normalizeHex, withAlpha } from "../util
 // the drag settles — that's the moment a swatch is added to "recent".
 //
 // HSB state lives here rather than being derived from the hex prop, because
-// a hex loses its hue at s=0 / v=0 (white, black, greys): dragging brightness
+// a hex loses its hue at s=0 / v=0 (white, black, grays): dragging brightness
 // to black and back must return to the same hue, not snap to red.
 
 const RING_THICKNESS = 26;
@@ -72,7 +72,7 @@ export default function ColorWheelPicker({
 
   const hex = useMemo(() => hsvToHex(hsv.h, hsv.s, hsv.v), [hsv]);
 
-  // External change (a palette tap in the rail, an undo of the colour…):
+  // External change (a palette tap in the rail, an undo of the color…):
   // resync unless it's the value we just emitted ourselves.
   useEffect(() => {
     const norm = normalizeHex(color, lastEmittedRef.current);
@@ -252,10 +252,10 @@ export default function ColorWheelPicker({
   const recentOnly = recent.filter((c) => !palette.includes(c));
 
   return (
-    <div className="cw" role="dialog" aria-label="Colour picker">
+    <div className="cw" role="dialog" aria-label="Color picker">
       <div className="cw-head">
-        <span className="cw-title">Colour</span>
-        <button type="button" className="cw-close" onClick={onClose} aria-label="Close colour picker">
+        <span className="cw-title">Color</span>
+        <button type="button" className="cw-close" onClick={onClose} aria-label="Close color picker">
           ✕
         </button>
       </div>
@@ -350,7 +350,7 @@ export default function ColorWheelPicker({
                 event.currentTarget.blur();
               }
             }}
-            aria-label="Hex colour"
+            aria-label="Hex color"
           />
         </label>
         <button type="button" className="primary-action cw-done" onClick={onClose}>
@@ -374,7 +374,7 @@ export default function ColorWheelPicker({
         </div>
       ) : null}
       {recentOnly.length > 0 ? (
-        <div className="cw-swatches cw-recent" aria-label="Recent colours">
+        <div className="cw-swatches cw-recent" aria-label="Recent colors">
           <span className="cw-swatches-label">Recent</span>
           {recentOnly.map((c) => (
             <button

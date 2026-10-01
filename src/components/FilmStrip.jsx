@@ -145,7 +145,7 @@ export default function FilmStrip({
             className="fs-onion"
             onClick={onToggleOnion}
             aria-pressed={onionSkin}
-            title="Onion skin — see neighbour frames faintly"
+            title="Onion skin — see neighbor frames faintly"
           >
             🧅
           </button>

@@ -29,7 +29,7 @@
 //     publish-info object (same shape)
 //   onNavigate?: (path: string) => void — optional, used for the "view studio" link
 //
-// Behaviour guarantees (contract):
+// Behavior guarantees (contract):
 //   * Publishing is always an explicit, confirmed action — never implicit.
 //   * Unpublishing removes gallery discovery ONLY; the copy states plainly
 //     that the room link keeps working ("unlisted still viewable by link").

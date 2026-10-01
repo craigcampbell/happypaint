@@ -45,7 +45,7 @@ half-finished-stroke flop, and no history hazard.
 
 ## 2. Tilt-mop asymmetry (`pool`)  ✅ implemented
 
-**Realism.** A leaned round watercolour mop deposits pigment asymmetrically:
+**Realism.** A leaned round watercolor mop deposits pigment asymmetrically:
 paint pools on the downhill side of the lean and the dab drags slightly wider
 along it. New dab field `pool` (wash shapes only, 0 = off — every pre-Stage-6
 wash op renders unchanged):
@@ -73,9 +73,9 @@ smudge pattern, NOT the direct-to-layer legacy path):
    motion (v3 smudge's `makeSmudgeV3Renderer` drag carry: `getSmudgeScratch` /
    `getCarryScratch`, feathered, deposited at pressure-driven strength).
 2. **Pigment deposit** — on top of the displacement, stamp a soft blob of the
-   brush colour whose pigment bends toward what it crosses via the mix map.
+   brush color whose pigment bends toward what it crosses via the mix map.
 
-So paint both moves (the smeared under-paint) and lays down its own colour that
+So paint both moves (the smeared under-paint) and lays down its own color that
 picks up what it crosses.
 
 **Adjustable gooeyness.** One slider (`settings.gooiness`, 0..1, captured into
@@ -88,7 +88,7 @@ roadmap's pudding/tempera presets, interpolated:
 | 1.0 (thick) | 0.60 | 0.25 | 0.15 | 0.08 |
 
 (`smear` = displacement re-stamp alpha, `drag` = sample trail fraction, `pickup`
-= pigment bend toward under-paint, `dragRate` = carried-colour chase.)
+= pigment bend toward under-paint, `dragRate` = carried-color chase.)
 
 **Room contract.** "fun" mode is where this is safe: the toddler contract —
 single layer (the mix map mirrors layer 0 only), opacity locked to 1, wet-on,

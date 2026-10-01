@@ -59,9 +59,9 @@
   height: 100%;
   overflow: visible;
 }
-/* Pencil outline that the watercolour filter then pools into a darker wet edge.
+/* Pencil outline that the watercolor filter then pools into a darker wet edge.
    Hover is drawn by .planet-hover-ring, NOT by restyling these (they sit inside
-   an SVG filter, and a restyle would re-render the whole watercolour). */
+   an SVG filter, and a restyle would re-render the whole watercolor). */
 .planet-country {
   stroke: none;
   outline: none;

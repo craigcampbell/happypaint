@@ -134,8 +134,8 @@ test("yellow + blue makes a green that is not dark", () => {
   // Hue window 70..170 spans yellow-green through green to teal-green; paint
   // mixes of a warm yellow and a cerulean-ish blue land mid-green (~115).
   assert.ok(h >= 70 && h <= 170, `hue ${h.toFixed(1)} of ${rgbToHex(mix)} not green`);
-  // Must be a real green, not a greyed-out olive: saturation at least 0.25.
-  assert.ok(s >= 0.25, `saturation ${s.toFixed(2)} of ${rgbToHex(mix)} too grey`);
+  // Must be a real green, not a grayed-out olive: saturation at least 0.25.
+  assert.ok(s >= 0.25, `saturation ${s.toFixed(2)} of ${rgbToHex(mix)} too gray`);
   // "Not darker than ~35% luminance": CIE L* >= 35 (Y >= ~0.085) is the
   // threshold below which the mix would read as a dark, muddy green. The
   // Kubelka-Munk result actually sits around L* 65.
@@ -145,7 +145,7 @@ test("yellow + blue makes a green that is not dark", () => {
   assert.ok(hsl(mix).l >= 0.35, `HSL lightness ${hsl(mix).l.toFixed(2)} too dark`);
 });
 
-test("red + blue gives a purple, not grey or black", () => {
+test("red + blue gives a purple, not gray or black", () => {
   // Pure red has ~3x the luminance of pure blue, and the concentration weights
   // are luminance-scaled, so the equal-luminance point sits at t ~ 0.63: below
   // that the mix is a red-leaning plum, above it a violet. Assert the whole
@@ -158,7 +158,7 @@ test("red + blue gives a purple, not grey or black", () => {
       h >= 255 && h <= 345,
       `t=${t}: hue ${h.toFixed(1)} of ${rgbToHex(mix)} is outside violet..plum`,
     );
-    assert.ok(s >= 0.3, `t=${t}: saturation ${s.toFixed(2)} of ${rgbToHex(mix)} is grey`);
+    assert.ok(s >= 0.3, `t=${t}: saturation ${s.toFixed(2)} of ${rgbToHex(mix)} is gray`);
     assert.ok(Math.max(...mix) >= 40, `t=${t}: ${rgbToHex(mix)} is black`);
   }
   const purple = mixRgb(RED, PURE_BLUE, 0.7);
@@ -166,20 +166,20 @@ test("red + blue gives a purple, not grey or black", () => {
   assert.ok(h >= 255 && h <= 320, `hue ${h.toFixed(1)} of ${rgbToHex(purple)} not purple`);
 });
 
-test("white + black makes an untinted grey around the middle", () => {
+test("white + black makes an untinted gray around the middle", () => {
   const mix = mixRgb(WHITE, BLACK, 0.5);
   // Untinted: channels equal within 1 sRGB step of rounding.
   assert.ok(
     Math.max(...mix) - Math.min(...mix) <= 1,
     `${rgbToHex(mix)} is tinted`,
   );
-  // "Approximately mid grey": Kubelka-Munk with luminance-weighted
+  // "Approximately mid gray": Kubelka-Munk with luminance-weighted
   // concentration lands lighter than an sRGB lerp (about #a6a6a6, L* ~68),
   // because black's near-zero luminance gives it little tinting power at an
   // even share. Accept sRGB 90..180 (L* ~38..73), which rules out both the
   // near-white and the near-black failure modes.
   const v = mix[0];
-  assert.ok(v >= 90 && v <= 180, `${rgbToHex(mix)} is not a mid grey`);
+  assert.ok(v >= 90 && v <= 180, `${rgbToHex(mix)} is not a mid gray`);
   // More black must always mean darker, never lighter.
   let prev = 256;
   for (const t of [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]) {
@@ -189,23 +189,23 @@ test("white + black makes an untinted grey around the middle", () => {
   }
 });
 
-test("white tints a colour without greying it", () => {
+test("white tints a color without graying it", () => {
   const tint = mixRgb(WHITE, BLUE, 0.5);
   const { h, s } = hsl(tint);
   const { h: hb } = hsl(BLUE);
   assert.ok(Math.abs(h - hb) <= 20, `tint hue drifted: ${h.toFixed(1)} vs ${hb.toFixed(1)}`);
-  assert.ok(s >= 0.5, `tint of blue went grey: ${rgbToHex(tint)} s=${s.toFixed(2)}`);
+  assert.ok(s >= 0.5, `tint of blue went gray: ${rgbToHex(tint)} s=${s.toFixed(2)}`);
   assert.ok(lightness(tint) > lightness(BLUE), "white did not lighten");
 });
 
-test("complementary red + green goes brown, not black or neutral grey", () => {
+test("complementary red + green goes brown, not black or neutral gray", () => {
   const mix = mixRgb(RED, GREEN, 0.5);
   const { h, s } = hsl(mix);
   assert.ok(Math.max(...mix) >= 80, `${rgbToHex(mix)} is (near) black`);
   assert.ok(lightness(mix) >= 25, `${rgbToHex(mix)} is too dark`);
   // brown/olive: hue in the orange..yellow-green band with real saturation
   assert.ok(h >= 10 && h <= 80, `hue ${h.toFixed(1)} of ${rgbToHex(mix)} is not brown/olive`);
-  assert.ok(s >= 0.2, `${rgbToHex(mix)} is neutral grey`);
+  assert.ok(s >= 0.2, `${rgbToHex(mix)} is neutral gray`);
 });
 
 test("never produces NaN or out-of-range channels", () => {
@@ -230,10 +230,10 @@ test("never produces NaN or out-of-range channels", () => {
   for (let i = 0; i < LATENT_SIZE; i++) assert.ok(Number.isFinite(lat[i]), `latent[${i}] not finite`);
 });
 
-test("rgbToLatent -> latentToRgb round-trips every colour on a 5-step grid exactly", () => {
+test("rgbToLatent -> latentToRgb round-trips every color on a 5-step grid exactly", () => {
   // The seven basis spectra were fitted so that reflectance -> XYZ -> sRGB
   // reproduces the input; we check it is exact after rounding on a
-  // 52^3 = 140,608 colour grid (a full 16.7M sweep is ~30x slower).
+  // 52^3 = 140,608 color grid (a full 16.7M sweep is ~30x slower).
   const lat = new Float64Array(LATENT_SIZE);
   const out = [0, 0, 0];
   let worst = 0;
@@ -259,7 +259,7 @@ test("latent-space mixing matches the RGB API and can be chained", () => {
   const viaLatent = latentToRgb(mixLatent(la, lb, 0.5));
   assert.deepEqual(viaLatent, mixRgb(YELLOW, BLUE, 0.5));
 
-  // Carried-colour use: mix repeatedly without leaving latent space, and
+  // Carried-color use: mix repeatedly without leaving latent space, and
   // mixing into one of the inputs is allowed.
   const carried = rgbToLatent(...WHITE);
   const brush = rgbToLatent(...BLUE);
@@ -283,7 +283,7 @@ test("mixRgbFloat writes into out, accepts float channels, and the cache is orde
   assert.equal(mixRgbFloat(255, 0, 0, 0, 0, 255, 0.5, out), out);
   assert.deepEqual(Array.from(out), mixRgb(RED, PURE_BLUE, 0.5));
 
-  // Float channels are accepted and land between their integer neighbours.
+  // Float channels are accepted and land between their integer neighbors.
   const lo = mixRgb([100, 50, 200], BLUE, 0.5);
   const hi = mixRgb([101, 50, 200], BLUE, 0.5);
   const mid = Array.from(mixRgbFloat(100.5, 50, 200, ...BLUE, 0.5, out));
@@ -293,12 +293,12 @@ test("mixRgbFloat writes into out, accepts float channels, and the cache is orde
 
   // Cache correctness: interleaving different operand orders and repeats must
   // never change a result (stale-slot bug detector).
-  const colours = [YELLOW, BLUE, RED, WHITE, [40, 90, 160]];
+  const colors = [YELLOW, BLUE, RED, WHITE, [40, 90, 160]];
   const expected = new Map();
-  for (const a of colours) for (const b of colours) expected.set(rgbToHex(a) + rgbToHex(b), mixRgb(a, b, 0.4));
+  for (const a of colors) for (const b of colors) expected.set(rgbToHex(a) + rgbToHex(b), mixRgb(a, b, 0.4));
   for (let round = 0; round < 3; round++) {
-    for (const a of colours) {
-      for (const b of colours) {
+    for (const a of colors) {
+      for (const b of colors) {
         assert.deepEqual(mixRgb(a, b, 0.4), expected.get(rgbToHex(a) + rgbToHex(b)));
         assert.deepEqual(mixRgb(b, a, 0.4), expected.get(rgbToHex(b) + rgbToHex(a)));
       }
@@ -321,8 +321,8 @@ test("performance: 100k mixRgbFloat calls", () => {
   // warm-up so the JIT has settled
   for (let i = 0; i < 5000; i++) mixRgbFloat(a[i * 3], a[i * 3 + 1], a[i * 3 + 2], 30, 136, 229, 0.35, out);
 
-  // Realistic stroke: varying carried colour vs one fixed brush colour
-  // (brush colour hits the cache, carried colour is decomposed every call).
+  // Realistic stroke: varying carried color vs one fixed brush color
+  // (brush color hits the cache, carried color is decomposed every call).
   let t0 = performance.now();
   for (let i = 0; i < N; i++) {
     mixRgbFloat(a[i * 3], a[i * 3 + 1], a[i * 3 + 2], 30, 136, 229, 0.35, out);
@@ -338,7 +338,7 @@ test("performance: 100k mixRgbFloat calls", () => {
   const bothMs = performance.now() - t0;
 
   console.log(
-    `  timing: 100k mixRgbFloat (fixed brush colour) = ${fixedMs.toFixed(1)} ms; ` +
+    `  timing: 100k mixRgbFloat (fixed brush color) = ${fixedMs.toFixed(1)} ms; ` +
       `(both operands varying) = ${bothMs.toFixed(1)} ms`,
   );
   // Design target is 150 ms on a dev machine; the assertion is loose enough

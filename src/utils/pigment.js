@@ -1,16 +1,16 @@
-// Pigment-style (Kubelka-Munk) colour mixing.
+// Pigment-style (Kubelka-Munk) color mixing.
 //
-// Mixing two sRGB colours the way paint mixes instead of the way light adds:
+// Mixing two sRGB colors the way paint mixes instead of the way light adds:
 // yellow + blue -> green, red + blue -> plum/purple, white lightens without
-// greying, complementary pairs go muddy brown/olive rather than neutral grey.
+// graying, complementary pairs go muddy brown/olive rather than neutral gray.
 //
-// The algorithm and the reflectance / colour-matching data tables below are
+// The algorithm and the reflectance / color-matching data tables below are
 // taken from spectral.js v3.0.0 by Ronald van Wijnen
 // (https://github.com/rvanwijnen/spectral.js, npm package "spectral.js"),
-// which is published under the MIT licence (verified against the LICENSE file
+// which is published under the MIT license (verified against the LICENSE file
 // shipped in the npm package, copyright (c) 2025 Ronald van Wijnen). The code
 // itself has been rewritten around preallocated typed arrays for a
-// zero-allocation per-dab hot path; the maths is unchanged.
+// zero-allocation per-dab hot path; the math is unchanged.
 //
 //  MIT License
 //
@@ -49,16 +49,16 @@
 //   5. K/S_mix = (c_a * K/S_a + c_b * K/S_b) / (c_a + c_b)
 //        with concentration c_a = (1-t)^2 * Y_a and c_b = t^2 * Y_b
 //        (Y = luminance). The luminance weighting is spectral.js's tinting-
-//        strength model: it stops dark, high-K/S colours from swamping light
-//        ones so that white + colour reads as a tint and t behaves like a
+//        strength model: it stops dark, high-K/S colors from swamping light
+//        ones so that white + color reads as a tint and t behaves like a
 //        perceptual share rather than a pigment-mass share.
 //   6. K/S -> R:  R = 1 + K/S - sqrt(K/S^2 + 2 K/S)    (exact inverse of 4)
-//   7. R -> XYZ via the CIE 1931 2-degree colour-matching functions weighted
+//   7. R -> XYZ via the CIE 1931 2-degree color-matching functions weighted
 //      by the D65 illuminant, XYZ -> linear sRGB (matrix), clamp to gamut,
 //      sRGB companding, round to 0-255.
 //
 // Everything is pure and deterministic (no Math.random / Date), every hot-path
-// buffer is preallocated at module level, and all inputs are sanitised so
+// buffer is preallocated at module level, and all inputs are sanitized so
 // NaN / out-of-range / non-numeric channels can never produce NaN output.
 // ---------------------------------------------------------------------------
 
@@ -138,8 +138,8 @@ const BASE_B = [
   0.0157640525629106, 0.015764589232951, 0.0157648147772649, 0.0157648801149616,
 ];
 
-// CIE 1931 2-degree colour-matching functions weighted by the D65 illuminant
-// and normalised so that a flat R = 1 spectrum gives Y = 1 (x-bar, y-bar, z-bar).
+// CIE 1931 2-degree color-matching functions weighted by the D65 illuminant
+// and normalized so that a flat R = 1 spectrum gives Y = 1 (x-bar, y-bar, z-bar).
 const CMF_X = [
   0.0000646919989576, 0.0002194098998132, 0.0011205743509343, 0.0037666134117111, 0.011880553603799, 0.0232864424191771, 0.0345594181969747, 0.0372237901162006,
   0.0324183761091486, 0.021233205609381, 0.0104909907685421, 0.0032958375797931, 0.0005070351633801, 0.0009486742057141, 0.0062737180998318, 0.0168646241897775,
@@ -230,7 +230,7 @@ function linearToByte(x) {
   return Math.round(compand(x) * 255);
 }
 
-/** Channel 0..255 (already sanitised) -> linear light. */
+/** Channel 0..255 (already sanitized) -> linear light. */
 function channelToLinear(x) {
   const xi = x | 0;
   return xi === x ? LINEAR_LUT[xi] : uncompand(x / 255);
@@ -239,15 +239,15 @@ function channelToLinear(x) {
 // --- Latent representation ----------------------------------------------------
 
 /**
- * Decompose an sRGB colour into its Kubelka-Munk latent vector.
+ * Decompose an sRGB color into its Kubelka-Munk latent vector.
  *
  * Cost: 3 sRGB->linear conversions, the 7-weight decomposition, and one pass
  * over 38 bands doing 7 multiply-adds + one division (K/S) + one multiply-add
  * (luminance) each: roughly 400 flops. This is the expensive half of a mix, so
- * a renderer that keeps a carried colour should hold it as a latent (see
- * mixLatent) and only decompose the brush colour once per stroke.
+ * a renderer that keeps a carried color should hold it as a latent (see
+ * mixLatent) and only decompose the brush color once per stroke.
  *
- * @param {number} r 0-255 (floats allowed; anything else is sanitised)
+ * @param {number} r 0-255 (floats allowed; anything else is sanitized)
  * @param {number} g 0-255
  * @param {number} b 0-255
  * @param {Float64Array|number[]} [out] buffer of length >= LATENT_SIZE
@@ -267,7 +267,7 @@ export function rgbToLatent(r, g, b, out) {
  * (the common minimum), then either a subtractive primary (C/M/Y, the second
  * minimum) and the leftover additive primary (R/G/B). Exactly three of the
  * seven weights can be non-zero for any input, and the basis spectra were fitted
- * so that the resulting reflectance reproduces the input colour under D65.
+ * so that the resulting reflectance reproduces the input color under D65.
  */
 function decomposeLinear(lr, lg, lb, out) {
   // White = the part shared by all three channels.
@@ -325,9 +325,9 @@ function decomposeLinear(lr, lg, lb, out) {
 export function mixLatent(a, b, t, out) {
   if (!out || out.length < LATENT_SIZE) out = new Float64Array(LATENT_SIZE);
   t = sanitizeT(t);
-  // Concentrations: the square of the share times the colour's luminance
+  // Concentrations: the square of the share times the color's luminance
   // (spectral.js's tinting-strength model). The luminance term is what keeps
-  // a light colour from being swallowed by a dark one's huge K/S.
+  // a light color from being swallowed by a dark one's huge K/S.
   const ta = 1 - t;
   let ca = ta * ta * a[Y_OFF];
   let cb = t * t * b[Y_OFF];
@@ -383,7 +383,7 @@ export function latentToRgb(latent, out) {
   const lr = XYZ_RGB[0] * X + XYZ_RGB[1] * Y + XYZ_RGB[2] * Z;
   const lg = XYZ_RGB[3] * X + XYZ_RGB[4] * Y + XYZ_RGB[5] * Z;
   const lb = XYZ_RGB[6] * X + XYZ_RGB[7] * Y + XYZ_RGB[8] * Z;
-  // Mixes of saturated colours can land slightly outside the sRGB gamut
+  // Mixes of saturated colors can land slightly outside the sRGB gamut
   // (e.g. white + red); a plain clamp is the cheap, deterministic choice here.
   out[0] = linearToByte(lr);
   out[1] = linearToByte(lg);
@@ -401,11 +401,11 @@ const SLOT_VALID = [false, false];
 const MIX_LAT = new Float64Array(LATENT_SIZE);
 
 /**
- * Find (or build) the latent for a sanitised colour in the two-slot cache.
+ * Find (or build) the latent for a sanitized color in the two-slot cache.
  * `fillSlot` is where a miss is decomposed to; the caller passes the slot the
  * other operand is NOT using so the two operands never evict each other.
- * The typical stroke mixes a varying carried colour against one fixed brush
- * colour, so the brush colour stays cached and only one decomposition runs
+ * The typical stroke mixes a varying carried color against one fixed brush
+ * color, so the brush color stays cached and only one decomposition runs
  * per call.
  */
 function resolveSlot(r, g, b, fillSlot) {

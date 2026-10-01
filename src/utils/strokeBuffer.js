@@ -77,7 +77,7 @@ export function createStrokeBuffer() {
         if (w > MAX_SIZE || h > MAX_SIZE) {
           return ENSURE_OVERFLOW; // caller commits + reset()s, then re-ensures
         }
-        // Centre the union inside the grown rect and copy the old content
+        // Center the union inside the grown rect and copy the old content
         // across at its world position (the new transform does the mapping).
         const nx0 = Math.floor(ux0 - (w - (ux1 - ux0)) / 2);
         const ny0 = Math.floor(uy0 - (h - (uy1 - uy0)) / 2);
@@ -98,7 +98,7 @@ export function createStrokeBuffer() {
         this._base.ty = -ny0;
         return ENSURE_OK;
       }
-      // First allocation: a power-of-2 square centred on the point.
+      // First allocation: a power-of-2 square centered on the point.
       const size = Math.min(MAX_SIZE, pow2AtLeast(Math.ceil(margin * 2 + 2)));
       this.x0 = Math.floor(x - size / 2);
       this.y0 = Math.floor(y - size / 2);

@@ -4,7 +4,7 @@ import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN } from "./BrushQuickMenu";
 
 // The two "quick stroke" items on the bottom bar (and the desktop zoom
 // cluster): a Size pill you DRAG to resize / TAP for the brush menu, and a
-// Colour dot that opens the studio's own picker.
+// Color dot that opens the studio's own picker.
 //
 // Size drag: multiplicative, so small brushes get fine control and big ones
 // move fast — every 60px of drag (right or up = bigger, left or down =
@@ -134,9 +134,9 @@ export function ColorDot({ color, opacity = 1, noColor, active, className = "", 
       type="button"
       className={`qs-color${active ? " is-active" : ""}${noColor ? " is-nocolor" : ""}${className ? ` ${className}` : ""}`}
       onClick={onTap}
-      aria-label={`Colour ${color}, ${Math.round(opacity * 100)} percent opacity. Press to change`}
+      aria-label={`Color ${color}, ${Math.round(opacity * 100)} percent opacity. Press to change`}
       aria-pressed={active}
-      title="Pick a colour"
+      title="Pick a color"
     >
       <span className={`qs-well qs-color-well${dark ? " is-dark" : ""}`} aria-hidden="true">
         <span className="qs-color-fill" style={{ background: withAlpha(color, opacity) }} />

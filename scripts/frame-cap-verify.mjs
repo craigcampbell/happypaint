@@ -1,4 +1,4 @@
-// End-to-end check of the + behaviour after the fix, on an isolated server with
+// End-to-end check of the + behavior after the fix, on an isolated server with
 // a fresh DATA_DIR (so the reel starts small, like a new kid's session):
 //   1. tapping + adds a cel (the normal path still works);
 //   2. the reel scrolls the newest cel into view;

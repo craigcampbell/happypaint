@@ -36,7 +36,7 @@
 // make-golden-ops.mjs --check regenerates (fixture / engine drift fails).
 //
 // Stage 3 gates (full run): the mixing scenario's checks (km brushes read
-// green, not grey, dry and wet; carry recovery; sample-free brushes hash
+// green, not gray, dry and wet; carry recovery; sample-free brushes hash
 // identical with and without a mix map), the km determinism pair, the
 // mixPrefetch sample-sequence equivalence, and the km CPU budget (KM_BUDGET
 // ms per 100 dabs of dab-walk CPU work with every dab sampling; the software
@@ -47,7 +47,7 @@
 //
 // Stage 4 gates (full run): the smudge scenario's checks — v3 drag / blend
 // feathered vs the legacy square (no hard edge across the motion, no
-// corner signature), the drag carry (colour travels, then thins out; blend
+// corner signature), the drag carry (color travels, then thins out; blend
 // carries nothing), rerun + batching determinism per mode — and the smudge
 // per-dab budget on the real 4000x2500 layer (SMUDGE_BUDGET ms per dab for
 // drag and blend; the legacy column is the self-referential drawImage they
@@ -97,8 +97,8 @@ const useGpu = args.includes("--gpu");
 const GPU_ARGS = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-gpu-blocklist", "--enable-accelerated-2d-canvas"];
 // Stage 3: max ms per 100 dabs of CPU work the pigment path may add when
 // every dab samples (the representative, GPU-renderer number). The software
-// renderer gets an allowance: a colour that drifts across many 5-bit buckets
-// (a dry oil stroke settling over a contrasting colour) re-tints a 128² tint
+// renderer gets an allowance: a color that drifts across many 5-bit buckets
+// (a dry oil stroke settling over a contrasting color) re-tints a 128² tint
 // ring slot per transition, and SwiftShader rasterises that ~5x slower than
 // a GPU — a bounded per-transition cost, not a per-dab one, but it lands in
 // the same clock.
@@ -669,7 +669,7 @@ if (Object.keys(timing).length) {
   }
   const kmRows = Object.entries(timing).flatMap(([brush, sizes]) => Object.entries(sizes).filter(([, t]) => t.km).map(([size, t]) => [brush, size, t]));
   if (kmRows.length) {
-    console.log("\nKM PATH (Stage 3; cpu = the dab walk against a no-op ctx, with vs without a sampling mix map — the pigment maths + bucket bookkeeping alone, best-of-N;");
+    console.log("\nKM PATH (Stage 3; cpu = the dab walk against a no-op ctx, with vs without a sampling mix map — the pigment math + bucket bookkeeping alone, best-of-N;");
     console.log(`  Δcpu per 100 dabs is what the budget gates: ${KM_BUDGET} ms on the GPU renderer, ${KM_BUDGET_SOFTWARE} ms on the software one (its ring re-tints); this run: ${kmBudget}.`);
     console.log("  raster = the same stroke rasterised over blank paper / solid / gradient under-paint (best-of-N, prefetched map): context only)");
     console.log(`${pad("brush", 11)} ${pad("size", 4, true)} ${pad("path", 4)} ${pad("cpu", 7, true)} ${pad("cpu+km", 7, true)} ${pad("Δcpu/100", 9, true)} ${pad("blank", 7, true)} ${pad("solid", 7, true)} ${pad("grad", 7, true)} ${pad("Δsolid", 8, true)} ${pad("Δgrad", 8, true)}`);
@@ -716,7 +716,7 @@ if (Object.keys(mixing).length) {
   }
   const recoveries = Object.entries(mixing).filter(([, cells]) => cells.recovery);
   if (recoveries.length) {
-    console.log("\nCARRY RECOVERY (wet yellow, size 40, across a 200px blue patch then 300px of paper: on patch → just after → last 20%; gate = last 20% closer to the brush colour than to blue)");
+    console.log("\nCARRY RECOVERY (wet yellow, size 40, across a 200px blue patch then 300px of paper: on patch → just after → last 20%; gate = last 20% closer to the brush color than to blue)");
     for (const [brush, cells] of recoveries) {
       const r = cells.recovery;
       console.log(`  ${r.recovered ? "ok  " : "FAIL"} ${pad(brush, 11)} patch [${r.onPatchMeanRgb}] h${r.onPatch.hue}  after [${r.justAfterMeanRgb}]  last20% [${r.lastFifthMeanRgb}] h${r.lastFifth.hue}  d(brush)=${r.distanceToBrush} d(blue)=${r.distanceToBlue}`);
@@ -748,7 +748,7 @@ if (Object.keys(mixPrefetch).length) {
 if (report.scenarios.smudge) {
   const s = report.scenarios.smudge.report;
   console.log("\nSMUDGE (legacy square vs v3 drag / blend over a red|blue field, size 40, strength 0.6, pressure 0.7; boundary band mean on white before=[" + s.boundaryMeanBefore + "];");
-  console.log("  edge = max / p99 colour step ACROSS the motion inside the passes' bands, corners = px with a strong step along AND across — v3 must be below legacy)");
+  console.log("  edge = max / p99 color step ACROSS the motion inside the passes' bands, corners = px with a strong step along AND across — v3 must be below legacy)");
   console.log(`${pad("mode", 8)} ${pad("after", 16)} ${pad("blended", 8, true)} ${pad("edge max", 9, true)} ${pad("p99", 5, true)} ${pad("corners", 8, true)} ${pad("points", 7, true)} ${pad("ms", 8, true)}`);
   for (const [mode, m] of Object.entries(s.modes || {})) {
     console.log(`${pad(mode, 8)} ${pad(`[${m.boundaryMeanAfter}]`, 16)} ${pad(m.blendedColumnsAtRow150, 8, true)} ${pad(m.edge.maxAcross, 9, true)} ${pad(m.edge.p99Across, 5, true)} ${pad(m.edge.corners, 8, true)} ${pad(m.pointsFed, 7, true)} ${pad(m.ms, 8, true)}`);

@@ -1,7 +1,7 @@
 /* ==========================================================================
-   Quick stroke controls — the Size pill + Colour dot on the bottom bar (and
+   Quick stroke controls — the Size pill + Color dot on the bottom bar (and
    on the desktop zoom cluster), their popovers (the brush quick menu and the
-   studio's own HSB colour picker), and the Hand & pen preferences section.
+   studio's own HSB color picker), and the Hand & pen preferences section.
 
    Loaded LAST (after studio-layout.css), so plain rules here win ties.
    ========================================================================== */
@@ -35,7 +35,7 @@
   transition: width 60ms linear, height 60ms linear;
 }
 
-/* Eraser / smudge carry no colour: a dashed ring instead of a filled dot. */
+/* Eraser / smudge carry no color: a dashed ring instead of a filled dot. */
 .qs-size-dot.is-nocolor {
   border: 2px dashed #7a8794;
   background: transparent;
@@ -91,8 +91,8 @@
   background: var(--brand-blue-soft, #e7f4ff);
 }
 
-/* ---- Popover (brush menu / colour picker) --------------------------------- */
-/* Rendered INSIDE the bar (which is fixed + centred), so the popover follows
+/* ---- Popover (brush menu / color picker) --------------------------------- */
+/* Rendered INSIDE the bar (which is fixed + centered), so the popover follows
    the bar wherever a tier or the open side sheet puts it. The dismiss
    backdrop is rendered OUTSIDE the bar: the bar's transform / backdrop-filter
    would otherwise become the containing block of a fixed child. */
@@ -107,7 +107,7 @@
   z-index: 19; /* under the zoom cluster (20) */
 }
 
-/* While a popover is up, the cluster rises above the top-centre chrome
+/* While a popover is up, the cluster rises above the top-center chrome
    (prompt / private-room chips at 28) so a tall picker is never painted
    under them; the desktop popover also has less height to play with because
    the canvas paper clips it. */
@@ -178,7 +178,7 @@
   font-size: 0.95rem;
 }
 
-/* One labelled bar: label · range · readout. */
+/* One labeled bar: label · range · readout. */
 .cw-row {
   display: grid;
   grid-template-columns: 80px minmax(0, 1fr) 44px;
@@ -257,7 +257,7 @@ input.cw-range-plain {
   background-image: linear-gradient(to right, #dfe3e8, #7c8794);
 }
 
-/* ---- Colour wheel --------------------------------------------------------- */
+/* ---- Color wheel --------------------------------------------------------- */
 .cw-wheel-wrap {
   position: relative;
   width: 196px;
@@ -289,7 +289,7 @@ input.cw-range-plain {
   pointer-events: none;
 }
 
-/* The live colour (at the brush opacity, over a checkerboard) fills the hole. */
+/* The live color (at the brush opacity, over a checkerboard) fills the hole. */
 .cw-preview {
   position: absolute;
   top: 50%;
@@ -470,7 +470,7 @@ input.cw-range-plain {
 }
 
 /* ---- Narrow phones: eight items must fit the bar ---------------------------- */
-/* (paint · eraser · size · colour · pan · tools · chat │ undo)
+/* (paint · eraser · size · color · pan · tools · chat │ undo)
    Undo made this eight, and stepped breakpoints kept missing a phone between
    them — 375px clipped the last button clean off the bar. The width is fluid
    instead: 44px where there is room, otherwise an even share of the bar's own

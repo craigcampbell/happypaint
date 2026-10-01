@@ -115,7 +115,7 @@
    {
     "card_id": "CARD-019",
     "title": "Discoverable 'Watch live' entry on /rooms (needs App.css ownership for an aligned treatment)",
-    "description": "Cycle 5 proved the /live/<CODE> public watch page works, but its /rooms entry point was rejected: a pill stacked under the card made the live card 45px shorter than its row neighbours at >=2 grid columns (measured 0px -> 45px row-bottom spread). Reverted for that cycle. Re-add the affordance with a layout that cannot misalign rows: an absolutely-positioned badge inside the card face, or a uniform reserved slot across all cards, plus a real class in App.css instead of inline styles. Files: src/components/RoomFinderPage.jsx + App.css (+ optionally .open-room-card-hot styling that currently lives as inline styles).",
+    "description": "Cycle 5 proved the /live/<CODE> public watch page works, but its /rooms entry point was rejected: a pill stacked under the card made the live card 45px shorter than its row neighbors at >=2 grid columns (measured 0px -> 45px row-bottom spread). Reverted for that cycle. Re-add the affordance with a layout that cannot misalign rows: an absolutely-positioned badge inside the card face, or a uniform reserved slot across all cards, plus a real class in App.css instead of inline styles. Files: src/components/RoomFinderPage.jsx + App.css (+ optionally .open-room-card-hot styling that currently lives as inline styles).",
     "effort": 2,
     "status": "backlog",
     "created_cycle": 5,
@@ -124,7 +124,7 @@
    {
     "card_id": "CARD-020",
     "title": "Cartoon mode: fps presets (8/12/15/24) instead of fixed 120ms holds",
-    "description": "No fps concept exists: timing is per-frame holds (40ms-10s, default 120ms ~= 8.3fps). Add presets mapping to durationMs=round(1000/fps) (15fps = 67ms). Playback + both exporters already honour exact durations, so no engine change. Scope: NEW frames default to the chosen fps; existing films keep their timing unless the artist explicitly applies it.",
+    "description": "No fps concept exists: timing is per-frame holds (40ms-10s, default 120ms ~= 8.3fps). Add presets mapping to durationMs=round(1000/fps) (15fps = 67ms). Playback + both exporters already honor exact durations, so no engine change. Scope: NEW frames default to the chosen fps; existing films keep their timing unless the artist explicitly applies it.",
     "effort": 2,
     "files": [
      "src/components/FilmStrip.jsx",
@@ -133,7 +133,7 @@
     ],
     "status": "backlog",
     "created_cycle": "animation",
-    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colors/brushes/layers; must not affect normal rooms"
    },
    {
     "card_id": "CARD-021",
@@ -147,12 +147,12 @@
     ],
     "status": "backlog",
     "created_cycle": "animation",
-    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colors/brushes/layers; must not affect normal rooms"
    },
    {
     "card_id": "CARD-022",
-    "title": "Cartoon mode: restricted studio (2 layers Ink/Paint, ~10 colours, simple tools, 1600x1000 doc)",
-    "description": "Owner approved limiting colours/brushes/layers inside animation mode. Mirrors the anishare constraint set (3 fixed layers, <=10 colours, 4 tools) that the owner admires. Also cuts per-cel memory from ~40MB (4000x2500) to ~6.4MB, which is what makes long films affordable. Flag-gated to animation rooms only; normal drawing/colouring rooms untouched.",
+    "title": "Cartoon mode: restricted studio (2 layers Ink/Paint, ~10 colors, simple tools, 1600x1000 doc)",
+    "description": "Owner approved limiting colors/brushes/layers inside animation mode. Mirrors the anishare constraint set (3 fixed layers, <=10 colors, 4 tools) that the owner admires. Also cuts per-cel memory from ~40MB (4000x2500) to ~6.4MB, which is what makes long films affordable. Flag-gated to animation rooms only; normal drawing/coloring rooms untouched.",
     "effort": 3,
     "files": [
      "server.js (room flag)",
@@ -161,7 +161,7 @@
     ],
     "status": "backlog",
     "created_cycle": "animation",
-    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colors/brushes/layers; must not affect normal rooms"
    },
    {
     "card_id": "CARD-023",
@@ -173,7 +173,7 @@
     ],
     "status": "backlog",
     "created_cycle": "animation",
-    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colors/brushes/layers; must not affect normal rooms"
    },
    {
     "card_id": "CARD-024",
@@ -186,7 +186,7 @@
     ],
     "status": "backlog",
     "created_cycle": "animation",
-    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colours/brushes/layers; must not affect normal rooms"
+    "owner_decision": "private invite-only cartoon rooms + shared FLIPBOOK; animation mode may restrict colors/brushes/layers; must not affect normal rooms"
    }
   ],
   "ready": [

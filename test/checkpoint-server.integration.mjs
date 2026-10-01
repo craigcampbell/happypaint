@@ -22,7 +22,7 @@
 //      the cut (the MAIN-like mix is NOT gated away);
 //   9. missing Chromium boot: checkpoints disabled, joins ordinary, startup
 //      unaffected;
-//  10. corrupt worker boot (FIXTURE worker, clearly labelled): corrupt frames
+//  10. corrupt worker boot (FIXTURE worker, clearly labeled): corrupt frames
 //      rejected, build failures counted, joins ordinary, no crash;
 //  11. flag-off boot: feature inert, anonymous path ordinary.
 //

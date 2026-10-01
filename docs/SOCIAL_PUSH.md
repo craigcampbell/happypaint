@@ -17,7 +17,7 @@ Measured on the live site today:
 | What was checked | What it actually showed |
 | --- | --- |
 | Homepage public canvas | `0 drawing now` |
-| `/rooms` | **20 themed public rooms, every one labelled "Be the first!"** |
+| `/rooms` | **20 themed public rooms, every one labeled "Be the first!"** |
 | `/wall` (The Fridge Wall) | 2 posts, both titled "My drawing", by guest-generated names (`Crispy Crow`, `Zesty Wren`) |
 | Shared-canvas mechanic | **Works.** A stroke drawn in one browser session appeared in a second, independent session (2603 non-white pixels on a fresh canvas; counter moved 1 → 2 "painting together") |
 | `/api/billing/config` | `{"configured": false, "plans": {"monthly": false, "yearly": false}}` |

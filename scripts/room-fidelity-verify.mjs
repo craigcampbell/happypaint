@@ -9,7 +9,7 @@
 //      seed keep Math.random: reseeding them would repaint saved history, so
 //      seedless erasers stay a DOCUMENTED divergence (tested functionally,
 //      never gated on determinism).
-//   B. Never-hydrated cold-frame rasters must honour the frame's ordered
+//   B. Never-hydrated cold-frame rasters must honor the frame's ordered
 //      layer stack (routing, visibility, opacity) — same structure coolFrame
 //      encodes from live layers. Cold frames with NO layer metadata (legacy
 //      rooms) keep the flat replay: locked here as the explicit policy.
@@ -60,7 +60,7 @@ console.log("Part 1: source guards");
   check(
     "guard: opReplay image fast path routes through targetFor",
     /op\.kind === "image"\) \{[\s\S]{0,400}?targetFor \? \(targetFor\(op\) \|\| ctx\) : ctx/.test(opReplay),
-    "replayFrameOnto's pre-decoded image branch must honour targetFor",
+    "replayFrameOnto's pre-decoded image branch must honor targetFor",
   );
   check(
     "guard: shared eraserRand helper is exported from opReplay",
@@ -234,7 +234,7 @@ try {
       };
     }
 
-    // B: cold-frame rasters honour the layer stack. World 4000x2500 → raster
+    // B: cold-frame rasters honor the layer stack. World 4000x2500 → raster
     // 1600x1000 (scale 0.4); rects at (1000,600)-(1800,1100) probe (560,340).
     const decodeToCanvas = async (blob) => {
       const bitmap = await decodeRaster(blob);
@@ -251,7 +251,7 @@ try {
       out.coldHiddenLayer = { pixel: probe(c, 560, 340) };
     }
     {
-      // B2: layer opacity is honoured (white @ 0.5 over black → mid grey).
+      // B2: layer opacity is honored (white @ 0.5 over black → mid gray).
       const meta = [{ id: "L0", visible: true, opacity: 1 }, { id: "L1", visible: true, opacity: 0.5 }];
       const ops = [rect(0, 0, 4000, 2500, "#000000", "L0"), bigRect("#ffffff", "L1")];
       const c = await decodeToCanvas(await rasterizeOps(ops, meta));
@@ -297,7 +297,7 @@ try {
       out.coldSingleLayerProperties = { hidden: probe(hidden, 560, 340), faded: probe(faded, 560, 340) };
     }
 
-    // C: offline image replay honours targetFor.
+    // C: offline image replay honors targetFor.
     const redPng = (() => {
       const c = createLayerCanvas(8, 8);
       const g = c.getContext("2d");
@@ -347,23 +347,23 @@ try {
     "seedless eraser must keep functioning",
   );
   check(
-    "B1 cold raster honours a hidden layer",
+    "B1 cold raster honors a hidden layer",
     r.coldHiddenLayer.pixel[3] === 0,
     `expected transparent, got ${r.coldHiddenLayer.pixel}`,
   );
   {
     const p = r.coldLayerOpacity.pixel;
-    const grey = p[0];
+    const gray = p[0];
     check(
-      "B2 cold raster honours layer opacity (mid grey ±24, lossy WebP)",
-      p[3] === 255 && Math.abs(grey - 128) <= 24 && Math.abs(p[1] - grey) <= 8 && Math.abs(p[2] - grey) <= 8,
-      `expected ~128 grey, got ${p}`,
+      "B2 cold raster honors layer opacity (mid gray ±24, lossy WebP)",
+      p[3] === 255 && Math.abs(gray - 128) <= 24 && Math.abs(p[1] - gray) <= 8 && Math.abs(p[2] - gray) <= 8,
+      `expected ~128 gray, got ${p}`,
     );
   }
   {
     const p = r.coldLayerOrder.pixel;
     check(
-      "B3 cold raster honours stack ORDER over op order (upper layer wins)",
+      "B3 cold raster honors stack ORDER over op order (upper layer wins)",
       p[2] > 150 && p[0] < 105,
       `expected blue, got ${p}`,
     );

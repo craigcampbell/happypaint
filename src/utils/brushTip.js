@@ -8,7 +8,7 @@
 // between renders. Only the pigment-free tools (eraser nib, spray cloud,
 // smudge pad) are drawn by hand here.
 //
-// Only re-drawn when brush / colour / size / zoom change — never per pointer
+// Only re-drawn when brush / color / size / zoom change — never per pointer
 // move — so it stays off the draw hot path (see updateBrushCursor in App.jsx).
 import { dabExtent, drawSingleDab, mulberry32, previewDabFor, SMUDGE_MASK_CELL } from "./brushes";
 import { getSoftMask } from "./brushSprites";
@@ -52,7 +52,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
   const rand = mulberry32(4242);
   if (brush === "goo") {
     // Goo lays a soft blob (the engine's soft-mask, tinted by the brush
-    // colour) — show that pad as the tip.
+    // color) — show that pad as the tip.
     const mask = getSoftMask();
     if (mask) {
       const cell = size * SMUDGE_MASK_CELL;
@@ -68,7 +68,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
     const mask = smudgeMode === "blend" ? getSoftMask() : null;
     if (mask) {
       // Blend softens in place, so the tip is the pad itself: the engine's
-      // soft-mask disc (white + alpha) tinted the neutral grey with one
+      // soft-mask disc (white + alpha) tinted the neutral gray with one
       // source-in fill — the canvas holds nothing but this tip.
       const cell = size * SMUDGE_MASK_CELL;
       ctx.drawImage(mask, cx - cell / 2, cy - cell / 2, cell, cell);

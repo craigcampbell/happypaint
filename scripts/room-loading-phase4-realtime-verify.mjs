@@ -139,7 +139,7 @@ try {
 
     // Scene 1 cels: f0 red (marker prefix + WET OIL tail — exercises the mix
     // continuation), f1 blue, f2 purple, f3 orange. Scene 2: g0 green, g1 yellow.
-    // Bands straddle the doc centre (1250) so centre-pixel probes always land
+    // Bands straddle the doc center (1250) so center-pixel probes always land
     // on paint (a ±150 pair leaves a transparent gap at 1250 — measured).
     const opsF0 = [...marker('f0a', '#e02030', -60, 11), ...wetOil('f0b', '#e02030', 60, 12)];
     const opsF1 = [...marker('f1a', '#2040e0', -60, 21), ...marker('f1b', '#2040e0', 60, 22)];

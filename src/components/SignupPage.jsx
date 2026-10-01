@@ -27,7 +27,7 @@ export default function SignupPage({ onNavigate }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
-  // Where to go afterwards. Only our own few destinations are honoured (never an
+  // Where to go afterwards. Only our own few destinations are honored (never an
   // arbitrary URL — that would be an open redirect): a room the person was
   // trying to enter (the private-room gate sends `/join/CODE`), their rooms, or
   // the family page.

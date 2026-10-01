@@ -1,6 +1,6 @@
 // The parents & teachers page: one honest, plain-language landing spot for the
 // grown-up deciding whether Drawesome is okay for their kid or their class.
-// Everything stated here reflects SHIPPED behaviour — if a claim stops being
+// Everything stated here reflects SHIPPED behavior — if a claim stops being
 // true in code, fix the code or fix this page in the same change.
 
 import SiteNav from "./SiteNav";

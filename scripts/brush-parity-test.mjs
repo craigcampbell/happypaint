@@ -9,7 +9,7 @@
 // (sprite `loaded` + ribbons, source-over), watercolor (wash sprites + bleed /
 // wet-edge / granulation passes, MULTIPLY commit), marker (multiply), pencil
 // (graphite sprites, multiply), and a paint + gouache pigment-mixing rect
-// (Stage 3: three strokes in three colours crossing each other, so the dry
+// (Stage 3: three strokes in three colors crossing each other, so the dry
 // `mix` of the later strokes samples the mix map — exactness there proves
 // the idle prefetch / lazy flush equivalence end to end), and a smudge rect
 // (Stage 4: two v3 marker strokes, then a Smudge (drag) stroke straight
@@ -52,7 +52,7 @@ const pickBrush = (name) => p1.evaluate((n) => {
   return !!chip;
 }, name);
 // A palette swatch (aria-label "Use #rrggbb"); the starter palette has every
-// colour Part 3 asks for.
+// color Part 3 asks for.
 const pickColor = (hex) => p1.evaluate((h) => {
   const swatch = document.querySelector(`.color-swatch[aria-label="Use ${h}"]`);
   if (swatch) swatch.click();
@@ -117,7 +117,7 @@ const exact = {};
 // Rows at cy ± 200 / ± 330 keep every rect clear of Part 1's X (|dy| <= ~132);
 // two 400-px columns per row, 120 px apart, each rect holding only its own
 // strokes (± 40 sine + brush radius + the watercolor bleed stay inside ± 60).
-// A rect lists its strokes in draw order: brush, optional palette colour
+// A rect lists its strokes in draw order: brush, optional palette color
 // (default: whatever is selected), `flip` mirrors the sine so it crosses the
 // previous stroke, `line` draws it straight through the middle, `mode` picks
 // Smudge | Blend for the smudge brush; `len` shortens a rect's strokes.

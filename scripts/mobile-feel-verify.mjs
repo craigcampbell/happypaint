@@ -208,7 +208,7 @@ async function runPage(page, cdp, engine, pageName, url) {
 
       if (!box.onScreen) { skip(P(`C1 long-press ${sel}`), "off-screen; synthetic probe only"); return; }
 
-      // (b) REAL engine-dispatched contextmenu at the element's centre. A
+      // (b) REAL engine-dispatched contextmenu at the element's center. A
       // mobile long-press and a right button both land on the same Blink /
       // WebKit code path: the engine fires contextmenu, and shows its menu
       // unless a handler prevents it. This is the honest end-to-end probe.

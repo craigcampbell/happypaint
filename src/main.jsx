@@ -18,7 +18,7 @@ import './site-nav.css'
 // pages retain native browser zoom and context menus for accessibility.
 // The canvas runs its own pinch-zoom off pointer events, so blocking Safari's
 // non-standard gesture events doesn't affect drawing — it only prevents the
-// "site zooms way in and taps miss" behaviour on iPad. Listeners are passive:false
+// "site zooms way in and taps miss" behavior on iPad. Listeners are passive:false
 // so preventDefault() takes effect.
 for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
   document.addEventListener(type, (event) => {

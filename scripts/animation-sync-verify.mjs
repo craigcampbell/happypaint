@@ -294,13 +294,13 @@ const run = async () => {
   check("FINGERS: smudge is NOT gated there", gatedCount === 0, `gated=${gatedCount}`);
   check("FINGERS: no film strip (it's a paint room)", !(await pageA.locator(".film-strip").isVisible().catch(() => false)));
 
-  // 10.5) SMUDGE UX — smudge carries no pigment: picking it hides the colour
+  // 10.5) SMUDGE UX — smudge carries no pigment: picking it hides the color
   // palette (a hint replaces it) and swaps the Opacity slider for a Strength
   // slider. This is the fix for "smudge acts like a brush + asks me to pick a
-  // colour"; smudge is reachable in FINGERS where it's ungated.
+  // color"; smudge is reachable in FINGERS where it's ungated.
   await pageA.locator(".brush-chip", { hasText: "Smudge" }).first().click();
   await sleep(500);
-  check("smudge: colour swatches replaced by a no-colour hint",
+  check("smudge: color swatches replaced by a no-color hint",
     (await pageA.locator(".no-color-note .tool-hint").count()) === 1 &&
       (await pageA.locator(".color-swatch").count()) === 0,
     `hint=${await pageA.locator(".no-color-note").count()} swatches=${await pageA.locator(".color-swatch").count()}`);
@@ -310,7 +310,7 @@ const run = async () => {
   // Switching back to a pigment brush restores the palette + Opacity.
   await pageA.locator(".brush-chip", { hasText: "Paint" }).first().click();
   await sleep(400);
-  check("non-smudge brush restores the colour palette + Opacity",
+  check("non-smudge brush restores the color palette + Opacity",
     (await pageA.locator(".color-swatch").count()) > 0 &&
       (await pageA.locator(".tool-section.sliders label span", { hasText: "Opacity" }).count()) === 1);
 

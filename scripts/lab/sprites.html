@@ -173,7 +173,7 @@
     };
 
     // (c) ALLOC: the tint ring's hit AND miss paths must allocate no canvas.
-    // 5000 lookups over rotating families / variants / colours — far more
+    // 5000 lookups over rotating families / variants / colors — far more
     // than 32 distinct keys, so most lookups are misses (re-tint in place).
     const runAlloc = () => {
       const stampable = FAMILIES.filter((f) => f.id !== "softMask");
@@ -204,7 +204,7 @@
         }
       }
       const hitMs = performance.now() - t1;
-      // Exact-key path (dry strokes, Stage 2): 5000 rotating 24-bit colours
+      // Exact-key path (dry strokes, Stage 2): 5000 rotating 24-bit colors
       // through the same ring — still no allocation, and the two namespaces
       // must not collide (a bucket hit right after must still be a hit).
       const t2 = performance.now();
@@ -217,9 +217,9 @@
       const exactHit = getTintedSprite("matte", 3, 30, 136, 229, true) === exactFirst;
       const bucketFirst = getTintedSprite("matte", 3, 30, 136, 229);
       const namespacesDistinct = bucketFirst !== exactFirst && getTintedSprite("matte", 3, 30, 136, 229) === bucketFirst && getTintedSprite("matte", 3, 30, 136, 229, true) === exactFirst;
-      // Correctness: a tinted slot's centre pixel carries the canonical
-      // (5-bit) colour and the sprite's alpha, i.e. copy + source-in worked;
-      // the exact slot carries the exact colour.
+      // Correctness: a tinted slot's center pixel carries the canonical
+      // (5-bit) color and the sprite's alpha, i.e. copy + source-in worked;
+      // the exact slot carries the exact color.
       const probe = getTintedSprite("matte", 0, 30, 136, 229);
       const px = probe.getContext("2d").getImageData(HALF, HALF, 1, 1).data;
       const exactProbe = getTintedSprite("matte", 0, 30, 136, 229, true);
@@ -255,7 +255,7 @@
     const runRim = () => {
       const atlas = getAtlas("wash");
       const data = atlas.getContext("2d").getImageData(0, 0, atlas.width, atlas.height).data;
-      const centre = (SPRITE_PX - 1) / 2;
+      const center = (SPRITE_PX - 1) / 2;
       const variants = FAMILIES[spriteFamilyIndex("wash")].variants;
       const report = {};
       for (let v = 0; v < variants; v += 1) {
@@ -267,8 +267,8 @@
         let alongN = 0;
         for (let y = 0; y < SPRITE_PX; y += 1) {
           for (let x = 0; x < SPRITE_PX; x += 1) {
-            const dx = x - centre;
-            const dy = y - centre;
+            const dx = x - center;
+            const dy = y - center;
             const rho = Math.hypot(dx, dy) / SPRITE_UNIT;
             const lat = (dy * dy) / (dx * dx + dy * dy + 1e-6); // sin^2 of the angle from the x axis
             const a = data[(y * atlas.width + v * SPRITE_PX + x) * 4 + 3] / 255;
@@ -316,7 +316,7 @@
         sctx.fillRect(labelW, y0, family.variants * SPRITE_PX, SPRITE_PX);
         sctx.globalAlpha = 1;
         sctx.drawImage(atlas, labelW, y0);
-        // Row 2: tinted, colour cycling by variant, on white.
+        // Row 2: tinted, color cycling by variant, on white.
         for (let v = 0; v < family.variants; v += 1) {
           const tint = TINTS[v % TINTS.length];
           const slot = getTintedSprite(family.id, v, tint.rgb[0], tint.rgb[1], tint.rgb[2]);
@@ -338,7 +338,7 @@
           sctx.drawImage(paper, labelW + tx * 128, py + ty * 128, 128, 128);
         }
       }
-      // softMask + scratch sanity: draw the mask over a colour block.
+      // softMask + scratch sanity: draw the mask over a color block.
       const mask = getSoftMask();
       sctx.fillStyle = "#1e88e5";
       sctx.fillRect(labelW + 300, py, 128, 128);
@@ -399,7 +399,7 @@
 
     // One dab, exactly the Stage-2 primitive: compose base x [rotation x
     // aspect] into ONE setTransform, set globalAlpha, ONE drawImage of the
-    // tinted slot centred on the origin. No save/restore.
+    // tinted slot centered on the origin. No save/restore.
     const stampDab = (ctx, base, slot, x, y, angle, radius, aspect, bakedAspect, alpha) => {
       const c = Math.cos(angle);
       const s = Math.sin(angle);

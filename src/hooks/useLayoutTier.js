@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 //   tablet   — the compact chrome (quick bar, rooms FAB) BUT landscape and
 //              ≥ 900px wide (iPad landscape, Cintiq touch-only): the tool rail
 //              is a right-hand side sheet so the canvas stays visible while
-//              picking brushes / colours.
+//              picking brushes / colors.
 //   phone    — everything else compact: the tool rail is a bottom sheet.
 //
 // "Compact" is the historical `(max-width: 1024px), (pointer: coarse)` rule

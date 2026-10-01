@@ -1392,7 +1392,7 @@ select:focus {
   z-index: 2;
 }
 
-/* The editor recedes into a quiet grey workspace while blue identifies actions. */
+/* The editor recedes into a quiet gray workspace while blue identifies actions. */
 .studio-shell {
   background: #eef0f2;
 }

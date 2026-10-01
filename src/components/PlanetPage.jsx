@@ -7,7 +7,7 @@
 //     country's FLAG ROOM (/join/FLAGxx) — a shared coloring page of its flag.
 //  2. A nature scene that grows with the community's recorded strokes: sky,
 //     hills, a river, trees, flowers and critters appear as illustrative
-//     milestones are passed. Labelled illustrative — never a measured saving.
+//     milestones are passed. Labeled illustrative — never a measured saving.
 //  3. The honest numbers underneath, same as before.
 //
 // No fabricated data: everything on screen derives from the API payload, and
@@ -28,7 +28,7 @@ const flagEmoji = (code) => String.fromCodePoint(...[...code].map((c) => 0x1f1e6
 const nameOf = (code) => world.names[code] || code;
 
 // Paint palette for painted countries: marigold -> coral -> berry with activity, on a
-// 4-step sqrt ramp so the long tail is still visibly "painted", not one flat colour.
+// 4-step sqrt ramp so the long tail is still visibly "painted", not one flat color.
 // Each country is then nudged a little (jitter) so it reads as its own pot of paint.
 const PAINT = ["#f4b71f", "#ee8a3c", "#dc4f63", "#a02f86"];
 const UNPAINTED = "#efe6d3"; // bare paper
@@ -227,7 +227,7 @@ function GrowingScene({ strokes, reduced }) {
 }
 
 // ---- The map -----------------------------------------------------------------
-// Painted like a watercolour on a torn sheet: a washed ocean with ships and a whale,
+// Painted like a watercolor on a torn sheet: a washed ocean with ships and a whale,
 // countries as wobbly wet-edged shapes with bristle drag, per-country second coats
 // and brush pulls, and paint splatter thrown off wherever people have painted.
 // All of the decoration is deterministic and derives from the same per-country
@@ -236,7 +236,7 @@ const PAD = 14; // room around the sheet so its torn edge shows
 
 // Each painted country gets 1-3 glazes of dry-brush strokes (busier country -> more
 // glazes, denser strokes, more splatter), each glaze at its own angle and in a shifted
-// tint, so the colour varies inside the shape like real paint instead of one flat fill.
+// tint, so the color varies inside the shape like real paint instead of one flat fill.
 function tint(fill, r) {
   const k = r();
   if (k < 0.3) return mix(fill, "#ffffff", 0.35 + r() * 0.2);
@@ -508,8 +508,8 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
         ) : (
           <div className="planet-card-stat planet-card-muted">Not painted yet — be the first from here!</div>
         )}
-        {l && l.painting > 0 ? <div className="planet-card-live">🟢 {l.painting} colouring the flag right now</div> : null}
-        {flagSet.has(hover.code) ? <div className="planet-card-cta">{coarsePointer ? "Tap again" : "Click"} to colour the {nameOf(hover.code)} flag →</div> : null}
+        {l && l.painting > 0 ? <div className="planet-card-live">🟢 {l.painting} coloring the flag right now</div> : null}
+        {flagSet.has(hover.code) ? <div className="planet-card-cta">{coarsePointer ? "Tap again" : "Click"} to color the {nameOf(hover.code)} flag →</div> : null}
       </div>
     );
   })() : null;
@@ -517,7 +517,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
   return (
     <div className="planet-map-wrap" onMouseLeave={() => setHover(null)}>
       {/* Layer 1 — the painting: static and baked to a bitmap, so hovering never re-runs the
-          heavy watercolour filters. Layer 2 (its children) is the transparent interaction
+          heavy watercolor filters. Layer 2 (its children) is the transparent interaction
           svg + hover card, laid over it inside the SAME box so they can never drift apart. */}
       <PaintingLayer work={work} fills={fills} byCode={byCode} top={top} vbW={vbW} vbH={vbH}>
       <svg
@@ -525,7 +525,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
         className="planet-map"
         viewBox={`${-PAD} ${-PAD} ${vbW} ${vbH}`}
         role="group"
-        aria-label="World map painted by country. Countries with recorded activity are coloured; select one to open its flag colouring room."
+        aria-label="World map painted by country. Countries with recorded activity are colored; select one to open its flag coloring room."
       >
         {world.countries.map((c) => {
           const count = byCode.get(c.code) || 0;
@@ -538,7 +538,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
               fill="transparent"
               tabIndex={clickable ? 0 : -1}
               role={clickable ? "button" : undefined}
-              aria-label={`${nameOf(c.code)}${count > 0 ? `, ${fmt(count)} recorded sessions` : ""}${clickable ? ". Open flag colouring room" : ""}`}
+              aria-label={`${nameOf(c.code)}${count > 0 ? `, ${fmt(count)} recorded sessions` : ""}${clickable ? ". Open flag coloring room" : ""}`}
               onMouseMove={(e) => place(c.code, e)}
               onMouseEnter={(e) => place(c.code, e)}
               onFocus={() => place(c.code, null)}
@@ -564,7 +564,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
               fill="transparent"
               tabIndex={clickable ? 0 : -1}
               role={clickable ? "button" : undefined}
-              aria-label={`${nameOf(d.code)}, ${fmt(count)} recorded sessions${clickable ? ". Open flag colouring room" : ""}`}
+              aria-label={`${nameOf(d.code)}, ${fmt(count)} recorded sessions${clickable ? ". Open flag coloring room" : ""}`}
               onMouseMove={(e) => place(d.code, e)}
               onMouseEnter={(e) => place(d.code, e)}
               onFocus={() => place(d.code, null)}
@@ -586,7 +586,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
             <g key={`live-${code}`} className="planet-live" transform={`translate(${c[0]} ${c[1]})`} pointerEvents="none">
               <circle r="9" fill="#22c55e" opacity="0.35" className="planet-live-ring" />
               <circle r="4" fill="#16a34a" />
-              <title>{v.painting} colouring the {nameOf(code)} flag now</title>
+              <title>{v.painting} coloring the {nameOf(code)} flag now</title>
             </g>
           );
         })}
@@ -596,7 +596,7 @@ function PaintedMap({ countries, flags, live, sessions, onOpen }) {
       <div className="planet-legend" aria-hidden="true">
         <span><i style={{ background: UNPAINTED }} /> not painted yet</span>
         {PAINT.map((c, i) => <span key={c}><i style={{ background: c }} /> {["a little", "some", "lots", "the most"][i]}</span>)}
-        <span><i className="planet-legend-live" /> colouring now</span>
+        <span><i className="planet-legend-live" /> coloring now</span>
       </div>
     </div>
   );
@@ -665,7 +665,7 @@ export default function PlanetPage({ onNavigate }) {
           <h1 id="planet-title"><PaintedGlobe size={56} /> <span>The Painted Planet</span></h1>
           <p>
             One little planet, painted by everyone who draws here. Hover or tap a country to see how much it has painted,
-            <strong> open it to colour that country&rsquo;s flag together</strong>, and watch the scene below grow with every stroke.
+            <strong> open it to color that country&rsquo;s flag together</strong>, and watch the scene below grow with every stroke.
           </p>
         </header>
 
@@ -687,13 +687,13 @@ export default function PlanetPage({ onNavigate }) {
                   {countries.length > 0
                     ? `${countries.length} country ${countries.length === 1 ? "group has" : "groups have"} painted here (groups under 5 stay private).`
                     : "No country groups to show yet — groups under 5 painters stay private."}
-                  {liveTotal > 0 ? ` ${liveTotal} colouring flags right now.` : ""}
+                  {liveTotal > 0 ? ` ${liveTotal} coloring flags right now.` : ""}
                 </p>
               </div>
               <PaintedMap countries={countries} flags={flags} live={live} sessions={sessions} onOpen={openFlag} />
               {activeFlags.length > 0 ? (
                 <div className="planet-active" aria-label="Flag rooms with activity">
-                  <span className="planet-active-label">Flags being coloured:</span>
+                  <span className="planet-active-label">Flags being colored:</span>
                   {activeFlags.map(([code, v]) => (
                     <button type="button" key={code} className="planet-chip" onClick={() => openFlag(code)}>
                       {flagEmoji(code)} {nameOf(code)}{v.painting > 0 ? <em> · {v.painting} now</em> : null}
@@ -712,7 +712,7 @@ export default function PlanetPage({ onNavigate }) {
                       </span>
                       <span className="jar-country-count">{fmt(c.count)}</span>
                       {flags.includes(c.code) ? (
-                        <button type="button" className="planet-mini" onClick={() => openFlag(c.code)} aria-label={`Colour the ${nameOf(c.code)} flag`}>colour flag</button>
+                        <button type="button" className="planet-mini" onClick={() => openFlag(c.code)} aria-label={`Color the ${nameOf(c.code)} flag`}>color flag</button>
                       ) : null}
                     </li>
                   ))}
@@ -750,7 +750,7 @@ export default function PlanetPage({ onNavigate }) {
               <h2 id="planet-note-title">What the numbers mean</h2>
               <p>
                 Strokes and sessions are <strong>aggregate recorded painting activity</strong> — not unique people, and
-                never individual visitors. A country&rsquo;s paint colour comes from how many recorded painting sessions
+                never individual visitors. A country&rsquo;s paint color comes from how many recorded painting sessions
                 started there (coarse, country-level only — nothing more precise is ever kept). The
                 &ldquo;sheets of paper&rdquo; figure is an <strong>illustrative equivalent</strong>: every {fmt(data.milestones?.strokesPerSheet || 1000)} recorded
                 strokes count as one sheet, and the growing scene above unlocks at illustrative stroke milestones. None of it is a{" "}

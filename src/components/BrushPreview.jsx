@@ -6,7 +6,7 @@ const CHIP_W = 46;
 const CHIP_H = 30;
 const CHIP_DAB = 18;
 
-// A tiny live preview of a brush's mark in the currently-selected colour, shown
+// A tiny live preview of a brush's mark in the currently-selected color, shown
 // on the brush chips instead of an emoji. ONE centered dab per chip (not a
 // stroke) so the picker stays calm and readable. The dab is the engine's own
 // stamp (drawSingleDab → makeStrokeRenderer's emitDab, v3-first) at full

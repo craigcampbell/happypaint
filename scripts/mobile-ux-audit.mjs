@@ -507,7 +507,7 @@ const run = async () => {
   // iPhone SE could not zoom out at all. Zoom now lives bottom-right on narrow
   // phones. These checks keep it there and keep that corner uncontested:
   //   a) the cluster is inside the viewport and each control is the topmost
-  //      element at its own centre (nothing painted over it),
+  //      element at its own center (nothing painted over it),
   //   b) a LIVE vote card (.cc-vote-floating, same corner) clears it,
   //   c) the bottom-left .reaction-picker clears it,
   //   d) the top chrome rows (.studio-rooms-fab, .room-prompt-chip, .wipe-chip)
@@ -637,7 +637,7 @@ const run = async () => {
     const covered = Object.entries(zoom.parts).filter(([, p]) => !p.ownsHit);
     log(covered.length ? "FAIL" : "PASS",
       `U10 nothing is painted over the zoom buttons (${prof.label})`,
-      "elementFromPoint at each centre: " +
+      "elementFromPoint at each center: " +
       Object.entries(zoom.parts).map(([k, p]) => `${k}->${p.ownsHit ? "itself" : p.hit}`).join(", ") +
       ` [${zoomShot}]`);
 
@@ -739,7 +739,7 @@ const run = async () => {
   log(vhHits.length > dvhCount ? "WARN" : "PASS", "U4 100vh vs dvh in the stylesheets",
     `${vhHits.length} raw vh declarations vs ${dvhCount} dvh; raw-vh sites that affect full-height layout: ` +
     vhHits.filter((h) => /height/.test(h)).slice(0, 10).join(" || "));
-  log(safeBottom > 0 ? "PASS" : "FAIL", "U4 bottom chrome honours env(safe-area-inset-bottom)",
+  log(safeBottom > 0 ? "PASS" : "FAIL", "U4 bottom chrome honors env(safe-area-inset-bottom)",
     `${safeBottom} of ${safeCount} safe-area references target the bottom inset`);
 
   // U5 — viewport meta.

@@ -492,7 +492,7 @@ const v3OverflowWashGroup = () =>
 // a DRY blue stroke crossing a v3 gouache yellow under-layer (the dry `mix`
 // samples the mix map), the same WET (pickup + drag), and CARRY RECOVERY —
 // a wet stroke through a fill-rect blue patch that runs on over blank paper
-// (the carried colour must fade back to the brush colour). Dabs embedded
+// (the carried color must fade back to the brush color). Dabs embedded
 // via getAuthoringDab at generation time, like every Stage-2 group.
 const V3_KM_BRUSHES = ["oil", "acrylic", "paint", "gouache"];
 const v3PigmentGroup = () => {

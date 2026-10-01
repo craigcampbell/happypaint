@@ -114,7 +114,7 @@ try {
     check("invalidation gen-bump mid-build kills the ticket", !rasterTicketCurrent(frame, ticket));
 
     // ---- Same-opcount regeneration must decode NEW pixels -------------------
-    // Two layers, one block of colour each: L1 red on the left, L2 blue on
+    // Two layers, one block of color each: L1 red on the left, L2 blue on
     // the right. Hiding L2 keeps the op count at 2 — the exact case the old
     // `id:rasterCount` bitmap key served stale pixels for.
     const ops = [

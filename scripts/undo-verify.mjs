@@ -179,7 +179,7 @@ try {
       fab ? `${Math.round(fab.w)}x${Math.round(fab.h)}` : "no .undo-fab");
     check("A2 it floats in the canvas top-right",
       !!(fab && paper && fab.cx > paper.x + paper.w * 0.6 && fab.cy < paper.y + paper.h * 0.25),
-      fab && paper ? `centre ${Math.round(fab.cx)},${Math.round(fab.cy)} of paper ${Math.round(paper.x)},${Math.round(paper.y)} ${Math.round(paper.w)}x${Math.round(paper.h)}` : "");
+      fab && paper ? `center ${Math.round(fab.cx)},${Math.round(fab.cy)} of paper ${Math.round(paper.x)},${Math.round(paper.y)} ${Math.round(paper.w)}x${Math.round(paper.h)}` : "");
     check("A3 it does not overlap the other top-right chrome", await A.evaluate(() => {
       const fabEl = document.querySelector(".undo-fab");
       if (!fabEl) return false;

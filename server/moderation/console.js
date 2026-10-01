@@ -1,7 +1,7 @@
 // Moderation console helpers: pure, dependency-free, synchronous.
 //
 // server.js exposes the admin-guarded endpoints (/api/admin/radar,
-// /api/admin/users-index, /api/admin/rooms/:id/chat/summary); every summarising
+// /api/admin/users-index, /api/admin/rooms/:id/chat/summary); every summarizing
 // rule lives here so the same judgement applies to a room row, a chat digest
 // and a user's risk score, and so the rules can be exercised without a server.
 //

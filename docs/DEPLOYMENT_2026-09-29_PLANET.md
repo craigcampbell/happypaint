@@ -23,7 +23,7 @@ Released from hp-dev-one, UTC 2026-09-29 (local CDT Sep 28 evening).
 - Image inspection before swap: PlanetPage chunk, 257 flag PNGs, src/data/world-paths.json present; server.js hash matches.
 - Swap: docker compose -p happypaint up -d --no-deps --no-build --wait app -> Recreated, Healthy; running image == acb7d861….
 - Blast radius: pocketbase (62bf14b3…, started 2026-09-25T23:54:33Z) and cloudflared (80fcb2da…, started 2026-09-25T23:55:29Z) unchanged.
-- Live: /healthz 200; /planet + /paintjar serve the Painted Planet title; /join/FLAGBR unfurls "Colour the Brazil flag together"; entry asset 200 text/javascript and equals the one in the image; /flags-lineart/MX.png 200 image/png; /api/planet 47,395 strokes / 44 groups / 257 flags; /api/paintjar unchanged contract; no flag rooms listed before any visit. Browser: 174 country paths, all clickable, scene 8/15, nav link present. No writes to any shared room.
+- Live: /healthz 200; /planet + /paintjar serve the Painted Planet title; /join/FLAGBR unfurls "Color the Brazil flag together"; entry asset 200 text/javascript and equals the one in the image; /flags-lineart/MX.png 200 image/png; /api/planet 47,395 strokes / 44 groups / 257 flags; /api/paintjar unchanged contract; no flag rooms listed before any visit. Browser: 174 country paths, all clickable, scene 8/15, nav link present. No writes to any shared room.
 
 ## Rollback
 ```

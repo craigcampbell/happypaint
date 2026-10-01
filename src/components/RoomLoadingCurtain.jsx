@@ -39,9 +39,9 @@ const CLOSE_BEAT_MS = 520; // let the last brush stroke land before closing
 
 // The palette the curtain dips into. One is picked at random per join and paints
 // the whole stroke; the wet leading edge, the brush bristles and the % readout
-// all wear it, so the card is one colour from end to end. Every entry has to
+// all wear it, so the card is one color from end to end. Every entry has to
 // hold its own alone, which is why they are all vivid — no pastels, nothing
-// that would read as a grey bar on a white card.
+// that would read as a gray bar on a white card.
 const PAINT = [
   "#ff4d8d", // hot pink
   "#f4364c", // poster red
@@ -56,7 +56,7 @@ const PAINT = [
   "#e858c8", // magenta
 ];
 
-// Brightest a colour may be before the % readout wears it. Paint that looks
+// Brightest a color may be before the % readout wears it. Paint that looks
 // great on the stroke (the gold especially) is unreadable as text on white, so
 // the readout gets the same hue taken down until it is. Tuned so every paint in
 // the palette clears 4.5:1 on the card.
@@ -88,7 +88,7 @@ const css = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 // Lighter (amount > 0) or deeper (amount < 0) without leaving the hue. Used for
 // the thin light-to-deep run along the stroke — the same paint thinning out as
-// the brush unloads, not a second colour.
+// the brush unloads, not a second color.
 function shade(rgb, amount) {
   const edge = amount > 0 ? 255 : 0;
   return rgb.map((channel) => Math.round(channel + (edge - channel) * Math.abs(amount)));
@@ -103,8 +103,8 @@ function relativeLuma(rgb) {
 }
 
 // Same hue, dimmed until it can be read on the card. Scaling all three channels
-// keeps the paint recognisable — gold reads as a deep bronze rather
-// than washing out to grey. Luminance goes roughly as the 2.4th power of the
+// keeps the paint recognizable — gold reads as a deep bronze rather
+// than washing out to gray. Luminance goes roughly as the 2.4th power of the
 // channels, so that is the exponent the scale has to undo.
 function readable(rgb) {
   const luma = relativeLuma(rgb);
@@ -132,7 +132,7 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
   const [done, setDone] = useState(false);
 
   // One paint, picked when the curtain goes up and held for its whole life, so
-  // the stroke never changes colour underneath the painter. Every room you join
+  // the stroke never changes color underneath the painter. Every room you join
   // gets a different one.
   const [paint] = useState(() => PAINT[Math.floor(Math.random() * PAINT.length)]);
   const tints = useMemo(() => {
@@ -237,7 +237,7 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
         ref={cardRef}
         style={{ "--ink": tints.wet, "--ink-text": tints.ink }}
       >
-        {/* The palette it dipped into, with today's colour ringed. */}
+        {/* The palette it dipped into, with today's color ringed. */}
         <div className="load-dots" aria-hidden="true">
           {PAINT.map((color, index) => (
             <i
@@ -266,13 +266,13 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
 
           {/* The paint itself: laid down full width, then revealed left to right
               by a clip-path driven from --p. Because the gradient is painted
-              across the WHOLE stroke, the colour genuinely changes as the brush
-              uncovers it rather than the bar being recoloured wholesale. */}
+              across the WHOLE stroke, the color genuinely changes as the brush
+              uncovers it rather than the bar being recolored wholesale. */}
           <div className="load-paint">
             <svg viewBox="0 0 1200 120" preserveAspectRatio="none" aria-hidden="true">
               <defs>
                 {/* One paint along the whole stroke. The light-to-deep run is
-                    the brush unloading, not a second colour. */}
+                    the brush unloading, not a second color. */}
                 <linearGradient id="load-paint-ramp" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1200" y2="0">
                   <stop offset="0" stopColor={tints.light} />
                   <stop offset="0.42" stopColor={tints.wet} />
@@ -312,7 +312,7 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
           <span className="load-wet" aria-hidden="true" />
 
           {/* The brush doing the work, riding the leading edge with its bristles
-              dipped in whatever colour the stroke is laying down right now. */}
+              dipped in whatever color the stroke is laying down right now. */}
           <span className="load-brush" aria-hidden="true">
             <svg viewBox="0 0 34 62" aria-hidden="true">
               <rect x="12" y="0" width="10" height="30" rx="5" fill="#e0a860" />

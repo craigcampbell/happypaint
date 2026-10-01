@@ -22,7 +22,7 @@ function check(name, value, detail = '') {
   console.log(`PASS ${name}`);
 }
 
-// ---- pure plan maths ----------------------------------------------------------
+// ---- pure plan math ----------------------------------------------------------
 {
   const scenes = [
     { id: 's0', loops: 3, camera: 'pan-right', frames: [{ id: 'a', durationMs: 100 }, { id: 'b', durationMs: 300 }] },
@@ -33,7 +33,7 @@ function check(name, value, detail = '') {
   check('plan runtime = frames × loops + holds', plan.reduce((s, p) => s + p.durationMs, 0) === 3 * 400 + 10000 && filmRuntimeMs(scenes) === 11200);
   check('camera progress spans the whole looped scene', plan[0].cameraT0 === 0 && Math.abs(plan[5].cameraT1 - 1) < 1e-9 && plan[2].cameraT0 > plan[1].cameraT0);
   check('a pan glides its window across the picture', cameraWindow('pan-right', 0).x === 0 && Math.abs(cameraWindow('pan-right', 1).x - 0.25) < 1e-9 && cameraWindow('none', 0.5).w === 1);
-  check('zoom-in ends on the centre crop', Math.abs(cameraWindow('zoom-in', 1).w - 0.55) < 1e-9);
+  check('zoom-in ends on the center crop', Math.abs(cameraWindow('zoom-in', 1).w - 0.55) < 1e-9);
   check('holds clamp to 40..10000ms', clampHold(5) === 40 && clampHold(99999) === MAX_FRAME_MS && clampHold('x') === 120);
   check('hold slider steps round-trip', HOLD_STEPS[holdStepIndex(333)] === 330 && formatHold(10000) === '10s' && formatHold(120) === '120ms' && formatRuntime(11200) === '11s' && formatRuntime(125000) === '2:05');
 }
@@ -113,7 +113,7 @@ try {
   check('late joiner receives scene loops + camera in the history frame', lateMeta.loops === 20 && lateMeta.frames[0].durationMs === 10000);
   const film = await (await fetch(`http://127.0.0.1:${port}/api/rooms/ZZFILM/film`)).json();
   check('/film exposes the same timing for exports', film.scenes.find((s) => s.id === sceneId).loops === 20);
-  check('film plan from /film honours the 10s hold × 20 loops', buildFilmPlan(film.scenes).filter((p) => p.sceneId === sceneId).reduce((s, p) => s + p.durationMs, 0) === 200000);
+  check('film plan from /film honors the 10s hold × 20 loops', buildFilmPlan(film.scenes).filter((p) => p.sceneId === sceneId).reduce((s, p) => s + p.durationMs, 0) === 200000);
 
   // Stage 2: private rooms allow 60 frames per scene (cold frames client-side);
   // the handshake tells the strip the cap.

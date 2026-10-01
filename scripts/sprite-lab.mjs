@@ -297,13 +297,13 @@ if (a.alloc) {
   // #1e88e5 through the module's 5-bit quantization: q5(c) = (c*31+127)/255,
   // expand5(q) = (q*255+15)/31 -> 30->33, 136->140, 229->230.
   if (Math.abs(pr - 33) > 1 || Math.abs(pg - 140) > 1 || Math.abs(pb - 230) > 1 || pa < 240) {
-    failures.push({ scenario: "alloc", error: `tinted slot centre is rgba(${pr},${pg},${pb},${pa}), expected ~rgba(33,140,230,>=240)` });
+    failures.push({ scenario: "alloc", error: `tinted slot center is rgba(${pr},${pg},${pb},${pa}), expected ~rgba(33,140,230,>=240)` });
   }
-  // The exact path (dry strokes) lands the raw colour, hits its own key, and
+  // The exact path (dry strokes) lands the raw color, hits its own key, and
   // never collides with the bucket namespace.
   const [er, eg, eb, ea] = a.alloc.exactProbeCentreRgba;
   if (Math.abs(er - 30) > 1 || Math.abs(eg - 136) > 1 || Math.abs(eb - 229) > 1 || ea < 240) {
-    failures.push({ scenario: "alloc", error: `exact tinted slot centre is rgba(${er},${eg},${eb},${ea}), expected ~rgba(30,136,229,>=240)` });
+    failures.push({ scenario: "alloc", error: `exact tinted slot center is rgba(${er},${eg},${eb},${ea}), expected ~rgba(30,136,229,>=240)` });
   }
   if (!a.alloc.exactHitReturnsSameCanvas || !a.alloc.namespacesDistinct) {
     failures.push({ scenario: "alloc", error: `exact-key ring: hit=${a.alloc.exactHitReturnsSameCanvas} namespacesDistinct=${a.alloc.namespacesDistinct}` });
@@ -369,8 +369,8 @@ if (hashA) {
   console.log(`       page B ${hashB || "(missing)"}  ${hashA === hashB ? "IDENTICAL" : "DIFFERENT"}  (${a.hash.bytes} bytes; per family: ${Object.entries(a.hash.perFamily).map(([k, v]) => `${k}=${v}`).join(" ")})`);
 }
 if (a.alloc) {
-  console.log(`ALLOC  ${a.alloc.canvasesAllocated} canvases over ${a.alloc.lookups} rotating lookups (${a.alloc.distinctKeys} distinct keys, ${a.alloc.usPerRotatingLookup} us each incl. re-tints); hit path ${a.alloc.usPerHit} us, same canvas = ${a.alloc.hitReturnsSameCanvas}; probe centre rgba(${a.alloc.probeCentreRgba})`);
-  console.log(`       exact path: ${a.alloc.exactLookups} rotating lookups ${a.alloc.usPerExactLookup} us each; hit same canvas = ${a.alloc.exactHitReturnsSameCanvas}; namespaces distinct = ${a.alloc.namespacesDistinct}; probe centre rgba(${a.alloc.exactProbeCentreRgba})`);
+  console.log(`ALLOC  ${a.alloc.canvasesAllocated} canvases over ${a.alloc.lookups} rotating lookups (${a.alloc.distinctKeys} distinct keys, ${a.alloc.usPerRotatingLookup} us each incl. re-tints); hit path ${a.alloc.usPerHit} us, same canvas = ${a.alloc.hitReturnsSameCanvas}; probe center rgba(${a.alloc.probeCentreRgba})`);
+  console.log(`       exact path: ${a.alloc.exactLookups} rotating lookups ${a.alloc.usPerExactLookup} us each; hit same canvas = ${a.alloc.exactHitReturnsSameCanvas}; namespaces distinct = ${a.alloc.namespacesDistinct}; probe center rgba(${a.alloc.exactProbeCentreRgba})`);
 }
 if (a.rim) {
   console.log(`RIM    wash LATERAL rim(0.7-0.9, within 30deg of y)/core(0-0.5) mean alpha: ${Object.entries(a.rim.report).map(([k, r]) => `${k}=${r.ratio} (${r.core}->${r.rim})`).join("  ")}`);

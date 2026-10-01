@@ -1,6 +1,6 @@
 /* Seasonal marketing UI — Inktober event page, Paint Jar page, and the
    homepage seasonal banner / room cards / prompt-artwork strips.
-   Mobile-first; honours prefers-reduced-motion. Loaded by the seasonal
+   Mobile-first; honors prefers-reduced-motion. Loaded by the seasonal
    components (HomePage / InktoberPage / PaintJarPage); reuses the global
    wall-card / open-room-card / primary-action styles from App.css. */
 

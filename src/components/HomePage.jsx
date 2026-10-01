@@ -115,7 +115,7 @@ export default function HomePage({ onNavigate }) {
   const [wallLoaded, setWallLoaded] = useState(false);
   // Prompt-specific artwork: today's Daily Challenge entries and the Inktober
   // event gallery. Empty = the strips simply don't render and the generic
-  // wall strip below carries the section (no art is ever mislabelled).
+  // wall strip below carries the section (no art is ever mislabeled).
   const [dailyPosts, setDailyPosts] = useState([]);
   const [inktoberPosts, setInktoberPosts] = useState([]);
   // The Inktober event state (phase/day/prompt) drives the seasonal banner.
@@ -618,7 +618,7 @@ export default function HomePage({ onNavigate }) {
           {/* Prompt-specific artwork first — real wall posts stamped by the
               server for today's challenge / the Inktober event. When a prompt
               has no posts yet its strip simply doesn't render, and the generic
-              strip below carries the section (never mislabelled as prompt art). */}
+              strip below carries the section (never mislabeled as prompt art). */}
           {daily && dailyPosts.length > 0 ? (
             <div className="home-prompt-wall" data-kind="daily">
               <div className="home-prompt-wall-head">

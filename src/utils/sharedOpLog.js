@@ -23,7 +23,7 @@
 //
 // The log is a memory budget, not a history: it keeps a bounded recent window,
 // and a mark that falls off the front returns null so the caller falls back to
-// the plain restore (the old behaviour) rather than replaying a partial room.
+// the plain restore (the old behavior) rather than replaying a partial room.
 
 // Undo only ever reaches back MAX_HISTORY of OUR strokes, so the window only
 // has to cover the friends' ops between those. 4000 ops is minutes of a busy

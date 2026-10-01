@@ -44,7 +44,7 @@ you're viewing (divergence), all downscale paths are squashed 4:3 (canvas is 8:5
 
 ### Client
 - The live-alias frames machinery stays. Only the **active cell** hydrates a full layer stack (named **Rough / Ink / Paint** in animation rooms — the ink-and-paint workflow is just named layers). Other cells hold `{ ops, proxy (960×600 desktop / 480×300 mobile), rev }`, replayed in `requestIdleCallback`.
-- Onion skin: pre-composited neighbour proxies, rebuilt off the pointer path, baked into the below-cache at pen-down — the existing zero-cost-per-pointermove invariant, kept byte-for-byte.
+- Onion skin: pre-composited neighbor proxies, rebuilt off the pointer path, baked into the below-cache at pen-down — the existing zero-cost-per-pointermove invariant, kept byte-for-byte.
 - Playback: ring of 3 composites; doubles as the onion source. Memory arithmetic closes at ~200MB worst case vs ~1.9GB naive.
 - Draft schema v5 persists the FULL frames array (loops finally survive reload).
 
@@ -79,7 +79,7 @@ film-splice reorder animation; scrub rail with waveform under it when audio exis
 ## Shippable increments
 1. **Film strip + onion rework (client-only, no wire changes)** — SHIPPING NOW. Bottom
    skeuomorphic strip (sprocket holes in pure CSS), scrub rail, per-frame local eyeball,
-   onion-skin neighbour cache (kills 40MB-per-recomposite churn), thumbnails off the pen-up
+   onion-skin neighbor cache (kills 40MB-per-recomposite churn), thumbnails off the pen-up
    path, 8:5 aspect fixes everywhere, remote ops pinned deterministically to frame 1 in
    shared rooms (divergence guard) with a LIVE badge.
 2. **Persistence + HUD extraction** — draft v5 (full frames array); extract Topbar/quickbar/

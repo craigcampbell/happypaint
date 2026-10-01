@@ -148,7 +148,7 @@
     };
 
     // A ctx Proxy that counts the raster calls the engine makes — so timing
-    // can be normalised per dab / per op. Forwards everything else untouched.
+    // can be normalized per dab / per op. Forwards everything else untouched.
     const COUNTED = new Set(["fill", "stroke", "drawImage", "fillRect", "strokeRect", "fillText", "putImageData"]);
     const makeCountingCtx = (ctx) => {
       const counts = { ops: 0, fill: 0, stroke: 0, drawImage: 0, fillRect: 0, getImageData: 0, save: 0 };
@@ -483,8 +483,8 @@
       return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     };
 
-    // HSL hue (degrees, NaN for grey) + saturation of an RGB triple: the
-    // mixing gate's units ("green, not grey").
+    // HSL hue (degrees, NaN for gray) + saturation of an RGB triple: the
+    // mixing gate's units ("green, not gray").
     const hueSat = ([r, g, b]) => {
       r /= 255;
       g /= 255;
@@ -528,7 +528,7 @@
     // ---- Scenarios ----------------------------------------------------------
 
     // (a) STROKES: per brush, 3 tiles (sizes 12/32/80) stacked; blue S-curve
-    // then a red mirrored S-curve crossing it, so overlap behaviour shows.
+    // then a red mirrored S-curve crossing it, so overlap behavior shows.
     // Both strokes go through measurePenUpPop, so `penUpPop` records how far
     // the commit lands from the live preview (the second stroke, over paint,
     // is the realistic case; `worst` is the larger of the two).
@@ -575,7 +575,7 @@
     // region = the shared stretch; its mean RGB on white is recorded, with
     // its HSL hue / saturation — the Stage-3 gate:
     //   km brushes (oil / acrylic / paint / gouache): yellow over blue reads
-    //     GREEN dry AND wet — hue 70..170°, saturation >= 0.2 (not grey);
+    //     GREEN dry AND wet — hue 70..170°, saturation >= 0.2 (not gray);
     //   watercolor: dry mixing is the multiply glaze (mix 0) — hue 70..170°
     //     (its saturation floor is lower: a thin wash on white is pale);
     //   sample-free brushes (marker, ink, pencil, crayon, glow, spray): a
@@ -583,8 +583,8 @@
     //     to one without (they never sample, so Stage 3 can't touch them).
     // Plus CARRY RECOVERY (km brushes with a wet pickup): a wet yellow stroke
     // crosses a blue patch, then runs 300 px on over blank paper — the mean
-    // colour of its last 20% must be closer to the brush colour than to blue
-    // (the carried colour fades out; the legacy lerp never recovered).
+    // color of its last 20% must be closer to the brush color than to blue
+    // (the carried color fades out; the legacy lerp never recovered).
     const MIX_BRUSHES = ["watercolor", "oil", "acrylic", "gouache", "marker", "paint"];
     const MIX_HUE = [70, 170];
     const MIX_SAT = 0.2;
@@ -674,7 +674,7 @@
           paintStroke(ctx, brushId, mixPath({ ...box, along: true }), { color: COLORS[cell.first], size, seed: SEED_A, wet: cell.wet, mix });
           paintStroke(ctx, brushId, mixPath({ ...box, along: false }), { color: COLORS[cell.second], size, seed: SEED_B, wet: cell.wet, mix });
           // Overlap = the shared middle stretch, a band size/2 tall around
-          // the wave's centre line; firstOnly = a patch the second stroke
+          // the wave's center line; firstOnly = a patch the second stroke
           // never reaches, for reference.
           const overlap = { x: Math.round(x0 + tw * 0.4), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.2), h: Math.round(size / 2) };
           const firstOnly = { x: Math.round(x0 + tw * 0.1), y: Math.round(y0 + th * 0.5 - size / 4), w: Math.round(tw * 0.08), h: Math.round(size / 2) };
@@ -733,7 +733,7 @@
             tailPx: RECOVERY_TAIL,
           };
           recovery.recovered = recovery.distanceToBrush < recovery.distanceToBlue;
-          check(brushId, "carryRecovery", recovery.recovered, `last 20% of a ${RECOVERY_TAIL}px tail [${last}] is ${recovery.distanceToBrush} from the brush colour, ${recovery.distanceToBlue} from blue`);
+          check(brushId, "carryRecovery", recovery.recovered, `last 20% of a ${RECOVERY_TAIL}px tail [${last}] is ${recovery.distanceToBrush} from the brush color, ${recovery.distanceToBlue} from blue`);
           report[brushId].recovery = recovery;
         }
         const sheet = makeCanvas(TILE_W, TILE_H + (strip ? th : 0));
@@ -774,7 +774,7 @@
     // 40, strength 0.6, a fresh renderer (stroke) per pass, one point per
     // addPoints call. Smudge paints DIRECTLY on layer 0 (the work canvas).
     // Gated (checks):
-    //   edge — inside each horizontal pass's band, the largest colour step
+    //   edge — inside each horizontal pass's band, the largest color step
     //     PERPENDICULAR to the motion (max channel |Δ| on white between
     //     vertically adjacent pixels — red #e04b2a and blue #1e88e5 are
     //     near-isoluminant, so luminance alone would be blind here): the
@@ -785,7 +785,7 @@
     //     field boundary — fewer than legacy's and at most a handful);
     //   carry — a drag stroke that starts inside a red field and runs 300
     //     px onto blank paper: its first ~4 dabs past the field read closer
-    //     to red than to paper (colour travels with the finger), the last
+    //     to red than to paper (color travels with the finger), the last
     //     15% of the tail closer to paper (it thins out); blend must not
     //     carry (its tail is paper too);
     //   timing — ms per dab at 900x600 AND the real 4000x2500 layer, one
@@ -925,7 +925,7 @@
       const fed = feedSmudge(ctx, work, mode, smudgeStrokes(boundary), batch);
       return { work, fed, ms: performance.now() - t0 };
     };
-    // Colour steps on white inside a rect: max channel |Δ| to the pixel
+    // Color steps on white inside a rect: max channel |Δ| to the pixel
     // below (ACROSS a horizontal pass's motion) and to the right (along it).
     // A "corner" pixel has both above `T`.
     const edgeStats = (canvas, rect, T = 40) => {
@@ -1088,7 +1088,7 @@
         const { work, fed, ms } = renderSmudgeTile(mode);
         const ctx = work.getContext("2d");
         // Stage-0 number, kept: columns near the boundary (row 150 ± 2)
-        // whose colour is neither the pure red nor the pure blue.
+        // whose color is neither the pure red nor the pure blue.
         const rowData = ctx.getImageData(boundary - 120, 148, 240, 5).data;
         let blendedColumns = 0;
         for (let col = 0; col < 240; col += 1) {
@@ -1352,7 +1352,7 @@
     // mean, not an exact count.
     const KM_RUNS = 7; // interleaved blank / solid / gradient iterations for the km delta
     // A ctx that does nothing: every method is a no-op, every property write
-    // is accepted. The renderer's walk + colour maths run in full against it
+    // is accepted. The renderer's walk + color math run in full against it
     // (it never reads the ctx back when handed a `base`), so a walk against
     // it times the CPU side of the dab path alone.
     const NOOP = () => {};
@@ -1389,7 +1389,7 @@
           const addMedian = median(addTimes);
           // Stage 3: the same stroke with the km path sampling on EVERY dab —
           // over a solid under-fill (the typical case: crossing a stroke, the
-          // carry settles, few colour-bucket changes) and over a gradient
+          // carry settles, few color-bucket changes) and over a gradient
           // (the worst case: the bucket changes every few dabs, so the tint
           // ring re-tints and the ribbon strings rebuild). The mix map is
           // prefetched (flush) first, like the app's idle prefetch, so the
@@ -1695,7 +1695,7 @@
         const work = makeCanvas(TILE_W, TILE_H);
         const ctx = work.getContext("2d");
         const mix = createMixMap(() => work, work.width, work.height); // this canvas plays layer 0
-        // Every byte the dabs read, in order (null = 0, a colour = rgb + 1).
+        // Every byte the dabs read, in order (null = 0, a color = rgb + 1).
         const samples = [];
         const sampler = {
           ...mix,

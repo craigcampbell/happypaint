@@ -170,7 +170,7 @@ function member(s, room, token, query = '') {
   alice.send({ type: 'op', op: stroke('s-evil', { shape: 'stamp', stampId: 'evil', stampDataUrl: TRACKER }) });
   await sleep(700);
   check('an image op pointing at a remote URL is never relayed', !gotOp((op) => op.dataUrl === TRACKER));
-  check('…nor an SVG, nor mislabelled bytes', !gotOp((op) => op.dataUrl === SVG || op.dataUrl === LIAR));
+  check('…nor an SVG, nor mislabeled bytes', !gotOp((op) => op.dataUrl === SVG || op.dataUrl === LIAR));
   check('a stamp brush whose tip is a remote URL is never relayed', !gotOp((op) => op.strokeId === 's-evil'));
 
   alice.send({ type: 'op', op: { kind: 'image', dataUrl: PNG, x: 0, y: 0, w: 50, h: 50 } });

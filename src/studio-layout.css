@@ -11,7 +11,7 @@
               rest of the window.
      tablet   (iPad landscape, ≥900px) compact chrome, but the tool rail is a
               RIGHT-HAND SIDE SHEET so the canvas stays visible and live while
-              you pick brushes / colours. No dimming backdrop.
+              you pick brushes / colors. No dimming backdrop.
      phone    compact chrome + the bottom-sheet tool drawer.
 
    Loaded after App.css and drawesome-theme.css, so plain rules here win ties.
@@ -379,7 +379,7 @@
   transform: translateX(0);
 }
 
-/* Floating chrome: the quick bar centres in the space RIGHT of the sheet; the
+/* Floating chrome: the quick bar centers in the space RIGHT of the sheet; the
    right-edge chrome stays put; the left-edge chrome (rooms FAB, reaction
    picker, symmetry) shifts right of the sheet instead. */
 .studio-shell[data-layout="tablet"][data-hand="left"].rail-open .mobile-quickbar {

@@ -208,7 +208,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
 ## 6. Verification (do this — don't hand it to the user)
 
 The two scripts already exist and already fail the right way (they pin today's
-behaviour). **Flip their assertions to the intended behaviour** and keep them as
+behavior). **Flip their assertions to the intended behavior** and keep them as
 regression tests:
 
 `node scripts/layer-room-reload-verify.mjs` (13 checks)
@@ -267,7 +267,7 @@ Docker stack that serves production drawesome.art.
 - **Memory** is the real cost: layers are full-resolution canvases per client, and
   animation rooms multiply frames × layers. Keep the caps, and keep cooling/
   rastering cold frames (a multi-layer frame's cold proxy stays flat).
-- **Snapshot behaviour changes** (slower joins for multi-layer rooms). If joins
+- **Snapshot behavior changes** (slower joins for multi-layer rooms). If joins
   feel slow, the follow-up is per-layer snapshot bundles — deliberately not in
   this plan.
 - **Moderation**: hidden/removed ops are addressed by opId and unaffected, but a
@@ -277,7 +277,7 @@ Docker stack that serves production drawesome.art.
   the anti-grief boundary. Kids' rooms are the audience — do not let any member
   delete someone else's layer in a `kid_safe` room.
 - **Wet/mix brushes** must not be allowed to sample a non-layer-0 stack (decision
-  4), or colours will smear across the wrong pixels.
+  4), or colors will smear across the wrong pixels.
 - **Don't break the single-layer case**: the overwhelming majority of rooms have
   one layer and no `layerId` on their ops. Legacy ops must land on layer 0 exactly
   as today, and a one-layer room must be byte-identical to before (compare against
@@ -325,7 +325,7 @@ assertions / `draft-roundtrip-verify` ALL PASS / lint 0 warnings / build OK.
 ## 10. Appendix## 10. Appendix: the "before" baseline (today's script output)
 
 `node scripts/layer-room-reload-verify.mjs` — ALL PASS (13 checks), i.e. these
-pass today *because* the behaviour is broken:
+pass today *because* the behavior is broken:
 
 ```
 PASS  R1 a room opens with exactly one layer

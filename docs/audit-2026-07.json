@@ -82,7 +82,7 @@
           "impact": "low",
           "effort": "quick",
           "detail": "paintOnionSkin (App.jsx:904-920) calls compositeFrameToCanvas(previous/next) which document.createElement's a NEW 4000x2500 canvas per call (frames.js:60-66). With onion skin on, every renderDisplay (each stroke end, each remote op while idle, every buildCompositeCache at pen-down via App.jsx:984) allocates 40-80MB of throwaway canvas — severe allocation/GC churn against the iOS canvas budget while animating.",
-          "fix": "Cache the composited neighbour canvases keyed by frame id + a dirty flag (invalidate in syncFrameState/refreshActiveThumbnail paths), or keep two reusable scratch canvases and composite into them."
+          "fix": "Cache the composited neighbor canvases keyed by frame id + a dirty flag (invalidate in syncFrameState/refreshActiveThumbnail paths), or keep two reusable scratch canvases and composite into them."
         },
         {
           "title": "Brush cursor ring calls getBoundingClientRect on every pointermove at up to 120Hz",

@@ -1,4 +1,4 @@
-// Colour math for the studio's own picker (HSB wheel + bars). Kept tiny and
+// Color math for the studio's own picker (HSB wheel + bars). Kept tiny and
 // dependency-free: hex ⇄ RGB ⇄ HSV (HSB), plus an rgba() string helper for
 // swatches that show the brush opacity over a checkerboard.
 //
@@ -105,7 +105,7 @@ export function withAlpha(hex, alpha = 1) {
 }
 
 // Perceived lightness 0..1 (Rec. 601 luma) — picks a readable ring/label
-// colour over a swatch.
+// color over a swatch.
 export function luma(hex) {
   const [r, g, b] = hexToRgb(hex);
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;

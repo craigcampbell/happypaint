@@ -40,7 +40,7 @@ const INKTOBER_UPCOMING = { // SYNTHETIC
   phase: "upcoming",
   date: "2026-09-27",
   day: null,
-  prompt: "Warm-up: sharpen your favourite pen",
+  prompt: "Warm-up: sharpen your favorite pen",
   nextChangeAt: "2026-10-01T00:00:00.000Z",
   source: "https://inktober.com/rules",
   prompts: promptList,
@@ -326,7 +326,7 @@ const run = async () => {
     (await page.locator('.home-prompt-wall[data-kind="inktober"]').count()) === 1);
 
   // Honest fallback: with no prompt-stamped posts, no prompt strips render and
-  // the generic wall section still carries the section (nothing mislabelled).
+  // the generic wall section still carries the section (nothing mislabeled).
   if (!realInktober) {
     fx.wallDaily = "empty";
     fx.wallEvent = "empty";
@@ -436,7 +436,7 @@ const run = async () => {
   check("/paintjar shows sessions count", new RegExp(fmtNum(jarExpect.sessions)).test(jarText), `${jarExpect.sessions}`);
   check("/paintjar shows illustrative sheet equivalent", new RegExp(fmtNum(jarExpect.paperEquivalent.sheets)).test(jarText) && /sheet/i.test(jarText));
   check("/paintjar labels equivalent as illustrative, not measured savings",
-    /illustrative/i.test(jarText) && !/litre|liter|CO2|carbon saved|trees saved/i.test(jarText.replace(/not a measured[^.]*carbon/i, "")));
+    /illustrative/i.test(jarText) && !/liter|liter|CO2|carbon saved|trees saved/i.test(jarText.replace(/not a measured[^.]*carbon/i, "")));
   check("/paintjar includes the disclaimer", /Counts are aggregate recorded drawing activity/.test(jarText));
   check("/paintjar renders the painted world map", (await page.locator(".planet-map").count()) === 1 && (await page.locator("path.planet-country").count()) > 150);
   check("/paintjar renders the growing scene", (await page.locator(".scene").count()) === 1);
@@ -452,7 +452,7 @@ const run = async () => {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(".scene").waitFor({ timeout: 15000 });
   const sunAnim = await page.locator(".scene-sun").evaluate((el) => getComputedStyle(el).animationName);
-  check("/paintjar honours prefers-reduced-motion (scene still)", sunAnim === "none", sunAnim);
+  check("/paintjar honors prefers-reduced-motion (scene still)", sunAnim === "none", sunAnim);
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
   // Error state (no fake numbers) — simulated outage in both modes.

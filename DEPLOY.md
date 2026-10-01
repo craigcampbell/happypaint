@@ -109,7 +109,7 @@ starting it again.
 
 `scripts/deploy-remote.sh` wraps RUNNING.md's procedure over SSH: pre-flight,
 rollback image tag, dated `app_data` backup, build, bounded swap, public +
-local `/healthz`, container health, and neighbour-container proof. Usage:
+local `/healthz`, container health, and neighbor-container proof. Usage:
 
 ```bash
 DEPLOY_HOST=root@<droplet-ip> scripts/deploy-remote.sh

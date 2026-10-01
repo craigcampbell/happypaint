@@ -30,7 +30,7 @@
 // earn throttle, is what makes cash-out safe.
 //
 // Scope of THIS module: purchases (safe, revenue in) are fully wired. Payouts
-// (money out) are modelled, priced and readable, but hard-gated behind
+// (money out) are modeled, priced and readable, but hard-gated behind
 // ECONOMY_PAYOUTS_ENABLED + a Stripe Connect account, and default OFF. The
 // documented phase plan (docs/paint-economy.md §Creator Earnings) requires
 // verified adults, tax info and guardian gates before money goes out; that is a

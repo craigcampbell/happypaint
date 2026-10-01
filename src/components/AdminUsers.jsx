@@ -613,7 +613,7 @@ export default function AdminUsers({ onNavigate }) {
           </div>
         )}
         <p className="admin-muted admin-note">
-          Risk is a heuristic from behaviour across every room (clears, room-hopping, moderation hits) — always read the
+          Risk is a heuristic from behavior across every room (clears, room-hopping, moderation hits) — always read the
           reasons before acting on a score. Blocking applies to every room at once; per-room kicks from the Live admin
           only remove someone from that one room.
         </p>

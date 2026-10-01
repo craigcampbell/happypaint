@@ -1,7 +1,7 @@
 // Brush sprites (Brush Engine revamp, spec section 3): fixed-seed texture
 // atlases for the sprite dab shapes (wash / graphite / wax / softOval / matte /
 // loaded / halo) plus the smudge feather mask, the granulation paper tile, the
-// per-colour tint cache and the two 256^2 scratch canvases.
+// per-color tint cache and the two 256^2 scratch canvases.
 //
 // Why a sprite atlas at all: the old per-dab shapes are arcs and flecks, which
 // is why a watercolor stroke read as "circles in a line". A dab is now ONE
@@ -42,7 +42,7 @@ const HAS_DOM = typeof document !== "undefined";
 // and a dab's extent is radius * SPRITE_PX / 2 / SPRITE_UNIT (~1.19 radii).
 export const SPRITE_PX = 128;
 export const SPRITE_UNIT = 54;
-const SPRITE_CENTER = (SPRITE_PX - 1) / 2; // pixel centres, so the sprite is symmetric
+const SPRITE_CENTER = (SPRITE_PX - 1) / 2; // pixel centers, so the sprite is symmetric
 const CELL = SPRITE_PX * SPRITE_PX;
 const PAPER_PX = 256;
 const SCRATCH_PX = 256;
@@ -182,7 +182,7 @@ function noiseField(dst, px, cells, seed, ox, oy, wrap) {
 // Shared per-pixel geometry for a 128^2 cell: unit-radius rho and the cell
 // edge guard. Built once (module lifetime, 256 KB) — build-time only.
 
-let RHO = null; // distance from the cell centre in unit radii
+let RHO = null; // distance from the cell center in unit radii
 let GUARD = null; // 1 inside, fading to 0 on the outermost pixel ring
 
 function geometry() {
@@ -190,7 +190,7 @@ function geometry() {
     RHO = new Float64Array(CELL);
     GUARD = new Float64Array(CELL);
     // Guard: alpha must hit exactly 0 ON the outermost pixel ring (whose
-    // centres sit 63.5 px out), otherwise a scaled stamp shows the cell as a
+    // centers sit 63.5 px out), otherwise a scaled stamp shows the cell as a
     // faint square. Starts at 61 px; circular, so a clipped fleck stays round.
     const guardStart = 61 / SPRITE_UNIT;
     const guardEnd = SPRITE_CENTER / SPRITE_UNIT;
@@ -406,7 +406,7 @@ function blitVariant(data, rowWidth, variant) {
 // Family formulas. IMMUTABLE once shipped — see the header. Notation: rho =
 // distance / SPRITE_UNIT; n_k = value noise with k lattice cells across the
 // cell (each octave has its own lattice, phase-shifted per variant); S =
-// smoothstep; x/y are the pixel's offset from the cell centre in px (x = the
+// smoothstep; x/y are the pixel's offset from the cell center in px (x = the
 // stroke tangent after Stage 2's rotation); white = hash(x, y, salt). The
 // per-pixel code lives in runKernel above; the setup below rolls the
 // variant's parameters and octaves in the documented order.
@@ -554,7 +554,7 @@ function rollLanes(roll, count, spread, widthMin, widthMax) {
   return lanes;
 }
 
-// Sum of lane bumps at row offset `dy` (px from the centre), each bump
+// Sum of lane bumps at row offset `dy` (px from the center), each bump
 // = 1 - S(0, 1, |dy - lane.y| / lane.width), weighted by sign (softOval) or
 // level (loaded).
 function laneField(lanes, dy, signed) {
@@ -806,7 +806,7 @@ export function getSoftMaskInverse() {
 }
 
 // Module-singleton 256^2 scratches for the Stage-4 blend brush: the sampled
-// patch (smudgeScratch) and the colour the finger carries (carryScratch).
+// patch (smudgeScratch) and the color the finger carries (carryScratch).
 // Cleared by the caller at stroke start — never allocated per stroke.
 export function getSmudgeScratch() {
   if (!HAS_DOM) {
@@ -833,20 +833,20 @@ export function getCarryScratch() {
 // by prebuild). A lookup is keyed by ONE Number in one of two namespaces:
 //   bucket (default):  ((familyIdx << 4) | variant) << 15 | rgb5key   (< 2^22)
 //   exact:             2^32 + ((familyIdx << 4) | variant) * 2^24 + rgb24
-// The bucket key quantizes the colour to 5 bits per channel (rounded), so a
-// rainbow of wet-pickup colours maps onto <= 32K keys and stays in the ring
+// The bucket key quantizes the color to 5 bits per channel (rounded), so a
+// rainbow of wet-pickup colors maps onto <= 32K keys and stays in the ring
 // instead of re-tinting per dab. The exact key is for a DRY stroke, whose
-// colour never changes: it must land the raw settings colour on the paper
-// (spec P4 — a 5-bit bucket would shift a picked palette colour by up to
+// color never changes: it must land the raw settings color on the paper
+// (spec P4 — a 5-bit bucket would shift a picked palette color by up to
 // 4/255), and one key per stroke costs the ring nothing. Both namespaces
 // share the same slots; keys stay exact in a double, so the ring's key
 // table is a Float64Array. On a miss the round-robin next slot is re-tinted
 // IN PLACE: 'copy' drawImage of the white variant, then 'source-in' fillRect
 // — no canvas allocation ever happens on the dab path.
 //
-// PARITY: the tint colour is the key's canonical colour (expand5(q5(c)) for a
+// PARITY: the tint color is the key's canonical color (expand5(q5(c)) for a
 // bucket key, the clamped integer rgb for an exact key), NEVER the caller's
-// unrounded rgb — two callers whose colours share a key must get
+// unrounded rgb — two callers whose colors share a key must get
 // byte-identical pixels regardless of who tinted the slot first, or cache
 // order would leak into strokes.
 
@@ -884,16 +884,16 @@ function q8(c) {
   return c <= 0 ? 0 : c >= 255 ? 255 : (c + 0.5) | 0;
 }
 
-// The 15-bit colour part of a tint key. Exported so a wet/mix renderer can
-// detect "colour bucket changed" with one integer compare per dab.
+// The 15-bit color part of a tint key. Exported so a wet/mix renderer can
+// detect "color bucket changed" with one integer compare per dab.
 export function packRgb5(r, g, b) {
   return (q5(r) << 10) | (q5(g) << 5) | q5(b);
 }
 
 // A 128^2 canvas holding `variant` of `family` tinted (r, g, b) — draw it
 // IMMEDIATELY: the returned canvas is a ring slot that a later call may
-// re-tint for another colour. `exact` keys the slot on the full 24-bit colour
-// (dry strokes); otherwise on the 5-bit bucket (per-dab varying colours).
+// re-tint for another color. `exact` keys the slot on the full 24-bit color
+// (dry strokes); otherwise on the 5-bit bucket (per-dab varying colors).
 // Returns null for an unknown family / no DOM.
 export function getTintedSprite(family, variant, r, g, b, exact = false) {
   const index = FAMILY_INDEX[family];

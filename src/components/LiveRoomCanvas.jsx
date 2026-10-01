@@ -162,7 +162,7 @@ export default function LiveRoomCanvas({
     };
 
     // The room's coloring-sheet line art (loaded on the `sheet` message), drawn
-    // over the strokes so colorings show the page they're colouring.
+    // over the strokes so colorings show the page they're coloring.
     let sheetImg = null;
     let sheetRect = null;
     let hasSheet = false;

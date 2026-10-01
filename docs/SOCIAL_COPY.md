@@ -55,7 +55,7 @@ most submissions here.
 > Open the site and you're already drawing — nothing to sign up for. To draw
 > with someone you open a room and send them the code; they're in the same
 > picture in a few seconds with no account of their own. Same canvas, live
-> cursors, real brushes (marker, pencil, watercolour, spray), layers, and a
+> cursors, real brushes (marker, pencil, watercolor, spray), layers, and a
 > timelapse of the whole session that you can export.
 >
 > The other half is coloring: 6,000+ coloring pages when a blank canvas is too
@@ -207,7 +207,7 @@ Produce these **inside the studio** with 🎬 Timelapse and 🖼 GIF export.
 > last frame.
 
 **B — "Blank canvas fear, solved" (15s)**
-> Open the coloring library, pick a page, colour 3 areas, export. Caption:
+> Open the coloring library, pick a page, color 3 areas, export. Caption:
 > `for anyone who freezes at a blank canvas — 6,000 of these`. No account
 > shown, because there isn't one.
 

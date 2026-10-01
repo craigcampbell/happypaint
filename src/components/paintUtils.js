@@ -26,7 +26,7 @@ export function rng(seed) {
   };
 }
 
-// ---- colour helpers ----------------------------------------------------------
+// ---- color helpers ----------------------------------------------------------
 const toRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 const toHex = (rgb) => `#${rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
 
@@ -38,7 +38,7 @@ export function mix(hex, toward, t) {
 }
 
 // A paint pot is never perfectly even: nudge each country a little around its
-// ramp colour, deterministically per country.
+// ramp color, deterministically per country.
 export function jitter(hex, seed, amount = 0.1) {
   const r = rng(seed)();
   return r < 0.5 ? mix(hex, "#ffffff", (0.5 - r) * 2 * amount) : mix(hex, "#5a2a1a", (r - 0.5) * 2 * amount * 0.7);

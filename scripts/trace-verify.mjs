@@ -71,7 +71,7 @@ const run = async () => {
   await sleep(500);
   check("SVG photo is rejected (no stored XSS)", priv.msgs.some((m) => m.type === "trace_rejected") && !lastSheet(priv.msgs));
 
-  // 4) Non-image bytes labelled image/png are rejected (magic-byte check).
+  // 4) Non-image bytes labeled image/png are rejected (magic-byte check).
   priv.msgs.length = 0;
   priv.send({ type: "set_trace_photo", image: "data:image/png;base64," + Buffer.from("not a png").toString("base64") });
   await sleep(500);
