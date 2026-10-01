@@ -675,7 +675,7 @@ export function createBilling({
             automatic_tax: { enabled: automaticTax },
             ...(automaticTax ? { customer_update: { address: 'auto' } } : {}),
             success_url: `${publicOrigin}/family?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${publicOrigin}/family?checkout=cancelled`,
+            cancel_url: `${publicOrigin}/family?checkout=canceled`,
             metadata: { profile_id: profileId },
             subscription_data: {
               metadata: { profile_id: profileId },
@@ -856,10 +856,12 @@ export function createBilling({
 
   async function cancelAndDeleteProfile(profileIdValue) {
     const profileId = cleanProfileId(profileIdValue);
-    if (!profileId) return { removed: false, cancelled: false, pending: false };
+    // Response field is US-spelled `canceled` (canonical); `pending` is the
+    // field the web client keys on and is unchanged.
+    if (!profileId) return { removed: false, canceled: false, pending: false };
     return withProfileLock(profileId, async () => {
       const record = state.records[profileId];
-      if (!record && !stripe) return { removed: false, cancelled: false, pending: false };
+      if (!record && !stripe) return { removed: false, canceled: false, pending: false };
       if (!record) {
         const lookupPending = {
           customerId: null,
@@ -878,8 +880,8 @@ export function createBilling({
           };
           draft.pendingCancellations[profileId] = lookupPending;
         });
-        const cancelled = await retryCancellation(profileId, lookupPending);
-        return { removed: cancelled, cancelled, pending: !cancelled };
+        const canceled = await retryCancellation(profileId, lookupPending);
+        return { removed: canceled, canceled, pending: !canceled };
       }
       const checkoutSessionId = record.pendingCheckout?.sessionId || null;
       if ((!record.subscriptionId || record.status === 'canceled') && !checkoutSessionId) {
@@ -887,7 +889,7 @@ export function createBilling({
           markProfileDeleted(draft, profileId);
         });
         notifyEntitlementChange(profileId);
-        return { removed: true, cancelled: record.status === 'canceled', pending: false };
+        return { removed: true, canceled: record.status === 'canceled', pending: false };
       }
 
       const pending = {
@@ -910,8 +912,8 @@ export function createBilling({
         draft.pendingCancellations[profileId] = pending;
       });
       notifyEntitlementChange(profileId);
-      const cancelled = await retryCancellation(profileId, pending);
-      return { removed: cancelled, cancelled, pending: !cancelled };
+      const canceled = await retryCancellation(profileId, pending);
+      return { removed: canceled, canceled, pending: !canceled };
     });
   }
 

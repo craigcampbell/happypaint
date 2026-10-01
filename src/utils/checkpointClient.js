@@ -141,7 +141,7 @@ const closeLayers = (layers) => {
   }
 };
 
-// Free every decoded bitmap without installing (a superseded/cancelled decode
+// Free every decoded bitmap without installing (a superseded/canceled decode
 // whose pixels must never reach the layer stack).
 export function releaseCheckpoint(decoded) {
   for (const frame of decoded?.frames || []) closeLayers(frame.layers);
@@ -278,9 +278,10 @@ const decodeFrame = async (descriptor, context) => {
 // decodedFrame is { frameId, throughOpId, layersKey, layers: [{id, bitmap}],
 // mixState }. NOTHING here mutates a live canvas — install is a separate,
 // explicit step. Rejects with CheckpointError { reason } and releases every
-// partially decoded asset on any failure; 'cancelled' means the caller's
+// partially decoded asset on any failure; 'canceled' means the caller's
 // isCancelled() fired (a newer baseline superseded this one) and is NOT a
-// corruption signal.
+// corruption signal. (Pre-rename builds emitted the legacy 'cancelled'
+// spelling — readers accept both via src/utils/cancellation.js.)
 export async function decodeCheckpoint(checkpoint, options = {}) {
   const rendererVersion = options.rendererVersion ?? checkpointClientSupport();
   if (!rendererVersion || !HEX64.test(rendererVersion)) fail("unsupported", "client cannot verify checkpoints");
@@ -297,7 +298,7 @@ export async function decodeCheckpoint(checkpoint, options = {}) {
     maxTotalBytes: options.limits?.maxTotalBytes ?? CHECKPOINT_MAX_TOTAL_BYTES,
   };
   const cancelled = () => {
-    if (options.isCancelled?.()) fail("cancelled", "checkpoint superseded by a newer baseline");
+    if (options.isCancelled?.()) fail("canceled", "checkpoint superseded by a newer baseline");
   };
   cancelled();
   const frames = [];

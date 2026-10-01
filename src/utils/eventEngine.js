@@ -14,7 +14,7 @@
 //
 // Audience gating: only kid_safe / friends events are surfaced on the default
 // discovery surface. adult_18 events are never shown (per docs + schema check
-// `audience <> 'adult_18' or status in ('draft','cancelled')`).
+// `audience <> 'adult_18' or status in ('draft','canceled')`).
 
 // A stable per-browser pseudo "profile id" so the one-vote-per-profile rule has a
 // subject without auth. Mirrors gallery_votes.profile_id. Local only.

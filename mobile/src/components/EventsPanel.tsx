@@ -31,7 +31,7 @@ const STATUS_STYLE: Record<TimedEventStatus, { bg: string; fg: string; label: st
   voting: { bg: "#fef3c7", fg: "#92400e", label: "Voting" },
   ended: { bg: "#e2e8f0", fg: "#475569", label: "Ended" },
   draft: { bg: "#e2e8f0", fg: "#475569", label: "Draft" },
-  cancelled: { bg: "#fee2e2", fg: "#b91c1c", label: "Cancelled" }
+  canceled: { bg: "#fee2e2", fg: "#b91c1c", label: "Canceled" }
 };
 
 function StatusPill({ status }: { status: TimedEventStatus }) {

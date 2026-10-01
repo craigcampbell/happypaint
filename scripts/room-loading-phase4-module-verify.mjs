@@ -317,7 +317,7 @@ try {
         );
         C.releaseCheckpoint(d);
       } catch (e) { reason = e && e.reason; }
-      out.animCancel = reason === 'cancelled';
+      out.animCancel = reason === 'canceled';
     }
     return out;
   });
@@ -345,7 +345,7 @@ try {
   check('rasterizeOps: checkpoint+tail raster identical to full-replay raster', result.rasterCheckpointParity === true, JSON.stringify(result.rasterCheckpointParity));
   check('rasterizeOps: corrupt descriptor rejects with CheckpointError', result.rasterCheckpointCorrupt === true, JSON.stringify(result.rasterCheckpointCorrupt));
   check('rasterizeOps: concurrent callers serialize safely', result.rasterSerialized === true, JSON.stringify(result.rasterSerialized));
-  check('decode: multi-frame cancellation rejects cancelled', result.animCancel === true, JSON.stringify(result.animCancel));
+  check('decode: multi-frame cancellation rejects canceled', result.animCancel === true, JSON.stringify(result.animCancel));
 
   assert.equal(failures.length, 0, `${failures.length} failures: ${failures.join(', ')}`);
   console.log('ALL room-loading-phase4 module checks passed');

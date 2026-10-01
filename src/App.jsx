@@ -65,6 +65,7 @@ import { encodeGif } from "./utils/gif";
 import { encodeAnimationVideo } from "./utils/videoExport";
 import { applyOp, eraserRand, replayFrameComposite, replayFrameOnto } from "./utils/opReplay";
 import { replayInSlices } from "./utils/replayQueue";
+import { isCanceled } from "./utils/cancellation";
 import { createSharedOpLog } from "./utils/sharedOpLog";
 import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
 import { getSession, hasStoredSession, onAuthStateChange, signOut } from "./utils/auth";
@@ -5576,7 +5577,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // (baseline + mix state, then the tail) — never a bare-tail raster.
           blob = await rasterizeOps(ops, frame.layerMeta, frame.checkpoint || null);
         } catch (error) {
-          if (frame.checkpoint && error?.reason !== "cancelled") {
+          if (frame.checkpoint && !isCanceled(error?.reason)) {
             frame.checkpoint = null; // poisoned descriptor — full scene refetch
             frame.rasterGen = (frame.rasterGen || 0) + 1;
             q.running = false;
@@ -5678,7 +5679,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         });
       } catch (error) {
         if (!isCurrent()) return;
-        if (descriptor && error?.reason !== "cancelled") {
+        if (descriptor && !isCanceled(error?.reason)) {
           frame.checkpoint = null; // poisoned — full scene refetch rebuilds this cel
           frame.rasterGen = (frame.rasterGen || 0) + 1;
           frame.hydrating = null;
@@ -8698,7 +8699,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   isCancelled: () => historyReplayEpochRef.current !== epoch,
                 });
               } catch (error) {
-                if (historyReplayEpochRef.current !== epoch || error?.reason === "cancelled") return; // superseded — the newer baseline owns the canvas
+                if (historyReplayEpochRef.current !== epoch || isCanceled(error?.reason)) return; // superseded — the newer baseline owns the canvas
                 declineCheckpoint();
                 return;
               }
@@ -9674,8 +9675,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           const ended = data.ended;
           if (ended) {
             const mine = ended.byId === myUserIdRef.current;
-            if (ended.outcome === "cancelled") {
-              showToast(mine ? "Wipe cancelled — the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
+            if (isCanceled(ended.outcome)) {
+              showToast(mine ? "Wipe canceled — the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
             } else if (ended.outcome === "failed") {
               showToast(`The room voted to keep the canvas 🎨 (${ended.yes} of ${ended.needed} yes votes needed)`, 5000);
             } else if (ended.outcome === "left") {

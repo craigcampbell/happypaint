@@ -266,11 +266,11 @@ try {
       const before = await sha256Hex(rgbaOf(target[0].canvas));
       let reason = null;
       try {
-        const cancelled = await decodeCheckpoint(checkpoint, {
+        const aborted = await decodeCheckpoint(checkpoint, {
           rendererVersion: VER, expectedFrames: framesMeta, tailOps,
           isCancelled: () => { calls += 1; return calls > 2; },
         });
-        releaseCheckpoint(cancelled);
+        releaseCheckpoint(aborted);
       } catch (err) { reason = err && err.reason; }
       const after = await sha256Hex(rgbaOf(target[0].canvas));
       out.cancellation = { reason, pixelsUntouched: before === after };
@@ -326,7 +326,7 @@ try {
   for (const c of result.checks) {
     check(`reject: ${c.name}`, c.ok === true, c.reason);
   }
-  check('late-decode cancellation rejects cancelled', result.cancellation && result.cancellation.reason === 'cancelled', JSON.stringify(result.cancellation));
+  check('late-decode cancellation rejects canceled', result.cancellation && result.cancellation.reason === 'canceled', JSON.stringify(result.cancellation));
   check('late-decode cancellation leaves pixels untouched', result.cancellation && result.cancellation.pixelsUntouched === true);
   check('multi-frame decode (stage4 shape)', result.multiFrame === true, JSON.stringify(result.multiFrame));
   check('install preserves hidden pixels (no visibility/opacity bake)', result.install && result.install.hiddenPreserved === true);

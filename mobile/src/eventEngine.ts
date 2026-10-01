@@ -15,10 +15,11 @@
 //
 // Audience gating: only kid-safe / friends events are surfaced on the discovery
 // surface. adult-18 events are never shown (per docs + schema check
-// `audience <> 'adult_18' or status in ('draft','cancelled')`).
+// `audience <> 'adult_18' or status in ('draft','canceled')`).
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { normalizeCanceled } from "./cancellation";
 import type { RoomAudience } from "./social";
 
 // One vote per profile needs a subject without auth: a stable per-device pseudo
@@ -60,7 +61,7 @@ export async function writeVotedPostIds(ids: string[]): Promise<void> {
 }
 
 // ---- Types (mirror the backend tables) ----
-export type TimedEventStatus = "draft" | "upcoming" | "live" | "voting" | "ended" | "cancelled";
+export type TimedEventStatus = "draft" | "upcoming" | "live" | "voting" | "ended" | "canceled";
 
 export type EventAudience = RoomAudience; // "kid-safe" | "friends" | "adult-18"
 
@@ -99,6 +100,14 @@ export type EventRecord = {
 };
 
 export type SurfaceEvent = EventRecord & { status: TimedEventStatus };
+
+// Normalize a status arriving from storage or the backend: the canonical
+// spelling is "canceled", but rows written before the US-spelling rename may
+// still carry the legacy "cancelled". Normalization happens HERE, at ingress,
+// so no consumer ever branches on spelling.
+export function normalizeTimedEventStatus(status: string): TimedEventStatus {
+  return normalizeCanceled(status) as TimedEventStatus;
+}
 
 export type PromptPack = {
   id: string;
@@ -336,7 +345,9 @@ export function formatCountdown(targetMs: number | null, atMs: number = now()): 
 }
 
 // Default-surface events: kid-safe + friends only, never adult, sorted by phase
-// (live first, then voting, upcoming, ended). Each carries its derived status.
+// (live first, then voting, upcoming, ended). Each carries its status — a
+// stored status (e.g. a synced draft/canceled event) wins and is normalized
+// at ingress; otherwise it derives from the time windows.
 export function getSurfaceEvents(atMs: number = now()): SurfaceEvent[] {
   const order: Record<TimedEventStatus, number> = {
     live: 0,
@@ -344,11 +355,18 @@ export function getSurfaceEvents(atMs: number = now()): SurfaceEvent[] {
     upcoming: 2,
     ended: 3,
     draft: 4,
-    cancelled: 5
+    canceled: 5
   };
   return BASE_EVENTS.filter((event) => event.audience === "kid-safe" || event.audience === "friends")
-    .map((event) => ({ ...event, status: deriveStatus(event, atMs) }))
+    .map((event) => toSurfaceEvent(event, atMs))
     .sort((a, b) => order[a.status] - order[b.status]);
+}
+
+// Ingress point for an event record: a stored status is normalized (legacy
+// "cancelled" -> "canceled") and kept; events without one derive from time.
+export function toSurfaceEvent(event: EventRecord & { status?: string }, atMs: number = now()): SurfaceEvent {
+  const status = event.status ? normalizeTimedEventStatus(event.status) : deriveStatus(event, atMs);
+  return { ...event, status };
 }
 
 // The gallery_posts (votable entries) for an event, highest votes first. The

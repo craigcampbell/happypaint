@@ -3244,7 +3244,7 @@ function cancelOwnWipeRequest(room, id, user, reqId) {
   // The last seconds are locked (the client grays the button); one second of
   // grace covers a tap that was already in flight when the lock started.
   if (req.endsAt - Date.now() < WIPE_CANCEL_LOCK_MS - 1000) return denyWipeRequest(user, 'too_late');
-  endWipeRequest(room, 'cancelled');
+  endWipeRequest(room, 'canceled');
 }
 
 function resolveWipeRequest(roomId, reqId) {

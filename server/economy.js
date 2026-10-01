@@ -493,7 +493,7 @@ export function createEconomy({
           metadata: { productId: product.id, ownerKey: owner, kind: 'drops' },
           payment_intent_data: { metadata: { productId: product.id, ownerKey: owner, kind: 'drops' } },
           success_url: `${publicOrigin}/?drops=success&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${publicOrigin}/?drops=cancelled`,
+          cancel_url: `${publicOrigin}/?drops=canceled`,
         });
         res.json({ url: session.url, id: session.id });
       } catch (error) {

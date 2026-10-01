@@ -6,9 +6,11 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import BrandMark from "./BrandMark";
+import InktoberInkHeading from "./InktoberInkHeading";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
 import "../seasonal.css";
+import "../home-inktober.css";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
@@ -240,18 +242,76 @@ export default function HomePage({ onNavigate }) {
     };
   }, []);
 
-  // The Inktober event state powers the seasonal banner. Silent on failure —
-  // no banner is better than a wrong one.
+  // The Inktober event state powers the seasonal banner and the hero paper
+  // card. Beyond the mount fetch, the state is refreshed when the server's own
+  // nextChangeAt passes (a real UTC-midnight flip, scheduled per payload) and
+  // whenever a hidden tab becomes visible again, so a long-lived page never
+  // keeps claiming yesterday's prompt. A failed refresh past the announced
+  // rollover drops the state entirely — the card falls back to the generic
+  // invitation rather than a stale or invented "today", and a retry is
+  // scheduled so recovery doesn't need a reload.
   useEffect(() => {
     let active = true;
-    fetch("/api/inktober", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (active && d && d.phase) setInktober(d);
-      })
-      .catch(() => { /* no banner offline */ });
+    let timer = null;
+    let request = null;
+    let generation = 0;
+    const schedule = (fn, ms) => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (active) fn();
+      }, ms);
+    };
+    const dropExpired = () => setInktober((cur) =>
+      cur?.nextChangeAt && Date.now() >= Date.parse(cur.nextChangeAt) ? null : cur,
+    );
+    const load = () => {
+      if (document.hidden) {
+        dropExpired();
+        schedule(load, 60_000);
+        return;
+      }
+      const current = ++generation;
+      request?.abort();
+      const controller = new AbortController();
+      request = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 15_000);
+      fetch("/api/inktober", { cache: "no-store", signal: controller.signal })
+        .then((r) => {
+          if (!r.ok) throw new Error("Inktober unavailable");
+          return r.json();
+        })
+        .then((d) => {
+          if (!active || current !== generation) return;
+          if (!d || !["active", "upcoming", "ended"].includes(d.phase)
+            || (d.phase === "active" && !d.prompt)) throw new Error("Invalid Inktober state");
+          setInktober(d);
+          if (timer) window.clearTimeout(timer);
+          timer = null;
+          if (d.nextChangeAt) {
+            const at = Date.parse(d.nextChangeAt);
+            // Short bounded timers avoid the 32-bit setTimeout overflow before
+            // October, detect clock changes, and never poll a hidden tab.
+            schedule(load, Number.isFinite(at) ? Math.min(60_000, Math.max(at - Date.now() + 1500, 2000)) : 60_000);
+          }
+        })
+        .catch(() => {
+          if (!active || current !== generation) return;
+          dropExpired();
+          schedule(load, 60_000); // HTTP failures retry too, not just network errors
+        })
+        .finally(() => window.clearTimeout(timeout));
+    };
+    const onVisible = () => {
+      if (!document.hidden) load();
+    };
+    load();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
+      request?.abort();
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
@@ -419,19 +479,78 @@ export default function HomePage({ onNavigate }) {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="home-paper"
-            onClick={startRoom}
-            aria-label="Jump into the shared Open Studio canvas and start drawing"
-          >
-            <span className="home-paper-sun" aria-hidden="true" />
-            <span className="home-paper-stroke home-paper-stroke-one" aria-hidden="true" />
-            <span className="home-paper-stroke home-paper-stroke-two" aria-hidden="true" />
-            <BrandMark className="home-paper-mark" showName={false} />
-            <span className="home-paper-note">A shared canvas is waiting.</span>
-            <span className="home-paper-pencil" aria-hidden="true">✎</span>
-          </button>
+          {inktober ? (
+            (() => {
+              // Phase-aware card content. Only the active window claims a
+              // "today" — the state above is dropped the moment a refresh past
+              // the announced rollover fails, so this is never stale. Active
+              // clicks land anonymously in the shared INKTOBER room (server
+              // field, falling back to the well-known code); the other phases
+              // lead to the event page instead.
+              const phase = inktober.phase;
+              const card = {
+                active: {
+                  title: "Inktober\nis here!",
+                  promptLabel: "Today\u2019s prompt",
+                  promptText: inktober.prompt,
+                  cta: "Draw yours today!",
+                  href: `/join/${inktober.room || "INKTOBER"}`,
+                  label: `Inktober day ${inktober.day} of 31 — today\u2019s prompt is \u201C${inktober.prompt}\u201D. Join the shared Ink & Pencil room and draw yours.`,
+                },
+                upcoming: {
+                  title: "Inktober\nis coming!",
+                  promptLabel: "Warm-up prompt",
+                  promptText: inktober.prompt,
+                  cta: "See the prompts \u2192",
+                  href: "/inktober",
+                  label: `Inktober starts ${utcLabel(inktober.nextChangeAt) || "October 1"} — see all 31 prompts.`,
+                },
+                ended: {
+                  title: "Inktober\nhas wrapped!",
+                  promptLabel: "Event gallery",
+                  promptText: "31 days of community ink",
+                  cta: "See the gallery \u2192",
+                  href: "/inktober",
+                  label: `Inktober ${inktober.year} has wrapped — browse the event gallery.`,
+                },
+              }[phase] || null;
+              if (!card) return null;
+              return (
+                <button
+                  type="button"
+                  className="home-paper home-paper-ink"
+                  data-phase={phase}
+                  onClick={() => onNavigate(card.href)}
+                  aria-label={card.label}
+                >
+                  <BrandMark className="home-paper-ink-mark" showName={false} />
+                  {phase === "active" && inktober.day ? (
+                    <span className="home-paper-ink-day">Day {inktober.day} of 31</span>
+                  ) : null}
+                  <InktoberInkHeading title={card.title} />
+                  <span className="home-paper-ink-prompt">
+                    <span className="home-paper-ink-prompt-label">{card.promptLabel}</span>
+                    <span className="home-paper-ink-prompt-text">{card.promptText}</span>
+                  </span>
+                  <span className="home-paper-ink-cta">{card.cta}</span>
+                </button>
+              );
+            })()
+          ) : (
+            <button
+              type="button"
+              className="home-paper"
+              onClick={startRoom}
+              aria-label="Jump into the shared Open Studio canvas and start drawing"
+            >
+              <span className="home-paper-sun" aria-hidden="true" />
+              <span className="home-paper-stroke home-paper-stroke-one" aria-hidden="true" />
+              <span className="home-paper-stroke home-paper-stroke-two" aria-hidden="true" />
+              <BrandMark className="home-paper-mark" showName={false} />
+              <span className="home-paper-note">A shared canvas is waiting.</span>
+              <span className="home-paper-pencil" aria-hidden="true">✎</span>
+            </button>
+          )}
         </section>
 
         <p className="home-feature-line" aria-label="Things you can do in Drawesome">

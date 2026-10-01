@@ -5,7 +5,7 @@ create extension if not exists pgcrypto;
 
 create type profile_kind as enum ('adult', 'teen', 'child', 'guardian_managed');
 create type invite_status as enum ('pending', 'accepted', 'declined', 'expired', 'revoked');
-create type session_status as enum ('planned', 'open', 'ended', 'cancelled');
+create type session_status as enum ('planned', 'open', 'ended', 'canceled');
 create type participant_role as enum ('host', 'artist', 'viewer', 'guest', 'guardian', 'teacher', 'moderator');
 create type room_audience as enum ('kid_safe', 'friends', 'adult_18');
 create type room_visibility as enum ('private', 'listed_preview', 'featured', 'suppressed');
@@ -17,7 +17,7 @@ create type verification_review_kind as enum ('guardian_consent', 'adult_verific
 create type verification_review_status as enum ('pending', 'approved', 'rejected', 'needs_more_info');
 create type ban_scope as enum ('all_access', 'rooms', 'uploads', 'social', 'adult_rooms');
 create type network_block_action as enum ('deny', 'challenge', 'rate_limit');
-create type timed_event_status as enum ('draft', 'upcoming', 'live', 'voting', 'ended', 'cancelled');
+create type timed_event_status as enum ('draft', 'upcoming', 'live', 'voting', 'ended', 'canceled');
 create type gallery_visibility as enum ('private', 'public', 'featured', 'suppressed');
 create type gallery_post_status as enum ('pending', 'approved', 'rejected', 'removed');
 create type room_event_type as enum (
@@ -300,7 +300,7 @@ create table public.timed_events (
   check (ends_at > starts_at),
   check (voting_ends_at is null or voting_starts_at is not null),
   check (voting_ends_at is null or voting_ends_at > voting_starts_at),
-  check (audience <> 'adult_18' or status in ('draft', 'cancelled'))
+  check (audience <> 'adult_18' or status in ('draft', 'canceled'))
 );
 
 create table public.room_discovery_snapshots (
@@ -1726,7 +1726,7 @@ comment on table public.ai_credits is 'Optional per-profile AI Assist credit bal
 -- "Add in-app account deletion before release"). Always available, never gated or sold.
 -- =====================================================================
 
-create type account_deletion_status as enum ('requested', 'processing', 'completed', 'cancelled');
+create type account_deletion_status as enum ('requested', 'processing', 'completed', 'canceled');
 
 create table public.account_deletion_requests (
   id uuid primary key default gen_random_uuid(),
@@ -2067,7 +2067,7 @@ begin
         scheduled_purge_at = now() + interval '30 days',
         completed_at = null
     where profile_id = caller
-      and status in ('requested', 'processing', 'cancelled')
+      and status in ('requested', 'processing', 'canceled')
     returning * into result;
 
   if not found then

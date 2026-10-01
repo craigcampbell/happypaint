@@ -1259,7 +1259,7 @@ export function StudioScreen({
           finishShape();
         }
       })
-      // onFinalize fires for every interaction (including a cancelled / failed
+      // onFinalize fires for every interaction (including a canceled / failed
       // gesture where onEnd never ran), so it cleans up any dangling active
       // stroke/shape. finishStroke/finishShape are idempotent: with nothing
       // active they no-op, and after a real onEnd the refs are already cleared.

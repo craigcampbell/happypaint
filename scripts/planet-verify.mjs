@@ -67,28 +67,16 @@ try {
   const errors = []; page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(API + "/planet", { waitUntil: "domcontentloaded" });
   await page.locator("main.planet-main h1").waitFor({ timeout: 15000 });
-  await page.locator(".planet-map").waitFor({ timeout: 15000 });
-  // the transparent hit layer must sit EXACTLY over the painting, or clicks land on the wrong country
-  await page.waitForFunction(() => document.querySelector("img.planet-art") || document.querySelector("svg.planet-art"), null, { timeout: 15000 });
-  const align = await page.evaluate(() => {
-    const art = (document.querySelector("img.planet-art") || document.querySelector("svg.planet-art")).getBoundingClientRect();
-    const hit = document.querySelector("svg.planet-map").getBoundingClientRect();
-    return { dx: Math.abs(art.x - hit.x), dy: Math.abs(art.y - hit.y), dw: Math.abs(art.width - hit.width), dh: Math.abs(art.height - hit.height) };
-  });
-  check("hit layer is pixel-aligned with the painting", Object.values(align).every((n) => n < 1.5), JSON.stringify(align));
-  await page.waitForFunction(() => !!document.querySelector("img.planet-art"), null, { timeout: 15000 }).catch(() => {});
-  check("painting is baked to a bitmap (filters run once)", (await page.locator("img.planet-art").count()) === 1);
-  const nCountries = await page.locator("path.planet-country").count();
-  check("map renders 170+ country paths", nCountries >= 170, String(nCountries));
-  const clickable = await page.locator("path.planet-country.is-clickable").count();
-  check("most countries are clickable (have a flag)", clickable >= 160, String(clickable));
-  // hover Brazil
-  const br = page.locator('path.planet-country[aria-label^="Brazil"]');
-  await br.hover();
-  await sleep(150);
-  const card = await page.locator(".planet-card").innerText().catch(() => "");
-  check("hover card names the country", /Brazil/.test(card), card.replace(/\s+/g, " "));
-  check("hover card explains the click", /color the Brazil flag/i.test(card));
+  await page.locator(".planet-globe-canvas").waitFor({ timeout: 15000 });
+  // Sphere motion, projection and direct hit alignment have focused coverage in
+  // planet-globe-verify; keep these full-build flag-room/SEO regressions here.
+  const countryPicker = page.getByLabel("Choose a country to face it on the globe");
+  check("all flag rooms remain keyboard-accessible", await countryPicker.locator("option").count() >= 250);
+  await countryPicker.selectOption("BR");
+  await page.getByRole("button", { name: "Color the Brazil flag →" }).waitFor();
+  const card = await page.locator(".planet-card").innerText();
+  check("country card names Brazil", /Brazil/.test(card), card.replace(/\s+/g, " "));
+  check("country card offers its flag room", /color the Brazil flag/i.test(card));
   const sceneOn = await page.locator(".scene-layer.is-on").count();
   const sceneOff = await page.locator(".scene-layer.is-off").count();
   check("scene has locked + unlocked layers (0 strokes → sky only)", sceneOn === 1 && sceneOff >= 10, `${sceneOn} on / ${sceneOff} off`);
@@ -103,8 +91,8 @@ try {
   check("/paintjar still lands on the planet", true);
   // click Mexico → the studio opens on FLAGMX with the flag as the sheet
   await page.goto(API + "/planet", { waitUntil: "domcontentloaded" });
-  await page.locator('path.planet-country[aria-label^="Mexico"]').waitFor();
-  await page.locator('path.planet-country[aria-label^="Mexico"]').click();
+  await page.getByLabel("Choose a country to face it on the globe").selectOption("MX");
+  await page.getByRole("button", { name: "Color the Mexico flag →" }).click();
   await page.waitForURL(/\/join\/FLAGMX/, { timeout: 15000 });
   check("clicking Mexico navigates to /join/FLAGMX", /FLAGMX/.test(page.url()));
   await sleep(4000);

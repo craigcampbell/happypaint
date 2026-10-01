@@ -23,6 +23,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { getSession, getSupabaseClient, isCloudConfigured, signOut } from "./auth";
+import { normalizeCanceled } from "./cancellation";
 import { makeId } from "./ids";
 import { clearAllReplayIndexes } from "./replay";
 import { STORAGE_KEYS, wipeStorageFiles } from "./storage";
@@ -35,11 +36,13 @@ export const DELETION_REQUEST_KEY = "happy-paint:account-deletion:v1";
 // immediate; this models the schema's scheduled_purge_at).
 const PURGE_GRACE_DAYS = 30;
 
-// Mirror of account_deletion_requests columns (sync-ready).
+// Mirror of account_deletion_requests columns (sync-ready). Canonical status
+// spelling is "canceled"; receipts persisted by pre-rename builds may still
+// carry the legacy "cancelled" and are normalized on read.
 export type DeletionRequest = {
   id: string;
   profile_id: string;
-  status: "requested" | "processing" | "completed" | "cancelled";
+  status: "requested" | "processing" | "completed" | "canceled";
   requested_at: string;
   scheduled_purge_at: string | null;
   completed_at: string | null;
@@ -65,10 +68,16 @@ const APP_STORAGE_KEYS: string[] = [
 ];
 
 // Read the locally-persisted deletion request (proof of filing), or null.
+// The status is normalized at ingress: receipts written by older builds may
+// carry the legacy "cancelled" spelling.
 export async function getDeletionRequest(): Promise<DeletionRequest | null> {
   try {
     const raw = await AsyncStorage.getItem(DELETION_REQUEST_KEY);
-    return raw ? (JSON.parse(raw) as DeletionRequest) : null;
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as DeletionRequest;
+    return { ...parsed, status: normalizeCanceled(parsed.status) as DeletionRequest["status"] };
   } catch {
     return null;
   }

@@ -3,6 +3,7 @@ import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { createInviteCode } from "../utils/social";
+import { isCanceled } from "../utils/cancellation";
 
 export default function FamilyPage({ onNavigate }) {
   const [session, setSession] = useState(null);
@@ -67,7 +68,8 @@ export default function FamilyPage({ onNavigate }) {
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get("checkout");
     if (result === "success") setMessage("Family is activating — welcome! It may take a few seconds to update.");
-    if (result === "cancelled") setMessage("Nothing was charged. You can come back whenever you're ready.");
+    // Accepts the legacy ?checkout=cancelled spelling on old Stripe cancel URLs.
+    if (isCanceled(result)) setMessage("Nothing was charged. You can come back whenever you're ready.");
   }, []);
 
   const callBilling = async (path, body) => {

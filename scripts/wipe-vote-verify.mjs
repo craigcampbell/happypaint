@@ -16,7 +16,9 @@ import { fileURLToPath } from "url";
 import { WebSocket } from "ws";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SCRATCH = path.join(process.env.TEMP || "/tmp", "wipe-vote-verify-data");
+const SCRATCH = process.env.HP_TEST_SCRATCH
+  ? path.join(process.env.HP_TEST_SCRATCH, "wipe-vote-verify-data")
+  : path.join(process.env.TMPDIR || process.env.TEMP || "/tmp", "wipe-vote-verify-data");
 const PORT = 8946;
 const BASE = `http://localhost:${PORT}`;
 
@@ -161,8 +163,8 @@ async function pairScenario() {
   await sleep(1500);
   const ma = a.msgs.length;
   a.send({ type: "wipe_cancel", id: reqB.req.id });
-  const cancelled = await waitFor(b, ended("cancelled"), 2000);
-  check("B pair: the asker cancels — everyone is told", !!cancelled && !has(a, ma, isClear));
+  const canceled = await waitFor(b, ended("canceled"), 2000);
+  check("B pair: the asker cancels — everyone is told", !!canceled && !has(a, ma, isClear));
   const view = await joinerView(R);
   check("B pair: the mural survived the cancel", view.ops === 2, `ops=${view.ops}`);
 
@@ -309,7 +311,7 @@ async function legacyClearScenario() {
   await sleep(400);
   check("H legacy: a bare clear becomes a countdown", req?.req?.mode === "countdown" && !has(b, mb, isClear));
   a.send({ type: "wipe_cancel", id: req.req.id });
-  await waitFor(b, ended("cancelled"), 1500);
+  await waitFor(b, ended("canceled"), 1500);
   a.ws.close(); b.ws.close();
 }
 
@@ -325,7 +327,7 @@ async function tabsScenario() {
   const req = await waitFor(a2, (m) => isWipeReq(m) && m.req);
   check("I tabs: 3 sockets but 2 people → countdown, not a vote", req?.req?.mode === "countdown", `mode=${req?.req?.mode}`);
   b.send({ type: "wipe_cancel", id: req.req.id });
-  await waitFor(a1, ended("cancelled"), 1500);
+  await waitFor(a1, ended("canceled"), 1500);
   a1.ws.close(); a2.ws.close(); b.ws.close();
 }
 
@@ -407,7 +409,7 @@ async function hostScenario() {
   const hr = await waitFor(g2, (m) => isWipeReq(m) && m.req, 1500);
   check("L host: the host's own request skips the vote", hr?.req?.mode === "countdown", `mode=${hr?.req?.mode}`);
   h.send({ type: "wipe_cancel", id: hr.req.id });
-  await waitFor(g2, ended("cancelled"), 1500);
+  await waitFor(g2, ended("canceled"), 1500);
   const mg = g2.msgs.length;
   g1.send({ type: "wipe_request" });
   const gr = await waitAfter(g2, mg, (m) => isWipeReq(m) && m.req, 1500);

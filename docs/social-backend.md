@@ -22,6 +22,16 @@ Start with Supabase:
 
 Reference schema: `backend/supabase/schema.sql`.
 
+Cancellation spelling: the canonical enum/protocol value is US-spelled
+`canceled` everywhere (session_status, timed_event_status,
+account_deletion_status, wipe outcomes, checkout URLs). Rows or messages
+written before the rename may still carry the legacy `cancelled`; clients
+normalize it on ingress (web `src/utils/cancellation.js`, mobile
+`src/cancellation.js`). Databases provisioned before the rename need
+`backend/supabase/migrations/20261001000000_rename_cancelled_to_canceled.sql`
+— idempotent, NOT applied to production (this backend is the legacy/optional
+reference; the production app runs on PocketBase).
+
 Future economy schema should add append-only wallet records for Drops and Kudos:
 
 - `wallets`: current Drops, Kudos, locked creator balance, and payout eligibility.
@@ -65,7 +75,7 @@ Timed events:
 
 - Lifecycle: `draft` -> `upcoming` -> `live` -> `voting` -> `ended`.
 - Events can collect rooms while live and gallery posts while voting.
-- Adult events should stay draft/cancelled until there is a separate adult-only surface.
+- Adult events should stay draft/canceled until there is a separate adult-only surface.
 - Events need start/end/voting windows so stale contests do not stay on the front page forever.
 
 Gallery voting:
@@ -194,7 +204,7 @@ Session clients subscribe to:
 - `stroke.preview`: optional ephemeral live preview, not stored.
 - `media.add`: approved library media or moderated user media, depending on room audience.
 - `media.remove`: host or moderation removal.
-- `session.state`: room open, planned, ended, or cancelled.
+- `session.state`: room open, planned, ended, or canceled.
 - `role.changed`: host/admin promotion or demotion between artist and viewer.
 - `gallery.posted`: reviewed group artwork ready for gallery moderation.
 - `gallery.vote`: a vote event or local optimistic state before backend confirmation.
