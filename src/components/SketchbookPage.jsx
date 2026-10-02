@@ -1,6 +1,6 @@
-// /sketchbook/:id — the sketchbook reader (docs/SKETCHBOOKS-CONTRACT.md).
+// /sketchbook/:id, the sketchbook reader (docs/SKETCHBOOKS-CONTRACT.md).
 //
-// PUBLIC books: anyone can flip through the pages — the pinned prompt chip
+// PUBLIC books: anyone can flip through the pages, the pinned prompt chip
 // stays in the top corner, previous/next (or the day strip) turns pages, and
 // ONLY the selected page's heavy canvas loads (the spectator LiveRoomCanvas
 // is mounted for one room at a time, keyed by page). Every page links to its
@@ -8,9 +8,9 @@
 // the start-your-own-sketchbook CTA; the owner gets add-page, invite and
 // visibility shortcuts.
 //
-// PRIVATE books: only the owner and invited artists can open them — the
+// PRIVATE books: only the owner and invited artists can open them, the
 // server answers everyone else with the same 404 as a missing book (no
-// metadata leak), so this page shows an honest "private — or not here"
+// metadata leak), so this page shows an honest "private, or not here"
 // card with a sign-in path back for invited artists. Private pages have NO
 // anonymous spectator surface, so the reader never mounts the spectate
 // canvas for them: the team views/draws through the page studio (member
@@ -21,8 +21,9 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
-import { fetchSketchbook, addSketchbookPage, setSketchbookVisibility } from "../utils/sketchbookApi";
+import { fetchSketchbook, addSketchbookPage, setSketchbookVisibility, startGuestSketchbook } from "../utils/sketchbookApi";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
+import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../sketchbook.css";
 
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
@@ -104,10 +105,10 @@ export default function SketchbookPage({ bookId, onNavigate }) {
           </>
         ) : (
           <>
-            <h1>This sketchbook is private — or isn’t here</h1>
+            <h1>This sketchbook is private, or isn’t here</h1>
             <p>
               Only the owner and invited artists can open a private sketchbook. If you were invited,
-              sign in and come straight back — this page will pick up where you left off.
+              sign in and come straight back, this page will pick up where you left off.
             </p>
             {session === null && isCloudConfigured ? (
               <button
@@ -136,6 +137,32 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   const page = pages[selected] || null;
   const isOwner = book.owner === true;
   const isPublic = book.public === true;
+  // An UNSAVED (guest) book: no owner exists yet, so owner controls never
+  // show. The notice explains what "not saved" means without ever implying
+  // THIS visitor could save someone else's book.
+  const unsaved = book.unsaved === true;
+
+  // One-tap start-your-own for the visitor (the same guest flow every prompt
+  // CTA uses): their OWN unsaved book, never this one.
+  const startOwnGuestBook = async () => {
+    if (busy) return;
+    const device = getDeviceKey();
+    if (!device) {
+      say("This browser blocks local storage, so we can't keep a sketchbook here.");
+      return;
+    }
+    setBusy(true);
+    const r = await startGuestSketchbook({ device });
+    setBusy(false);
+    if (!r.ok || !r.json?.room) {
+      say(r.error === "need_day"
+        ? "Inktober hasn't started yet. Try the shared Ink & Pencil room meanwhile."
+        : "Couldn't start your sketchbook just now. Try again in a moment.");
+      return;
+    }
+    saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+    onNavigate(`/join/${r.json.room}`);
+  };
 
   const addTodayPage = async () => {
     if (busy) return;
@@ -143,7 +170,7 @@ export default function SketchbookPage({ bookId, onNavigate }) {
     const r = await addSketchbookPage(book.id, null, session);
     setBusy(false);
     if (!r.ok) {
-      say(r.json?.message || "Couldn't add a page — pick a day in your studio banner instead.");
+      say(r.json?.message || "Couldn't add a page, pick a day in your studio banner instead.");
       return;
     }
     await load(session);
@@ -170,13 +197,13 @@ export default function SketchbookPage({ bookId, onNavigate }) {
     const r = await setSketchbookVisibility(book.id, goingPublic, session);
     setBusy(false);
     if (!r.ok || !r.json?.book) {
-      say(r.json?.message || "Couldn't change visibility — try again.");
+      say(r.json?.message || "Couldn't change visibility, try again.");
       return;
     }
     setBook(r.json.book);
     say(goingPublic
-      ? "Your sketchbook is now public — anyone with the link can watch."
-      : "Your sketchbook is now private — only you and invited artists can open it.");
+      ? "Your sketchbook is now public, anyone with the link can watch."
+      : "Your sketchbook is now private, only you and invited artists can open it.");
   };
 
   return (
@@ -196,12 +223,14 @@ export default function SketchbookPage({ bookId, onNavigate }) {
         </span>
         <h1 className="skb-reader-title">{book.title || "Inktober sketchbook"}</h1>
         <span
-          className={`skb-badge ${isPublic ? "skb-badge-public" : "skb-badge-private"}`}
-          title={isPublic
-            ? "Public — anyone with the link can watch; drawing stays invite-only"
-            : "Private — only the owner and invited artists can open this book"}
+          className={`skb-badge ${unsaved ? "skb-badge-unsaved" : isPublic ? "skb-badge-public" : "skb-badge-private"}`}
+          title={unsaved
+            ? "This sketchbook isn't saved to an account yet. Its pages stay public while they last."
+            : isPublic
+              ? "Public, anyone with the link can watch; drawing stays invite-only"
+              : "Private, only the owner and invited artists can open this book"}
         >
-          {isPublic ? "🌍 Public" : "🔒 Private"}
+          {unsaved ? "✏️ Not saved yet" : isPublic ? "🌍 Public" : "🔒 Private"}
         </span>
         <span className="skb-reader-meta">
           {book.artistCount} of {book.maxArtists} artists · {book.pageCount} of {book.maxPages} pages
@@ -209,12 +238,26 @@ export default function SketchbookPage({ bookId, onNavigate }) {
         </span>
       </header>
       <p className="skb-reader-visibility-note">
-        {isPublic
-          ? "Anyone with the link can watch this book; only the owner and invited artists can draw."
-          : isOwner
-            ? "Private: only you and your invited artists can open this book. Invitation links grant both viewing and drawing."
-            : "Private book — you’re viewing as an invited artist."}
+        {unsaved
+          ? "The artist hasn't signed up yet: these pages are public while they last, and only the artist's own device can draw on them."
+          : isPublic
+            ? "Anyone with the link can watch this book; only the owner and invited artists can draw."
+            : isOwner
+              ? "Private: only you and your invited artists can open this book. Invitation links grant both viewing and drawing."
+              : "Private book, you’re viewing as an invited artist."}
       </p>
+
+      {unsaved ? (
+        <div className="skb-reader-unsaved">
+          <p>
+            This sketchbook isn&rsquo;t saved to an account yet, so it isn&rsquo;t permanent. You can start your own
+            in one tap, no account needed, and save it later if you want to keep it.
+          </p>
+          <button type="button" className="primary-action" disabled={busy} onClick={startOwnGuestBook}>
+            {busy ? "Starting your page…" : "Start your own sketchbook →"}
+          </button>
+        </div>
+      ) : null}
 
       {pages.length > 0 ? (
         <>
@@ -253,7 +296,7 @@ export default function SketchbookPage({ bookId, onNavigate }) {
                 key={p.room}
                 role="tab"
                 aria-current={i === selected ? "true" : "false"}
-                title={`Day ${p.day} — ${p.prompt}${p.hidden ? " (hidden by moderators)" : ""}`}
+                title={`Day ${p.day}, ${p.prompt}${p.hidden ? " (hidden by moderators)" : ""}`}
                 onClick={() => setSelected(i)}
               >
                 {p.ops > 0 ? <span className="skb-day-dot" aria-label="has artwork">●</span> : null} {p.day}
@@ -286,7 +329,7 @@ export default function SketchbookPage({ bookId, onNavigate }) {
                 disabled={busy}
                 onClick={toggleVisibility}
                 title={isPublic
-                  ? "Switch back to private — only you and invited artists can open the book (takes effect immediately)"
+                  ? "Switch back to private, only you and invited artists can open the book (takes effect immediately)"
                   : "Make the book watchable by anyone with the link (asks for confirmation)"}
               >
                 {isPublic ? "Make private" : "Make public…"}

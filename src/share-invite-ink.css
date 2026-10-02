@@ -38,6 +38,29 @@
   color: #fbf3df;
 }
 
+/* In Inktober mode the toggle reads as a stamped ink chip: cream paper,
+ * heavy irregular border, hand lettering, a flick of spatter. */
+.share-invite-sheet[data-card-theme="inktober"] .share-card-theme button {
+  background: #fbf3df;
+  border: 2px solid #17131f;
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 rgba(23, 19, 31, 0.85);
+  color: #17131f;
+  font-family: "Inktober Share Ink", "Segoe Script", cursive;
+  font-size: 1.05rem;
+  font-weight: 700;
+  transform: rotate(-1deg);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-card-theme button:last-child {
+  transform: rotate(0.8deg);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-card-theme button[aria-pressed="true"] {
+  background: #17131f;
+  color: #fbf3df;
+}
+
 /* ---- Inktober-season sheet accents --------------------------------------- */
 .share-invite-sheet[data-card-theme="inktober"] h2 {
   font-family: "Inktober Share Ink", "Segoe Script", cursive;
@@ -46,24 +69,82 @@
   color: #17131f;
 }
 
+/* The preview reads as a pinned sheet of heavy-ink work: parchment ground,
+ * a double hand-ruled frame (two offset box-shadows), hard drop shadow. */
 .share-invite-sheet[data-card-theme="inktober"] .share-invite-preview {
   background: #fbf3df;
-  border-radius: 6px;
-  box-shadow: 8px 8px 0 rgba(23, 19, 31, 0.82);
+  border: 2px solid #17131f;
+  border-radius: 4px;
+  box-shadow:
+    4px 4px 0 #17131f,
+    8px 8px 0 rgba(23, 19, 31, 0.45);
+  transform: rotate(-0.6deg);
+  transition: transform 0.15s ease;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-preview:hover {
+  transform: rotate(0deg);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-preview img {
+  border-radius: 3px;
 }
 
 .share-invite-sheet[data-card-theme="inktober"] .share-invite-preview-empty {
   color: #655d71;
+  font-family: "Inktober Share Ink", "Segoe Script", cursive;
+  font-size: 1.1rem;
 }
 
 .share-invite-sheet[data-card-theme="inktober"] .share-invite-code {
   background: #17131f;
+  border: 2px solid #17131f;
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 rgba(23, 19, 31, 0.45);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-code span {
+  letter-spacing: 0.14em;
 }
 
 .share-invite-sheet[data-card-theme="inktober"] .share-invite-code strong {
   font-family: "Inktober Share Ink", "Segoe Script", cursive;
   font-size: 1.6rem;
   letter-spacing: 0.16em;
+}
+
+/* Share buttons in Inktober mode: ink-stamped plates. Cream faces, heavy
+ * ink borders, hard offset shadows that lift on hover/active like a stamp
+ * being pressed. The per-service colours stay for recognition. */
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-btn {
+  border: 2px solid #17131f;
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 rgba(23, 19, 31, 0.8);
+  background: #fbf3df;
+  color: #17131f;
+  font-weight: 800;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-btn:hover:not(:disabled) {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 rgba(23, 19, 31, 0.8);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 rgba(23, 19, 31, 0.8);
+}
+
+/* The already-dark buttons keep their ink fill but gain the stamped edge. */
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-btn.share-tiktok,
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-btn.share-x {
+  background: #17131f;
+  color: #fbf3df;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-note {
+  color: #655d71;
 }
 
 /* ---- New share actions ---------------------------------------------------- */

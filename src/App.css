@@ -362,7 +362,7 @@ button:disabled {
   gap: 5px;
 }
 
-/* Fun icon-cards: a big emoji on top, the name underneath, centered — reads like
+/* Fun icon-cards: a big emoji on top, the name underneath, centered, reads like
    a kids' art box instead of a row of text buttons. Applies on desktop + mobile. */
 .brush-chip,
 .texture-chip {
@@ -477,7 +477,7 @@ button:disabled {
 
 /* The chosen color pops out with a white + brand ring so kids can see what's
    selected at a glance (overrides the generic inset .is-active ring). The
-   :hover variant below has to repeat it — otherwise hovering the selected
+   :hover variant below has to repeat it, otherwise hovering the selected
    swatch (higher-specificity hover rule) would wipe its ring. */
 .color-swatch.is-active,
 .color-swatch.is-active:hover:not(:disabled) {
@@ -577,7 +577,7 @@ button:disabled {
   box-shadow: 0 24px 70px rgba(16, 24, 32, 0.28);
   /* The modal is its OWN scroll container. Its backdrop is position:fixed and
      centers with place-items, so a modal taller than the screen used to spill
-     off both ends with nothing scrollable — on a phone the rooms dialog
+     off both ends with nothing scrollable, on a phone the rooms dialog
      rendered 2174px tall on a 667px screen and most of the list was simply
      unreachable. Capping the height here (rather than scrolling the backdrop)
      also avoids the classic centered-overflow bug where the TOP gets clipped
@@ -2438,7 +2438,7 @@ button:disabled {
   min-width: 120px;
 }
 
-/* The share CTA leads — full width above the secondary actions. */
+/* The share CTA leads, full width above the secondary actions. */
 .replay-actions .replay-share {
   flex-basis: 100%;
   font-size: 1.05rem;
@@ -3083,7 +3083,7 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Floating leave/switch control — desktop hides it (the room bar covers it),
+/* Floating leave/switch control, desktop hides it (the room bar covers it),
    mobile shows it fixed so there's always an obvious way out of a room. */
 .studio-rooms-fab { display: none; }
 .mp-count {
@@ -3188,7 +3188,7 @@ button:disabled {
   0%, 100% { transform: rotate(-45deg) scale(1); }
   50% { transform: rotate(-45deg) scale(1.35); }
 }
-/* A friend we just jumped to from a chat chip — a couple of expanding rings so
+/* A friend we just jumped to from a chat chip, a couple of expanding rings so
    they're easy to spot among everyone's live cursors. */
 .remote-cursor.is-focused { z-index: 3; }
 .remote-cursor.is-focused .remote-cursor-dot {
@@ -3219,7 +3219,7 @@ button:disabled {
 }
 .brush-cursor.is-visible { opacity: 0.95; }
 
-/* The tip preview: one translucent dab of the current brush (its real shape —
+/* The tip preview: one translucent dab of the current brush (its real shape -
    bristles, paint ellipse, airbrush cloud…) drawn by drawBrushTip, centered on
    the ring and free to overflow it (paint dabs are wider than they are tall). */
 .brush-cursor-tip {
@@ -4438,7 +4438,7 @@ button:disabled {
   font-weight: 800;
   white-space: nowrap;
 }
-/* Smudge/eraser carry no pigment — the Color section shows a hint instead of
+/* Smudge/eraser carry no pigment, the Color section shows a hint instead of
    swatches, so the rail explains why the palette went away. */
 .tool-section .tool-hint {
   margin: 0;
@@ -4484,7 +4484,7 @@ button:disabled {
 @media (max-width: 1024px), (pointer: coarse) {
   .seg-toggle button { min-height: 44px; }
 }
-/* Pressure (Stroke section): Size | Opacity | Both | Off — four cells of the
+/* Pressure (Stroke section): Size | Opacity | Both | Off, four cells of the
    same pill track, captions a touch smaller so all four fit the rail. */
 .pref-pressure {
   display: grid;
@@ -4592,7 +4592,7 @@ button:disabled {
 .myroom-fade { font-size: 12px; font-weight: 700; color: #9a3412; }
 .myroom-go { min-height: 38px; padding: 0 16px; border-radius: 999px; font-weight: 800; }
 .myroom-go:disabled { opacity: 0.5; }
-/* The modal's list: a small picture, the words, the button — one row each. */
+/* The modal's list: a small picture, the words, the button, one row each. */
 .myrooms-list .myroom { grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; }
 .myrooms-list .myroom-thumb { font-size: 1.3rem; border-radius: 8px; }
 .lobby-audience { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
@@ -5428,8 +5428,8 @@ button:disabled {
   justify-content: flex-start;
   gap: 4px;
   /* The card owns the shape. An aspect-ratio on the IMG (with width:100%)
-     never reached the button's intrinsic height — %-width children are cut
-     out of intrinsic sizing — so every card collapsed to the global button
+     never reached the button's intrinsic height, %-width children are cut
+     out of intrinsic sizing, so every card collapsed to the global button
      min-height (42px) and the thumbnails spilled over their neighbors. */
   aspect-ratio: 3 / 4.35;
   padding: 6px;
@@ -5499,7 +5499,7 @@ button:disabled {
   min-width: 0;
 }
 .sheet-preview img {
-  /* A real look at the sheet, not a 56px speck — sheets are portrait 3:4. */
+  /* A real look at the sheet, not a 56px speck, sheets are portrait 3:4. */
   width: 96px;
   height: 128px;
   object-fit: contain;
@@ -5532,7 +5532,7 @@ button:disabled {
   font-size: 0.85rem;
 }
 /* Phones: denser grid, keyboard-safe height. (Width stays the base
-   min(960px, 96vw) — a percentage here re-resolves against the backdrop's
+   min(960px, 96vw), a percentage here re-resolves against the backdrop's
    auto-sized grid track and balloons the modal to its content width.) */
 @media (max-width: 640px) {
   /* NOTE: no max-height override here. The base min(88vh, calc(100dvh - 20px))
@@ -5572,7 +5572,7 @@ button:disabled {
   /* Chunky, tappable colors. The OLD rule capped width with max-width +
      justify-self:center, which actually collapsed each swatch to its ~2px content
      width inside the column (that's why the colors looked "super small"). Size
-     them by the COLUMN instead — auto-fill tracks of ~48px that the swatch fills —
+     them by the COLUMN instead, auto-fill tracks of ~48px that the swatch fills -
      so they stay a fat, finger-friendly ~48–54px on phones and tablets alike. */
   .palette-grid { grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 10px; }
   .color-swatch {
@@ -5605,7 +5605,7 @@ button:disabled {
   .brush-grid .brush-chip { min-height: 50px; }
   .chip-ico { font-size: 1.55rem; }
 
-  /* The quick bar STAYS while the drawer is open — hiding it left kids with no
+  /* The quick bar STAYS while the drawer is open, hiding it left kids with no
      way to reach Chat / Pan / Eraser without closing the sheet first. Its z-index
      (70) already clears the rail (60) and the backdrop (55); the phone sheet is
      capped and lifted in studio-layout.css so it slides in underneath the bar. */
@@ -5688,7 +5688,7 @@ button:disabled {
   padding: 5px 12px;
 }
 
-/* ---- Keyboard focus visibility (a11y) — only for keyboard users --------- */
+/* ---- Keyboard focus visibility (a11y), only for keyboard users --------- */
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -5777,7 +5777,7 @@ textarea:focus-visible,
    the SPA intercepts on plain left-click. Neutralize anchor UA styles so they
    render exactly like the buttons they replaced. */
 /* No `color` here on purpose: every nav anchor gets its ink from its own class
-   rules (.site-nav-links > :is(button,a), .site-brand, .site-nav-paint, …) —
+   rules (.site-nav-links > :is(button,a), .site-brand, .site-nav-paint, …) -
    a blanket inherit/override would clobber the themed CTA pill. */
 .site-nav a {
   text-decoration: none;
@@ -5892,7 +5892,7 @@ textarea:focus-visible,
 .home-code input { width: min(220px, 50vw); }
 
 /* ---- Home: Fridge Wall nudge (community loop) ---- */
-/* Today's Challenge — the daily come-back loop. Warm sunny card so it pops
+/* Today's Challenge, the daily come-back loop. Warm sunny card so it pops
    against the cool wall section below it. */
 .home-daily {
   width: min(1040px, 100%);
@@ -6113,7 +6113,7 @@ textarea:focus-visible,
 
 /* ---- Film strip (bottom animation timeline) --------------------------------
    Skeuomorphic reel: charcoal strip, sprocket holes (pure CSS radial-gradient
-   bands — zero images), cel thumbnails with a warm projector glow on the active
+   bands, zero images), cel thumbnails with a warm projector glow on the active
    cel, a scrub rail with a grabbable playhead, and per-cel eyeball toggles. */
 
 .film-strip {
@@ -6324,7 +6324,7 @@ textarea:focus-visible,
   font-size: 1.2rem;
 }
 
-/* Confetti burst on a cel — a few emoji pop, scatter up, and fade. */
+/* Confetti burst on a cel, a few emoji pop, scatter up, and fade. */
 .fs-cheer-burst {
   position: absolute;
   inset: 0;
@@ -6353,7 +6353,7 @@ textarea:focus-visible,
   100% { transform: translate(calc(-50% + var(--dx, 0)), -42px) scale(0.9) rotate(var(--dr, 0)); opacity: 0; }
 }
 
-/* "Come look at my frame!" beacon card — floats over the canvas, tap to jump. */
+/* "Come look at my frame!" beacon card, floats over the canvas, tap to jump. */
 .beacon-card {
   position: absolute;
   top: 14px;
@@ -6667,13 +6667,13 @@ textarea:focus-visible,
 .fs-reel {
   position: relative;
   flex: 1000 1 0;
-  min-width: min(100%, 520px); /* ~4 cels — below this it takes its own line */
+  min-width: min(100%, 520px); /* ~4 cels, below this it takes its own line */
   display: flex;
   align-items: center;
   gap: 10px;
   overflow-x: auto;
   /* A pen can't drag-scroll: the scrollbar IS the way along a long reel on a
-     Cintiq, so keep it — just thin and on-theme. */
+     Cintiq, so keep it, just thin and on-theme. */
   scrollbar-width: thin;
   scrollbar-color: #4a5662 transparent;
   padding: 15px 6px;
@@ -6692,7 +6692,7 @@ textarea:focus-visible,
 .fs-cel-thumb {
   position: relative;
   width: 96px;
-  height: 60px; /* 8:5 — matches the 4000x2500 canvas */
+  height: 60px; /* 8:5, matches the 4000x2500 canvas */
   padding: 0;
   overflow: hidden;
   border-radius: 6px;
@@ -6880,7 +6880,7 @@ textarea:focus-visible,
     padding: 6px 8px 6px;
     border-radius: 12px;
     /* Clear the floating quickbar (bottom:10px, ~58px tall, z-70) so the reel
-       and scrub rail stay reachable — same 78px convention as the tool rail. */
+       and scrub rail stay reachable, same 78px convention as the tool rail. */
     margin-bottom: calc(70px + env(safe-area-inset-bottom));
   }
   .fs-duration {
@@ -6902,7 +6902,7 @@ textarea:focus-visible,
 
 /* Short screens (a 1080p Cintiq at 2x is ~960x470 of CSS space) and phones:
    the reel's own line costs height, so tighten the strip rather than the
-   canvas (a phone strip stays under ~120px — scripts/filmstrip-verify.mjs). */
+   canvas (a phone strip stays under ~120px, scripts/filmstrip-verify.mjs). */
 @media (max-height: 640px), (max-width: 600px) {
   .film-strip { padding: 4px 8px; gap: 2px 8px; }
   .fs-transport button,
@@ -7274,7 +7274,7 @@ textarea:focus-visible,
     padding: 8px;
   }
   /* On a 320px phone the three nowrap sort chips are wider than the screen and
-     used to push the whole page sideways — scroll them inside their own pill
+     used to push the whole page sideways, scroll them inside their own pill
      instead of overflowing the document. */
   .wall-sorts {
     width: 100%;
@@ -8036,7 +8036,7 @@ select {
   }
 
   /* Touch minimum. These are all icon-only controls a finger has to hit while
-     the other hand holds the tablet — the glyphs keep their size, the BOX grows
+     the other hand holds the tablet, the glyphs keep their size, the BOX grows
      to 44px so the tap lands. (Each already centers its glyph, so they stay
      aligned in their rows.) */
   .room-prompt-chip button,
@@ -8423,7 +8423,7 @@ select {
   max-width: min(92vw, 720px);
   padding: 10px 16px;
   border-radius: 16px;
-  /* Fully opaque — NO backdrop-filter. During a drawing round this banner sits
+  /* Fully opaque: NO backdrop-filter. During a drawing round this banner sits
      over the live canvas the player is actively drawing on; a backdrop blur
      would re-composite the canvas every frame (drawing performance is paramount). */
   background: #0b1524;
@@ -8464,7 +8464,7 @@ select {
 .phone-skip-btn { background: #f59e0b; color: #3a1d00; }
 .phone-start-btn:disabled { background: #475569; color: #cbd5e1; cursor: not-allowed; }
 
-/* The floating "Done" button on a drawing round — clears the bottom toolbar. */
+/* The floating "Done" button on a drawing round, clears the bottom toolbar. */
 .phone-done-fab {
   position: absolute;
   bottom: 100px;
@@ -8809,7 +8809,7 @@ select {
   font-weight: 700;
 }
 
-/* ==== Canvas Chat — Twitch × iMessage over the canvas ===================== */
+/* ==== Canvas Chat: Twitch × iMessage over the canvas ===================== */
 /* Every piece is transform/opacity-animated and blur-free: this UI floats
    over the live drawing surface, and drawing performance is paramount. */
 
@@ -8936,7 +8936,7 @@ select {
   color: #e2e8f0;
   cursor: pointer;
 }
-/* The room row / vote card / participants ride along inside the panel — with
+/* The room row / vote card / participants ride along inside the panel, with
    dark-panel colors (their home styles assume a light background). */
 .cc-panel .mp-chat-room { display: flex !important; padding: 0 10px 6px; color: #e2e8f0; border: none; }
 .cc-panel .mp-chat-room-switch { color: #a5f3c4; }
@@ -9278,7 +9278,7 @@ select {
     max-height: 52vh;
     max-height: 52dvh;
   }
-  /* The quickbar's 💬 button is the mobile entry — the pill would sit in the
+  /* The quickbar's 💬 button is the mobile entry, the pill would sit in the
      same bottom band as the reaction picker's emoji row and cover its tail. */
   .cc-pill { display: none; }
   .cc-ambient { bottom: calc(96px + env(safe-area-inset-bottom)); max-width: 76vw; }
@@ -9289,7 +9289,7 @@ select {
 /* ---- Small phones: rescue the zoom cluster from under the rooms FAB ------- */
 /* The rooms FAB row (🏠 · Rooms · step-back · 🔔, z-index 45) is ~253px wide and
    the zoom cluster ~164px, so on any phone-width screen they fight for the same
-   line — and the FAB wins, burying the "−" button and the % readout under it
+   line, and the FAB wins, burying the "−" button and the % readout under it
    (z-index 45 over 20). A kid on an iPhone SE cannot zoom out at all. Neither
    row can shrink enough to share the line, so zoom moves to the bottom-RIGHT:
    it mirrors the reaction picker on the bottom-left and reuses the same
@@ -9302,7 +9302,7 @@ select {
     right: 8px;
     bottom: calc(84px + env(safe-area-inset-bottom));
   }
-  /* A live vote card lives in that same corner — lift it clear of the cluster:
+  /* A live vote card lives in that same corner, lift it clear of the cluster:
      84px quick-bar clearance + the 54px-tall cluster + a 12px gap. */
   .cc-vote-floating {
     bottom: calc(150px + env(safe-area-inset-bottom));
@@ -9562,7 +9562,7 @@ select {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* The doodle pad — a tiny meme easel above the composer. */
+/* The doodle pad, a tiny meme easel above the composer. */
 .doodle-pad {
   margin: 6px 10px 0;
   padding: 8px;
@@ -9623,7 +9623,7 @@ select {
   cursor: pointer;
 }
 
-/* Homepage banter overlay — the room's conversation over the live viewport. */
+/* Homepage banter overlay, the room's conversation over the live viewport. */
 .home-banter {
   position: absolute;
   left: 10px;
@@ -9657,7 +9657,7 @@ select {
 .home-banter-hypes { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .home-banter-hypes .hype-emoji { font-size: 44px; }
 
-/* "Join the chat" — one tap from reading the banter to being in it. */
+/* "Join the chat", one tap from reading the banter to being in it. */
 .home-join-chat {
   display: flex;
   align-items: center;
@@ -9698,7 +9698,7 @@ select {
    pointer math normalizes by the rendered rect). */
 .doodle-pad canvas { width: 100%; height: auto; aspect-ratio: 13 / 9; }
 
-/* Reserve the bubble's box BEFORE the image loads — an async pop-in would
+/* Reserve the bubble's box BEFORE the image loads, an async pop-in would
    unpin the chat scroll and shift the ambient overlay mid-stroke. */
 .cc-doodle { aspect-ratio: 13 / 9; object-fit: cover; }
 img.cc-doodle { background: #fff; }
@@ -9728,7 +9728,7 @@ img.cc-doodle { background: #fff; }
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  /* Opaque enough to read as white-on-dark over the white canvas — at 0.62 the
+  /* Opaque enough to read as white-on-dark over the white canvas, at 0.62 the
      label composited to gray-on-gray and fell under WCAG AA. */
   background: rgba(10, 16, 28, 0.78);
   color: #fff;
@@ -9784,7 +9784,7 @@ img.cc-doodle { background: #fff; }
 .wipe-keep-count,
 .wipe-fork-sub { font-weight: 600; font-size: 0.74rem; opacity: 0.85; }
 
-/* The prompt chip shares this top strip — keep it clear of the countdown so
+/* The prompt chip shares this top strip, keep it clear of the countdown so
    long prompts never slide underneath it. */
 .room-prompt-chip:has(~ .wipe-chip) { max-width: calc(100% - 210px); }
 
@@ -9803,8 +9803,8 @@ img.cc-doodle { background: #fff; }
 
 /* ==== Member wipe: countdown + room vote (WipeCountdown.jsx) ============== */
 /* Same dark card language as the refresh panel. It floats over the top of the
-   canvas — above the prompt chip (28) and clear banner (30), under the refresh
-   panel (33) — only while a wipe is pending. */
+   canvas, above the prompt chip (28) and clear banner (30), under the refresh
+   panel (33), only while a wipe is pending. */
 .wipe-req {
   position: absolute;
   top: 12px;
@@ -9852,7 +9852,7 @@ img.cc-doodle { background: #fff; }
   cursor: pointer;
 }
 .wipe-req-cancel { background: #f5f8fc; color: #0b1524; }
-/* The last seconds: still visible, clearly grayed out — it's happening. */
+/* The last seconds: still visible, clearly grayed out, it's happening. */
 .wipe-req-cancel:disabled {
   background: rgba(255, 255, 255, 0.1);
   color: rgba(245, 248, 252, 0.5);
@@ -9900,7 +9900,7 @@ img.cc-doodle { background: #fff; }
   inset: 0;
   /* Above everything that lives in the canvas area (reaction picker 30, zoom
      controls 40) AND the fixed chrome that overlaps it (rooms FAB 45, mobile
-     quickbar 70) — but under a real modal backdrop (200). */
+     quickbar 70), but under a real modal backdrop (200). */
   z-index: 90;
   display: grid;
   place-items: center;
@@ -9980,7 +9980,7 @@ img.cc-doodle { background: #fff; }
   display: block;
 }
 
-/* The reveal. inset() is the cheap one — no layout, no repaint of the SVG. */
+/* The reveal. inset() is the cheap one, no layout, no repaint of the SVG. */
 .load-paint {
   -webkit-clip-path: inset(0 calc(100% - var(--p) * 1%) 0 0);
   clip-path: inset(0 calc(100% - var(--p) * 1%) 0 0);
@@ -10297,11 +10297,11 @@ img.cc-doodle { background: #fff; }
 }
 
 /* ==== Undo, on its own ==================================================== */
-/* Undo used to sit in the Actions list inside the tool rail — a trip away from
+/* Undo used to sit in the Actions list inside the tool rail, a trip away from
    the canvas mid-drawing. It is now the one action with its own control: a
    floating pill over the canvas top-right on desktop, and its own button at
    the end of the quick bar on the compact tiers (the top-right corner there
-   belongs to zoom). It takes back YOUR last stroke only — the restore replays
+   belongs to zoom). It takes back YOUR last stroke only, the restore replays
    friends' ops back over itself (App.jsx#replaySharedOpsSince), so nobody
    else's art moves. */
 .undo-fab {
@@ -10336,17 +10336,17 @@ img.cc-doodle { background: #fff; }
 }
 .undo-fab-ico { font-size: 20px; line-height: 1; }
 
-/* The countdown chip shared this corner — give it the row underneath, exactly
+/* The countdown chip shared this corner, give it the row underneath, exactly
    as the compact tiers already do, instead of squeezing two pills onto one
    line. (The FAB only renders on desktop, so this never fires on a phone.) */
 .undo-fab ~ .wipe-chip { top: 60px; }
 .undo-fab ~ .wipe-chip ~ .wipe-panel { top: 96px; }
-/* The prompt chip is centered across the same strip — keep it clear of the FAB. */
+/* The prompt chip is centered across the same strip, keep it clear of the FAB. */
 .undo-fab ~ .room-prompt-chip,
 .undo-fab ~ .room-prompt-chip:has(~ .wipe-chip) { max-width: calc(100% - 230px); }
 
 @media (max-width: 1024px), (pointer: coarse) {
-  /* The quick bar's hairline divider — tablet already styled its zoom group's
+  /* The quick bar's hairline divider, tablet already styled its zoom group's
      one; undo sits behind the same rule at the far end of every compact bar. */
   .qb-sep {
     align-self: center;
@@ -10356,7 +10356,7 @@ img.cc-doodle { background: #fff; }
     margin: 0 2px;
     background: var(--snap-gray-200, #dfe3e8);
   }
-  /* Nothing to take back yet — dim, but keep the slot so the bar never shifts
+  /* Nothing to take back yet, dim, but keep the slot so the bar never shifts
      under a thumb that is already on its way to the button. */
   .qb-btn:disabled { opacity: 0.4; }
   .qb-undo .qb-ico { font-size: 25px; }

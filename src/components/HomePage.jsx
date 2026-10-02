@@ -9,6 +9,8 @@ import BrandMark from "./BrandMark";
 import InktoberInkHeading from "./InktoberInkHeading";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
+import { startGuestSketchbook } from "../utils/sketchbookApi";
+import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../seasonal.css";
 import "../home-inktober.css";
 import "../sketchbook.css";
@@ -16,8 +18,8 @@ import "../sketchbook.css";
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
 
-// The homepage live preview is fixed to the shared Open Studio (MAIN) — the
-// commons every visitor can walk into — refreshing as a periodic snapshot
+// The homepage live preview is fixed to the shared Open Studio (MAIN), the
+// commons every visitor can walk into, refreshing as a periodic snapshot
 // (preview owner's snapshotIntervalMs) instead of a continually-running canvas.
 const PREVIEW_CODE = "MAIN";
 
@@ -39,7 +41,7 @@ function readStreak() {
     const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const now = new Date();
     const today = day(now);
-    // Calendar arithmetic (DST-proof) — see bumpDrawingStreak in App.jsx.
+    // Calendar arithmetic (DST-proof), see bumpDrawingStreak in App.jsx.
     const yesterday = day(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
     return saved.last === today || saved.last === yesterday ? Number(saved.count) || 0 : 0;
   } catch {
@@ -47,7 +49,7 @@ function readStreak() {
   }
 }
 
-// "New challenge in 9h 32m" — minute precision is plenty for a daily timer.
+// "New challenge in 9h 32m", minute precision is plenty for a daily timer.
 function untilLabel(endsAt) {
   const ms = Math.max(0, endsAt - Date.now());
   const h = Math.floor(ms / 3_600_000);
@@ -55,7 +57,7 @@ function untilLabel(endsAt) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-// The room's live conversation floating over the homepage viewport — the talk
+// The room's live conversation floating over the homepage viewport, the talk
 // IS the show. Owns its own state fed via listenerRef, so a chatty room only
 // re-renders these few spans, never the page. Mounted keyed by room code.
 // Inert spans only (it renders inside the viewer <button>).
@@ -185,7 +187,7 @@ export default function HomePage({ onNavigate }) {
     };
   }, [showJoin]);
   // The viewed room's live banter rides through a ref-listener into the
-  // <HomeBanter> child, so a busy room's chat re-renders THAT tiny overlay —
+  // <HomeBanter> child, so a busy room's chat re-renders THAT tiny overlay -
   // never this whole page. onSocial itself stays referentially stable so
   // LiveRoomCanvas's socket effect (keyed on it) never reconnects.
   const socialListenerRef = useRef(null);
@@ -211,10 +213,10 @@ export default function HomePage({ onNavigate }) {
       const data = await res.json();
       const list = Array.isArray(data?.rooms) ? data.rooms : [];
       // The server orders the lobby: MAIN, then INKTOBER (seasonal), then the
-      // other featured rooms — the room cards below inherit that order as-is.
+      // other featured rooms, the room cards below inherit that order as-is.
       setRooms(list);
     } catch {
-      /* offline — leave as-is */
+      /* offline, leave as-is */
     }
   }, []);
 
@@ -250,7 +252,7 @@ export default function HomePage({ onNavigate }) {
   // nextChangeAt passes (a real UTC-midnight flip, scheduled per payload) and
   // whenever a hidden tab becomes visible again, so a long-lived page never
   // keeps claiming yesterday's prompt. A failed refresh past the announced
-  // rollover drops the state entirely — the card falls back to the generic
+  // rollover drops the state entirely, the card falls back to the generic
   // invitation rather than a stale or invented "today", and a retry is
   // scheduled so recovery doesn't need a reload.
   useEffect(() => {
@@ -357,7 +359,7 @@ export default function HomePage({ onNavigate }) {
         if (!active || !d || !d.prompt) return;
         setDaily(d);
       })
-      .catch(() => { /* offline — the card just doesn't render */ });
+      .catch(() => { /* offline, the card just doesn't render */ });
     return () => {
       active = false;
     };
@@ -365,7 +367,7 @@ export default function HomePage({ onNavigate }) {
 
   // Tick the countdown label once a minute; if midnight passed, pull the fresh
   // challenge so a long-lived tab rolls over on its own. Rollover is accepted
-  // only when the DATE actually changed — a client clock running fast would
+  // only when the DATE actually changed, a client clock running fast would
   // otherwise wipe the gallery strip and refetch-loop every minute until real
   // (server) midnight.
   useEffect(() => {
@@ -414,6 +416,34 @@ export default function HomePage({ onNavigate }) {
     onNavigate(href);
   };
 
+  // The Inktober hero card's draw CTA: start/resume THIS device's unsaved
+  // sketchbook for today's prompt and go straight into the page studio. No
+  // account needed; on failure the card falls back to the event page (which
+  // keeps the shared Ink & Pencil room one tap away).
+  const heroGuestBusyRef = useRef(false);
+  const drawInktoberToday = useCallback(async () => {
+    if (heroGuestBusyRef.current) return;
+    const device = getDeviceKey();
+    if (!device) {
+      onNavigate("/join/INKTOBER");
+      return;
+    }
+    heroGuestBusyRef.current = true;
+    try {
+      const r = await startGuestSketchbook({ device, day: null });
+      if (!r.ok || !r.json?.room) {
+        onNavigate("/inktober");
+        return;
+      }
+      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      onNavigate(`/join/${r.json.room}`);
+    } catch {
+      onNavigate("/inktober");
+    } finally {
+      heroGuestBusyRef.current = false;
+    }
+  }, [onNavigate]);
+
   // The generic "start drawing" entries land in the shared MAIN room (the
   // commons) so first-time visitors paint together instead of alone. A private
   // room is still one custom code away: joining any unused code via the form
@@ -436,7 +466,7 @@ export default function HomePage({ onNavigate }) {
           <div className="seasonal-banner-copy">
             {inktober.phase === "upcoming" ? (
               <>
-                <p className="seasonal-banner-title">Inktober is coming — get ready</p>
+                <p className="seasonal-banner-title">Inktober is coming, get ready</p>
                 <p className="seasonal-banner-sub">
                   31 days, 31 ink prompts. Our shared Ink &amp; Pencil room opens{" "}
                   {utcLabel(inktober.nextChangeAt) || "October 1"}.
@@ -445,9 +475,9 @@ export default function HomePage({ onNavigate }) {
             ) : null}
             {inktober.phase === "active" ? (
               <>
-                <p className="seasonal-banner-title">Inktober — Day {inktober.day} of 31</p>
+                <p className="seasonal-banner-title">Inktober: Day {inktober.day} of 31</p>
                 <p className="seasonal-banner-sub">
-                  Today&rsquo;s prompt: &ldquo;{inktober.prompt}&rdquo; — draw it with ink &amp; pencil, together.
+                  Today&rsquo;s prompt: &ldquo;{inktober.prompt}&rdquo;, draw it with ink &amp; pencil, together.
                 </p>
               </>
             ) : null}
@@ -489,7 +519,7 @@ export default function HomePage({ onNavigate }) {
             <h1 id="home-title">Draw something.</h1>
             <p className="home-hero-line">Make it together.</p>
             <p className="home-sub">
-              Jump into the Open Studio — a shared canvas where everyone draws together in real time. No account or install.
+              Jump into the Open Studio, a shared canvas where everyone draws together in real time. No account or install.
             </p>
             <div className="home-hero-actions">
               <button type="button" className="primary-action home-draw-now" onClick={startRoom}>
@@ -509,12 +539,13 @@ export default function HomePage({ onNavigate }) {
           {inktober ? (
             (() => {
               // Phase-aware card content. Only the active window claims a
-              // "today" — the state above is dropped the moment a refresh past
+              // "today", the state above is dropped the moment a refresh past
               // the announced rollover fails, so this is never stale. The
               // active card's draw CTA opens the visitor's OWN sketchbook
               // (create/resume with sign-in recovery); the shared public
               // INKTOBER room stays one quiet link below, exactly as before.
               const phase = inktober.phase;
+              const heroGuest = phase === "active"; // the active card draws, others navigate
               const card = {
                 active: {
                   title: "Inktober\nis here!",
@@ -522,7 +553,7 @@ export default function HomePage({ onNavigate }) {
                   promptText: inktober.prompt,
                   cta: "Draw it in your sketchbook!",
                   href: "/sketchbook",
-                  label: `Inktober day ${inktober.day} of 31 — today\u2019s prompt is \u201C${inktober.prompt}\u201D. Open your own Inktober sketchbook and draw today's page.`,
+                  label: `Inktober day ${inktober.day} of 31, today\u2019s prompt is \u201C${inktober.prompt}\u201D. Open your own Inktober sketchbook and draw today's page. No account needed.`,
                 },
                 upcoming: {
                   title: "Inktober\nis coming!",
@@ -530,7 +561,7 @@ export default function HomePage({ onNavigate }) {
                   promptText: inktober.prompt,
                   cta: "See the prompts \u2192",
                   href: "/inktober",
-                  label: `Inktober starts ${utcLabel(inktober.nextChangeAt) || "October 1"} — see all 31 prompts.`,
+                  label: `Inktober starts ${utcLabel(inktober.nextChangeAt) || "October 1"}, see all 31 prompts.`,
                 },
                 ended: {
                   title: "Inktober\nhas wrapped!",
@@ -538,7 +569,7 @@ export default function HomePage({ onNavigate }) {
                   promptText: "31 days of community ink",
                   cta: "See the gallery \u2192",
                   href: "/inktober",
-                  label: `Inktober ${inktober.year} has wrapped — browse the event gallery.`,
+                  label: `Inktober ${inktober.year} has wrapped, browse the event gallery.`,
                 },
               }[phase] || null;
               if (!card) return null;
@@ -547,7 +578,7 @@ export default function HomePage({ onNavigate }) {
                   type="button"
                   className="home-paper home-paper-ink"
                   data-phase={phase}
-                  onClick={() => onNavigate(card.href)}
+                  onClick={() => (heroGuest ? drawInktoberToday() : onNavigate(card.href))}
                   aria-label={card.label}
                 >
                   <BrandMark className="home-paper-ink-mark" showName={false} />
@@ -668,7 +699,7 @@ export default function HomePage({ onNavigate }) {
           {rooms.length > 0 ? (
             <div className="home-rooms-grid open-rooms-grid">
               {/* API order is the curated order: MAIN, then INKTOBER, then the
-                  other featured rooms — the cards inherit it untouched. */}
+                  other featured rooms, the cards inherit it untouched. */}
               {rooms.slice(0, 6).map((room) => (
                 <button
                   type="button"
@@ -702,7 +733,7 @@ export default function HomePage({ onNavigate }) {
               Paint on the same canvas in real time, or play a drawing game. Send a room code and everyone can jump in.
             </p>
             <ol className="home-invite-steps">
-              <li><strong>Jump into the Open Studio.</strong> It&rsquo;s a shared canvas — others may be drawing too.</li>
+              <li><strong>Jump into the Open Studio.</strong> It&rsquo;s a shared canvas, others may be drawing too.</li>
               <li><strong>Choose Invite friends.</strong> Share the room link with people you know.</li>
               <li><strong>Make something together.</strong> Everyone paints on the same canvas.</li>
             </ol>
@@ -746,7 +777,7 @@ export default function HomePage({ onNavigate }) {
             {/* One tap from reading the banter to being IN it. */}
             {active ? (
               <button type="button" className="home-join-chat" onClick={() => join(active.code)}>
-                <span className="home-join-chat-hint">💬 Join the chat — say hi, drop a doodle…</span>
+                <span className="home-join-chat-hint">💬 Join the chat, say hi, drop a doodle…</span>
                 <span className="home-join-chat-go">Chat →</span>
               </button>
             ) : null}
@@ -772,7 +803,7 @@ export default function HomePage({ onNavigate }) {
             <button type="button" className="home-wall-link" onClick={() => onNavigate("/wall")}>Visit the Wall →</button>
           </div>
 
-          {/* Prompt-specific artwork first — real wall posts stamped by the
+          {/* Prompt-specific artwork first, real wall posts stamped by the
               server for today's challenge / the Inktober event. When a prompt
               has no posts yet its strip simply doesn't render, and the generic
               strip below carries the section (never mislabeled as prompt art). */}

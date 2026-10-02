@@ -1,16 +1,16 @@
 // "Invite friends" share sheet. One place for every way to say "come draw with
 // me": the OS share sheet (mobile), copy link, X, Instagram, TikTok, save
-// image, SMS and email. Instagram/TikTok are the odd ones out — there's no
-// share URL and they ignore text — so we hand them a pre-rendered invite CARD
+// image, SMS and email. Instagram/TikTok are the odd ones out, there's no
+// share URL and they ignore text, so we hand them a pre-rendered invite CARD
 // (art + room code + link) and put the caption on the clipboard: on phones via
 // the OS share sheet (pick the app → Story/Post), on desktop by saving the PNG
 // and opening the site to upload it.
 //
 // During October the card defaults to the seasonal Inktober theme (original
-// rough ink strokes, cream paper, hand-lettered Caveat — see inviteCard.js)
+// rough ink strokes, cream paper, hand-lettered Caveat, see inviteCard.js)
 // with a user toggle back to the year-round Classic look. The seasonal
 // default follows the server-stamped phase: ONLY "active" (Oct 1–31) means
-// Inktober — the upcoming warm-up and the ended wind-down both default to
+// Inktober, the upcoming warm-up and the ended wind-down both default to
 // Classic, matching the October-only local-calendar fallback.
 //
 // Sketchbook pages can pin the sheet to a fixed Inktober day via the optional
@@ -22,7 +22,7 @@
 // Gesture discipline: navigator.share is called FIRST in every share handler
 // (no awaited clipboard work before it, or mobile Safari drops the user
 // activation). The caption is copied only AFTER the share resolves; an
-// AbortError (user cancelled) triggers nothing — no download, no new tab.
+// AbortError (user cancelled) triggers nothing, no download, no new tab.
 // "Share image…" attaches the card FILE to the OS sheet so Messages/Mail can
 // be picked as the target; sms:/mailto: stay link-only on purpose (those URL
 // schemes cannot attach images), with honest attach-it-yourself guidance.
@@ -76,7 +76,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
     }
   })();
 
-  // A pinned sketchbook page overrides the live event entirely — serialize
+  // A pinned sketchbook page overrides the live event entirely, serialize
   // first so an inline object literal from the parent stays referentially
   // stable across renders (no card re-render churn).
   const pinnedJson = inktoberPage ? JSON.stringify(inktoberPage) : null;
@@ -89,7 +89,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
   // Seasonal default: the server-stamped event state wins (UTC rollover, no
   // client clock math); until it arrives, an optimistic guess from the local
   // calendar keeps the first render sensible. Only the ACTIVE season defaults
-  // to Inktober — upcoming/ended default to Classic, and the toggle always
+  // to Inktober, upcoming/ended default to Classic, and the toggle always
   // allows either style. A pinned page skips the fetch: it IS the event.
   useEffect(() => {
     if (pinned) return undefined;
@@ -164,7 +164,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
 
   const copyLink = async () => {
     if (await copyText(joinUrl)) {
-      showToast("Invite link copied — paste it anywhere!");
+      showToast("Invite link copied, paste it anywhere!");
     } else {
       window.prompt("Copy this invite link:", joinUrl);
     }
@@ -174,7 +174,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
   const nativeShare = async () => {
     try {
       // Link-only on purpose: iPadOS drops the URL when a file rides along.
-      // The caption is seasonal — it matches the card the preview is showing.
+      // The caption is seasonal, it matches the card the preview is showing.
       await navigator.share({ title, text: caption, url: joinUrl });
       showToast("Invite shared! 🎨");
       onClose();
@@ -188,10 +188,10 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
     const popup = window.open(xIntentUrl({ roomId, joinUrl, theme }), "_blank", "noopener,noreferrer");
     if (!popup) {
       copyText(caption);
-      showToast("Popup blocked — caption copied, paste it into your post!");
+      showToast("Popup blocked, caption copied, paste it into your post!");
       return;
     }
-    showToast("Opening X — your invite link is in the post 🎨");
+    showToast("Opening X, your invite link is in the post 🎨");
     onClose();
   };
 
@@ -201,7 +201,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
     const label = target === "tiktok" ? "TikTok" : "Instagram";
     const current = cardRef.current;
     if (!current) {
-      showToast(cardFailed ? "Couldn't build the invite card — try Copy link instead" : "Getting your invite card ready…");
+      showToast(cardFailed ? "Couldn't build the invite card, try Copy link instead" : "Getting your invite card ready…");
       return;
     }
     if (navigator.canShare?.({ files: [current.file] })) {
@@ -219,21 +219,21 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
     const copied = await copyText(caption);
     downloadBlob(current.blob, current.file.name);
     window.open(target === "tiktok" ? "https://www.tiktok.com/upload" : "https://www.instagram.com/", "_blank", "noopener,noreferrer");
-    showToast(copied ? `Invite card saved + caption copied — upload it on ${label}!` : `Invite card saved — upload it on ${label}!`);
+    showToast(copied ? `Invite card saved + caption copied, upload it on ${label}!` : `Invite card saved, upload it on ${label}!`);
     onClose();
   };
 
-  // "Share image…" — the OS share sheet WITH the card file attached, so
+  // "Share image…", the OS share sheet WITH the card file attached, so
   // Messages or Mail can be picked as the target and the picture rides along
-  // (the sms:/mailto: links below can't do that). Share FIRST — nothing is
-  // awaited before the native call, so the tap's user activation survives —
+  // (the sms:/mailto: links below can't do that). Share FIRST, nothing is
+  // awaited before the native call, so the tap's user activation survives -
   // and an AbortError (user cancelled) is completely side-effect-free: no
   // download, no toast, no close. Unsupported platforms fall back to saving
   // the card with honest attach-it-yourself guidance.
   const shareImageNative = async () => {
     const current = cardRef.current;
     if (!current) {
-      showToast(cardFailed ? "Couldn't build the invite card — try Copy link instead" : "Getting your invite card ready…");
+      showToast(cardFailed ? "Couldn't build the invite card, try Copy link instead" : "Getting your invite card ready…");
       return;
     }
     if (navigator.canShare?.({ files: [current.file] })) {
@@ -248,22 +248,22 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
       }
     }
     downloadBlob(current.blob, current.file.name);
-    showToast("Invite card saved — attach it in Messages or Mail! 🖼️");
+    showToast("Invite card saved, attach it in Messages or Mail! 🖼️");
     onClose();
   };
 
   const saveImage = () => {
     const current = cardRef.current;
     if (!current) {
-      showToast(cardFailed ? "Couldn't build the invite card — try Copy link instead" : "Getting your invite card ready…");
+      showToast(cardFailed ? "Couldn't build the invite card, try Copy link instead" : "Getting your invite card ready…");
       return;
     }
     downloadBlob(current.blob, current.file.name);
-    showToast("Invite card saved — attach it anywhere! 🖼️");
+    showToast("Invite card saved, attach it anywhere! 🖼️");
     onClose();
   };
 
-  // SMS/email can't carry the picture — only the link (honest note below).
+  // SMS/email can't carry the picture, only the link (honest note below).
   const smsHref = `sms:?&body=${encodeURIComponent(caption)}`;
   const mailHref = `mailto:?subject=${encodeURIComponent("Come draw with me on Drawesome!")}&body=${encodeURIComponent(caption)}`;
 
@@ -384,10 +384,10 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
         </div>
 
         <p className="share-invite-note">
-          Instagram &amp; TikTok get your invite card as a picture — the caption is copied for you, just paste it in.{" "}
+          Instagram &amp; TikTok get your invite card as a picture, the caption is copied for you, just paste it in.{" "}
           {canShareFiles
-            ? "For texts and email, tap Share image… and pick Messages or Mail — the card rides along as a picture. Text it / Email it send the link only (they can’t attach pictures automatically), so tap Save image first if you’d rather attach the card yourself."
-            : "Texts and email send the link only — they can’t attach pictures automatically, so tap Save image first and attach the card in your app."}{" "}
+            ? "For texts and email, tap Share image… and pick Messages or Mail, the card rides along as a picture. Text it / Email it send the link only (they can’t attach pictures automatically), so tap Save image first if you’d rather attach the card yourself."
+            : "Texts and email send the link only, they can’t attach pictures automatically, so tap Save image first and attach the card in your app."}{" "}
           Posting somewhere public? Check with a grown-up first. 💛
         </p>
       </section>

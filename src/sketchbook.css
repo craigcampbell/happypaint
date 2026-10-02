@@ -1,4 +1,4 @@
-/* Inktober sketchbooks — banner, reader, start and invite pages.
+/* Inktober sketchbooks, banner, reader, start and invite pages.
    (docs/SKETCHBOOKS-CONTRACT.md). Class prefix skb-; inherits the seasonal
    ink aesthetic (paper cards, warm browns) from seasonal.css / home-inktober.css. */
 
@@ -159,7 +159,7 @@
   font-size: 0.85rem;
 }
 
-/* Viewer own-sketchbook CTA — prominent (the public INKTOBER room's "draw
+/* Viewer own-sketchbook CTA, prominent (the public INKTOBER room's "draw
    this prompt yourself" door), with the honest visibility explainer. */
 .skb-own-cta {
   display: inline-flex;
@@ -181,6 +181,105 @@
 .skb-banner-error {
   color: #8c2f23;
   font-weight: 600;
+}
+
+/* ---- unsaved (guest) books ---- */
+/* The device-owner's save strip sits at the TOP of the banner (above the
+   prompt chip row): the book is drawable and public, this says how to keep it.
+   In-flow like the banner itself, so it can never overlay the canvas stage. */
+.skb-save-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.65rem 0.9rem;
+  background: linear-gradient(180deg, #2b2118, #3d2f22);
+  color: #f5ead9;
+  border-bottom: 1px solid rgba(43, 33, 24, 0.5);
+}
+.skb-save-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1 1 16rem;
+}
+.skb-save-heading {
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.skb-save-sub {
+  font-size: 0.8rem;
+  color: rgba(245, 234, 217, 0.82);
+  line-height: 1.45;
+}
+.skb-save-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+.skb-save-strip .skb-save-btn {
+  background: #e8b04b;
+  color: #2b2118;
+  border-color: #e8b04b;
+  font-weight: 700;
+  padding: 0.45em 0.95em;
+  white-space: nowrap;
+}
+.skb-save-strip .skb-save-btn:hover {
+  background: #f0c069;
+}
+.skb-save-strip .skb-save-login {
+  background: transparent;
+  color: #f5ead9;
+  border-color: rgba(245, 234, 217, 0.4);
+  white-space: nowrap;
+}
+.skb-save-strip .skb-save-login:hover {
+  background: rgba(245, 234, 217, 0.12);
+}
+/* The quiet post-claim status line (no actions, just the confirmation). */
+.skb-save-strip-quiet {
+  display: block;
+  background: #fbf6ec;
+  color: #2f5d33;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(43, 33, 24, 0.18);
+}
+
+/* "Not saved yet" badge (banner + reader) and card chip: warm amber, distinct
+   from both the green Public and the outline Private badges. */
+.skb-badge-unsaved {
+  background: #8a5a17;
+  color: #fdf6e7;
+  border: 1px solid #8a5a17;
+}
+.skb-card .skb-card-unsaved {
+  align-self: flex-start;
+  font-size: 0.68rem;
+}
+
+/* Watcher notice on an unsaved page room (kid_safe audience): honest copy in
+   the banner's own visual language, full-width button on phone. */
+.skb-watch-note {
+  font-weight: 600;
+}
+
+/* Reader: the unsaved-book explainer + start-your-own CTA. */
+.skb-reader-unsaved {
+  margin: 0 1.2rem 0.9rem;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  border: 1px dashed rgba(138, 90, 23, 0.55);
+  background: rgba(232, 176, 75, 0.12);
+  color: #2b2118;
+  font-size: 0.9rem;
+}
+.skb-reader-unsaved p {
+  margin: 0 0 0.6rem;
+  line-height: 1.5;
 }
 
 /* Mobile fit: the banner wraps ABOVE the canvas (in-flow), chips shrink,
@@ -211,6 +310,27 @@
   .skb-own-note {
     flex: 1 1 100%;
     max-width: none;
+  }
+  /* Guest save strip: stack the actions under the copy; the primary button
+     takes the full 375px row so the tap target stays generous. */
+  .skb-save-copy {
+    flex: 1 1 100%;
+  }
+  .skb-save-actions {
+    flex: 1 1 100%;
+  }
+  .skb-save-strip .skb-save-btn {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+  .skb-save-heading {
+    font-size: 0.9rem;
+  }
+  .skb-save-sub {
+    font-size: 0.76rem;
+  }
+  .skb-watch-note span {
+    flex: 1 1 100%;
   }
 }
 

@@ -226,7 +226,7 @@ def main():
         phrase = {"easy": "a simple, easy-to-color",
                   "medium": "a moderately detailed",
                   "detailed": "a detailed"}[diff]
-        r["desc"] = (f"{r['title']} — {phrase} {cats_txt} coloring page with "
+        r["desc"] = (f"{r['title']}, {phrase} {cats_txt} coloring page with "
                      f"about {a_} areas to color. Best for ages {r['age']}.")
         r["ip"] = next((v for k, v in IP.items() if k in r["id"]), None)
         r.pop("tiny", None)

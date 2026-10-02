@@ -43,7 +43,7 @@ body {
   touch-action: manipulation; /* no double-tap-to-zoom on the page chrome */
 }
 
-/* Double-tap anywhere must never trigger the platform's zoom/select gesture —
+/* Double-tap anywhere must never trigger the platform's zoom/select gesture -
    that's what pops the Copy / Translate toolbar over the studio. touch-action
    doesn't inherit, so this has to be the universal selector; the canvas, the
    film-strip scrub rail, and the chat drag handle keep their touch-action:none

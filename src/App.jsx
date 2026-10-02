@@ -165,6 +165,8 @@ import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, 
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import SketchbookRoomBanner from "./components/SketchbookRoomBanner";
+import { startGuestSketchbook } from "./utils/sketchbookApi";
+import { getDeviceKey, saveGuestSketchbook } from "./utils/guestSketchbook";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
 import ColorWheelPicker from "./components/ColorWheelPicker";
@@ -196,13 +198,13 @@ import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
 
 // Undo depth. Each snapshot is a full-resolution canvas (tens of MB at
 // 4000x2500), so on memory-constrained touch devices we keep far fewer to stay
-// under iOS WebKit's canvas-memory ceiling — past it, WebKit silently purges
+// under iOS WebKit's canvas-memory ceiling, past it, WebKit silently purges
 // backing stores and drawing stops working until a reallocation. Desktops keep
 // the deep stack. (Deeper fix: store history as compressed blobs / dirty rects.)
 const IS_TOUCH_DEVICE = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 const MAX_HISTORY = IS_TOUCH_DEVICE ? 8 : 18;
 const MAX_GALLERY_ITEMS = 10;
-// Cap layers per artist — each is a full-size canvas, so this keeps memory and
+// Cap layers per artist, each is a full-size canvas, so this keeps memory and
 // compositing sane on phones/tablets.
 const MAX_LAYERS = 6;
 // Animation frames keep a SMALLER layer cap: each frame is a whole layer stack,
@@ -224,7 +226,7 @@ const REMOTE_STROKE_IDLE_MS = 8000;
 const WIRE_FLUSH_MS = 150;
 const WIRE_POINTS_PER_OP = 256;
 // Canvas-mutating message types that defer while a catch-up history replay is
-// still applying (see historyReplayActiveRef) — everything else (chat, cursors,
+// still applying (see historyReplayActiveRef), everything else (chat, cursors,
 // presence) is ephemeral and passes through immediately. `history` + its paired
 // `snapshot` are deferred too so a moderation rebuild arriving mid-replay can't
 // start a second concurrent replay (it fully rebuilds after the first settles).
@@ -241,7 +243,7 @@ const AVATAR_COLORS = [
 
 const PROFILE_STORAGE_KEY = "drawesome:profile:v1";
 
-// Drawing streak — device-local (localStorage only; nothing leaves the browser,
+// Drawing streak, device-local (localStorage only; nothing leaves the browser,
 // COPPA-clean). Counts LOCAL calendar days on which the user finished at least
 // one real stroke. No loss-aversion mechanics on purpose: a missed day just
 // resets the count quietly next time.
@@ -278,7 +280,7 @@ const STORAGE_KEYS = {
 const DRAFT_IDB_KEY = "draft:v4";
 
 // Some engines (WebKit most reliably) refuse to serialize a Blob into an object
-// store — "Error preparing Blob/File data to be stored in object store". The
+// store: "Error preparing Blob/File data to be stored in object store". The
 // autosave retries the same draft as base64 dataURLs, which always store, so the
 // artwork is safe and the user sees nothing. Warn ONCE per session: the autosave
 // timer fires every few seconds and would otherwise bury the console.
@@ -295,7 +297,7 @@ function warnDraftBlobFallback(error) {
   }
   draftBlobFallbackWarned = true;
   console.warn(
-    "Draft autosave: this browser wouldn't store PNG Blobs — falling back to dataURLs.",
+    "Draft autosave: this browser wouldn't store PNG Blobs, falling back to dataURLs.",
     error,
   );
 }
@@ -323,7 +325,7 @@ const FRAME_THUMB_HEIGHT = 60;
 // identical at 20-28% alpha, but two warm neighbors cost a constant fraction
 // of a full-res composite instead of a fresh full-res allocation per recomposite.
 
-// The toddler finger-paint room shows only chunky, wet, smeary brushes — no
+// The toddler finger-paint room shows only chunky, wet, smeary brushes, no
 // pencils, no tech. Everything else about the studio hides there too.
 const FINGER_PAINT_BRUSHES = new Set(["paint", "watercolor", "gouache", "smudge", "goo"]);
 // "Fun" brush mode (per-room toggle): a bold, wet, smeary subset for loose
@@ -333,7 +335,7 @@ const FUN_BRUSHES = new Set(["marker", "crayon", "paint", "watercolor", "waterco
 
 // Ink-only (Ink & Pencil / INKTOBER) rooms: the server accepts ink, pencil
 // and eraser draw ops ONLY, so every local path must stay inside the same set
-// — anything else would paint locally but never reach the room (divergent
+//, anything else would paint locally but never reach the room (divergent
 // art). The eraser is a draw-op brush setting, not a separate tool.
 const INK_ONLY_BRUSHES = new Set(["ink", "pencil", "eraser"]);
 const INK_ONLY_PAINT_BRUSHES = new Set(["ink", "pencil"]);
@@ -350,7 +352,7 @@ const visibleBrushList = (fingerPaint, brushMode) => {
 // Safari has no requestIdleCallback; a short timeout is close enough there.
 // The default 200 ms timeout keeps the deferred work timely on a busy page;
 // pass `options` without one for work that must WAIT for a real idle slot
-// (the sprite prebuild — forced through a timeout it would land inside a
+// (the sprite prebuild, forced through a timeout it would land inside a
 // stroke's first frames).
 const scheduleIdle = (callback, options = { timeout: 200 }) =>
   typeof window.requestIdleCallback === "function"
@@ -379,13 +381,13 @@ const PALM_CONTACT_PX = 100;
 // "Pen session": a pen was used this recently, so a lone finger landing on
 // the canvas is most likely the drawing hand settling ahead of the pen tip
 // (the classic palm mark: hand down, then pen). Its stroke is HELD for
-// TOUCH_HOLD_MS and only starts — replaying the held points, so the line is
-// complete — if no pen shows up meanwhile. Fingers on a phone with no pen in
+// TOUCH_HOLD_MS and only starts, replaying the held points, so the line is
+// complete, if no pen shows up meanwhile. Fingers on a phone with no pen in
 // play never pay this latency.
 const PEN_SESSION_MS = 60000;
 const TOUCH_HOLD_MS = 160;
 // A held touch that lifts inside the hold window is dropped as a stray palm
-// tap unless it traveled this far — a real quick flick still draws.
+// tap unless it traveled this far, a real quick flick still draws.
 const TOUCH_HOLD_FLICK_PX = 12;
 // A palm-sized touch contact during a pen session (penAt = lastPenAtRef; 0 =
 // no pen yet this page load).
@@ -407,7 +409,7 @@ const writeRailPreference = (open) => {
   try {
     window.localStorage.setItem(RAIL_OPEN_STORAGE_KEY, open ? "open" : "closed");
   } catch {
-    /* private mode / quota — the rail just won't remember */
+    /* private mode / quota, the rail just won't remember */
   }
 };
 
@@ -435,7 +437,7 @@ function screenToWorld(v, cx, cy) {
 }
 
 // Centroid + (for 2 fingers) the spread distance and angle of the active touch
-// points — the raw signal for pinch-zoom, twist-rotate, and multi-finger pan.
+// points, the raw signal for pinch-zoom, twist-rotate, and multi-finger pan.
 function gestureMetrics(pts) {
   const n = pts.length;
   let cx = 0;
@@ -509,14 +511,14 @@ function canvasToBlob(canvas, type = "image/png", quality = 0.95) {
 // The FileReader read is the one step here that can fail to settle: WebKit
 // denies a pending blob read on a document that is navigating away ("Cannot
 // load blob: … due to access control checks") and fires NEITHER load nor
-// error nor abort — so without a guard the promise hangs forever and any
+// error nor abort, so without a guard the promise hangs forever and any
 // in-flight flag the caller holds (saveInFlightRef) stays stuck. A base64 read
 // of an in-memory Blob takes milliseconds; anything past the deadline is a
 // dead document, and "" is the same answer onerror gives.
 const DATA_URL_READ_DEADLINE_MS = 15_000;
 
 // WebKit cancels the old document's loaders the moment a navigation is
-// committed — right after `beforeunload`, long before `pagehide` — and a blob
+// committed, right after `beforeunload`, long before `pagehide`, and a blob
 // read caught in flight is what it reports as "access control checks". So on
 // `beforeunload` every in-flight reader is aborted (settling "") and the page
 // is flagged as leaving, which makes any later read return "" without touching
@@ -580,8 +582,8 @@ function todayName() {
 }
 
 function downloadBlob(blob, filename) {
-  // Append the anchor to the DOM before clicking (some browsers — notably
-  // Firefox — ignore clicks on detached anchors) and defer the revoke so the
+  // Append the anchor to the DOM before clicking (some browsers, notably
+  // Firefox, ignore clicks on detached anchors) and defer the revoke so the
   // download has time to start before the object URL is torn down (W15).
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -598,7 +600,7 @@ function downloadBlob(blob, filename) {
 // signed-in account. When a signed-out user with `u_…` saves signs in, the
 // active gallery key flips to `pb_<id>` (empty) and their device art disappears
 // from view. We copy each device artwork into the account, capped by the
-// server's MAX_SAVES (stop on HTTP 409), entirely best-effort — it never throws
+// server's MAX_SAVES (stop on HTTP 409), entirely best-effort, it never throws
 // and a localStorage guard ensures it runs at most once per device. `token` is
 // the account access token; the device GET is intentionally unauthenticated so
 // the server resolves the device key, while the account POST carries the token.
@@ -629,16 +631,16 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ name: detail.name, image: detail.image, thumb: meta.thumb }),
       });
-      if (postRes.status === 409) break; // account hit MAX_SAVES — stop copying
+      if (postRes.status === 409) break; // account hit MAX_SAVES, stop copying
     }
   } catch {
-    // network / parse failure — best-effort, leave the flag unset to retry
+    // network / parse failure, best-effort, leave the flag unset to retry
     return;
   }
   try {
     window.localStorage.setItem(flag, "1");
   } catch {
-    // ignore — worst case migration re-runs and re-copies (POST is idempotent-ish)
+    // ignore, worst case migration re-runs and re-copies (POST is idempotent-ish)
   }
 }
 
@@ -669,7 +671,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const rafPendingRef = useRef(0);
 
   // rAF coalescing for gesture-driven view repaints (pinch/pan) and for
-  // remote-op recomposites — both can otherwise fire several times per frame.
+  // remote-op recomposites, both can otherwise fire several times per frame.
   const viewRafRef = useRef(0);
   const remoteRenderRafRef = useRef(0);
 
@@ -729,7 +731,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   }, []);
   // Keep only the active frame's neighbors warm (all onion ever reads) and
-  // drop entries for removed frames — bounds the cache at ~2 x 10MB no matter
+  // drop entries for removed frames, bounds the cache at ~2 x 10MB no matter
   // how the user hops around. Runs on every frame switch AND frame CRUD.
   const pruneOnionCache = useCallback(() => {
     const liveIds = new Set(framesRef.current.map((frame) => frame.id));
@@ -768,7 +770,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // mute: playback + onion skin skip them; never on the wire, never persisted).
   const hiddenFramesRef = useRef(new Set());
 
-  // Film-strip scrub: refs only — zero React state per pointer-move.
+  // Film-strip scrub: refs only, zero React state per pointer-move.
   const scrubStateRef = useRef({ active: false, raf: 0, index: -1 });
 
   const historyRef = useRef([]);
@@ -781,9 +783,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const shapePreviewRectRef = useRef(null);
   const activePointerRef = useRef(null);
   const activeCanvasRectRef = useRef(null);
-  // Pen prioritization / palm rejection (W14). While a pen is active — or was
+  // Pen prioritization / palm rejection (W14). While a pen is active, or was
   // seen (incl. hovering: Cintiq / M2 Pencil proximity) within the last
-  // PEN_PRIORITY_MS — touch contacts are ignored, so a resting hand can't paint
+  // PEN_PRIORITY_MS, touch contacts are ignored, so a resting hand can't paint
   // or hijack the stroke into a pinch. It's TIME-based, not sticky: a shared
   // iPad can go Pencil → finger and back without a reload. Mouse and a normal
   // lone finger are never rejected; big contact patches are always palms.
@@ -829,7 +831,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const applyRemoteOpRef = useRef(null);
   // Chunked history replay: while a big catch-up history frame is still being
   // applied in idle slices, canvas-mutating live messages (op / clear / sheet /
-  // resync) defer so they land AFTER the replayed history in stream order —
+  // resync) defer so they land AFTER the replayed history in stream order -
   // otherwise they'd interleave into the middle of a half-rebuilt mural.
   const historyReplayActiveRef = useRef(false);
   const historyReplayEpochRef = useRef(0);
@@ -926,7 +928,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [myDrawings, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
-  // Which studio layout we're in (desktop / tablet / phone) — see useLayoutTier.
+  // Which studio layout we're in (desktop / tablet / phone), see useLayoutTier.
   // Stamped on the shell as data-layout so the CSS tiers and this state agree.
   const layoutTier = useLayoutTier();
   const layoutTierRef = useRef(layoutTier);
@@ -953,16 +955,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Which quick popover is open from the bottom bar: "brush" | "color" | null.
   const [quickMenu, setQuickMenu] = useState(null);
   // Crossing a tier (window resize, iPad rotation, plugging a Cintiq in):
-  // re-apply that tier's default — desktop remembers the rail, the compact
+  // re-apply that tier's default, desktop remembers the rail, the compact
   // tiers drop the sheet so the canvas isn't suddenly half-covered.
   // Desktop-only: remember whether the docked rail is open. (Sheet tiers are
-  // transient — opening the phone drawer shouldn't pin the desktop rail.)
+  // transient, opening the phone drawer shouldn't pin the desktop rail.)
   const prevTierRef = useRef(layoutTier);
   useEffect(() => {
     if (prevTierRef.current !== layoutTier) {
       prevTierRef.current = layoutTier;
       setToolsOpen(layoutTier === "desktop" ? readRailPreference() : false);
-      return; // the value in hand is the OLD tier's — don't persist it
+      return; // the value in hand is the OLD tier's, don't persist it
     }
     if (layoutTier === "desktop") {
       writeRailPreference(toolsOpen);
@@ -975,7 +977,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Public canvas refresh: { wipeAt, keepVotes, keepNeeded } or null off-cycle.
   const [roomWipe, setRoomWipe] = useState(null);
   // A member wipe counting down (or a room vote): the server's payload plus
-  // when it arrived — WipeCountdown ticks its own clock from msLeft.
+  // when it arrived: WipeCountdown ticks its own clock from msLeft.
   const [wipeReq, setWipeReq] = useState(null);
   const [wipePanelOpen, setWipePanelOpen] = useState(false);
   const [, setWipeTick] = useState(0); // ticks the countdown label
@@ -1021,7 +1023,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const soundtrackRef = useRef({ meta: null, buffer: null, stop: null });
   const soundtrackInputRef = useRef(null);
   const [soundtrackBusy, setSoundtrackBusy] = useState(false);
-  // Rotoscope clip — LOCAL to this browser only (utils/videoTrace.js): never
+  // Rotoscope clip: LOCAL to this browser only (utils/videoTrace.js): never
   // uploaded, never shown to friends, never exported. Meta mirrors the ref
   // for the tools panel; the ref holds the <video>.
   const [videoTrace, setVideoTrace] = useState(null);
@@ -1057,7 +1059,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [brushSize, setBrushSize] = useState(24);
   const [brushOpacity, setBrushOpacity] = useState(0.86);
   const [brushVariation, setBrushVariation] = useState(0.08);
-  // Smudge carries no pigment — it just BLENDS. Its own "strength" (how hard it
+  // Smudge carries no pigment, it just BLENDS. Its own "strength" (how hard it
   // pulls paint), independent of brush opacity so switching brushes doesn't
   // clobber it. Rides the op so replay is deterministic.
   const [smudgeStrength, setSmudgeStrength] = useState(0.5);
@@ -1068,7 +1070,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Smudge | Blend (brush engine Stage 4): "drag" pushes paint along with
   // the finger and carries color; "blend" softens in place. Rides the op as
   // settings.smudgeMode (with v: 3) so every consumer renders the same mode.
-  // Session-local on purpose — no localStorage.
+  // Session-local on purpose, no localStorage.
   const [smudgeMode, setSmudgeMode] = useState("drag");
   const [fillShape, setFillShape] = useState(false);
   const [textSize, setTextSize] = useState(64);
@@ -1113,8 +1115,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // so the access token can ride the multiplayer socket and the host UI can read
   // identity. Room ownership/host flags are learned live from the WS server.
   const [session, setSession] = useState(null);
+  // Did this studio mount WITHOUT a stored sign-in? The guest-sketchbook claim
+  // path needs it: a socket opened guest-first can't be re-authorized by a
+  // client-side session lift alone, so onSaved reloads once (below); a socket
+  // opened WITH the session already present (the sign-up return landing on
+  // /join/CODE) is authoritative already and needs no reload.
+  const joinedWithoutSessionRef = useRef(!hasStoredSession());
   // Has the stored sign-in (if any) finished loading? The room socket waits for
-  // it, so a signed-in person joins AS themselves — never as a guest first (a
+  // it, so a signed-in person joins AS themselves, never as a guest first (a
   // private room turns a guest away with the sign-in gate). Guests settle at once.
   const [authSettled, setAuthSettled] = useState(() => !hasStoredSession());
   // Cross-room @mention inbox (shown in the profile menu). Persisted in
@@ -1127,9 +1135,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [roomTitle, setRoomTitle] = useState(null);
   // 'kid_safe' = public room (brush-only tools); anything else = private.
   const [roomAudience, setRoomAudience] = useState(null);
+  // Sketchbook page-room flags from the WS handshake: `sketchbook` marks a
+  // page of a saved OR unsaved book (an unsaved page is a kid_safe room, so
+  // the audience alone can't identify it); `sketchbookUnsaved` narrows it to
+  // a device-owned guest book. Both drive the banner mount + watcher notice.
+  const [mpSketchbookPage, setMpSketchbookPage] = useState(false);
+  const [mpSketchbookUnsaved, setMpSketchbookUnsaved] = useState(false);
   const [roomAdFree, setRoomAdFree] = useState(false);
   const [mutedSelf, setMutedSelf] = useState(false);
-  // "Hide this painter" — MY mute button, no host needed: locally hides a
+  // "Hide this painter": MY mute button, no host needed: locally hides a
   // user's chat, cursor, reactions and hype for this session. Client-only
   // agency (the audit's quick-win): nothing is sent to the server, their
   // strokes still land (that's the host's mute/kick domain).
@@ -1156,7 +1170,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [roomFull, setRoomFull] = useState(false); // server said the room is at capacity
   const [roomBlocked, setRoomBlocked] = useState(false); // server refused this room
   // Join curtain: how far this room has got hooking up, as milestones rather
-  // than a timer — 0 opening the socket, 1 socket open, 2 handshake in,
+  // than a timer: 0 opening the socket, 1 socket open, 2 handshake in,
   // 3 the shared history is on the canvas. RoomLoadingCurtain paints the bar.
   const [joinStep, setJoinStep] = useState(0);
   const joinStepRef = useRef(0);
@@ -1166,7 +1180,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Dev/test-only introspection for the checkpoint fixture harness (the
   // scripts/checkpoint-client-realtime-verify suite reads layer pixels +
   // join progress). import.meta.env.DEV is statically false in production
-  // builds, so this compiles out — it is never a runtime surface.
+  // builds, so this compiles out, it is never a runtime surface.
   useEffect(() => {
     if (!import.meta.env.DEV) return undefined;
     window.__drawesomeCheckpoint = {
@@ -1198,7 +1212,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [seasonalEvent, setSeasonalEvent] = useState(null);
   // Artist studios (audience 'artist_public'): whether THIS client may draw,
   // server-authoritative via the handshake (connected.canPaint) and
-  // role_changed. Default TRUE — the anonymous commons and every non-artist
+  // role_changed. Default TRUE, the anonymous commons and every non-artist
   // room keep working exactly as before; an artist room's handshake flips it
   // to false until the owner approves. The ref is the hot-path truth (pointer
   // handlers), the mp hook's state drives the UI.
@@ -1213,7 +1227,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [showSheetModal, setShowSheetModal] = useState(false);
 
   // ---- Artist studios: the local mutation gate -----------------------------
-  // A watcher in an artist studio must never change local canvas state — the
+  // A watcher in an artist studio must never change local canvas state, the
   // server already drops their ops, and any local-only change would diverge
   // from the shared truth (the "ghost drawing" a reload then wipes). EVERY
   // local mutation entrypoint (pointer strokes, fill/text, image import,
@@ -1227,8 +1241,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (now - paintAccessNoticeAtRef.current > 2500) {
       paintAccessNoticeAtRef.current = now;
       setStatus(action
-        ? `👀 Watching only — ${action} stays off until the artist approves you`
-        : "👀 Watching only — the artist hasn't approved painting here");
+        ? `👀 Watching only, ${action} stays off until the artist approves you`
+        : "👀 Watching only, the artist hasn't approved painting here");
     }
     return true;
   }, []);
@@ -1255,7 +1269,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Inktober sketchbook page rooms (docs/SKETCHBOOKS-CONTRACT.md): the banner
   // under the room bar resolves the pinned page metadata ONCE per room/auth
   // and hands it up, so the invite sheet pins its card to THIS page's
-  // server-stamped year/day/prompt — never the rotating daily prompt. Null =
+  // server-stamped year/day/prompt, never the rotating daily prompt. Null =
   // ordinary room (or unresolved/failed lookup): the sheet falls back to the
   // live event. App remounts per room (Router keys on the room code), and the
   // banner re-reports on auth changes, so this can never go stale.
@@ -1267,11 +1281,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return a === b ? prev : meta; // identical re-report: no re-render churn
     });
   }, []);
+
+  // The device's unsaved guest book was just claimed under the signed-in
+  // account (SketchbookRoomBanner auto-claim). If THIS studio's socket was
+  // opened without a session (a guest-first join), reload ONCE so the fresh
+  // session owns the page on the wire; a socket that already carried the
+  // session (the sign-up return landing on /join/CODE) is authoritative as-is.
+  const guestBookSavedReloadRef = useRef(false);
+  const handleGuestSketchbookSaved = useCallback(() => {
+    if (!joinedWithoutSessionRef.current || guestBookSavedReloadRef.current) return;
+    guestBookSavedReloadRef.current = true;
+    window.location.reload();
+  }, []);
   // The studio has no Router onNavigate prop; room/page hops are full loads
   // (the same pattern the room switcher and Part-hops already use).
   const navigateToPath = useCallback((path) => { window.location.href = path; }, []);
   // Sketchbook page rooms: chat and the shared animation room mode are OFF
-  // (performance) — the server refuses them, and the client hides every
+  // (performance), the server refuses them, and the client hides every
   // entry point (chat overlay/panel/pill, quickbar chat button, floating
   // vote card, host animation toggle). Ordinary rooms are untouched.
   const sketchbookPage = Boolean(sketchbookPageMeta?.isSketchbook);
@@ -1282,7 +1308,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [roomWet, setRoomWet] = useState(false);
   const roomWetRef = useRef(false);
   // Brush mode (realistic | fun): which palette the room shows + whether the
-  // room forces wet. Palette-only — the mode never rides an op, so flipping it
+  // room forces wet. Palette-only, the mode never rides an op, so flipping it
   // never repaints history (see the wet toggle comment).
   const [roomBrushMode, setRoomBrushMode] = useState("realistic");
   const roomBrushModeRef = useRef("realistic");
@@ -1301,11 +1327,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
   // Shared animation: whether THIS room has the film strip (the FLIPBOOK
   // public room, or a private room whose host enabled it). When on, frames are
-  // shared state — ops carry frameId and frame CRUD relays through the server,
+  // shared state, ops carry frameId and frame CRUD relays through the server,
   // so everyone sees the same flipbook and rejoiners catch up like a document.
   const [roomAnimation, setRoomAnimation] = useState(false);
   // Per-scene frame cap for server-synced rooms (the handshake sends it; cold
-  // frames — utils/frameRasters.js — are what let it exceed the local 8).
+  // frames, utils/frameRasters.js, are what let it exceed the local 8).
   const [animMaxFrames, setAnimMaxFrames] = useState(MAX_FRAMES);
   // The cold-frame machinery (hydrate / cool / raster queue) is defined later
   // than some of its callers (message handlers, activateFrame); reach it by ref.
@@ -1326,7 +1352,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [myWord, setMyWord] = useState(null);
   const [gamePop, setGamePop] = useState(null); // { name, points } | { reveal, word }
   const gamePopTimer = useRef(null);
-  // Match-over podium: { standings: [{name, score}], rounds } — auto-dismissed.
+  // Match-over podium: { standings: [{name, score}], rounds }, auto-dismissed.
   const [gamePodium, setGamePodium] = useState(null);
   const gamePodiumTimer = useRef(null);
   // Draw Phone (telephone): whether this room plays it, the public game state,
@@ -1342,16 +1368,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [phoneGuess, setPhoneGuess] = useState("");
   const [phoneReveal, setPhoneReveal] = useState(null); // [{ ownerName, pages:[...] }]
   const [isExportingVideo, setIsExportingVideo] = useState(false);
-  // Multi-scene export pages scenes UNDER the user — freeze drawing + frame/
+  // Multi-scene export pages scenes UNDER the user, freeze drawing + frame/
   // scene navigation while it runs so strokes can't land in scenes the artist
   // never opened (guards read this ref, not state, on the hot paths).
   const isExportingVideoRef = useRef(false);
   const exportShotCanvasRef = useRef(null); // reusable export-size canvas for camera moves
   // Async op assets (image dataURLs) still decoding when a scene's history
-  // finishes replaying — hydration isn't "done" until these settle.
+  // finishes replaying, hydration isn't "done" until these settle.
   const pendingAssetLoadsRef = useRef([]);
   // Scenes: a film is pages ("scenes") of up to 8 frames; only the ACTIVE
-  // scene's frames are hydrated as canvases — paging swaps them via
+  // scene's frames are hydrated as canvases, paging swaps them via
   // scene_fetch, so memory stays at one scene's worth (~30s of film per room).
   const [scenes, setScenes] = useState([]); // [{id, name, frames:[{id,durationMs}]}]
   const scenesRef = useRef([]);
@@ -1359,19 +1385,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const activeSceneIdRef = useRef(null);
   const sceneWaitersRef = useRef(new Map());
   // Server-negotiated per-frame hold bounds (FLIPBOOK: 1000..3000ms, default
-  // 1000). Null everywhere else — private/local films keep the 40..10000ms
+  // 1000). Null everywhere else, private/local films keep the 40..10000ms
   // ladder. Rides `connected` and `room_animation` (see utils/frameTiming).
   const frameTimingRef = useRef(null);
   const [roomFrameTiming, setRoomFrameTiming] = useState(null);
   // Bounded backoff for `resync` reason=rate_limited scene refetches (Phase 2
-  // retried on the next RTT — a self-made storm). One pending timer at a time;
+  // retried on the next RTT, a self-made storm). One pending timer at a time;
   // attempts reset when the scene's history actually lands.
   const resyncBackoffRef = useRef({ timer: 0, target: null, attempts: 0 });
   // Whole-film playback across scenes (Phase 4): an async plan walker that
   // pages scenes in the background and paints snapshot bitmaps. Null while
   // stopped; `token.cancelled` is THE stop signal every await checks.
   const filmPlaybackRef = useRef(null);
-  // Our own session id (from the connected handshake) — used to recognize our
+  // Our own session id (from the connected handshake), used to recognize our
   // echoed frame mutations without depending on the mp hook object.
   const myUserIdRef = useRef(null);
   // Production (multi-room film) this room belongs to, + the storyboard modal.
@@ -1380,7 +1406,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const [showStoryboard, setShowStoryboard] = useState(false);
   // Crew presence: which cel each teammate is on (animation rooms). Ref is the
   // source of truth (userId -> {sceneId, frameId, name, color, ts}); the state
-  // snapshot drives the pips/chips render (cold path — updated on presence
+  // snapshot drives the pips/chips render (cold path, updated on presence
   // messages + the shared 4s cursor-stale sweep, never in the draw loop).
   const crewPresenceRef = useRef(new Map());
   const [crewPresence, setCrewPresence] = useState([]); // [{userId, sceneId, frameId, name, color}]
@@ -1443,7 +1469,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       ctx.drawImage(composed, 0, 0);
     } else if (frame.raster) {
       // Cold frame: paint its raster if it's decoded; otherwise keep the old
-      // thumb (null) — the decode we just kicked off re-queues this frame.
+      // thumb (null), the decode we just kicked off re-queues this frame.
       const bitmap = peekFrameBitmap(frame);
       if (!bitmap) return null;
       ctx.drawImage(bitmap, 0, 0, FRAME_THUMB_WIDTH, FRAME_THUMB_HEIGHT);
@@ -1477,7 +1503,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       });
       // Structural changes are a housekeeping moment for the per-frame caches
       // and the eyeball-hidden set (drop ids that no longer exist). In a
-      // scene-paged room "exists" means ANY scene's frame — eyeball marks must
+      // scene-paged room "exists" means ANY scene's frame, eyeball marks must
       // survive paging away and back.
       pruneOnionCache();
       const liveIds = new Set(framesRef.current.map((frame) => frame.id));
@@ -1497,7 +1523,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [commitLayersToFrame, pruneOnionCache, renderFrameThumbnail],
   );
 
-  // A COLD frame's raster is a composite of its layer stack — the ordered
+  // A COLD frame's raster is a composite of its layer stack, the ordered
   // ids, visibility and opacity are part of its identity (layerRenderSig).
   // When the server syncs a render-affecting layer change onto a cold cel the
   // raster stops matching even though the op count never moved: drop the
@@ -1519,7 +1545,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // know about is RE-KEYED onto the matching slot when that slot is otherwise
   // free (that is what carries a restored local draft's pixels into a room's
   // stack) and dropped otherwise; a new id gets a blank canvas. `sync` repaints
-  // and refreshes the panel now — a bulk frame reconcile defers to one final sync.
+  // and refreshes the panel now, a bulk frame reconcile defers to one final sync.
   const reconcileFrameLayers = useCallback((frame, serverLayers, sync = true) => {
     if (!frame || !Array.isArray(serverLayers) || serverLayers.length === 0) {
       return false;
@@ -1580,7 +1606,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [invalidateColdRaster, syncLayerState]);
 
   // Snap the local frame list to the server's authoritative metadata (ids,
-  // order, durations) — the Google-Docs invariant: everyone runs the same
+  // order, durations), the Google-Docs invariant: everyone runs the same
   // flipbook. Canvases are preserved for frames whose id survives (reconnects
   // keep pixels; the history replay right after repaints them anyway); frames
   // the server dropped disappear, new ones arrive blank until replayed into.
@@ -1603,7 +1629,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               if (reconcileFrameLayers(existing, meta.layers, false)) layersChanged = true;
             } else {
               const before = layerRenderSig(existing.layerMeta);
-              existing.layerMeta = meta.layers; // cold cel — hydrate builds from it
+              existing.layerMeta = meta.layers; // cold cel, hydrate builds from it
               if (layerRenderSig(meta.layers) !== before) {
                 invalidateColdRaster(existing); // render-affecting sync under a cold raster
               }
@@ -1637,7 +1663,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       syncFrameState();
       // The panel's React state must follow the live stack whenever the ACTIVE
       // frame's layer array is new (a fresh join, a re-keyed stack, or a layer
-      // list that changed shape) — syncFrameState only refreshes the film strip.
+      // list that changed shape), syncFrameState only refreshes the film strip.
       if (layersChanged || previousLayers !== active.layers) {
         syncLayerState();
         renderDisplayRef.current();
@@ -1691,7 +1717,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Refresh the active frame's thumbnail after an edit. The alias writeback +
   // onion-stamp bump stay synchronous (cheap); the composite + PNG encode is
   // deferred, so pen-up never pays for it. Every local edit signal funnels
-  // through here — this is the onion cache's invalidation hook too.
+  // through here, this is the onion cache's invalidation hook too.
   const refreshActiveThumbnail = useCallback(() => {
     commitLayersToFrame();
     const frame = framesRef.current[activeFrameIndexRef.current];
@@ -1702,7 +1728,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     queueThumbnailRefresh(frame.id);
   }, [bumpFrameStamp, commitLayersToFrame, queueThumbnailRefresh]);
 
-  // Remote counterpart: a remote mutation landed on some frame — stale-mark
+  // Remote counterpart: a remote mutation landed on some frame, stale-mark
   // its onion proxy and queue its cel thumbnail, whichever frame this client
   // is viewing. Pass the op's frameId (undefined = first frame, legacy).
   const touchFrame = useCallback(
@@ -1725,7 +1751,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // sampleMix is the sampler injected into every makeStrokeRenderer; it only
   // materializes the map once a wet dab actually samples (born fully dirty, so
   // whatever is already on layer 0 is mirrored on first use). The mark* calls
-  // below are O(1) bbox unions — the pixel refresh happens lazily in sample().
+  // below are O(1) bbox unions, the pixel refresh happens lazily in sample().
   const ensureMixMap = useCallback(() => {
     if (!mixMapRef.current) {
       mixMapRef.current = createMixMap(() => layersRef.current[0]?.canvas || null, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -1735,11 +1761,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const sampleMix = useCallback((x, y) => ensureMixMap().sample(x, y), [ensureMixMap]);
   // Idle PREFETCH of the mirror refresh: after a commit dirties layer 0's
   // mirror, re-read it while the pen is up instead of on the first wet dab of
-  // the next stroke (that read — a downscaled drawImage + a small
-  // getImageData — was the one stroke-start stall the wet path had). Strictly
+  // the next stroke (that read, a downscaled drawImage + a small
+  // getImageData, was the one stroke-start stall the wet path had). Strictly
   // a prefetch: sample() still flushes itself when dirty, so a dab never reads
   // a stale mirror, and a flush that lands mid-stroke (pointer down) is
-  // skipped — the lazy path handles it in op order, exactly as before.
+  // skipped, the lazy path handles it in op order, exactly as before.
   const mixPrefetchRef = useRef(0);
   const scheduleMixPrefetch = useCallback(() => {
     if (mixPrefetchRef.current) {
@@ -1752,7 +1778,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
     });
   }, [ensureMixMap]);
-  // A stroke-buffer/image commit landed on `layer` — if that's layer 0, the
+  // A stroke-buffer/image commit landed on `layer`, if that's layer 0, the
   // mix map's mirror of that bbox is stale now (and worth prefetching).
   const markMixDirty = useCallback((layer, bounds) => {
     if (layer && layer === layersRef.current[0]) {
@@ -1761,7 +1787,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   }, [scheduleMixPrefetch]);
   // An UNMARKED write landed on `layer` (eraser / smudge / shape / text /
-  // sticker — the paths that draw the layer directly and never markDirty):
+  // sticker, the paths that draw the layer directly and never markDirty):
   // if that's layer 0, anything the idle prefetch read since the last wet
   // sample may be stale, and history / spectators / the other clients (lazy
   // maps, no prefetch) would re-read it at their next sample. Hand it back
@@ -1776,7 +1802,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // stroke pays for them. The IdleDeadline goes through to the prebuild so
   // it builds one piece per idle slice and re-schedules itself for the rest
   // (undefined on the setTimeout fallback: one synchronous build), and the
-  // busy predicate makes it defer a slice while a pointer is down — the
+  // busy predicate makes it defer a slice while a pointer is down, the
   // build must never land inside a stroke. No timeout on the first schedule
   // either: forced through App's usual 200 ms it fired at mount, exactly
   // when a kid's first stroke starts. Scheduled on mount and again whenever
@@ -1870,7 +1896,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const markChanged = useCallback((message = "Saved locally") => {
     dirtyRef.current = true;
-    // Commit-level signal (never per-frame) — lets the NSFW watcher know the
+    // Commit-level signal (never per-frame), lets the NSFW watcher know the
     // mural changed so it can schedule an idle re-scan. O(1), no-op when inactive.
     nsfwWatcherRef.current?.markDirty();
     setStatus(message);
@@ -1954,7 +1980,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     return v;
   };
 
-  // Keep scale in range AND the page framed. (rot is free — it's the user's own
+  // Keep scale in range AND the page framed. (rot is free, it's the user's own
   // orientation.) Split helpers above let zoomAt/rotateAt anchor before reframing.
   const clampView = (v) => {
     clampScale(v);
@@ -2049,7 +2075,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Coalesce gesture-driven repaints (mirrors scheduleStrokeFrame): two moving
   // fingers can fire two pointermoves per frame, and applyView blits the whole
-  // mural — so pan/pinch schedules at most ONE applyView per rAF instead.
+  // mural, so pan/pinch schedules at most ONE applyView per rAF instead.
   const scheduleViewFrame = () => {
     if (viewRafRef.current) {
       return;
@@ -2070,7 +2096,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   // In-place cores (mutate the view, no clamp/blit) so a multi-touch frame can
-  // compose pan + zoom + rotate and repaint the canvas exactly ONCE — repainting
+  // compose pan + zoom + rotate and repaint the canvas exactly ONCE, repainting
   // blits the full mural, so doing it per sub-step would jank the gesture.
   const zoomCore = (v, factor, fx, fy) => {
     const wp = screenToWorld(v, fx, fy); // world point under the focal point
@@ -2117,7 +2143,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (frame.layers) {
       canvas = compositeFrameToCanvas(frame, { width: CANVAS_WIDTH / 2, height: CANVAS_HEIGHT / 2 });
     } else {
-      // Cold neighbor: its raster (decoded or not yet — null skips this pass).
+      // Cold neighbor: its raster (decoded or not yet, null skips this pass).
       const bitmap = peekFrameBitmap(frame);
       if (!bitmap) return null;
       canvas = document.createElement("canvas");
@@ -2180,7 +2206,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (strokes.size === 0) {
       return;
     }
-    // Only overlay in-progress strokes that belong to the frame ON SCREEN —
+    // Only overlay in-progress strokes that belong to the frame ON SCREEN -
     // a friend inking cel 3 shouldn't ghost over your view of cel 5.
     const activeId = framesRef.current[activeFrameIndexRef.current]?.id;
     for (const entry of strokes.values()) {
@@ -2298,7 +2324,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (!compositeCacheValidRef.current || activeStrokeLayerIdRef.current !== activeLayerIdRef.current) {
       // Cache invalidated MID-stroke (a remote clear/history rebuild landed
       // while painting): rebuild the caches once and stay on the cached path.
-      // The renderDisplay fallback can't show the live stroke — its buffer
+      // The renderDisplay fallback can't show the live stroke, its buffer
       // isn't in the layer stack until the pen-up commit (#62). One-off cost
       // per invalidation, not per move (the rebuild re-validates the cache).
       const stroke = localStrokeRef.current;
@@ -2427,7 +2453,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // ---- Undo in a shared room -----------------------------------------------
   // Since layers became shared state, a friend's op paints into the SAME stack
-  // we do — there is no separate "remote" canvas any more. So the snapshot an
+  // we do, there is no separate "remote" canvas any more. So the snapshot an
   // undo entry holds is "my layer, plus whatever friends had drawn by then",
   // and restoring it verbatim rubs off every stroke they have added SINCE: an
   // undo that undoes other people. Each entry therefore also marks its place
@@ -2479,13 +2505,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         if (op.strokeId) {
           destFor.set(op.strokeId, targetFor(op));
         }
-        // The parity-tested offline interpreter — the same pixels every peer
+        // The parity-tested offline interpreter, the same pixels every peer
         // sees, and independent of the live remote-stroke buffers, which this
         // must not disturb.
         applyOp(ctx0, op, lastMap, strokes, renderDisplay, mix, deferred, CANVAS_WIDTH, CANVAS_HEIGHT, targetFor);
       }
       // Every stroke we replay is one that already landed, so its end op came
-      // with it — except a stroke the idle sweep committed without one. Bank
+      // with it, except a stroke the idle sweep committed without one. Bank
       // those rather than leak the buffer.
       for (const [strokeId, entry] of strokes) {
         if (entry.buf) {
@@ -2501,7 +2527,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Push an undo entry. Brush/fill/shape/text ops only touch the ACTIVE layer,
   // so they snapshot just that layer + a lightweight structural descriptor (W4)
-  // — roughly Nx less memory than cloning the whole stack. Structural ops
+  //, roughly Nx less memory than cloning the whole stack. Structural ops
   // (add/delete/reorder/merge/duplicate/visibility) pass scope="full".
   const pushHistory = useCallback(
     (scope = "active") => {
@@ -2558,13 +2584,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           ? snapshot.activeLayerId
           : layersRef.current[layersRef.current.length - 1]?.id || null;
       }
-      // Undo/redo can swap layer 0's pixels wholesale — re-mirror on next wet sample.
+      // Undo/redo can swap layer 0's pixels wholesale, re-mirror on next wet sample.
       mixMapRef.current?.markAllDirty();
       // …then put the room back: the snapshot is OUR layer as it was, so every
       // stroke a friend has added since is missing from it. Re-applied AFTER
       // markAllDirty so a wet dab in the replay samples the restored paper.
       replaySharedOpsSince(snapshot.sharedMark);
-      // The active frame's pixels changed outside the stroke path — its onion
+      // The active frame's pixels changed outside the stroke path, its onion
       // proxy is stale for when it next becomes someone's neighbor.
       bumpFrameStamp(framesRef.current[activeFrameIndexRef.current]?.id);
       invalidateCompositeCache();
@@ -2599,7 +2625,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     markChanged("Redo");
   }, [applySnapshot, captureInverse, markChanged, paintGate]);
 
-  // Show the "mural cleared — bring it back" banner for a while (whoever cleared).
+  // Show the "mural cleared, bring it back" banner for a while (whoever cleared).
   const showClearBanner = useCallback((by) => {
     setClearBanner({ by });
     if (clearBannerTimerRef.current) {
@@ -2629,17 +2655,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     // Clear is a shared wipe ON THE LIVE FRAME: clear every layer, snapshot for
     // local undo, and tell the room. On frames 2+ (the local flipbook) it only
-    // clears YOUR frame — the room's mural is untouched.
+    // clears YOUR frame, the room's mural is untouched.
     const animated = roomAnimationRef.current;
     const activeFrame = framesRef.current[activeFrameIndexRef.current];
     const onLiveFrame = activeFrameIndexRef.current === 0;
     pushHistory("full");
     layersRef.current.forEach((layer) => layer.canvas.getContext("2d").clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT));
-    // The wet-mix mirror tracks the ACTIVE frame's layer 0 — whichever frame
+    // The wet-mix mirror tracks the ACTIVE frame's layer 0, whichever frame
     // this is, its layer 0 is blank now, so the mirror must empty too.
     mixMapRef.current?.clear();
     if (animated && activeFrame) {
-      // Animation rooms: every frame is shared — clear THIS frame for everyone.
+      // Animation rooms: every frame is shared, clear THIS frame for everyone.
       remoteStrokeLastRef.current.clear();
       dropRemoteStrokes(); // in-flight strokes for this frame are wiped with it
       mpRef.current?.sendClear(activeFrame.id);
@@ -2743,7 +2769,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Note that the canvas changed so the recorder may take a (debounced, idle)
   // keyframe; capture on a meaningful event when `event` is true (stroke-batch
-  // end / layer or frame change). Never blocks the draw hot path — the recorder
+  // end / layer or frame change). Never blocks the draw hot path, the recorder
   // itself debounces and renders the downscaled snapshot asynchronously.
   const recordReplay = useCallback(
     (event = false) => {
@@ -2807,7 +2833,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           } catch (error) {
             // The Blobs wouldn't serialize (see warnDraftBlobFallback). That's a
             // storage-SHAPE problem, not "out of room", so re-encode the same
-            // layers as base64 dataURLs and try once more — restoreLayersFromDraft
+            // layers as base64 dataURLs and try once more, restoreLayersFromDraft
             // reads either form. If this throws too, the outer catch reports it.
             warnDraftBlobFallback(error);
             blobPutFailed = true;
@@ -2836,14 +2862,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // The IndexedDB write is now the source of truth. Drop this room's
         // localStorage fallback (it would only shadow the IDB copy), and for MAIN
         // also drop the pre-per-room global draft that was migrated forward into
-        // draft:v4:MAIN — so neither the legacy blob nor a stale fallback lingers.
+        // draft:v4:MAIN, so neither the legacy blob nor a stale fallback lingers.
         try {
           window.localStorage.removeItem(`${STORAGE_KEYS.draft}:${roomId}`);
           if (roomId === "MAIN") {
             window.localStorage.removeItem(STORAGE_KEYS.draft);
           }
         } catch {
-          // ignore — removing a stale key failing is non-fatal
+          // ignore, removing a stale key failing is non-fatal
         }
         if (roomId === "MAIN" && !legacyDraftPurgedRef.current) {
           legacyDraftPurgedRef.current = true;
@@ -2874,7 +2900,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setStatus("Autosaved");
     } catch {
       // Keep dirtyRef true so the next interval retries, and tell the truth.
-      setStatus("Couldn't autosave — storage full");
+      setStatus("Couldn't autosave, storage full");
     } finally {
       saveInFlightRef.current = false;
     }
@@ -2885,7 +2911,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
     // The studio ALWAYS opens on the brush. Restoring a saved fill/text/shape
-    // tool means a kid's first touch does something other than draw — and on a
+    // tool means a kid's first touch does something other than draw, and on a
     // phone there is no hover to tell them why. Brush, color, size and the rest
     // below still persist; only the tool resets. (handTool is never persisted.)
     setSelectedTool("brush");
@@ -2945,10 +2971,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (rebuilt.length === 0) {
         return;
       }
-      // Shared flipbooks are server state — swapping in locally-id'd frames
+      // Shared flipbooks are server state, swapping in locally-id'd frames
       // would silently fork this client (nothing drawn after would be shared).
       if (roomAnimationRef.current) {
-        setStatus("Drafts can't replace a shared animation — restore in a drawing room instead");
+        setStatus("Drafts can't replace a shared animation, restore in a drawing room instead");
         return;
       }
 
@@ -2979,7 +3005,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       // MAIN (our default room) inherits the pre-per-room global draft once, so
       // existing users' studio work migrates forward on the next autosave. Other
-      // rooms never read the shared global key — that's what stops one room's
+      // rooms never read the shared global key, that's what stops one room's
       // canvas from bleeding into another.
       if (roomId === "MAIN") {
         const legacyIdb = await idbGet(DRAFT_IDB_KEY).catch(() => null);
@@ -3004,7 +3030,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (paintGate("draft restore")) return;
     // Ink-only rooms: restoring a saved draft would paste pixels (possibly
     // non-ink, definitely not this room's op truth) into a shared mural that
-    // only accepts ink/pencil ops — divergent art. Closed here.
+    // only accepts ink/pencil ops, divergent art. Closed here.
     if (inkOnlyRef.current) {
       setStatus("Drafts stay on the shelf in the Ink & Pencil room ✒️");
       return;
@@ -3098,7 +3124,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       await persistGallery(next);
     } catch {
       // Honest failure: don't pretend the save worked.
-      setStatus("Couldn't save gallery — storage full");
+      setStatus("Couldn't save gallery, storage full");
       return;
     }
     galleryRef.current = next;
@@ -3166,11 +3192,40 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     toastTimerRef.current = window.setTimeout(() => setToast(null), ms);
   }, []);
 
+  // Watcher's escape hatch on an unsaved (kid_safe) sketchbook page: start
+  // THIS device's own unsaved book for the page's pinned day and jump straight
+  // into it. Same guest flow the Inktober CTAs use; no account anywhere.
+  const guestStartBusyRef = useRef(false);
+  const handleStartOwnGuestPage = useCallback(async (day) => {
+    if (guestStartBusyRef.current) return;
+    const device = getDeviceKey();
+    if (!device) {
+      showToast("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
+      return;
+    }
+    guestStartBusyRef.current = true;
+    try {
+      const r = await startGuestSketchbook({ device, day });
+      if (!r.ok || !r.json?.room) {
+        showToast(r.error === "need_day" || r.error === "bad_day"
+          ? "That prompt day isn't open right now. Try today's prompt or the shared Ink & Pencil room."
+          : "Couldn't start your sketchbook just now. Try again in a moment.");
+        return;
+      }
+      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      window.location.href = `/join/${r.json.room}`;
+    } catch {
+      showToast("Couldn't start your sketchbook just now. Try again in a moment.");
+    } finally {
+      guestStartBusyRef.current = false;
+    }
+  }, [showToast]);
+
   // The toolbar Clear. The shared mural is never wiped on the spot any more:
   // this ASKS the server, which counts down (10s alone, 30s with company) or
   // runs a room vote at 3+ people, and the canvas waits for its `clear` (see
-  // WipeCountdown). Clears that touch only one frame — a flipbook cel, a local
-  // frame 2+ — and the Draw & Guess drawer scrapping their own turn keep the
+  // WipeCountdown). Clears that touch only one frame, a flipbook cel, a local
+  // frame 2+, and the Draw & Guess drawer scrapping their own turn keep the
   // old confirm-and-clear.
   const requestClear = useCallback(() => {
     const game = gameRef.current;
@@ -3180,7 +3235,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
     if (!mpConnectedRef.current) {
-      showToast("Reconnecting to the room — try again in a moment.");
+      showToast("Reconnecting to the room, try again in a moment.");
       return;
     }
     mpRef.current?.sendWipeRequest?.();
@@ -3243,14 +3298,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Jump OUR canvas to a friend's last cursor position and pulse it for a moment.
   // Wired to the tappable participant chips in chat. Each person keeps their own
-  // orientation/zoom — we only move our own view to find them.
+  // orientation/zoom, we only move our own view to find them.
   const focusUser = (userId) => {
     if (!userId) {
       return;
     }
     const pos = userPosRef.current.get(userId);
     if (!pos) {
-      showToast("Can't see them on the canvas yet — ask them to draw! ✏️");
+      showToast("Can't see them on the canvas yet, ask them to draw! ✏️");
       return;
     }
     const { w, h } = getViewportSize();
@@ -3299,7 +3354,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         setSavesMax(data.max);
       }
     } catch {
-      // Offline / server down — leave the list as-is.
+      // Offline / server down, leave the list as-is.
     }
   }, []);
 
@@ -3333,11 +3388,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         throw new Error("save failed");
       }
       const data = await res.json();
-      showToast(`Saved! 🎉 (${data.count}/${data.max}) — find it in 🖼️ Gallery`);
+      showToast(`Saved! 🎉 (${data.count}/${data.max}), find it in 🖼️ Gallery`);
       await loadMyDrawings();
       signalNaturalAdBreak("server_save");
     } catch {
-      showToast("Couldn't save — please try again");
+      showToast("Couldn't save, please try again");
     } finally {
       setSavingArt(false);
     }
@@ -3370,7 +3425,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       setWallPostDraft({ frames, durationMs });
     } catch {
-      showToast("Couldn't get your art ready for the wall — try again");
+      showToast("Couldn't get your art ready for the wall, try again");
     }
   }, [commitLayersToFrame, composeCanvas, renderPaper, selectedTexture, showToast]);
 
@@ -3395,7 +3450,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           throw new Error("decode failed");
         }
         if (roomAnimationRef.current) {
-          showToast("Open saved art in a drawing room — this room is a shared animation");
+          showToast("Open saved art in a drawing room, this room is a shared animation");
           setShowMyArt(false);
           return;
         }
@@ -3412,7 +3467,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         syncFrameState();
         setShowMyArt(false);
         markChanged("Opened your saved drawing");
-        showToast("Opened — keep drawing! ✏️");
+        showToast("Opened, keep drawing! ✏️");
       } catch {
         showToast("Couldn't open that drawing");
       }
@@ -3451,7 +3506,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (paintGate("image import")) return;
       // Ink-only rooms: no image/stamp imports (the server drops image ops).
       if (inkOnlyRef.current) {
-        setStatus("The Ink & Pencil room is hand-drawn only — no image imports ✒️");
+        setStatus("The Ink & Pencil room is hand-drawn only, no image imports ✒️");
         return;
       }
       const active = getActiveLayer();
@@ -3517,7 +3572,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Every "Share" / "Invite" button opens the invite sheet (copy link, OS share,
   // Instagram, X). The sheet renders an invite card from the current art so
-  // Instagram — which has no share URL and drops text — still gets the invite.
+  // Instagram, which has no share URL and drops text, still gets the invite.
   const shareRoomLink = useCallback(() => {
     setShowShareInvite(true);
   }, []);
@@ -3533,7 +3588,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       if (roomAnimationRef.current) {
-        setStatus("Open gallery art in a drawing room — this room is a shared animation");
+        setStatus("Open gallery art in a drawing room, this room is a shared animation");
         return;
       }
       pushHistory("full");
@@ -3559,7 +3614,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const chooseBrush = useCallback(
     (brushId) => {
-      // Ink-only rooms: ink, pencil and the eraser — nothing else may paint.
+      // Ink-only rooms: ink, pencil and the eraser, nothing else may paint.
       if (inkOnlyRef.current && !INK_ONLY_BRUSHES.has(brushId)) {
         setStatus("This room is ink, pencil and eraser only ✒️");
         return;
@@ -3568,22 +3623,22 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       if (brush?.tier === "studio" && !studioUnlocked) {
         setShowStore(true);
-        setStatus("Studio brush — unlock with the Creator Brushes pack");
+        setStatus("Studio brush, unlock with the Creator Brushes pack");
         return;
       }
 
       // Private-room-only brushes (smudge) are ghosted in public rooms; the
       // picker routes their taps to a toast, but guard here too. The
-      // finger-paint room is the exception — smearing is the toy there.
+      // finger-paint room is the exception, smearing is the toy there.
       if (brush?.privateOnly && roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
-        showToast("Smudge works in private rooms — start one from Rooms!");
+        showToast("Smudge works in private rooms, start one from Rooms!");
         return;
       }
 
       setSelectedBrush(brushId);
       setActiveBrushRecipe(null);
       setSelectedTool("brush");
-      // Picking a brush means you want to draw — drop out of the pan/hand tool.
+      // Picking a brush means you want to draw, drop out of the pan/hand tool.
       handToolRef.current = false;
       setHandTool(false);
     },
@@ -3596,7 +3651,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       if (texture?.tier === "studio" && !studioUnlocked) {
         setShowStore(true);
-        setStatus("Studio paper — unlock with the Creator Brushes pack");
+        setStatus("Studio paper, unlock with the Creator Brushes pack");
         return;
       }
 
@@ -3664,8 +3719,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
     } else {
       // No real pressure (mouse reports a UA-constant 0.5/0, fingers a
-      // constant too — the old hardcoded 0.62/0.72 fallbacks): synthesize it
-      // from stroke speed (#63) — slow, deliberate = heavy; fast flicks =
+      // constant too, the old hardcoded 0.62/0.72 fallbacks): synthesize it
+      // from stroke speed (#63), slow, deliberate = heavy; fast flicks =
       // light. EMA-smoothed so width breathes instead of flickering.
       rawPressure = resolvePointPressure(event, {
         worldX: world.x,
@@ -3683,8 +3738,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Send the buffered points of the in-progress stroke to the room. Throttled
   // to WIRE_FLUSH_MS mid-stroke so volume stays sane while feeling live. `end = true`
-  // (pen-up) bypasses the throttle AND always sends — even with zero pending
-  // points — because the end marker is what tells every peer to commit their
+  // (pen-up) bypasses the throttle AND always sends, even with zero pending
+  // points, because the end marker is what tells every peer to commit their
   // buffered copy of this stroke at its uniform opacity (#62).
   const flushStrokeNet = useCallback((end = false) => {
     const net = strokeNetRef.current;
@@ -3707,7 +3762,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     net.pending = [];
     // Animation rooms share EVERY frame: the op is tagged with its frame so
     // peers ink the right cel. Elsewhere only the first frame (the mural) is
-    // shared — extra frames shouldn't exist there, but never leak them.
+    // shared, extra frames shouldn't exist there, but never leak them.
     // (activateFrame aborts in-flight strokes, so the frame is stroke-stable.)
     const animated = roomAnimationRef.current;
     if (!animated && activeFrameIndexRef.current !== 0) {
@@ -3715,7 +3770,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     const stampId = net.settings?.dab?.stampId;
     const hasInlineStamp = !!net.settings?.dab?.stampDataUrl && !!stampId;
-    // Scene histories are fetched independently — someone who pages into
+    // Scene histories are fetched independently, someone who pages into
     // scene 3 never replays scene 1's ops, so the full tip pixels must ride
     // at least once PER SCENE (not per session) or their replay of this
     // brush bakes a plain line into the cel.
@@ -3774,7 +3829,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       markMixDirty(stroke.layer, stroke.buf.bounds()); // wet-mix mirror (layer 0 only)
       if (stroke.layer.id !== activeLayerIdRef.current) {
         // A smudge lands on layer 0 while another layer is active: its
-        // pixels now sit inside the "below" composite cache — invalidate so
+        // pixels now sit inside the "below" composite cache, invalidate so
         // the next frame recomposites (same cost remote ops already pay).
         invalidateCompositeCache();
       }
@@ -3821,11 +3876,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Non-eraser strokes paint into the offscreen stroke buffer at FULL
       // opacity with coordinate-seeded randomness (#62); the eraser stays on
       // the legacy direct destination-out path (stroke === null). A v3
-      // smudge is a buffered stroke too — its renderer samples layer 0 and
+      // smudge is a buffered stroke too, its renderer samples layer 0 and
       // its buffer commits to layer 0 (see startStroke).
       const stroke = localStrokeRef.current;
       // Dab walks (makeStrokeRenderer / makeSmudgeRenderer) must see EXACTLY
-      // the point sequence the wire carries — see wirePoint below.
+      // the point sequence the wire carries, see wirePoint below.
       const dabWalk = stroke ? (stroke.copies ? stroke.copies[0].renderer : stroke.renderer) != null : false;
       for (const pointerEvent of events) {
         const point = getPoint(pointerEvent);
@@ -3835,7 +3890,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // visible) and deduped against the previous sent point (a point that
         // quantizes onto it with the same pressure repaints nothing on replay,
         // so it costs no op bytes). `wirePoint` IS the object pushed to
-        // net.pending — and it is the object the dab renderers, buf.ensure()
+        // net.pending, and it is the object the dab renderers, buf.ensure()
         // and the symmetry expansion are fed below, so the local dab walk,
         // buffer-grow history and copy paths are byte-identical to what every
         // remote / spectator / replay consumer derives from the op. A point
@@ -3875,7 +3930,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // point for legacy segments. Null = deduped, nothing to paint.
         // The SEEDED ERASER is wired too: it paints the exact wire point
         // sequence (quantized, deduped) so the local cut is the op every
-        // remote / history replay / cold-frame raster derives — a deduped
+        // remote / history replay / cold-frame raster derives, a deduped
         // point paints nothing, because remotes never see it either.
         const wiredEraser = !stroke && net?.settings?.brush === "eraser" && net.settings.seed != null;
         const walkPoint = (dabWalk || wiredEraser) ? wirePoint : point;
@@ -3904,7 +3959,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             if (stroke.buf.ensure(walkPoint.x, walkPoint.y, stroke.pad).overflow) {
               // The stroke outgrew the 2048² buffer cap: bank what we have into
               // the layer and restart the buffer here (a rare, visually-minor
-              // opacity seam on giant strokes — intended). Commit passes (wet
+              // opacity seam on giant strokes, intended). Commit passes (wet
               // edge / impasto / grain) run per committed chunk; final = false
               // skips the renderer's end() so the dab walk state
               // (residual/lastPoint) stays alive across the restart, and
@@ -3917,7 +3972,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             }
             if (stroke.renderer) {
               // Stage-2 dab path: the renderer interpolates spaced stamps from
-              // its OWN per-stroke lastPoint/residual — feed one point at a time
+              // its OWN per-stroke lastPoint/residual, feed one point at a time
               // (matching how remote batches are unpacked per point).
               stroke.renderer.addPoints(stroke.buf.getCtx(), [walkPoint], stroke.buf.base());
             } else {
@@ -3930,7 +3985,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // identical to what every remote, history replay and cold-frame
             // raster derives (the #62 wire-point rule, extended to the
             // direct eraser path). A stroke's first wired point starts and
-            // ends on itself — the remote's `last || point` tap. The OTHER
+            // ends on itself, the remote's `last || point` tap. The OTHER
             // legacy direct brushes (spray / custom) keep raw points +
             // Math.random: reseeding them would repaint saved history
             // (documented divergence).
@@ -3986,7 +4041,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
 
       // A host locked the room: nobody but a host may draw. (The server also
-      // drops these ops — this is just immediate feedback so strokes don't appear
+      // drops these ops, this is just immediate feedback so strokes don't appear
       // and then vanish on the next history replay.)
       if (roomLocked && !isRoomHost) {
         setStatus("🔒 A host locked the canvas");
@@ -4029,7 +4084,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Decide whether to ignore a touch contact for palm rejection / pen priority
   // (W14). The pen always wins: while a pen stroke is live, or for
-  // PEN_PRIORITY_MS after any pen activity (contact or hover — a Cintiq and an
+  // PEN_PRIORITY_MS after any pen activity (contact or hover, a Cintiq and an
   // M2 iPad report the pen in proximity before it lands), touch contacts are
   // ignored, so the resting hand can't paint or pinch. Any touch with a large
   // contact patch is a palm regardless. Mouse and a lone fingertip are never
@@ -4042,7 +4097,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     if (type === "touch") {
       if (activePointerRef.current != null && activePointerTypeRef.current === "pen") {
-        return true; // a pen stroke is in progress — this is the hand
+        return true; // a pen stroke is in progress, this is the hand
       }
       const now = event.timeStamp || performance.now();
       if (now - lastPenAtRef.current < PEN_PRIORITY_MS) {
@@ -4063,7 +4118,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       // Artist-studio watchers: the server drops their ops, so never start a
-      // local stroke either — pan/zoom paths return before this point and
+      // local stroke either, pan/zoom paths return before this point and
       // stay available.
       if (paintGate()) {
         return;
@@ -4090,7 +4145,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const tool = settings?.tool || "brush";
 
       // Ink-only rooms: the settings effect already forces the brush tool,
-      // but never let a stale fill/text/shape tool past the draw hot path —
+      // but never let a stale fill/text/shape tool past the draw hot path -
       // those ops are refused by the room and would diverge locally.
       if (inkOnlyRef.current && tool !== "brush") {
         return;
@@ -4117,7 +4172,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           opacity: settings.opacity,
         });
         if (filled) {
-          // Flood fill has no cheap bbox — if it touched layer 0, re-mirror
+          // Flood fill has no cheap bbox, if it touched layer 0, re-mirror
           // the whole wet-mix map on next sample (fills are rare).
           if (active === layersRef.current[0]) {
             mixMapRef.current?.markAllDirty();
@@ -4196,7 +4251,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       commitLocalStroke();
       // Smudge is private-room only EXCEPT the finger-paint room, where smearing
       // is the toy. The picker ghosts it in other kid_safe rooms; this fallback
-      // guards restored drafts / audience races — without the fingerPaint
+      // guards restored drafts / audience races, without the fingerPaint
       // exception it would silently turn FINGERS smudge into a colored marker.
       const smudgeBlocked = roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current;
       const brushId = (settings.brush === "smudge" || settings.brush === "goo") && smudgeBlocked ? "marker" : settings.brush;
@@ -4221,7 +4276,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Velocity-pressure synthesis (#63) starts fresh on every stroke.
       resetVelocityPressure(velocityRef.current);
       lastPointRef.current = getPoint(event.nativeEvent);
-      // Smudge + goo edit LAYER 0 even when another layer is active — snapshot
+      // Smudge + goo edit LAYER 0 even when another layer is active, snapshot
       // the full stack in that case so undo restores the right layer's pixels.
       pushHistory((brushId === "smudge" || brushId === "goo") && activeLayerIdRef.current !== layersRef.current[0]?.id ? "full" : "active");
       buildCompositeCache();
@@ -4229,8 +4284,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // exact same jitter/scatter for this stroke (see pointRand in brushes).
       const seed = Math.floor(Math.random() * 2 ** 31);
       // Stage-2 routing: brushes with dab params mark their ops settings.v = 2
-      // (rides the wire), so every consumer — local, live remote, spectator,
-      // history replay — picks the makeStrokeRenderer path for this stroke.
+      // (rides the wire), so every consumer, local, live remote, spectator,
+      // history replay, picks the makeStrokeRenderer path for this stroke.
       // Spray/eraser/anything without dab params stays legacy, and legacy
       // history ops (no v) replay pixel-stable forever. (Smudge is routed BY
       // BRUSH ID in every consumer, not via the dab table.)
@@ -4259,21 +4314,21 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       // Smudge's Strength (per-dab blend alpha) rides the wire so the local
       // renderer honors the slider AND every remote/replay/spectator client
-      // smears with the identical alpha — deterministic parity. Only smudge
+      // smears with the identical alpha, deterministic parity. Only smudge
       // reads it, so we don't bloat every other brush's op.
       if (brushId === "smudge") {
-        netSettings.opacity = 1; // Strength IS smudge's strength — the opacity slider is hidden for it
+        netSettings.opacity = 1; // Strength IS smudge's strength, the opacity slider is hidden for it
         netSettings.strength = settings.strength;
         // Stage 4: v:3 + the Smudge | Blend mode ride the wire too, read
         // through the engine's one normalizer (anything but "blend" is
-        // "drag"). Every consumer — this walker included — builds its
+        // "drag"). Every consumer, this walker included, builds its
         // renderer from these settings, and ops without v keep the legacy
         // square renderer everywhere, so old history never repaints.
         netSettings.v = 3;
         netSettings.smudgeMode = normalizeSmudgeSettings({ v: 3, smudgeMode: settings.smudgeMode }).mode;
       }
       if (brushId === "goo") {
-        netSettings.opacity = 1; // Gooeyness IS goo's strength — the opacity slider is hidden for it
+        netSettings.opacity = 1; // Gooeyness IS goo's strength, the opacity slider is hidden for it
         netSettings.gooiness = settings.gooiness;
         // Stage 6: v:3 + gooiness ride the wire, read through the engine's
         // one normalizer, so every consumer lays the identical goo.
@@ -4286,7 +4341,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         // The room's wet state is captured INTO the op at pen-down: replay
         // stays deterministic no matter how the toggle flips later. Fun brush
-        // mode is always wet — captured the same way (the mode itself is NOT
+        // mode is always wet, captured the same way (the mode itself is NOT
         // in the op, only its consequence: wetness).
         if (roomWetRef.current || roomBrushModeRef.current === "fun") {
           netSettings.wet = true;
@@ -4309,11 +4364,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // replays smudge against layer 0, and a smudge that sampled a
       // different layer than its peers would smear different paint. (Its
       // preview draws above the active layer; paint on higher layers over
-      // the smear pops under it at pen-up — the documented multi-layer
+      // the smear pops under it at pen-up, the documented multi-layer
       // divergence class, see makeStrokeEntryCore.)
       if (brushId !== "eraser") {
         // ONE shared entry core (buffer / dab renderer / commit passes / pad /
-        // opacity / commit composite) — the same builder applyRemoteOp and
+        // opacity / commit composite), the same builder applyRemoteOp and
         // opReplay start from, so nothing about this stroke is decided
         // differently on the local side. Symmetry: one core per copy (each
         // copy has its own buffer + walk state); the shared fields ride on
@@ -4348,7 +4403,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         localStrokeRef.current = null;
       }
       drawBrushFromEvent(event);
-      // Flag the draft dirty WITHOUT the setStatus re-render markChanged does —
+      // Flag the draft dirty WITHOUT the setStatus re-render markChanged does -
       // a full component render mid-pointerdown stalls the first stroke frames.
       // finishStroke's markChanged("Stroke saved") covers the status update.
       dirtyRef.current = true;
@@ -4424,7 +4479,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       try {
         event.currentTarget.releasePointerCapture?.(event.pointerId);
       } catch {
-        /* pointer already inactive (interrupted pen sequence) — never strand the stroke */
+        /* pointer already inactive (interrupted pen sequence), never strand the stroke */
       }
 
       const tool = settingsRef.current?.tool || "brush";
@@ -4468,7 +4523,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       } else {
         // Brush/eraser: push the tail of the stroke (+ the end marker peers
         // commit on) to the room, land the buffered stroke on its layer ONCE
-        // at the stroke's opacity (#62 — a single pen-down/up tap commits its
+        // at the stroke's opacity (#62, a single pen-down/up tap commits its
         // one dab here too), then flush any pending per-move composite and do
         // one full recomposite (this also invalidates the per-stroke caches).
         flushStrokeNet(true);
@@ -4513,7 +4568,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         /* already released */
       }
       flushStrokeFrame();
-      // Termination path: keep what was painted so far (legacy parity — the
+      // Termination path: keep what was painted so far (legacy parity, the
       // direct path had already inked the layer). Send the end marker so
       // peers commit their copy, then land the local buffer.
       flushStrokeNet(true);
@@ -4542,7 +4597,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Stamp one dab of the current brush into the ring's canvas at the ring's
   // on-screen size. Called ONLY when brush / color / size / zoom change (see
-  // the signature check in updateBrushCursor) — never per pointer move.
+  // the signature check in updateBrushCursor), never per pointer move.
   const renderBrushTip = (d) => {
     const tip = brushTipCanvasRef.current;
     if (!tip) {
@@ -4576,7 +4631,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (!ring || !canvas) {
       return;
     }
-    // Artist-studio watchers get no brush ring — there is no brush in hand.
+    // Artist-studio watchers get no brush ring, there is no brush in hand.
     if (!canPaintRef.current) {
       hideBrushCursor();
       return;
@@ -4612,10 +4667,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   };
 
-  // Flash the ring at the canvas center for a moment — the "before you paint"
+  // Flash the ring at the canvas center for a moment, the "before you paint"
   // size preview that works even on touch (no hover). Re-armed on size changes.
   // If a mouse/pen is hovering the canvas, the ring is resized under the
-  // pointer instead (and stays put) — the cursor must never jump away from
+  // pointer instead (and stays put), the cursor must never jump away from
   // where the user is holding it.
   const flashBrushCursor = () => {
     const canvas = overlayCanvasRef.current;
@@ -4696,7 +4751,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // The hold expired (or a quick flick lifted): start the stroke from the
   // snapshot and replay every move that arrived meanwhile, so the line the
-  // finger drew is complete — just late by the hold. `up` closes it too.
+  // finger drew is complete, just late by the hold. `up` closes it too.
   const releaseHeldTouch = (up = null) => {
     const held = heldTouchRef.current;
     if (!held) {
@@ -4727,10 +4782,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   // A pen landed while a FINGER stroke was live: that finger is the hand.
-  // Drop the stroke instead of committing it — the buffer is thrown away and
+  // Drop the stroke instead of committing it, the buffer is thrown away and
   // the undo entry it pushed is popped, so nothing of the palm is left
   // behind. Whatever already streamed to the room gets its end marker (peers
-  // keep the fragment — there is no retraction op), so this is local hygiene.
+  // keep the fragment, there is no retraction op), so this is local hygiene.
   const discardTouchStroke = () => {
     if (activePointerRef.current == null || activePointerTypeRef.current !== "touch") {
       return false;
@@ -4809,31 +4864,31 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setStatus("Loading this frame…"); // its ops are still replaying in
       return;
     }
-    // A LOCKED layer refuses local ink (the server drops it too — belt and
+    // A LOCKED layer refuses local ink (the server drops it too, belt and
     // braces for a stale/hacked client). Tell the artist why nothing happens.
     const activeLayer = layersRef.current.find((layer) => layer.id === activeLayerIdRef.current);
     if (activeLayer?.locked && !isRoomHostRef.current) {
-      setStatus("This layer is locked — ask the host to unlock it");
+      setStatus("This layer is locked, ask the host to unlock it");
       showToast("🔒 This layer is locked");
       return;
     }
-    // Capture EVERY pointer — draw, pan, AND pinch fingers — so the browser
+    // Capture EVERY pointer, draw, pan, AND pinch fingers, so the browser
     // guarantees its pointerup/pointercancel comes back here even if the finger
     // slides off-canvas or a system gesture interrupts. Without this, a lost
     // touch-up on iOS strands a stale entry in pointersRef, and the next single
-    // touch is misread as a 2nd pinch finger — so it silently refuses to draw.
+    // touch is misread as a 2nd pinch finger, so it silently refuses to draw.
     // Best-effort: a capture failure must never abort the pointerdown.
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
-      /* capture unavailable — pointer tracking + the safety nets still apply */
+      /* capture unavailable, pointer tracking + the safety nets still apply */
     }
     // Palm / pen-priority filtering happens HERE, before the contact is
     // registered as a pointer. Two hard rejections: a big contact patch is a
     // palm, and while a pen stroke is actually IN PROGRESS nothing touch may
     // interfere (a palm used to land in pointersRef, read as a 2nd "finger",
     // and abort the pen stroke into a pinch). But fingers while the pen is
-    // merely NEAR (hovering / just lifted) DO register — as gesture-only
+    // merely NEAR (hovering / just lifted) DO register, as gesture-only
     // contacts: two of them pinch/pan/twist like Procreate, they just can't
     // paint (the pen-priority window in startStroke keeps single touches
     // inert). Rejected touches are still captured so their up/cancel returns.
@@ -4858,7 +4913,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // any lingering pointersRef entries are stale (a prior touch's up/cancel was
     // dropped by iOS). Clear them so this touch isn't misread as a 2nd pinch finger.
     // EXCEPT inside the pen-priority window: there, a tracked finger with no
-    // stroke is a live GESTURE CANDIDATE (it deliberately doesn't paint) — the
+    // stroke is a live GESTURE CANDIDATE (it deliberately doesn't paint), the
     // second finger landing next to it is exactly how a pinch starts. Pen only
     // mode makes EVERY finger such a candidate, so it never prunes either.
     if (
@@ -4874,7 +4929,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     viewRectRef.current = event.currentTarget.getBoundingClientRect();
 
-    // Only touch contacts form a gesture — a pen (iPad Pencil) with a resting palm
+    // Only touch contacts form a gesture, a pen (iPad Pencil) with a resting palm
     // must still draw, not be hijacked into pan/zoom/rotate. Two fingers pinch +
     // twist + pan; three or more pan. Baselined here and on every finger change.
     if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
@@ -4886,8 +4941,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
 
-    // Hand tool, OR a secondary button held — pen barrel button, mouse right /
-    // middle — pans for the length of the drag without changing the tool (the
+    // Hand tool, OR a secondary button held, pen barrel button, mouse right /
+    // middle, pans for the length of the drag without changing the tool (the
     // Wacom / Krita / Photoshop habit). Never starts a stroke mid-stroke.
     const buttonPan = !handToolRef.current && activePointerRef.current == null && isSecondaryButtonPointer(event);
     if (handToolRef.current || buttonPan) {
@@ -4908,7 +4963,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const penAt = lastPenAtRef.current;
       // Pen only mode: fingers never paint (two still pinch / pan / twist).
       // Otherwise a lone finger inside the pen-priority window stays a silent
-      // gesture candidate — no ring, no stroke (startStroke would reject it
+      // gesture candidate, no ring, no stroke (startStroke would reject it
       // anyway, but the ring hopping to a resting finger looks broken).
       if (penOnlyTouch() || now - penAt < PEN_PRIORITY_MS) {
         return;
@@ -4929,7 +4984,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const handleCanvasPointerMove = (event) => {
     if (event.pointerType === "pen") {
       // Hover counts: a Cintiq / M2 Pencil in proximity keeps palm touches out
-      // — and drops a finger stroke still on hold (the hand rests, the pen
+      //, and drops a finger stroke still on hold (the hand rests, the pen
       // approaches).
       lastPenAtRef.current = event.timeStamp || performance.now();
       notePenSeen();
@@ -5007,7 +5062,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
     // A lone gesture-candidate finger (Pen only mode, or inside the
     // pen-priority window): tracked above (it may become a pinch), but it
-    // owns neither the ring nor the cursor relay — those follow the pen.
+    // owns neither the ring nor the cursor relay, those follow the pen.
     if (
       event.pointerType === "touch" &&
       (penOnlyTouch() ||
@@ -5086,7 +5141,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   };
 
   // Flash the brush-size preview ring whenever the size or brush changes (skipping
-  // the first render) — the "know how big before you paint" hint that works on
+  // the first render), the "know how big before you paint" hint that works on
   // touch where there's no hover. Dragging the size slider re-arms it live.
   const brushPreviewInitRef = useRef(false);
   useEffect(() => {
@@ -5098,8 +5153,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brushSize, selectedBrush]);
 
-  // Clear any pending brush-ring hide timer — and a finger stroke still on
-  // hold (it must never start against an unmounted canvas) — on unmount.
+  // Clear any pending brush-ring hide timer, and a finger stroke still on
+  // hold (it must never start against an unmounted canvas), on unmount.
   useEffect(
     () => () => {
       if (brushCursorHideRef.current) {
@@ -5115,12 +5170,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Mobile safety net: if the tab is backgrounded or the window loses focus (an
   // app switch, a notification, an interrupting system gesture), iOS may never
-  // deliver the pending pointerup/cancel — stranding stale pointers that break the
+  // deliver the pending pointerup/cancel, stranding stale pointers that break the
   // next touch. Reset all pointer + gesture state on those signals.
   useEffect(() => {
     const reset = () => {
       if (heldTouchRef.current) {
-        // A finger stroke on hold never started — just forget it.
+        // A finger stroke on hold never started, just forget it.
         window.clearTimeout(heldTouchRef.current.timer);
         heldTouchRef.current = null;
       }
@@ -5129,7 +5184,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       panPointerRef.current = null;
       if (activePointerRef.current != null) {
         // Termination path: the pointerup will never arrive, so end the
-        // stroke properly — tell peers to commit (end marker) and land the
+        // stroke properly, tell peers to commit (end marker) and land the
         // local buffer on its layer before dropping the stroke state.
         flushStrokeNet(true);
         commitLocalStroke();
@@ -5188,7 +5243,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Layer STRUCTURE is room state now: the server mints ids, applies the change
   // and echoes the canonical list (see the layer_* echo handlers). These senders
-  // are the only writers — a dead socket falls back to the old local-only edit so
+  // are the only writers, a dead socket falls back to the old local-only edit so
   // the studio never feels frozen, and the next join history reconciles the stack
   // with the server's.
   const layersAreShared = useCallback(() => Boolean(mpConnectedRef.current && mpRef.current?.sendLayerAdd), []);
@@ -5231,7 +5286,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       const index = layersRef.current.findIndex((layer) => layer.id === id);
       // The bottom layer is load-bearing (goo/smudge and the wet-mix mirror read
-      // layer 0, and legacy untagged ops live there) — the server refuses it too.
+      // layer 0, and legacy untagged ops live there), the server refuses it too.
       if (index <= 0) {
         setStatus("The bottom layer can't be deleted");
         return;
@@ -5249,7 +5304,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       renderDisplay();
       syncLayerState();
-      refreshActiveThumbnail(); // composite changed — stamp + thumb (idle)
+      refreshActiveThumbnail(); // composite changed, stamp + thumb (idle)
       recordReplay(true);
       markChanged("Layer deleted");
     },
@@ -5333,7 +5388,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   // Flatten every layer onto a single layer 0 (respecting visibility + opacity)
-  // — "fun" brush mode is single-layer so goo/smudge displacement samples
+  //: "fun" brush mode is single-layer so goo/smudge displacement samples
   // exactly the paint everyone else sees (ops carry no layer; peers already see
   // everything on layer 0). Undoable: a full snapshot restores the stack.
   const flattenLayers = useCallback(() => {
@@ -5353,7 +5408,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     activeLayerIdRef.current = flat.id;
     renderDisplay();
     syncLayerState();
-    markChanged("Fun mode — flattened to one layer");
+    markChanged("Fun mode, flattened to one layer");
   }, [markChanged, paintGate, pushHistory, renderDisplay, syncLayerState]);
 
   // Entering fun mode (the toggle, or joining a fun/toddler room, or a draft
@@ -5385,7 +5440,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       layersRef.current = next;
       renderDisplay();
       syncLayerState();
-      refreshActiveThumbnail(); // composite order changed — stamp + thumb (idle)
+      refreshActiveThumbnail(); // composite order changed, stamp + thumb (idle)
       markChanged("Layer reordered");
     },
     [layerMutationFrameId, layersAreShared, markChanged, pushHistory, refreshActiveThumbnail, renderDisplay, syncLayerState],
@@ -5408,7 +5463,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       layer.visible = !layer.visible;
       renderDisplay();
       syncLayerState();
-      refreshActiveThumbnail(); // composite changed — stamp + thumb (idle)
+      refreshActiveThumbnail(); // composite changed, stamp + thumb (idle)
       markChanged(layer.visible ? "Layer shown" : "Layer hidden");
     },
     [layerMutationFrameId, layersAreShared, markChanged, refreshActiveThumbnail, renderDisplay, syncLayerState],
@@ -5445,7 +5500,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const handleOpacityDragEnd = useCallback(() => {
     opacityDragActiveRef.current = false;
-    // Flush the debounced shared patch (the drag is over — send it now).
+    // Flush the debounced shared patch (the drag is over, send it now).
     if (opacitySharedTimerRef.current) {
       window.clearTimeout(opacitySharedTimerRef.current);
       opacitySharedTimerRef.current = 0;
@@ -5553,13 +5608,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // artist first; frames re-hydrate by replaying their ops when activated.
   const rasterQueueRef = useRef({ pending: false, running: false, run: null });
   // A cold frame's retained checkpoint failed to restore (corrupt descriptor,
-  // a drifted layer stack): poison it and pull the CURRENT scene in full —
+  // a drifted layer stack): poison it and pull the CURRENT scene in full -
   // the contract's fallback, never a bare tail painted over blank canvases.
   const refetchSceneFull = useCallback(() => {
     if (!roomAnimationRef.current) return;
     const target = activeSceneIdRef.current;
     if (target) {
-      setStatus("A saved frame snapshot didn't check out — refreshing the scene…");
+      setStatus("A saved frame snapshot didn't check out, refreshing the scene…");
       mpRef.current?.sendSceneFetch?.(target);
     }
   }, []);
@@ -5592,17 +5647,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const sig = layerRenderSig(frame.layerMeta);
         // Capture the inputs BEFORE the async build: an op arrival, a clear,
         // or a render-affecting layer sync while we replay + encode makes the
-        // blob stale — even when the op count is UNCHANGED (a hidden layer, a
+        // blob stale, even when the op count is UNCHANGED (a hidden layer, a
         // reorder), which the old count-only check could never catch.
         const ticket = rasterTicket(frame);
         let blob = null;
         try {
           // A retained frame checkpoint restores INSIDE the rasterizer
-          // (baseline + mix state, then the tail) — never a bare-tail raster.
+          // (baseline + mix state, then the tail), never a bare-tail raster.
           blob = await rasterizeOps(ops, frame.layerMeta, frame.checkpoint || null);
         } catch (error) {
           if (frame.checkpoint && !isCanceled(error?.reason)) {
-            frame.checkpoint = null; // poisoned descriptor — full scene refetch
+            frame.checkpoint = null; // poisoned descriptor, full scene refetch
             frame.rasterGen = (frame.rasterGen || 0) + 1;
             q.running = false;
             refetchSceneFull();
@@ -5619,7 +5674,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             queueThumbnailRefresh(frame.id);
             renderDisplay(); // it may be an onion neighbor
           } else {
-            frame.rasterCount = count; // encode unsupported here — don't spin
+            frame.rasterCount = count; // encode unsupported here, don't spin
             frame.rasterSig = sig;
           }
         }
@@ -5634,8 +5689,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     rasterQueueRef.current.run = runRasterQueue;
   }, [runRasterQueue]);
 
-  // Record an op on its frame's own list — both ops we send and ops we receive
-  // — so any frame can re-hydrate or re-raster without asking the server. A
+  // Record an op on its frame's own list, both ops we send and ops we receive
+  //, so any frame can re-hydrate or re-raster without asking the server. A
   // cold frame's raster is stale from now on.
   const noteFrameOp = useCallback((op) => {
     if (!roomAnimationRef.current || !op) return;
@@ -5650,7 +5705,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [scheduleRasterQueue]);
 
   // Give a cold frame live canvases NOW and replay its ops into layer 0 in the
-  // background (the parity-tested offline interpreter — the same pixels every
+  // background (the parity-tested offline interpreter, the same pixels every
   // peer sees). A frame carrying a retained checkpoint restores its verified
   // baseline (re-decoded, bounded, cancellable) + mix continuation state
   // BEFORE the tail replays. Resolves when the replay lands.
@@ -5670,7 +5725,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     const gen = (frame.hydrateGen = (frame.hydrateGen || 0) + 1);
     // Each op replays into the layer it belongs to (op.layerId), so a cold cel
-    // comes back with its real stack — not everything piled onto layer 0.
+    // comes back with its real stack, not everything piled onto layer 0.
     const layerIndex = new Map(layers.map((layer, index) => [layer.id, index]));
     const targetFor = (op) => layers[layerIndex.has(op.layerId) ? layerIndex.get(op.layerId) : 0].canvas.getContext("2d");
     const isCurrent = () => frame.hydrateGen === gen && frame.layers === layers;
@@ -5704,7 +5759,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       } catch (error) {
         if (!isCurrent()) return;
         if (descriptor && !isCanceled(error?.reason)) {
-          frame.checkpoint = null; // poisoned — full scene refetch rebuilds this cel
+          frame.checkpoint = null; // poisoned, full scene refetch rebuilds this cel
           frame.rasterGen = (frame.rasterGen || 0) + 1;
           frame.hydrating = null;
           refetchSceneFull();
@@ -5717,7 +5772,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       queueThumbnailRefresh(frame.id);
       if (isActiveFrame(frame)) {
         // Restore the replay's exact end ledger (birth/prefix + these ops in
-        // order) into the shared wet-mix map — the same parity rule as the
+        // order) into the shared wet-mix map, the same parity rule as the
         // join finalize; a blanket re-read would only approximate it. Fall
         // back to a full re-mirror only if the capture can't apply.
         try {
@@ -5734,10 +5789,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [bumpFrameStamp, ensureMixMap, isActiveFrame, queueThumbnailRefresh, refetchSceneFull, renderDisplay]);
 
   // Drop a far-away frame's canvases after snapshotting them into its raster
-  // (exact pixels). Local layer stacks flatten on the way back — the shared
+  // (exact pixels). Local layer stacks flatten on the way back, the shared
   // truth (ops) is flat anyway. Skipped while the frame is mid-hydration or
   // took edits while we were encoding. `force` (the byte-budget enforcer)
-  // overrides the radius keep-alive — but NEVER the active frame.
+  // overrides the radius keep-alive, but NEVER the active frame.
   const coolFrame = useCallback(async (frame, { force = false } = {}) => {
     if (!roomAnimationRef.current || !frame?.layers || frame.hydrating || isActiveFrame(frame)) return;
     const layers = frame.layers;
@@ -5745,7 +5800,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (count > 0) {
       const blob = await encodeRaster((ctx, w, h) => compositeLayers(ctx, layers, { width: w, height: h }));
       if (!blob || frame.layers !== layers || !framesRef.current.includes(frame)) return;
-      if ((frame.ops || []).length !== count) return; // edited meanwhile — next sweep
+      if ((frame.ops || []).length !== count) return; // edited meanwhile, next sweep
       frame.raster = blob;
       frame.rasterCount = count;
       frame.rasterSig = layerRenderSig(frame.layerMeta); // same contract as the cold rasterizer
@@ -5832,7 +5887,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     if (framesRef.current.length <= 1) {
       return;
     }
-    // A multi-scene film plays the WHOLE plan across scenes (Phase 4) — the
+    // A multi-scene film plays the WHOLE plan across scenes (Phase 4), the
     // async walker owns the display from here; the rAF loop below stays the
     // single-scene path.
     if (roomAnimationRef.current && scenesRef.current.length > 1 && startFilmPlaybackRef.current) {
@@ -5863,11 +5918,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const sceneCamera = normalizeCamera(sceneMeta?.camera);
     const paintFrame = (frame, cameraT) => {
       // Composite the frame into the art-resolution document, then blit it to
-      // the DPR-sized display canvas (same path as editing — stays crisp).
+      // the DPR-sized display canvas (same path as editing, stays crisp).
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       // A camera move composites the layers straight through the camera
-      // window (a transform, not a scratch canvas — no extra 40MB surface).
+      // window (a transform, not a scratch canvas, no extra 40MB surface).
       if (sceneCamera !== "none") applyCameraTransform(context, sceneCamera, cameraT, CANVAS_WIDTH, CANVAS_HEIGHT);
       paintFrameSync(context, frame, CANVAS_WIDTH, CANVAS_HEIGHT); // cold frames paint their decoded raster
       context.setTransform(1, 0, 0, 1, 0, 0);
@@ -5877,7 +5932,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
     const step = (timestamp) => {
       // Eyeball-hidden frames sit out of playback (local preview mute). If
-      // everything is hidden, play as if nothing were — never a blank loop.
+      // everything is hidden, play as if nothing were, never a blank loop.
       const all = framesRef.current;
       const hidden = hiddenFramesRef.current;
       const visible = hidden.size > 0 && hidden.size < all.length ? all.filter((frame) => !hidden.has(frame.id)) : all;
@@ -5934,7 +5989,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Point the live layer view at a frame and repaint.
   const activateFrame = useCallback(
     (index) => {
-      // A second finger can tap the film strip MID-STROKE on touch devices —
+      // A second finger can tap the film strip MID-STROKE on touch devices -
       // terminate the stroke BEFORE the frame swap, while activeFrameIndexRef
       // still points at the pen-down frame, so the wire gate sends the end
       // marker (or correctly stays silent) and the buffer lands on the right
@@ -5947,7 +6002,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       if (!frame.layers) coldFramesRef.current?.hydrateFrame(frame); // canvases now, ops replay in the background
       layersRef.current = frame.layers;
       activeLayerIdRef.current = frame.activeLayerId;
-      // The wet-mix mirror follows layersRef[0], which just changed identity —
+      // The wet-mix mirror follows layersRef[0], which just changed identity -
       // and the LIVE frame may have taken remote edits/clears while we were
       // away. Re-mirror lazily on the next wet sample (O(1) here).
       mixMapRef.current?.markAllDirty();
@@ -6018,7 +6073,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         list.push(done);
         waiters.set(sceneId, list);
         mpRef.current?.sendSceneFetch?.(sceneId);
-        // Never wedge an awaiting export if the socket drops mid-switch — but
+        // Never wedge an awaiting export if the socket drops mid-switch, but
         // report the timeout as FAILURE (and drop the stale waiter) so the
         // exporter aborts instead of silently encoding blank scenes.
         const timer = window.setTimeout(() => {
@@ -6050,7 +6105,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   // A cold frame's raster, built on demand when the idle rasterizer hasn't got
-  // there yet (whole-film playback + export both await this — a missing raster
+  // there yet (whole-film playback + export both await this, a missing raster
   // must never become a silently blank exported/played cel). Retained frame
   // checkpoints restore inside rasterizeOps; a poisoned one refetches the
   // scene in full (handled by the caller's catch).
@@ -6070,11 +6125,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // ---- Whole-film playback (Phase 4) -----------------------------------------
   // A multi-scene film plays the SHARED film plan end to end: the async walker
   // pages each scene in the background (the history handler does NOT stop
-  // playback — playback owns no rAF timer, and its scene fetches are its own),
+  // playback, playback owns no rAF timer, and its scene fetches are its own),
   // snapshots the scene's cels as cheap raster blobs, and paints decoded
   // bitmaps from a byte-bounded LRU with the same camera math as the
   // exporters. Async scene hydration PAUSES the walker (last good frame stays
-  // on screen) — it can never skip cels or paint blank ones: a cel whose
+  // on screen), it can never skip cels or paint blank ones: a cel whose
   // raster can't be produced aborts playback loudly instead.
   // Cancellation: stopPlayback / unmount / animation-off flip token.cancelled;
   // every await checks it and the finally-block returns to the artist's scene.
@@ -6144,7 +6199,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     });
     // Snapshot every planned cel of the loaded scene: hydrated cels encode
     // from their live stack, cold cels reuse/build their raster (checkpoint
-    // included). Two workers, serialized inside rasterizeOps — bounded.
+    // included). Two workers, serialized inside rasterizeOps, bounded.
     const snapshotScene = (sceneId) => {
       if (!sceneSnapshots.has(sceneId)) {
         sceneSnapshots.set(sceneId, (async () => {
@@ -6249,7 +6304,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const map = await loadScene(shot.sceneId);
         if (token.cancelled) break;
         // Bounded prefetch: kick the NEXT scene's fetch+snapshot while this
-        // one plays (memoized — never more than one extra scene in flight).
+        // one plays (memoized, never more than one extra scene in flight).
         const upcoming = plan.slice(i + 1).find((item) => item.sceneId !== shot.sceneId);
         if (upcoming && !sceneLoads.has(upcoming.sceneId)) {
           // The awaited load on entry reports a failure; don't leak an
@@ -6269,7 +6324,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const bitmap = blob ? await bitmapFor(shot.sceneId, shot.frameId, blob) : null;
         if (token.cancelled) break;
         if (!bitmap) {
-          // A planned cel we cannot show — NEVER skip or blank it silently.
+          // A planned cel we cannot show: NEVER skip or blank it silently.
           throw new Error("cel raster unavailable during film playback");
         }
         syncAudio(shot, filmCursor);
@@ -6278,7 +6333,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
     } catch {
       if (!token.cancelled) {
-        setStatus("Couldn't keep playing the film — stopped at the last good frame.");
+        setStatus("Couldn't keep playing the film, stopped at the last good frame.");
         showToast("Couldn't play the whole film on this device.");
       }
     } finally {
@@ -6305,7 +6360,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
     if (roomAnimationRef.current) {
       commitLayersToFrame();
-      // The anchor frame could have raced a delete server-side — the sceneId
+      // The anchor frame could have raced a delete server-side, the sceneId
       // makes the server fall back to OUR scene, never scenes[0].
       mpRef.current?.sendFrameAdd?.(framesRef.current[activeFrameIndexRef.current]?.id, null, activeSceneIdRef.current);
       return; // applied on the server echo
@@ -6327,11 +6382,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // forward that actually exists for this person: a host can open a new scene,
   // while a guest in the shared public room (where scene_add is refused) is
   // pointed at making their own animation room. Before this, the + simply went
-  // dead with no message — a child read that as a broken app.
+  // dead with no message, a child read that as a broken app.
   const handleFrameCap = useCallback(() => {
     const cap = animMaxFrames;
     if (isRoomHost) {
-      showToast(`This scene is full (${cap} cels) — tap 🎬 + for a new scene`, 5200);
+      showToast(`This scene is full (${cap} cels), tap 🎬 + for a new scene`, 5200);
       return;
     }
     showToast(`This scene is full (${cap} cels). Start your own animation room for a longer film.`, 6000);
@@ -6471,7 +6526,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [invalidateCompositeCache, renderDisplay],
   );
 
-  // Film-strip scrub: paint transient frame previews driven entirely by refs —
+  // Film-strip scrub: paint transient frame previews driven entirely by refs -
   // one rAF in flight, zero React state per pointer-move (the same cost profile
   // playback already proved at 25fps). pointer-up lands on handleScrubEnd.
   const handleScrub = useCallback(
@@ -6481,7 +6536,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       const scrub = scrubStateRef.current;
       if (!scrub.active) {
-        // A second finger can start scrubbing mid-stroke — terminate the
+        // A second finger can start scrubbing mid-stroke, terminate the
         // stroke first (same reasoning as activateFrame).
         abortActiveStroke();
         if (playTimerRef.current) {
@@ -6642,7 +6697,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   }, [commitLayersToFrame, gateExport, getGifWorker, isExportingGif, renderPaper, selectedTexture, stopPlayback]);
 
-  // Real video export — MP4 where the browser can (H.264 plays everywhere:
+  // Real video export: MP4 where the browser can (H.264 plays everywhere:
   // iMessage, Discord, camera roll), WebM otherwise. Free for everyone.
   // Frames are composited on demand at 1600x1000 (8:5) into the encoder's
   // reusable canvas, so long flipbooks never pile up snapshots in memory.
@@ -6661,13 +6716,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // pages scenes in via switchScene (memory stays at a scene's worth) and
     // frames resolve by id after each hydration. Single-scene exports snapshot
     // the frame list so remote edits mid-export can't shrink or reorder it.
-    // The real-time MediaRecorder fallback can't pause for scene hydration —
+    // The real-time MediaRecorder fallback can't pause for scene hydration -
     // so a multi-scene film on a browser WITHOUT WebCodecs is REFUSED up
     // front, before a single byte is encoded: no quietly-truncated
     // current-scene-only file with a whole-film label (Phase 4 contract).
     const wantsWholeFilm = roomAnimationRef.current && scenesRef.current.length > 1;
     if (wantsWholeFilm && typeof window.VideoEncoder !== "function") {
-      setStatus("Whole-film video needs a newer browser (WebCodecs) — export one scene at a time here.");
+      setStatus("Whole-film video needs a newer browser (WebCodecs), export one scene at a time here.");
       showToast("This browser can't encode the whole film. Export each scene, or try a newer browser.", 6000);
       return;
     }
@@ -6723,7 +6778,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (multiScene && item.sceneId !== activeSceneIdRef.current) {
             const hydrated = await switchScene(item.sceneId);
             if (!hydrated || activeSceneIdRef.current !== item.sceneId) {
-              // A failed/hijacked hydration must ABORT the export — never
+              // A failed/hijacked hydration must ABORT the export, never
               // report "Film exported 🎬" with silently blank scenes.
               throw new Error("scene hydration failed");
             }
@@ -6733,7 +6788,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             throw new Error("frame missing after scene switch");
           }
           // A cold cel whose raster the idle queue hasn't built yet must be
-          // rendered NOW (checkpoint restore included) — never encoded blank.
+          // rendered NOW (checkpoint restore included), never encoded blank.
           if (frame && !frame.layers && (!frame.raster || coldRasterStale(frame))) {
             await ensureFrameRasterBlob(frame);
           }
@@ -6762,7 +6817,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       setStatus(audio ? `Film exported with sound (.${ext}) 🎬🎵` : `Film exported (.${ext}) 🎬`);
     } catch {
-      setStatus("Video export failed on this browser — try Export GIF");
+      setStatus("Video export failed on this browser, try Export GIF");
     } finally {
       setIsExportingVideo(false);
       isExportingVideoRef.current = false;
@@ -6863,11 +6918,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }
   }, [gateExport, isExportingVideo, renderPaper, roomId, selectedTexture, showToast, storybook]);
 
-  // Export the WHOLE production — every part, in order, as one movie. Fully
+  // Export the WHOLE production, every part, in order, as one movie. Fully
   // offline: each segment's ops come from /api/rooms/:code/film and replay
   // through the shared op interpreter into ONE reusable world canvas, so a
   // 2-minute film renders memory-flat and never touches the artist's view
-  // (you can keep painting while it renders — edits after the fetch just
+  // (you can keep painting while it renders, edits after the fetch just
   // aren't in this cut).
   const exportProduction = useCallback(async () => {
     const activeProduction = productionRef.current;
@@ -6928,7 +6983,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
       }
       if (plan.length === 0) {
-        setStatus("Nothing to render yet — draw some frames first!");
+        setStatus("Nothing to render yet, draw some frames first!");
         return;
       }
       // 2) Offline-replay each frame into a reusable world canvas and encode.
@@ -6972,9 +7027,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       });
       const slug = (activeProduction.title || "film").replace(/[^\w-]+/g, "-").toLowerCase();
       downloadBlob(blob, `${slug}-${Date.now()}.${ext}`);
-      setStatus(`🎬 "${activeProduction.title}" exported (.${ext}) — premiere time! 🍿`);
+      setStatus(`🎬 "${activeProduction.title}" exported (.${ext}), premiere time! 🍿`);
     } catch {
-      setStatus("Film export hit a snag — try again in a moment");
+      setStatus("Film export hit a snag, try again in a moment");
     } finally {
       setIsExportingVideo(false);
     }
@@ -7094,14 +7149,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [encodeTimelapseBytes, gateExport, isExportingTimelapse]);
 
   // Share the timelapse straight to the OS share sheet (socials, iMessage,
-  // etc.) — the shareable "watch it draw" artifact is the growth loop.
+  // etc.), the shareable "watch it draw" artifact is the growth loop.
   //
   // The artifact is NEVER a GIF: Instagram/Android share targets flatten an
   // animated GIF to its first frame, and a process timelapse's first frame is
   // near-blank paper (the receiver saw a white picture). We prepare an MP4
   // (H.264) when the browser encodes it, else an explicit finished-frame PNG;
   // "Save GIF" stays as a separate, explicit download. Encoding is async, so
-  // the tap's user activation can be gone by share time — in that case the
+  // the tap's user activation can be gone by share time, in that case the
   // prepared file is parked in `preparedShare` and the replay player shows a
   // separate "tap to share" button (a fresh gesture) to complete it.
   const shareTimelapse = useCallback(
@@ -7111,7 +7166,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const recorder = replayRecorderRef.current;
       const snaps = recorder ? recorder.getSnapshots() : [];
       if (snaps.length === 0) {
-        setStatus("Draw a bit first — no timelapse yet!");
+        setStatus("Draw a bit first, no timelapse yet!");
         return;
       }
       shareAbortRef.current?.abort();
@@ -7121,7 +7176,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setIsExportingTimelapse(true);
       setStatus("Preparing your video…");
       try {
-        // The Inktober border only ever lands on the export pixels — the
+        // The Inktober border only ever lands on the export pixels, the
         // stored art and the room's mural are untouched.
         const useTheme = themed && seasonalEvent;
         const asset = await buildReplayShareAsset({
@@ -7134,7 +7189,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           eventLabel: useTheme ? "Inktober 2026" : null,
         });
         if (!asset) {
-          setStatus("Draw a bit first — no timelapse yet!");
+          setStatus("Draw a bit first, no timelapse yet!");
           return;
         }
         const fileName = asset.kind === "mp4" ? "drawesome-timelapse.mp4" : "drawesome-drawing.png";
@@ -7143,27 +7198,27 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         const shareData = {
           files: [file],
           title: "Watch my drawing come together! 🎨",
-          text: `I made this on Drawesome${promptBit} — watch it draw itself!`,
+          text: `I made this on Drawesome${promptBit}, watch it draw itself!`,
           url: `${window.location.origin}/join/${roomId}`,
         };
         const outcome = await shareFile(file, shareData);
         if (outcome === "shared") {
           setStatus("Shared your timelapse! 🎉");
         } else if (outcome === "needs-gesture") {
-          // The encode consumed the tap's user activation — park the prepared
+          // The encode consumed the tap's user activation, park the prepared
           // file; the replay player's "tap to share" button finishes it.
           setPreparedShare({ blob: asset.blob, file, shareData, kind: asset.kind });
-          setStatus(asset.kind === "mp4" ? "Your video is ready — tap to share it!" : "Your drawing is ready — tap to share it!");
+          setStatus(asset.kind === "mp4" ? "Your video is ready, tap to share it!" : "Your drawing is ready, tap to share it!");
         } else if (outcome === "aborted") {
-          setStatus("Share dismissed — nothing left your device");
+          setStatus("Share dismissed, nothing left your device");
         } else {
           // Desktop / unsupported: download the artifact so it can be shared.
           downloadBlob(asset.blob, fileName);
-          setStatus(asset.kind === "mp4" ? "Saved your timelapse video — share it anywhere!" : "Saved your finished drawing — share it anywhere!");
+          setStatus(asset.kind === "mp4" ? "Saved your timelapse video, share it anywhere!" : "Saved your finished drawing, share it anywhere!");
         }
       } catch (err) {
         // AbortError = a newer prepare (or closing the player) cancelled this one.
-        if (err?.name !== "AbortError") setStatus("Couldn't make the timelapse — try again");
+        if (err?.name !== "AbortError") setStatus("Couldn't make the timelapse, try again");
       } finally {
         setIsExportingTimelapse(false);
       }
@@ -7188,13 +7243,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setPreparedShare(null);
       setStatus("Shared your timelapse! 🎉");
     } else if (outcome === "aborted") {
-      setStatus("Share dismissed — it's still ready when you are");
+      setStatus("Share dismissed, it's still ready when you are");
     } else if (outcome === "unsupported") {
       setPreparedShare(null);
       downloadBlob(prepared.blob, prepared.file.name);
-      setStatus("Saved it — share it anywhere!");
+      setStatus("Saved it, share it anywhere!");
     } else if (outcome !== "needs-gesture") {
-      setStatus("Couldn't share that — try again");
+      setStatus("Couldn't share that, try again");
     }
   }, [gateExport, preparedShare]);
 
@@ -7208,7 +7263,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     try {
       await savePaintSpace(next);
     } catch {
-      setStatus("Couldn't save to Paint Space — storage full");
+      setStatus("Couldn't save to Paint Space, storage full");
       return false;
     }
     paintSpaceAssetsRef.current = next;
@@ -7357,11 +7412,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       if (paintGate("remix")) return;
       if (inkOnlyRef.current) {
-        setStatus("Remix is paused in the Ink & Pencil room — keep drawing in ink ✒️");
+        setStatus("Remix is paused in the Ink & Pencil room, keep drawing in ink ✒️");
         return;
       }
       if (roomAnimationRef.current) {
-        setStatus("Remix in a drawing room — this room is a shared animation");
+        setStatus("Remix in a drawing room, this room is a shared animation");
         return;
       }
       pushHistory("full");
@@ -7425,7 +7480,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const brush = brushCatalog.find((item) => item.id === settings.brush);
       if (brush?.tier === "studio" && !studioUnlocked) {
         setShowStore(true);
-        setStatus("That recipe uses a studio brush — unlock with the Creator Brushes pack");
+        setStatus("That recipe uses a studio brush, unlock with the Creator Brushes pack");
         return;
       }
       setActiveBrushRecipe(null);
@@ -7462,7 +7517,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const brush = brushCatalog.find((item) => item.id === settings.brush);
       if (brush?.tier === "studio" && !studioUnlocked) {
         setShowStore(true);
-        setStatus("That brush uses a studio base — unlock with the Creator Brushes pack");
+        setStatus("That brush uses a studio base, unlock with the Creator Brushes pack");
         return;
       }
       if (settings.dab?.shape === "stamp") {
@@ -7580,7 +7635,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const handleUseAsset = useCallback(
     async (asset) => {
       // Ink-only rooms: stickers/templates/loops paste pixels and brush
-      // recipes carry non-native dabs — all of them would diverge from the
+      // recipes carry non-native dabs, all of them would diverge from the
       // room's ink/pencil op truth. Palettes (color only) stay available.
       if (inkOnlyRef.current && asset.kind !== "palette") {
         setStatus("Paint Space stamps and recipes stay on the shelf in the Ink & Pencil room ✒️");
@@ -7609,7 +7664,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       if (asset.kind === "template") {
         if (roomAnimationRef.current) {
-          setStatus("Templates can't replace a shared animation — use them in a drawing room");
+          setStatus("Templates can't replace a shared animation, use them in a drawing room");
           setShowPaintSpace(false);
           return;
         }
@@ -7669,7 +7724,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           return;
         }
         if (framesRef.current.length <= 1 && (asset.payload?.frames || []).length > 1) {
-          setStatus("Multi-frame loops need an animation room — try the 🎬 Animation Studio!");
+          setStatus("Multi-frame loops need an animation room, try the 🎬 Animation Studio!");
           setShowPaintSpace(false);
           return;
         }
@@ -7793,7 +7848,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       return;
     }
     if (file.size > SOUNDTRACK_MAX_BYTES) {
-      showToast("That audio file is too big (8MB max) — try a shorter clip or an MP3");
+      showToast("That audio file is too big (8MB max), try a shorter clip or an MP3");
       return;
     }
     setSoundtrackBusy(true);
@@ -7804,7 +7859,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       showToast("🎵 Adding your soundtrack…");
     } catch {
       setSoundtrackBusy(false);
-      showToast("That file isn't audio we can play here — try an MP3, M4A or WAV");
+      showToast("That file isn't audio we can play here, try an MP3, M4A or WAV");
     }
   }, [showToast]);
 
@@ -7842,7 +7897,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const handleVideoTraceFile = useCallback(async (file) => {
     if (!file) return;
     if (file.size > VIDEO_TRACE_MAX_BYTES) {
-      showToast("That clip is too big (200MB max) — trim it first");
+      showToast("That clip is too big (200MB max), trim it first");
       return;
     }
     try {
@@ -7850,7 +7905,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       disposeVideoTrace(videoTraceRef.current);
       videoTraceRef.current = trace;
       setVideoTrace({ name: trace.name, durationMs: trace.durationMs, opacity: trace.opacity, offsetMs: trace.offsetMs, visible: trace.visible });
-      showToast("🎥 Clip loaded — only you can see it. Draw over each cel!");
+      showToast("🎥 Clip loaded, only you can see it. Draw over each cel!");
       syncVideoTrace();
     } catch (error) {
       showToast(error?.message || "Couldn't load that clip");
@@ -7880,7 +7935,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const room = animMaxFrames - framesRef.current.length;
     const count = Math.min(needed, room);
     if (count <= 0) {
-      showToast(needed <= 0 ? "Your cels already cover the clip" : `This scene is full (${animMaxFrames} cels) — start a new scene for the rest`);
+      showToast(needed <= 0 ? "Your cels already cover the clip" : `This scene is full (${animMaxFrames} cels), start a new scene for the rest`);
       return;
     }
     const lastId = framesRef.current[framesRef.current.length - 1]?.id;
@@ -7898,7 +7953,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       try {
         // Downscale to a sane max so the WS payload + everyone's decode stay light.
         const bmp = await createImageBitmap(file).catch(() => null);
-        if (!bmp) { showToast("Couldn't read that photo — try another."); return; }
+        if (!bmp) { showToast("Couldn't read that photo, try another."); return; }
         const maxDim = 1400;
         const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
         const w = Math.max(1, Math.round(bmp.width * scale));
@@ -7918,9 +7973,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         setSheetMode("under"); // a photo is a tracing underlay, not line-art on top
         mpRef.current?.sendTracePhoto?.(dataUrl);
-        showToast("📷 Photo added — trace away! Everyone can draw over it.");
+        showToast("📷 Photo added, trace away! Everyone can draw over it.");
       } catch {
-        showToast("Couldn't add that photo — try again.");
+        showToast("Couldn't add that photo, try again.");
       } finally {
         setTraceBusy(false);
       }
@@ -7931,8 +7986,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Remote ops land on the frame AND LAYER they were drawn on (op.frameId +
   // op.layerId; an untagged op = the first frame's bottom layer, where every
   // legacy stroke has always gone). In animation rooms every frame is shared
-  // state, and now so is every layer: two people can ink different cels — or
-  // different layers of the same cel — simultaneously.
+  // state, and now so is every layer: two people can ink different cels, or
+  // different layers of the same cel, simultaneously.
   const frameLayerTarget = useCallback((frame, layerId) => {
     const layers = frame?.layers;
     if (!layers || !layers.length) {
@@ -7945,7 +8000,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, []);
 
   // Land a remote in-progress stroke on ITS frame's layer ONCE at its
-  // stroke opacity (#62) and forget it — including its last-point entry, which
+  // stroke opacity (#62) and forget it, including its last-point entry, which
   // previously leaked one point per stroke forever.
   const commitRemoteStroke = useCallback(
     (strokeId, entry) => {
@@ -7978,7 +8033,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   );
 
   // Idle sweep: while any remote stroke is open, check every 2s and commit
-  // strokes that stopped receiving points (their end-op was lost — a dropped
+  // strokes that stopped receiving points (their end-op was lost, a dropped
   // socket or a legacy client). Clears itself once the map empties.
   const ensureRemoteSweep = useCallback(() => {
     if (remoteSweepRef.current) {
@@ -8005,8 +8060,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     }, 2000);
   }, [commitRemoteStroke, scheduleRemoteRender]);
 
-  // Commit every open remote stroke (history replay leaves legacy strokes —
-  // ops with no end marker — open; deleting entries mid-iteration is safe).
+  // Commit every open remote stroke (history replay leaves legacy strokes -
+  // ops with no end marker, open; deleting entries mid-iteration is safe).
   const commitAllRemoteStrokes = useCallback(() => {
     for (const [strokeId, entry] of remoteStrokesRef.current) {
       commitRemoteStroke(strokeId, entry);
@@ -8023,7 +8078,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       // Route the op to ITS frame (op.frameId; untagged = first frame). Ops
-      // for a frame that no longer exists (raced a delete) are dropped —
+      // for a frame that no longer exists (raced a delete) are dropped -
       // resolveOpFrame only falls back for untagged legacy ops.
       const frame = op.frameId
         ? framesRef.current.find((item) => item.id === op.frameId) || null
@@ -8096,7 +8151,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             last = point;
           }
           invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
-          touchFrame(frame.id); // pixels landed directly — proxy/thumb are stale
+          touchFrame(frame.id); // pixels landed directly, proxy/thumb are stale
           if (op.end) {
             lastMap.delete(op.strokeId);
           } else {
@@ -8105,26 +8160,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           return;
         }
         if (settings.brush === "smudge" || settings.brush === "goo") {
-          // Ignore smudge/goo in public rooms (the server drops these too —
+          // Ignore smudge/goo in public rooms (the server drops these too -
           // this is belt-and-braces against a hacked/stale client). The
           // finger-paint room is the exception: smearing is the whole toy.
           if (roomAudienceRef.current === "kid_safe" && !roomFingerPaintRef.current) {
             return;
           }
-          // Legacy smudge ops (no `v`) edit LAYER 0 directly — no stroke
+          // Legacy smudge ops (no `v`) edit LAYER 0 directly, no stroke
           // buffer; everyone replays them against layer 0 in server op
           // order, so history replay is deterministic and live overlap
           // divergence self-heals on the next history frame. v3 ops (Stage
           // 4) fall through to the buffered path below like every brush:
           // makeStrokeEntryCore builds their drag / blend renderer over this
-          // frame's layer 0 (smudgeSource) and the buffer commits there —
+          // frame's layer 0 (smudgeSource) and the buffer commits there -
           // the same normalizer decides in every consumer.
           if (settings.brush === "smudge" && !normalizeSmudgeSettings(settings).v3) {
             const strokes = remoteStrokesRef.current;
             let entry = strokes.get(op.strokeId);
             if (!entry) {
               entry = {
-                buf: null, // nothing to buffer / commit — end just cleans up
+                buf: null, // nothing to buffer / commit, end just cleans up
                 opacity: 1,
                 lastTouch: 0,
                 renderer: null,
@@ -8138,10 +8193,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             }
             entry.lastTouch = Date.now();
             for (const point of op.points || []) {
-              entry.smudge.addPoints(ctx, [point]); // one at a time — batching-proof
+              entry.smudge.addPoints(ctx, [point]); // one at a time, batching-proof
             }
             invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
-            touchFrame(frame.id); // smudge drags layer 0 directly — proxy/thumb stale
+            touchFrame(frame.id); // smudge drags layer 0 directly, proxy/thumb stale
             if (op.end) {
               commitRemoteStroke(op.strokeId, entry); // buf is null: pure cleanup
             }
@@ -8156,10 +8211,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             }
           }
           // The shared entry core (buffer / dab renderer / commit passes / pad
-          // / opacity / commit composite) — the same builder the local stroke
+          // / opacity / commit composite), the same builder the local stroke
           // and opReplay start from, so nothing is decided differently here.
           // Past the cap (buffered: false) the stroke is flagged (buf: null)
-          // onto the legacy direct per-segment path — its end-op then has
+          // onto the legacy direct per-segment path, its end-op then has
           // nothing to commit. Null = a v3 op whose inline dab can't render.
           const core = makeStrokeEntryCore(settings, sampleMix, { buffered: buffered < REMOTE_BUFFER_CAP, smudgeSource: ctx.canvas });
           if (!core) {
@@ -8169,7 +8224,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ...core,
             settings,
             lastTouch: 0,
-            frameId: frame.id, // the stroke's home frame — commit + overlays use it
+            frameId: frame.id, // the stroke's home frame, commit + overlays use it
             layerId: targetLayer.id, // and its home layer, so the commit lands there
           };
           strokes.set(op.strokeId, entry);
@@ -8224,7 +8279,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         invalidateMixPrefetch(targetLayer); // direct, unmarked write to that layer
         touchFrame(frame.id);
       } else if (op.kind === "image" && op.dataUrl) {
-        // Only an inline raster is ever loaded — see utils/safeImage.js.
+        // Only an inline raster is ever loaded, see utils/safeImage.js.
         const image = remoteOpImage(op.dataUrl);
         if (!image) return undefined;
         const epoch = historyReplayEpochRef.current;
@@ -8261,7 +8316,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Apply a catch-up history frame in bounded slices, yielding to the event
   // loop and repainting between slices so a huge mural no longer freezes the
   // main thread for tens of seconds (the old synchronous forEach did exactly
-  // that — the canvas stayed blank until the last op landed). Returns a promise
+  // that, the canvas stayed blank until the last op landed). Returns a promise
   // that settles once every op is applied; `liveLocalStrokeId` is skipped the
   // same way the old loop did (our own in-flight stroke's echo is re-delivered
   // from the local buffer, not replayed).
@@ -8331,7 +8386,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       }
       // While a catch-up history frame is still applying in slices, defer the
       // canvas-mutating types so they land after it (stream order). They drain
-      // when the replay settles — see replayHistoryChunked's completion.
+      // when the replay settles, see replayHistoryChunked's completion.
       if (historyReplayActiveRef.current && DEFERRED_MP_TYPES.has(data.type)) {
         deferredMpMessagesRef.current.push(data);
         return;
@@ -8339,7 +8394,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       switch (data.type) {
         case "connected": {
           // We're IN. A sign-in gate raised by an earlier (guest) attempt is
-          // stale now — it used to stay up over a room we'd already joined.
+          // stale now, it used to stay up over a room we'd already joined.
           setSigninGate(null);
           // A fresh connection supersedes work from the previous socket.
           historyReplayEpochRef.current += 1;
@@ -8351,7 +8406,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           window.clearTimeout(resyncBackoffRef.current.timer);
           resyncBackoffRef.current = { timer: 0, target: null, attempts: 0 };
           // Per-frame hold bounds (FLIPBOOK: 1000..3000/default 1000; absent
-          // everywhere else — normalizeFrameTiming rejects malformed shapes).
+          // everywhere else, normalizeFrameTiming rejects malformed shapes).
           frameTimingRef.current = normalizeFrameTiming(data.frameTiming);
           setRoomFrameTiming(frameTimingRef.current);
           myUserIdRef.current = data.userId;
@@ -8401,7 +8456,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setRemixSource(data.remixSource || null);
           setRoomVote(data.vote ? { options: data.vote.options || [], endsAt: data.vote.endsAt || 0, counts: data.vote.counts || [0, 0, 0], myChoice: null } : null);
           // Remember this room (with its friendly title) so it shows up under
-          // "Your rooms" in the switcher for quick hopping back — plus the
+          // "Your rooms" in the switcher for quick hopping back, plus the
           // mention-watch capability (our name here + the server-issued key)
           // so the notify socket can subscribe to @mentions later.
           recordRecentRoom(
@@ -8415,13 +8470,19 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setMutedSelf(!!data.muted);
           roomAudienceRef.current = data.audience || null;
           setRoomAudience(data.audience || null);
+          // Sketchbook page rooms (saved or unsaved). An UNSAVED page room is
+          // kid_safe (not artist_public), so the audience alone can't tell it
+          // apart from an ordinary public mural: these flags say "page room"
+          // and "the device's own unsaved book".
+          setMpSketchbookPage(!!data.sketchbook);
+          setMpSketchbookUnsaved(!!data.sketchbookUnsaved);
           roomFingerPaintRef.current = !!data.fingerPaint;
           setRoomFingerPaint(!!data.fingerPaint);
           // Ink-only (Ink & Pencil / INKTOBER): the handshake tells us the
           // room is ink/pencil/eraser-only and carries the seasonal event
           // state. Snap the local tool/brush inside the room's rules so a
           // restored draft or a pre-join marker can't paint divergent art
-          // (the server refuses non-ink ops — they'd be local-only).
+          // (the server refuses non-ink ops, they'd be local-only).
           const roomIsInkOnly = !!data.inkOnly;
           applyInkOnlyTools(roomIsInkOnly);
           if (data.event !== undefined) {
@@ -8454,7 +8515,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setSelectedBrush((prev) => (FINGER_PAINT_BRUSHES.has(prev) ? prev : "paint"));
             setBrushSize((prev) => Math.max(prev, 56));
           } else if (data.audience === "kid_safe") {
-            // Public rooms are brush-only (fill/shape/text hidden) — snap back
+            // Public rooms are brush-only (fill/shape/text hidden), snap back
             // if one of the hidden tools was selected before the audience arrived.
             setSelectedTool((prev) => (prev === "brush" ? prev : "brush"));
             // Private-only brushes (smudge) fall back too (a restored draft
@@ -8462,7 +8523,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setSelectedBrush((prev) => (brushCatalog.find((b) => b.id === prev)?.privateOnly ? "marker" : prev));
           }
           // Offer to be a watcher in EVERY room (the server elects who scans).
-          // Private rooms elect watchers too now — a flag there goes to the
+          // Private rooms elect watchers too now, a flag there goes to the
           // room's host instead of nobody (the audit's biggest gap).
           if (isWatcherCapable()) {
             mpRef.current?.sendWatcherAck?.(true);
@@ -8476,7 +8537,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (data.event !== undefined) {
             setSeasonalEvent(data.event || null);
             // Inktober-opted-in artist studios enforce ink/pencil only while
-            // the event is ACTIVE — the phase rides this push (warm-up <->
+            // the event is ACTIVE, the phase rides this push (warm-up <->
             // October rollover), so the rail + guard follow it live.
             if (roomAudienceRef.current === "artist_public") {
               applyInkOnlyTools(Boolean(data.event && data.event.phase === "active"));
@@ -8509,16 +8570,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           paintRequestCountRef.current = nextRequests.length;
           if (nextRequests.length > had) {
             const newest = nextRequests[nextRequests.length - 1];
-            showToast(`🖌 ${newest?.name || "Someone"} asked to paint — open Studio to approve`);
+            showToast(`🖌 ${newest?.name || "Someone"} asked to paint, open Studio to approve`);
           }
           break;
         }
         case "paint_requested": {
           // The server's answer to OUR request (or an owner's live decision).
           if (data.status === "approved") {
-            showToast("🖌 The artist approved you — paint away!");
+            showToast("🖌 The artist approved you, paint away!");
           } else if (data.status === "revoked") {
-            showToast("The artist turned off your brush — you can keep watching");
+            showToast("The artist turned off your brush, you can keep watching");
           }
           break;
         }
@@ -8537,7 +8598,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setIsRoomHost(!!data.isHost);
           if (data.isHost) setStatus("⭐ You're a co-host now");
           // Artist studios: the server flipped our paint access (approve /
-          // revoke — co-hosting never grants paint). A live revoke aborts the
+          // revoke, co-hosting never grants paint). A live revoke aborts the
           // in-flight stroke so not one more point leaves this client; the
           // painted-so-far part stays, exactly like a peer saw it.
           if (data.canPaint !== undefined) {
@@ -8546,7 +8607,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             canPaintRef.current = nextCanPaint;
             if (hadPaint && !nextCanPaint) {
               abortActiveStroke();
-              setStatus("👀 Your brush is off — you can keep watching");
+              setStatus("👀 Your brush is off, you can keep watching");
             } else if (!hadPaint && nextCanPaint) {
               setStatus("🖌 You can paint now!");
             }
@@ -8565,7 +8626,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         case "blocked":
           // Blocked from EVERY room by a moderator (the console's global block),
-          // not just this one. Same teardown as a kick — without it the client
+          // not just this one. Same teardown as a kick, without it the client
           // reconnects in a loop and the room curtain sits on "Knocking on the
           // room door…" forever, which reads as a broken app to a kid.
           mpRef.current?.disconnect?.();
@@ -8573,7 +8634,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         case "signin_required":
           // Invite-only rooms are account-only (the door is the only enforceable
-          // point — the studio mints a private room client-side). Tear the socket
+          // point, the studio mints a private room client-side). Tear the socket
           // down like a kick so we don't hammer the server, then explain WHY and
           // give the kid a way forward: sign up, or go draw in a public room.
           mpRef.current?.disconnect?.();
@@ -8581,7 +8642,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         case "history": {
           // The server's history (even when empty) is the authoritative shared
-          // state — local drafts never auto-restore over it. `frames` rides
+          // state, local drafts never auto-restore over it. `frames` rides
           // along: the whole flipbook rebuilds, so leaving and coming back
           // shows everything friends did in the meantime (Google-Docs model).
           const incomingOps = Array.isArray(data.ops) ? data.ops : [];
@@ -8602,7 +8663,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (data.sceneId) {
             activeSceneIdRef.current = data.sceneId;
             setActiveSceneId(data.sceneId);
-            // This scene's refetch (if any) just answered — reset its backoff.
+            // This scene's refetch (if any) just answered, reset its backoff.
             if (resyncBackoffRef.current.target === data.sceneId) {
               window.clearTimeout(resyncBackoffRef.current.timer);
               resyncBackoffRef.current = { timer: 0, target: null, attempts: 0 };
@@ -8612,7 +8673,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             reconcileFrames(data.frames);
           }
           // Trusted checkpoint baseline. Phase 3: ordinary single-frame rooms.
-          // Phase 4: animation rooms too — `checkpoint.frames` may cover a
+          // Phase 4: animation rooms too, `checkpoint.frames` may cover a
           // SUBSET of history.frames; those frames' ops here are tails above
           // each frame's throughOpId, the rest stay full. EVERY asset is
           // decoded/hashed/validated BEFORE one layer pixel is touched, so the
@@ -8626,14 +8687,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // The checkpoint is being IGNORED (post-nack connection, or this
             // bundle can't verify). That is only safe when the paired ops are
             // still a FULL baseline for every checkpointed frame; a bare tail
-            // over a cleared canvas is truncated ink — refuse it and ask for
+            // over a cleared canvas is truncated ink, refuse it and ask for
             // the scene again (the nacked connection gets full history).
             const tailOnly = checkpointTailOnlyFrame(data.checkpoint, incomingOps, data.frames?.[0]?.id || null);
             if (tailOnly) {
               historyReplayActiveRef.current = false;
               baselineRefusalsRef.current += 1;
               if (baselineRefusalsRef.current <= 3) {
-                setStatus("Fast-load data arrived incomplete — fetching the full scene…");
+                setStatus("Fast-load data arrived incomplete, fetching the full scene…");
                 if (roomAnimationRef.current) {
                   mpRef.current?.sendSceneFetch?.(data.sceneId || activeSceneIdRef.current);
                 } else {
@@ -8647,7 +8708,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             }
           }
           // Rebuild EVERY frame from a clean slate (join, moderation rebuilds,
-          // undo-clear restores). Open live buffers are stale — the replay
+          // undo-clear restores). Open live buffers are stale, the replay
           // re-delivers their points. In the checkpoint path this clear runs
           // AFTER the baseline verifies, inside the async block below.
           if (!checkpoint) {
@@ -8656,7 +8717,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             );
           }
           // The shared wet-mix map restarts from its BIRTH state with the
-          // replay (zeroed mirror, fully dirty, no prefetch ledger — see
+          // replay (zeroed mirror, fully dirty, no prefetch ledger, see
           // freshMixState): the old session's sampled cells must not survive a
           // wholesale rebuild, and no blanket re-read is needed at the end
           // because the ops re-dirty the map in op order as they replay.
@@ -8687,12 +8748,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // Only a BUFFERED local stroke is skipped below; an in-flight eraser
           // has no buffer, so the replayed copy is its only restoration.
           const liveLocalStrokeId = localStrokeRef.current ? strokeNetRef.current?.id : null;
-          // A preceding `snapshot` frame baked a PNG of the mural — draw it onto
+          // A preceding `snapshot` frame baked a PNG of the mural, draw it onto
           // layer 0 first, then replay only the tail ops (the server already
           // filtered the history to what came after the snapshot's opId).
           const pendingSnapshot = pendingSnapshotRef.current;
           pendingSnapshotRef.current = null;
-          // Apply the catch-up in bounded slices (progressive + non-blocking —
+          // Apply the catch-up in bounded slices (progressive + non-blocking -
           // the old synchronous forEach froze the thread and left the canvas
           // blank until the very last op). The completion runs the once-per-
           // frame finalization below, THEN drains any live messages that were
@@ -8707,11 +8768,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               historyReplayActiveRef.current = false; // let the full baseline history straight in
               // Live messages deferred during the decode are ALREADY inside
               // the baseline the server builds in answer to the nack (its
-              // catch-up gates ops behind the new baseline) — draining them
+              // catch-up gates ops behind the new baseline), draining them
               // after that baseline's replay would paint every one twice.
               deferredMpMessagesRef.current = [];
               mpRef.current?.sendCheckpointNack?.();
-              setStatus("Fast-load data didn't check out — loading the full drawing instead…");
+              setStatus("Fast-load data didn't check out, loading the full drawing instead…");
             };
             let decoded = null;
             if (checkpoint) {
@@ -8723,7 +8784,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   isCancelled: () => historyReplayEpochRef.current !== epoch,
                 });
               } catch (error) {
-                if (historyReplayEpochRef.current !== epoch || isCanceled(error?.reason)) return; // superseded — the newer baseline owns the canvas
+                if (historyReplayEpochRef.current !== epoch || isCanceled(error?.reason)) return; // superseded, the newer baseline owns the canvas
                 declineCheckpoint();
                 return;
               }
@@ -8731,7 +8792,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 releaseCheckpoint(decoded);
                 return;
               }
-              // Verified — NOW pixels may change. Per decoded frame, in order:
+              // Verified: NOW pixels may change. Per decoded frame, in order:
               // retain the wire descriptor on COLD frames (their hydrate /
               // raster / export restores the baseline + tail on demand), and
               // INSTALL into hydrated frames. The ACTIVE checkpointed frame
@@ -8775,7 +8836,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 if (activeMixState) ensureMixMap().restoreState(activeMixState);
               } catch {
                 // Clear+install is a transaction: ANY throw here means the
-                // canvas state is undefined — take the full-baseline path
+                // canvas state is undefined, take the full-baseline path
                 // instead of letting a bare tail paint over a partial wipe.
                 releaseCheckpoint(decoded);
                 if (historyReplayEpochRef.current !== epoch) return;
@@ -8802,14 +8863,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 });
                 if (historyReplayEpochRef.current !== epoch) return;
                 // The baked PNG landed WITHOUT dirtying the wet-mix map in op
-                // order — the one path that still needs a full re-mirror.
+                // order, the one path that still needs a full re-mirror.
                 mixMapRef.current?.markAllDirty();
                 touchFrame(snapFrame.id);
               }
             }
             if (!(await replayHistoryChunked(incomingOps, liveLocalStrokeId, epoch))) return;
             // Replayed strokes with no end marker (legacy clients, strokes cut
-            // off by the snapshot) stay open above — commit them all now.
+            // off by the snapshot) stay open above, commit them all now.
             commitAllRemoteStrokes();
             // Every cel was rebuilt wholesale: stale-mark all proxies + thumbs.
             framesRef.current.forEach((frame) => touchFrame(frame.id));
@@ -8819,10 +8880,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // frame continued from its verified prefix state). A blanket
             // markAllDirty here would re-read every cell from the final pixels
             // and destroy the deliberately-stale sampled cells the replay just
-            // reproduced — future wet dabs would diverge from every peer that
+            // reproduced, future wet dabs would diverge from every peer that
             // stayed in the room, and from a checkpoint joiner. So: no blanket
             // re-mirror on EITHER path (the snapshot PNG above is the only
-            // exception — it lands pixels no op accounts for).
+            // exception, it lands pixels no op accounts for).
             renderDisplay();
             // Join curtain: everyone's art is now ON the canvas. This is the real
             // "the experience has loaded" moment, so the bar finishes here.
@@ -8834,7 +8895,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // Now that a scene is hydrated (join or scene-switch), let the crew
             // know which cel we're parked on so their pips include us.
             announcePresence();
-            // Wake anything awaiting this scene's hydration (export stitching) —
+            // Wake anything awaiting this scene's hydration (export stitching) -
             // but only after embedded image ops finish decoding, or the exporter
             // would encode frames whose pictures haven't landed yet.
             if (data.sceneId) {
@@ -8871,7 +8932,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         case "resync": {
           // Shared history changed in a way that can't be patched incrementally
-          // (moderation hide/restore, undo-clear) — refetch OUR scene. If a
+          // (moderation hide/restore, undo-clear), refetch OUR scene. If a
           // scene SWITCH is already in flight, refetch its target instead:
           // re-requesting the old scene would answer LAST and revert the hop.
           if (roomAnimationRef.current) {
@@ -8893,7 +8954,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 if (backoff.attempts >= 6) {
                   backoff.target = null;
                   backoff.attempts = 0;
-                  setStatus("The room is busy — tap the scene again in a moment.");
+                  setStatus("The room is busy, tap the scene again in a moment.");
                 } else {
                   backoff.attempts += 1;
                   const delay = serverHint ?? Math.min(400 * 2 ** (backoff.attempts - 1), 6000);
@@ -8938,7 +8999,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setScenes(data.scenes);
           }
           if (data.sceneId === activeSceneIdRef.current) {
-            // Our scene was deleted under us — hop to the first surviving one.
+            // Our scene was deleted under us, hop to the first surviving one.
             const fallback = (data.scenes || [])[0];
             if (fallback) {
               activeSceneIdRef.current = null; // force the switch
@@ -8951,13 +9012,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           const previous = productionRef.current;
           productionRef.current = data.production || null;
           setProduction(data.production || null);
-          // A new part opening is a MOMENT — announce it to the whole crew.
+          // A new part opening is a MOMENT, announce it to the whole crew.
           if (data.production && previous && data.production.segments.length > previous.segments.length) {
             const newest = data.production.segments[data.production.segments.length - 1];
-            showToast(`🎬 ${newest.title} is open — places, everyone!`);
+            showToast(`🎬 ${newest.title} is open, places, everyone!`);
           } else if (data.production && !previous) {
             showToast(`🎬 "${data.production.title}" is now in production!`);
-            // Only the host who started it gets the storyboard flung open —
+            // Only the host who started it gets the storyboard flung open -
             // everyone else keeps painting and can open it from the strip.
             if (isRoomHostRef.current) setShowStoryboard(true);
           }
@@ -8974,8 +9035,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         case "thumb_request": {
           // The server asked us (a rotating member, every ~15s while the room
-          // draws) for a small JPEG of the shared mural — layer 0, what every
-          // member sees — for the admin room list. Off the hot path; skipped
+          // draws) for a small JPEG of the shared mural, layer 0, what every
+          // member sees, for the admin room list. Off the hot path; skipped
           // while our own mural is still replaying (it would be half-empty).
           const thumbLayer = framesRef.current[0]?.layers?.[0];
           if (!thumbLayer || historyReplayActiveRef.current) break;
@@ -8994,20 +9055,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               const dataUrl = tc.toDataURL("image/jpeg", 0.72);
               if (dataUrl.length <= 200 * 1024) mpRef.current?.sendThumb?.(dataUrl);
             } catch {
-              // Tainted canvas or memory pressure — the next sweep asks again.
+              // Tainted canvas or memory pressure, the next sweep asks again.
             }
           }, 50);
           break;
         }
         case "snapshot_request": {
           // The server elected us to bake the current mural into a catch-up
-          // snapshot (the room just got big). Render layer 0 — the canonical
-          // replay target — to a full-res PNG and upload it, off the hot path.
+          // snapshot (the room just got big). Render layer 0, the canonical
+          // replay target, to a full-res PNG and upload it, off the hot path.
           const snapFrame = framesRef.current[0];
           const snapLayer = snapFrame?.layers?.[0];
           if (!snapFrame || !snapLayer) break;
           // Defensive: if our own mural is still replaying, layer 0 is
-          // incomplete — a snapshot now would bake a half-empty canvas. The
+          // incomplete, a snapshot now would bake a half-empty canvas. The
           // server normally elects an established member, so this is rare; it
           // re-requests after the cooldown.
           if (historyReplayActiveRef.current) break;
@@ -9016,16 +9077,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           window.setTimeout(() => {
             try {
               let dataUrl = snapCanvas.toDataURL("image/png");
-              // A dense mural's full-res PNG can exceed the WS payload cap —
+              // A dense mural's full-res PNG can exceed the WS payload cap -
               // fall back to a high-quality JPEG (snapshots are a visual
               // starting point, not byte-parity-gated).
               if (dataUrl.length > 12 * 1024 * 1024) {
                 dataUrl = snapCanvas.toDataURL("image/jpeg", 0.9);
               }
-              if (dataUrl.length > 14 * 1024 * 1024) return; // still too big — skip
+              if (dataUrl.length > 14 * 1024 * 1024) return; // still too big, skip
               mpRef.current?.sendSnapshot?.(snapOpId, dataUrl);
             } catch {
-              // Tainted canvas (cross-origin sheet) or memory pressure — skip;
+              // Tainted canvas (cross-origin sheet) or memory pressure, skip;
               // the next joiner just replays full history.
             }
           }, 100);
@@ -9097,8 +9158,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             : roomAnimationRef.current
               ? [...framesRef.current]
               : framesRef.current.slice(0, 1);
-          // A FULL wipe (no frameId) — a friend's or moderator's clear, the
-          // 3-day refresh, the daily wipe, a game round — is a new drawing:
+          // A FULL wipe (no frameId), a friend's or moderator's clear, the
+          // 3-day refresh, the daily wipe, a game round, is a new drawing:
           // the timelapse starts over with it.
           if (!data.frameId) {
             resetReplay();
@@ -9119,7 +9180,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           });
           // In-progress remote strokes on cleared frames are wiped with them;
           // strokes on surviving frames keep buffering. A live LOCAL stroke
-          // keeps drawing — only its pre-clear part drops.
+          // keeps drawing, only its pre-clear part drops.
           for (const [sid, entry] of [...remoteStrokesRef.current]) {
             if (clearedIds.has(entry.frameId || framesRef.current[0]?.id)) {
               entry.buf?.dispose();
@@ -9129,9 +9190,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           }
           clearedFrames.forEach((frame) => touchFrame(frame.id));
           if (clearedFrames.some((frame) => isActiveFrame(frame))) {
-            mixMapRef.current?.clear(); // layer 0 is blank — empty the wet-mix mirror
+            mixMapRef.current?.clear(); // layer 0 is blank, empty the wet-mix mirror
             // The in-progress local stroke loses what it painted so far: drop
-            // the buffer(s) (a symmetry stroke keeps one per copy — `buf` is
+            // the buffer(s) (a symmetry stroke keeps one per copy, `buf` is
             // on the copies, not the shared entry) and the renderer's ink
             // bbox with them, so the commit passes at pen-up cover only what
             // gets painted from here on.
@@ -9145,14 +9206,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             renderDisplay();
             refreshActiveThumbnail();
           }
-          // A Draw & Guess round clears the canvas every turn — that's expected,
+          // A Draw & Guess round clears the canvas every turn, that's expected,
           // so skip the "Someone cleared" banner (the HUD already narrates it).
           if (data.wipeRefresh) {
-            // Not blame-worthy and not a surprise — say what happened, which
+            // Not blame-worthy and not a surprise, say what happened, which
             // also covers FINGERS, where there's no chat to read it in.
             showToast("🧽 Fresh canvas! This room starts over every 3 days.");
           } else if (data.modReset) {
-            // A moderator reset the room (chat too) — nothing to bring back.
+            // A moderator reset the room (chat too), nothing to bring back.
             setClearBanner(null);
             showToast("🧽 A moderator gave this room a fresh start.");
           } else if (data.final) {
@@ -9160,9 +9221,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             // "Bring it back" (one kid could overturn the room's vote).
             setClearBanner(null);
             showToast(
-              data.wipeMode === "vote" ? "🧽 The room voted — fresh canvas!"
+              data.wipeMode === "vote" ? "🧽 The room voted, fresh canvas!"
                 : data.userId === myUserIdRef.current ? "🧽 Fresh canvas!"
-                  : `🧽 ${data.name || "Someone"} wiped the canvas — fresh start!`,
+                  : `🧽 ${data.name || "Someone"} wiped the canvas, fresh start!`,
             );
           } else if (!data.gameRound) {
             showClearBanner(data.name || "Someone");
@@ -9237,7 +9298,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               renderDisplay(); // the doc canvas still holds the scrub preview
             }
           }
-          showToast(data.enabled ? "🎬 Animation ON — film strip unlocked!" : "🎬 Animation off");
+          showToast(data.enabled ? "🎬 Animation ON, film strip unlocked!" : "🎬 Animation off");
           break;
         }
         case "frame_add": {
@@ -9247,14 +9308,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setScenes(data.scenes);
           }
           // A frame added to a scene we're NOT viewing only updates the pager
-          // meta — its canvas hydrates when we page there.
+          // meta, its canvas hydrates when we page there.
           if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
             break;
           }
           commitLayersToFrame();
           const afterIndex = data.afterFrameId ? framesRef.current.findIndex((f) => f.id === data.afterFrameId) : framesRef.current.length - 1;
           // New frames arrive COLD (no canvases); the actor lands on it below and
-          // activateFrame hydrates it (instant — nothing to replay yet). The
+          // activateFrame hydrates it (instant, nothing to replay yet). The
           // frame's shared LAYER list rides along: without it the cold cel would
           // build a default stack with LOCAL ids, and every op drawn on it would
           // name a layer the room has never heard of (dropped server-side).
@@ -9289,11 +9350,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             activateFrame(framesRef.current.indexOf(frame)); // the actor lands on their new frame
             announcePresence(); // ...and tells the crew they're on the new cel
           } else if (insertIndex <= activeFrameIndexRef.current) {
-            // Someone inserted before our spot — keep pointing at OUR frame or
+            // Someone inserted before our spot, keep pointing at OUR frame or
             // every subsequent local op mistags onto a neighbor.
             activeFrameIndexRef.current += 1;
           }
-          // activateFrame doesn't mirror the frame LIST into React — always sync.
+          // activateFrame doesn't mirror the frame LIST into React, always sync.
           syncFrameState();
           break;
         }
@@ -9303,14 +9364,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setScenes(data.scenes);
           }
           if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
-            break; // another scene's frame — meta update only
+            break; // another scene's frame, meta update only
           }
           const delIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
           if (delIndex < 0 || framesRef.current.length <= 1) break;
           const wasActive = delIndex === activeFrameIndexRef.current;
           if (wasActive) {
             // Terminate any in-flight stroke while the index still points at
-            // the dying frame — the end marker goes out tagged with its id
+            // the dying frame, the end marker goes out tagged with its id
             // (harmlessly rejected server-side) instead of a neighbor's.
             abortActiveStroke();
           }
@@ -9318,11 +9379,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           onionCacheRef.current.delete(data.frameId);
           if (wasActive) {
             activateFrame(Math.max(0, delIndex - 1));
-            announcePresence(); // our cel changed under us — re-announce
+            announcePresence(); // our cel changed under us, re-announce
           } else if (activeFrameIndexRef.current > delIndex) {
             activeFrameIndexRef.current -= 1;
           }
-          // activateFrame doesn't mirror the frame LIST into React — always sync.
+          // activateFrame doesn't mirror the frame LIST into React, always sync.
           syncFrameState();
           break;
         }
@@ -9332,7 +9393,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setScenes(data.scenes);
           }
           if (data.sceneId && roomAnimationRef.current && data.sceneId !== activeSceneIdRef.current) {
-            break; // another scene's ordering — meta update only
+            break; // another scene's ordering, meta update only
           }
           const fromIndex = framesRef.current.findIndex((f) => f.id === data.frameId);
           if (fromIndex < 0) break;
@@ -9351,7 +9412,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setScenes(data.scenes);
           }
           const durFrame = framesRef.current.find((f) => f.id === data.frameId);
-          if (!durFrame) break; // another scene's frame — meta update only
+          if (!durFrame) break; // another scene's frame, meta update only
           durFrame.durationMs = data.durationMs;
           setFrames(framesRef.current.map((item) => ({ id: item.id, durationMs: item.durationMs })));
           break;
@@ -9363,7 +9424,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         // ---- Shared layer structure -------------------------------------------
         // Every layer mutation is the SERVER's call: it mints the ids, applies the
         // change and echoes the canonical list for that frame to everyone
-        // (including the sender). We adopt it exactly — pixels survive by id, a
+        // (including the sender). We adopt it exactly, pixels survive by id, a
         // local layer the server re-keyed keeps its canvas, a new id starts blank
         // (its ops replay in), a deleted id's ops the server purged are dropped.
         case "layer_add":
@@ -9387,7 +9448,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             frame.rasterGen = (frame.rasterGen || 0) + 1; // a raster built from the old list is stale
           }
           if (data.type === "layer_del") {
-            // Open remote strokes on the dead layer have nowhere to land — drop
+            // Open remote strokes on the dead layer have nowhere to land, drop
             // their buffers rather than let them commit onto the bottom layer.
             for (const [strokeId, entry] of remoteStrokesRef.current) {
               if (entry.layerId === data.layerId) {
@@ -9423,7 +9484,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "frame_full":
-          setStatus("🎞️ This frame is full — start the next one!");
+          setStatus("🎞️ This frame is full, start the next one!");
           break;
         case "frame_denied":
           setStatus(data.reason || "Can't add more frames here");
@@ -9432,13 +9493,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           setSheetId(data.sheetId || null);
           loadSheetImage(data.sheetId || null);
           // A newly-set underlay (esp. a user trace photo) becomes part of the
-          // composited canvas — nudge the ambient NSFW watcher to sample it.
+          // composited canvas, nudge the ambient NSFW watcher to sample it.
           nsfwWatcherRef.current?.markDirty();
           break;
         case "trace_rejected":
           // Server refused the uploaded photo (not a valid image, or too big).
           setTraceBusy(false);
-          showToast("Couldn't add that photo — try a different one.");
+          showToast("Couldn't add that photo, try a different one.");
           break;
         case "cursor":
           if (hiddenPaintersRef.current.has(data.userId)) break; // locally hidden painter
@@ -9490,7 +9551,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           publishCrewPresence();
           break;
         case "beacon": {
-          // "Come look at my frame!" — a friendly, tappable summon (never a
+          // "Come look at my frame!", a friendly, tappable summon (never a
           // forced view-yank). Lands the tapper on the exact Part+scene+frame.
           if (hiddenPaintersRef.current.has(data.fromUserId)) break; // locally hidden painter
           const target = { roomCode: data.roomCode, sceneId: data.sceneId, frameId: data.frameId };
@@ -9498,7 +9559,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "cheer": {
-          // Confetti pops on a cel — echoed to the cheerer too. Auto-removed.
+          // Confetti pops on a cel, echoed to the cheerer too. Auto-removed.
           if (!data.frameId || !data.emoji) break;
           const cid = `ch${Date.now()}_${(cheerIdRef.current += 1)}`;
           setCheers((list) => [...list.slice(-11), { id: cid, frameId: data.frameId, emoji: data.emoji }]);
@@ -9521,7 +9582,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "game_correct": {
-          // Someone (maybe me) guessed it — celebratory pop + a confetti burst.
+          // Someone (maybe me) guessed it, celebratory pop + a confetti burst.
           const mine = data.userId === myUserIdRef.current;
           setGamePop({ kind: "correct", name: mine ? "You" : data.name, points: data.points, mine });
           window.clearTimeout(gamePopTimer.current);
@@ -9529,7 +9590,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "game_end": {
-          // Round over — reveal the word for the intermission, drop my drawer word.
+          // Round over, reveal the word for the intermission, drop my drawer word.
           setMyWord(null);
           setGamePop({ kind: "reveal", word: data.word });
           window.clearTimeout(gamePopTimer.current);
@@ -9538,10 +9599,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "game_spoiler":
-          showToast("🤫 No spoilers — you already know the word!");
+          showToast("🤫 No spoilers, you already know the word!");
           break;
         case "game_podium": {
-          // Match over — celebrate the top three, then get out of the way
+          // Match over, celebrate the top three, then get out of the way
           // before the next match's first round begins.
           setGamePodium({ standings: data.standings || [], rounds: data.rounds || 0 });
           window.clearTimeout(gamePodiumTimer.current);
@@ -9550,14 +9611,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         // ---- Draw Phone (telephone) ----------------------------------------
         case "phone_state": {
-          // Public game snapshot (phase/round/roster/timer) — no page contents.
+          // Public game snapshot (phase/round/roster/timer), no page contents.
           phoneRef.current = data.phone || null;
           setPhone(data.phone || null);
           if (!data.phone) {
             phoneTaskRef.current = null; setPhoneTask(null);
             setPhoneReveal(null); setPhoneSubmitted(false);
           } else if (data.phone.phase !== "reveal") {
-            // Any non-reveal phase means the reveal is over — clear it so a
+            // Any non-reveal phase means the reveal is over, clear it so a
             // spectator (who never gets a phone_task) isn't stuck behind the
             // previous game's full-screen reveal for the whole next game.
             setPhoneReveal(null);
@@ -9584,7 +9645,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         }
         case "phone_rejected": {
-          showToast(data.reason === "text" ? "Let's keep it kind — try another word." : "Couldn't use that drawing — try again.");
+          showToast(data.reason === "text" ? "Let's keep it kind, try another word." : "Couldn't use that drawing, try again.");
           setPhoneSubmitted(false);
           break;
         }
@@ -9603,14 +9664,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
         case "hype": {
           // Big animated celebration over the canvas (curated kinds; the server
-          // rate-limits + allowlists). Hard cap of 3 on screen — extras drop so
+          // rate-limits + allowlists). Hard cap of 3 on screen, extras drop so
           // a hype pile-on can never bury the art or the frame rate.
           if (hiddenPaintersRef.current.has(data.userId)) break; // locally hidden painter
           const meta = HYPES.find((h) => h.kind === data.kind);
           if (!meta) break;
           const hid = `hy${Date.now()}_${(hypeIdRef.current += 1)}`;
           setHypes((list) => {
-            if (list.length >= 3) return list; // dropped — no timer, no re-render later
+            if (list.length >= 3) return list; // dropped, no timer, no re-render later
             window.setTimeout(() => {
               setHypes((cur) => (cur.some((h) => h.id === hid) ? cur.filter((h) => h.id !== hid) : cur));
             }, 2400);
@@ -9623,10 +9684,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           // wetness captured in their op settings (replay determinism).
           roomWetRef.current = !!data.wet;
           setRoomWet(!!data.wet);
-          showToast(data.wet ? "💧 Wet canvas ON — paints mix and smear!" : "☀️ Canvas dried — paints stay put.");
+          showToast(data.wet ? "💧 Wet canvas ON, paints mix and smear!" : "☀️ Canvas dried, paints stay put.");
           break;
         case "brush_mode_state":
-          // The room's palette flipped. Palette-only in ops — no op carries the
+          // The room's palette flipped. Palette-only in ops, no op carries the
           // mode, so nothing repaints. BUT fun mode is single-layer by contract
           // (goo/smudge read layer 0), so the server collapses the stack and
           // sends the new layer lists along: adopt them.
@@ -9636,14 +9697,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             setSelectedBrush((prev) => (FUN_BRUSHES.has(prev) ? prev : "paint"));
           }
           if (Array.isArray(data.frames) && data.frames.length) reconcileFrames(data.frames);
-          showToast(roomBrushModeRef.current === "fun" ? "🖐️ Fun paint mode — bold, wet brushes!" : "🎨 Realistic brushes — the full set.");
+          showToast(roomBrushModeRef.current === "fun" ? "🖐️ Fun paint mode, bold, wet brushes!" : "🎨 Realistic brushes, the full set.");
           break;
         case "vote_open":
           setRoomVote({ options: data.options || [], endsAt: data.endsAt || 0, counts: [0, 0, 0], myChoice: null });
-          // The vote card lives in the chat panel — announce it so people with
+          // The vote card lives in the chat panel, announce it so people with
           // the panel closed know a 45s vote just started (a floating card also
           // renders for them; see the cc-vote-floating block).
-          showToast("🗳️ Theme vote started — pick the next theme!");
+          showToast("🗳️ Theme vote started, pick the next theme!");
           break;
         case "vote_tally":
           setRoomVote((vote) => (vote ? { ...vote, counts: data.counts || vote.counts } : vote));
@@ -9664,22 +9725,22 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           nsfwWatcherRef.current?.setActive(!!data.active);
           break;
         case "mention_key":
-          // A rename minted a fresh mention-watch capability for our new name —
+          // A rename minted a fresh mention-watch capability for our new name -
           // store it so cross-room @mention pings keep following us.
           if (data.room && data.name && data.key) {
             recordRecentRoom(data.room, null, Date.now(), { name: data.name, key: data.key });
           }
           break;
         case "mod_alert":
-          // Host-only — the server only sends these to a room's hosts.
+          // Host-only, the server only sends these to a room's hosts.
           setModAlerts((list) => [{ ...data, id: `ma_${Date.now()}_${list.length}`, ts: Date.now() }, ...list].slice(0, 50));
-          showToast(data.hidden ? "🛡️ Auto-hid a flagged drawing — see Host controls" : "🛡️ A drawing was flagged — see Host controls");
+          showToast(data.hidden ? "🛡️ Auto-hid a flagged drawing, see Host controls" : "🛡️ A drawing was flagged, see Host controls");
           break;
         case "chat_blocked":
-          // Honest feedback per cause — a rate-limited kid shouldn't be told
+          // Honest feedback per cause, a rate-limited kid shouldn't be told
           // the safety filter caught them.
-          if (data.reason === "slow_down") showToast("Whoa, slow down a little — try again in a moment! 🐢");
-          else if (data.reason === "doodle") showToast("That doodle couldn't be sent — try drawing it again!");
+          if (data.reason === "slow_down") showToast("Whoa, slow down a little, try again in a moment! 🐢");
+          else if (data.reason === "doodle") showToast("That doodle couldn't be sent, try drawing it again!");
           else showToast("That message was blocked by the room's safety filter.");
           break;
         case "wipe_state":
@@ -9688,7 +9749,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         case "wipe_denied":
           showToast(
             data.reason === "already_voted" ? "You already voted to keep this one! 🗳️"
-              : data.reason === "already_extended" ? "This canvas is already booked for a while — enjoy it! 🎉"
+              : data.reason === "already_extended" ? "This canvas is already booked for a while, enjoy it! 🎉"
                 : data.reason === "muted" ? "You're muted by a host right now."
                   : "Give it a moment and try again.",
           );
@@ -9700,11 +9761,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           if (ended) {
             const mine = ended.byId === myUserIdRef.current;
             if (isCanceled(ended.outcome)) {
-              showToast(mine ? "Wipe canceled — the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
+              showToast(mine ? "Wipe canceled, the canvas is safe 🎨" : `${ended.byName || "Someone"} called off the wipe 🎨`);
             } else if (ended.outcome === "failed") {
               showToast(`The room voted to keep the canvas 🎨 (${ended.yes} of ${ended.needed} yes votes needed)`, 5000);
             } else if (ended.outcome === "left") {
-              showToast(`Wipe called off — ${ended.byName || "the asker"} left the room`);
+              showToast(`Wipe called off, ${ended.byName || "the asker"} left the room`);
             }
             // "wiped" is announced by the clear itself; "cleared"/"blocked"
             // by whatever beat the countdown to it.
@@ -9715,7 +9776,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           showToast(
             {
               busy: "A wipe is already counting down! ⏳",
-              cooldown: "The room just voted to keep it — try again in a little bit 🎨",
+              cooldown: "The room just voted to keep it, try again in a little bit 🎨",
               slow_down: "Give it a moment and try again.",
               muted: "You're muted by a host right now.",
               host_only: "Only this room's host can wipe the canvas.",
@@ -9723,7 +9784,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               game: "Wait until the game round is over! ⏱️",
               animation: "In a flipbook, clear one frame at a time.",
               already_voted: "You already voted! 🗳️",
-              too_late: "Too late to cancel — here comes a fresh canvas! 🧽",
+              too_late: "Too late to cancel, here comes a fresh canvas! 🧽",
               no_request: "That vote already ended.",
             }[data.reason] || "Give it a moment and try again.",
           );
@@ -9731,18 +9792,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         case "fork_denied":
           showToast(
             data.reason === "empty" ? "Draw something first, then you can take it private! ✏️"
-              : data.reason === "too_big" ? "This canvas is too big to copy — pin it to the Wall instead. 🧲"
+              : data.reason === "too_big" ? "This canvas is too big to copy, pin it to the Wall instead. 🧲"
                 : data.reason === "locked" ? "A host locked this room."
                   : data.reason === "muted" ? "You're muted by a host right now."
                     : data.reason === "not_forkable" ? "This room doesn't refresh, so there's nothing to rescue."
-                      : "Couldn't make your copy — try again in a bit.",
+                      : "Couldn't make your copy, try again in a bit.",
           );
           break;
         case "fork_ready":
-          // Our private copy is ready — hand over the room, don't teleport the
+          // Our private copy is ready, hand over the room, don't teleport the
           // user mid-stroke.
           setWipePanelOpen(false);
-          showToast(`Your private copy is ready — room ${data.code} 🔒`);
+          showToast(`Your private copy is ready, room ${data.code} 🔒`);
           window.setTimeout(() => { window.location.href = `/join/${data.code}`; }, 900);
           break;
         case "chat_doodle_removed":
@@ -9751,7 +9812,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           evictPageImage(data.doodle);
           break;
         case "room_full":
-          // The server closes the socket right after this — stop the auto-
+          // The server closes the socket right after this, stop the auto-
           // reconnect loop and show a way forward instead of "Connecting…".
           mpRef.current?.disconnect?.();
           setRoomFull(true);
@@ -9849,7 +9910,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       artistApiFetch(`/api/rooms/${encodeURIComponent(roomCode)}/unpublish`, { token, method: "POST", body: {} }),
     [artistApiFetch],
   );
-  // Revoke an approved painter by their opaque account id — works whether
+  // Revoke an approved painter by their opaque account id, works whether
   // they're in the room right now or offline (the owner-only REST ACL).
   const artistRevokePainter = useCallback(
     async (profileId) => {
@@ -9860,7 +9921,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [artistApiFetch, session?.access_token, roomId],
   );
 
-  // A room that refused us has its own full-screen explanation — never leave a
+  // A room that refused us has its own full-screen explanation, never leave a
   // loading bar painting hopefully on top of it.
   useEffect(() => {
     if (kicked || blockedByMod || signinGate || roomFull || roomBlocked) setJoinCurtain(false);
@@ -9874,7 +9935,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Watch our OTHER recent rooms for @mentions of us and collect them in the
   // profile-menu inbox (the current room's chat is already live here, so it's
-  // excluded). Each watch presents the room's stored mention-key capability —
+  // excluded). Each watch presents the room's stored mention-key capability -
   // rooms visited before keys existed (or where the handshake didn't issue one)
   // simply aren't watchable until the next visit.
   const selfName = mp.self?.name || null;
@@ -9953,7 +10014,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Draw Phone suppresses op relay while a game runs (drawing is private); this
   // gate wraps the raw sender so every draw call site respects it. The server
-  // also drops these ops — this just saves the wire.
+  // also drops these ops, this just saves the wire.
   const relayOp = useCallback((op) => {
     const ph = phoneRef.current;
     if (ph && (ph.phase === "starting" || ph.phase === "drawing" || ph.phase === "guessing")) return;
@@ -10041,7 +10102,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
 
   // Draw Phone: submit my drawn page. Grab the current canvas as a downscaled
-  // JPEG (private — never relayed as ops) and send it as this round's page.
+  // JPEG (private, never relayed as ops) and send it as this round's page.
   const submitPhoneDrawing = useCallback(async () => {
     const task = phoneTaskRef.current;
     if (!task || task.phase !== "drawing" || phoneSubmitted) return;
@@ -10053,7 +10114,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       showToast("Sent! Waiting for the others… ✏️");
     } catch {
       setPhoneSubmitted(false);
-      showToast("Couldn't send your drawing — try again");
+      showToast("Couldn't send your drawing, try again");
     }
   }, [composeCanvas, phoneSubmitted, showToast]);
 
@@ -10066,7 +10127,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [phoneGuess, phoneSubmitted]);
 
   // Countdown label for the public canvas refresh. Ticks once a minute (only
-  // while a room is actually on the cycle) — this is a "2d 4h" label, not a
+  // while a room is actually on the cycle), this is a "2d 4h" label, not a
   // stopwatch, so per-second work would be pure waste on the drawing path.
   useEffect(() => {
     if (!roomWipe || !roomWipe.wipeAt) return undefined;
@@ -10138,7 +10199,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       const data = await res.json();
       setSheets(Array.isArray(data.sheets) ? data.sheets : []);
     } catch {
-      // offline — leave list as-is
+      // offline, leave list as-is
     }
   }, []);
 
@@ -10150,7 +10211,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     mpRef.current?.sendSheet?.(id || null); // clears room-wide if you're a host / unowned room
     if (!id) {
       // Always remove the sheet from YOUR OWN view immediately, even if the
-      // server (host-gated in owned rooms) doesn't clear it for everyone — so a
+      // server (host-gated in owned rooms) doesn't clear it for everyone, so a
       // joiner can never get stuck staring at a coloring sheet they can't dismiss.
       setSheetId(null);
       loadSheetImage(null);
@@ -10171,7 +10232,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // canvas clears. Flipbooks keep the old confirm-and-clear.
       if (hasContent && !roomAnimationRef.current) {
         if (!mpConnectedRef.current) {
-          showToast("Reconnecting to the room — try again in a moment.");
+          showToast("Reconnecting to the room, try again in a moment.");
           return;
         }
         mpRef.current?.sendWipeRequest?.(`lib:${sheet.id}`);
@@ -10294,7 +10355,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         }
       });
       // Change-signature bailout: an identical cursor set (including the idle
-      // empty one) means no re-render — without it this interval re-renders
+      // empty one) means no re-render, without it this interval re-renders
       // the whole component ~8x/sec forever.
       const sig = live
         .map((c) => `${c.userId}:${c.leftPx}:${c.topPx}:${c.drawing ? 1 : 0}:${c.focused ? 1 : 0}`)
@@ -10311,7 +10372,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Keep crew presence honest against the roster: presence is a COLD signal
   // (sent once per cel change, not refreshed), so a TTL would wrongly drop a
   // teammate who's sitting still. Instead, whenever the room roster changes,
-  // drop presence for anyone no longer present — robust even if a leave
+  // drop presence for anyone no longer present, robust even if a leave
   // message was missed.
   useEffect(() => {
     if (crewPresenceRef.current.size === 0) {
@@ -10332,7 +10393,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Derive cel pips (frameId -> people on it, CURRENT scene only) + a count of
   // crew off in other scenes for the pager. Recomputes only when presence or
-  // the active scene changes — never on the draw path.
+  // the active scene changes, never on the draw path.
   const celPresence = useMemo(() => {
     const map = {};
     for (const p of crewPresence) {
@@ -10356,7 +10417,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       if (target.roomCode && target.roomCode !== roomId) {
-        window.location.href = `/join/${target.roomCode}`; // another Part — hop rooms
+        window.location.href = `/join/${target.roomCode}`; // another Part, hop rooms
         return;
       }
       if (target.sceneId && target.sceneId !== activeSceneIdRef.current) {
@@ -10383,7 +10444,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // pinch (which browsers deliver as ctrlKey+wheel) or ⌘/Ctrl+scroll ZOOMS
   // smoothly at the cursor, and a classic mouse-wheel notch keeps the familiar
   // 12% zoom step. On a Mac, Wacom Cintiq touch is translated by the driver
-  // into these same trackpad gestures — the browser never sees real touches —
+  // into these same trackpad gestures, the browser never sees real touches -
   // so this is exactly what makes pan/zoom-by-hand work on a Cintiq + Mac.
   useEffect(() => {
     const el = overlayCanvasRef.current;
@@ -10404,7 +10465,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
         return;
       }
-      // A classic mouse notch is a big, whole-number, vertical-only delta —
+      // A classic mouse notch is a big, whole-number, vertical-only delta -
       // keep its zoom-per-click. Everything else (trackpad two-finger scroll,
       // Cintiq touch ring: small and/or two-axis deltas) pans the view, the
       // pro-drawing-app convention.
@@ -10432,7 +10493,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     [],
   );
 
-  // Spacebar toggles the pan/hand tool — unless you're typing (e.g. chat).
+  // Spacebar toggles the pan/hand tool, unless you're typing (e.g. chat).
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.code !== "Space" && event.key !== " ") {
@@ -10498,7 +10559,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             if (prev !== "eraser") return prev;
             const last = lastPaintBrushRef.current || "marker";
             // Ink-only rooms: the remembered brush could predate the join
-            // (e.g. marker) — snap back inside the room's rules instead.
+            // (e.g. marker), snap back inside the room's rules instead.
             return inkOnlyRef.current ? inkSafeBrush(last) : last;
           });
           break;
@@ -10514,7 +10575,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           break;
         case "t":
         case "T":
-          // Toggle the tool rail / sheet — the "give me the whole canvas" key
+          // Toggle the tool rail / sheet, the "give me the whole canvas" key
           // (Cintiq ExpressKeys map nicely to it).
           event.preventDefault();
           setToolsOpen((open) => !open);
@@ -10576,7 +10637,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // keyframe lands ~4s after the edit that armed a 5s flush, so a flush
       // armed by an earlier (empty) event used to write 0 snapshots and the
       // keyframe itself never reached disk until the next edit. A 'load'
-      // just read the series from disk — nothing new to write.
+      // just read the series from disk, nothing new to write.
       if (reason !== "load") {
         scheduleReplayFlush();
       }
@@ -10630,7 +10691,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     });
 
     // NOTE: drafts are never auto-restored. Multiplayer rooms are server-
-    // authoritative — every join receives a 'history' frame (even when empty)
+    // authoritative, every join receives a 'history' frame (even when empty)
     // that rebuilds the shared mural, and a stale local draft painted over it
     // reappeared as ghost drawings. The manual "Restore last draft" button
     // (restoreDraft) is still available.
@@ -10694,7 +10755,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Keep the display canvas backing store matched to its CSS size and the
   // current device pixel ratio so it stays crisp through window resizes, layout
-  // changes, and DPR changes (e.g. dragging the tab between monitors) — W6.
+  // changes, and DPR changes (e.g. dragging the tab between monitors): W6.
   useEffect(() => {
     let mediaQuery = null;
     let resizeRaf = 0;
@@ -10778,7 +10839,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   useEffect(() => {
     autosaveTimerRef.current = window.setInterval(() => {
-      // Never snapshot mid-stroke or mid-pinch — saveDraft serializes every
+      // Never snapshot mid-stroke or mid-pinch, saveDraft serializes every
       // layer and would stall the pointer stream. dirtyRef stays true, so the
       // next tick retries once the hands are off the canvas.
       if (activePointerRef.current != null || gestureRef.current != null) {
@@ -10893,7 +10954,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   // Drawing streak: the day's FIRST finished stroke ticks it (device-local).
   // Session-guarded so the localStorage read happens once per day, not per
-  // stroke — nothing rides the drawing hot path. Celebrate day 2+ only.
+  // stroke, nothing rides the drawing hot path. Celebrate day 2+ only.
   const bumpStreak = useCallback(() => {
     if (streakDoneRef.current === localDayString()) return;
     streakDoneRef.current = localDayString();
@@ -10969,7 +11030,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const activateEraser = () => {
     if (roomFingerPaintRef.current) {
-      return; // toddler room: chunky wet brushes only — no eraser
+      return; // toddler room: chunky wet brushes only, no eraser
     }
     handToolRef.current = false;
     setHandTool(false);
@@ -10979,7 +11040,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
   const isPaintActive = !handTool && selectedTool === "brush" && selectedBrush !== "eraser";
   const isEraserActive = !handTool && selectedTool === "brush" && selectedBrush === "eraser";
-  // Smudge blends the paint already on the canvas — it carries no pigment, so it
+  // Smudge blends the paint already on the canvas, it carries no pigment, so it
   // shows a Strength control instead of a color + opacity + variation. The
   // eraser likewise ignores color (it cuts to transparent).
   const isSmudgeActive = selectedTool === "brush" && selectedBrush === "smudge";
@@ -11025,7 +11086,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           onSize={setBrushSize}
           onChoose={(item) => {
             if (item.gated) {
-              showToast("Smudge works in private rooms — start one from Rooms!");
+              showToast("Smudge works in private rooms, start one from Rooms!");
               return;
             }
             chooseBrush(item.id);
@@ -11082,9 +11143,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ room: roomId, reason: reportReason, reporterName: mp.self?.name || "anonymous" }),
       });
-      showToast("Thanks — a moderator will take a look. 🙏");
+      showToast("Thanks, a moderator will take a look. 🙏");
     } catch {
-      showToast("Couldn't send the report — please try again");
+      showToast("Couldn't send the report, please try again");
     }
     setShowReport(false);
     setReportReason("");
@@ -11210,7 +11271,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           <button
             type="button"
             onClick={() => { window.location.href = "/"; }}
-            title="Leave this room — back to the front page"
+            title="Leave this room, back to the front page"
             aria-label="Home"
           >
             🏠
@@ -11269,7 +11330,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             type="button"
             className="mp-home"
             onClick={() => { window.location.href = "/"; }}
-            title="Leave this room — back to the front page"
+            title="Leave this room, back to the front page"
           >
             🏠 Home
           </button>
@@ -11278,7 +11339,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             type="button"
             className="mp-room mp-room-switch"
             onClick={() => setShowLobby(true)}
-            title="Switch rooms — hop between your rooms, browse, or start a new one"
+            title="Switch rooms, hop between your rooms, browse, or start a new one"
           >
             {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
           </button>
@@ -11307,8 +11368,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               aria-pressed={roomAnimation}
               title={
                 roomAnimation
-                  ? "Animation is ON — the film strip is unlocked for this room. Tap to turn off."
-                  : "Animation — unlock the shared film strip for this room"
+                  ? "Animation is ON, the film strip is unlocked for this room. Tap to turn off."
+                  : "Animation, unlock the shared film strip for this room"
               }
             >
               <span aria-hidden="true">🎬</span>{" "}
@@ -11324,8 +11385,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               aria-pressed={roomPhone}
               title={
                 roomPhone
-                  ? "Draw Phone is ON — the telephone game for this room. Tap to turn off."
-                  : "Draw Phone — play telephone: draw a prompt, pass it on, watch it drift"
+                  ? "Draw Phone is ON, the telephone game for this room. Tap to turn off."
+                  : "Draw Phone, play telephone: draw a prompt, pass it on, watch it drift"
               }
             >
               📞
@@ -11340,10 +11401,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             aria-pressed={roomBrushMode === "fun"}
             title={
               roomAudience === "kid_safe" && !isRoomHost
-                ? "Brush mode — only a host can switch this in public rooms"
+                ? "Brush mode, only a host can switch this in public rooms"
                 : roomBrushMode === "fun"
-                  ? "Fun paint mode is ON — bold, wet brushes. Tap for the realistic set."
-                  : "Realistic brushes — tap for fun, wet paint mode"
+                  ? "Fun paint mode is ON, bold, wet brushes. Tap for the realistic set."
+                  : "Realistic brushes, tap for fun, wet paint mode"
             }
           >
             🖐️
@@ -11359,10 +11420,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               roomBrushMode === "fun"
                 ? "Fun paint mode is always wet"
                 : roomAudience === "kid_safe" && !isRoomHost
-                  ? "Wet canvas — only a host can switch this in public rooms"
+                  ? "Wet canvas, only a host can switch this in public rooms"
                   : roomWet
-                    ? "Wet canvas is ON — paints mix and smear. Tap to dry."
-                    : "Wet canvas — make paints mix and smear into each other"
+                    ? "Wet canvas is ON, paints mix and smear. Tap to dry."
+                    : "Wet canvas, make paints mix and smear into each other"
             }
           >
             💧
@@ -11376,7 +11437,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <span className="mp-lock-chip" title="A host locked the canvas">🔒 Locked</span>
           ) : null}
 
-          {/* Artist studios: the owner's door to approvals + publishing —
+          {/* Artist studios: the owner's door to approvals + publishing -
               badged while watchers are asking to paint. */}
           {roomAudience === "artist_public" && isRoomOwner ? (
             <button
@@ -11493,22 +11554,44 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         {/* Inktober sketchbook page rooms: the pinned prompt banner lives
             IN-FLOW between the room bar and the canvas stage, so it is
             visible on desktop AND mobile without ever overlaying (blocking)
-            the canvas. Renders nothing for ordinary rooms. */}
-        {roomAudience === "artist_public" ? (
+            the canvas. Renders nothing for ordinary rooms. An UNSAVED guest
+            page room is kid_safe (not artist_public), so the mount ALSO keys
+            on the handshake's sketchbook flag (mpSketchbookPage). */}
+        {roomAudience === "artist_public" || mpSketchbookPage ? (
           <SketchbookRoomBanner
             roomCode={roomId}
             session={session}
             onNavigate={navigateToPath}
             onPageChange={handleSketchbookPageChange}
+            onSaved={handleGuestSketchbookSaved}
           />
         ) : roomId === "INKTOBER" ? (
           <section className="skb-banner-wrap" aria-label="Start an Inktober sketchbook">
             <div className="skb-banner">
               <strong>Make this prompt your own.</strong>
-              <button type="button" className="skb-banner-primary" onClick={() => navigateToPath("/sketchbook")}>
+              <button type="button" className="skb-banner-primary" onClick={() => handleStartOwnGuestPage(null)}>
                 Draw this prompt in your own sketchbook →
               </button>
-              <span>Choose private or public. Invite up to five artists; share your public pages with everyone.</span>
+              <span>No account needed. Your pages save to this device, and a free account can keep them forever.</span>
+            </div>
+          </section>
+        ) : null}
+
+        {/* An UNSAVED sketchbook page room is kid_safe with device-only
+            drawing: a watcher's pointer ops are dropped server-side and the
+            paintGate blocks local strokes, so say so honestly and offer the
+            one-tap start-your-own door instead of a silently dead canvas. */}
+        {mpSketchbookUnsaved && !mp.canPaint ? (
+          <section className="skb-banner-wrap" aria-label="Watch-only sketchbook page">
+            <div className="skb-banner skb-watch-note">
+              <span>👀 Only the artist on this page can draw here. You can watch, chat and react.</span>
+              <button
+                type="button"
+                className="skb-banner-primary"
+                onClick={() => handleStartOwnGuestPage(sketchbookPageMeta?.day ?? null)}
+              >
+                Start your own page for this prompt →
+              </button>
             </div>
           </section>
         ) : null}
@@ -11530,7 +11613,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               onLostPointerCapture={handleCanvasLostPointerCapture}
               onContextMenu={handleCanvasContextMenu}
             />
-            {/* Brush-size preview ring — sized to brushSize x zoom, tinted with the
+            {/* Brush-size preview ring, sized to brushSize x zoom, tinted with the
                 color, following the pointer (and flashed when size/brush changes). */}
             <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true">
               <canvas ref={brushTipCanvasRef} className="brush-cursor-tip" width={1} height={1} />
@@ -11579,7 +11662,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
             ) : null}
 
-            {/* "Come look at my frame!" beacon — a friendly tap-to-jump card. */}
+            {/* "Come look at my frame!" beacon, a friendly tap-to-jump card. */}
             {beacon ? (
               <div className="beacon-card" role="alert">
                 <span className="beacon-dot" style={{ background: beacon.color || "#2d6cdf" }} aria-hidden="true" />
@@ -11595,10 +11678,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
             ) : null}
 
-            {/* Reaction picker — cheer on your friends. In paint rooms the
+            {/* Reaction picker, cheer on your friends. In paint rooms the
                 canvas reaches the viewport bottom, so the fixed mobile
                 quickbar (z 70) covered this button; qb-clear lifts it above
-                the bar. Animation rooms keep bottom:12 — the film strip
+                the bar. Animation rooms keep bottom:12, the film strip
                 already holds the canvas clear of the bar. */}
             <div className={`reaction-picker${roomAnimation ? "" : " qb-clear"}`}>
               <button
@@ -11642,7 +11725,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 +
               </button>
               {/* Quick paint / eraser beside the hand, so hopping out of a pan
-                  never means a trip to the tool rail. (Desktop only — the
+                  never means a trip to the tool rail. (Desktop only, the
                   compact tiers already have these on the quick bar.) */}
               <span className="zoom-sep" aria-hidden="true" />
               <button
@@ -11672,13 +11755,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 className={handTool ? "zoom-hand is-active" : "zoom-hand"}
                 onClick={toggleHandTool}
                 aria-pressed={handTool}
-                title="Pan (Space, hold the pen's barrel button, or scroll — pinch zooms)"
+                title="Pan (Space, hold the pen's barrel button, or scroll, pinch zooms)"
               >
                 ✋
               </button>
               {/* Quick stroke: drag the size pill to resize, tap it for the
                   brush menu; the color dot opens the studio's own picker.
-                  (Desktop only — the compact tiers carry these on the quick
+                  (Desktop only, the compact tiers carry these on the quick
                   bar.) */}
               {layoutTier === "desktop" ? (
                 <>
@@ -11708,7 +11791,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
             {/* Undo, floating over the canvas top-right so it is one reach
                 from the drawing hand instead of a trip to the tool rail. It
-                takes back YOUR last stroke only — friends' art is replayed
+                takes back YOUR last stroke only, friends' art is replayed
                 back over the restore (see replaySharedOpsSince). The compact
                 tiers keep zoom in this corner, so they carry undo as its own
                 button on the bottom quick bar instead. */}
@@ -11718,7 +11801,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 className="undo-fab"
                 onClick={undo}
                 disabled={historyCount === 0}
-                title="Undo my last stroke (Ctrl+Z) — nobody else's"
+                title="Undo my last stroke (Ctrl+Z), nobody else's"
                 aria-label="Undo my last stroke"
               >
                 <span className="undo-fab-ico" aria-hidden="true">↶</span>
@@ -11756,7 +11839,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ) : null}
 
             {/* Public canvas refresh: a live countdown so the reset is never a
-                surprise, and two ways out — vote to keep it, or fork it into
+                surprise, and two ways out, vote to keep it, or fork it into
                 your own private room. */}
             {roomWipe && roomWipe.wipeAt ? (
               <>
@@ -11845,7 +11928,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 role="note"
                 style={{ background: "#fff7ed", color: "#9a3412" }}
               >
-                <span>🔓 Private room — not auto-moderated like public rooms. Only invite people you know.</span>
+                <span>🔓 Private room, not auto-moderated like public rooms. Only invite people you know.</span>
                 <button type="button" onClick={() => setPrivateNoticeDismissed(true)} aria-label="Dismiss">
                   ✕
                 </button>
@@ -11876,7 +11959,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               />
             ) : null}
 
-            {/* Draw & Guess HUD — word/timer/scoreboard over the canvas. */}
+            {/* Draw & Guess HUD, word/timer/scoreboard over the canvas. */}
             {roomGame && game ? (
               <GameHud
                 game={game}
@@ -12014,7 +12097,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <div className="confirm-card">
               <h2 id="clear-confirm-title">Clear the whole canvas? 😱</h2>
               <p>
-                This wipes the shared mural for <strong>everyone</strong> in the room — your friends might be
+                This wipes the shared mural for <strong>everyone</strong> in the room, your friends might be
                 mad! You can bring it back with <strong>“Bring it back”</strong> right after, but only for a
                 little while.
               </p>
@@ -12059,14 +12142,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
               {session ? (
                 <p className="myart-synced">
-                  ✅ Signed in — new art you save is kept in your account gallery, so you can sign in
+                  ✅ Signed in, new art you save is kept in your account gallery, so you can sign in
                   on another device to find it.
                 </p>
               ) : (
                 <div className="gallery-gate">
                   <span className="gallery-gate-emoji" aria-hidden="true">🔒</span>
                   <div className="gallery-gate-body">
-                    <strong>Sign up to save your gallery — or it could be lost!</strong>
+                    <strong>Sign up to save your gallery, or it could be lost!</strong>
                     <span>
                       Right now your art only lives on this device. Make a free account so the art you
                       save is kept in your own gallery.
@@ -12087,7 +12170,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
               {myDrawings.length === 0 ? (
                 <p className="myart-empty">
-                  No saved drawings yet. Tap <strong>💾 Save</strong> to keep one here — you can come back
+                  No saved drawings yet. Tap <strong>💾 Save</strong> to keep one here, you can come back
                   and open it anytime{session ? ", on any device" : " on this device"}.
                 </p>
               ) : (
@@ -12150,7 +12233,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 <p className="myart-note">
                   {session
                     ? "New saves are kept in your account gallery."
-                    : "Saved on this device only — sign up to keep your gallery safe."}
+                    : "Saved on this device only, sign up to keep your gallery safe."}
                 </p>
               </div>
             </div>
@@ -12232,8 +12315,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           </div>
         ) : null}
 
-        {/* Canvas Chat — Twitch × iMessage overlay (finger-paint room: none —
-            its audience can't read yet; sketchbook pages: none — chat is off
+        {/* Canvas Chat: Twitch × iMessage overlay (finger-paint room: none -
+            its audience can't read yet; sketchbook pages: none, chat is off
             for performance). Ambient bubbles float over the art;
             the open panel carries the room row, votes, and participants. */}
         {roomFingerPaint || sketchbookPage ? null : (
@@ -12273,10 +12356,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                     aria-pressed={roomBrushMode === "fun"}
                     title={
                       roomAudience === "kid_safe" && !isRoomHost
-                        ? "Brush mode — only a host can switch this in public rooms"
+                        ? "Brush mode, only a host can switch this in public rooms"
                         : roomBrushMode === "fun"
-                          ? "Fun paint mode is ON — bold, wet brushes. Tap for the realistic set."
-                          : "Realistic brushes — tap for fun, wet paint mode"
+                          ? "Fun paint mode is ON, bold, wet brushes. Tap for the realistic set."
+                          : "Realistic brushes, tap for fun, wet paint mode"
                     }
                   >
                     🖐️
@@ -12291,10 +12374,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                       roomBrushMode === "fun"
                         ? "Fun paint mode is always wet"
                         : roomAudience === "kid_safe" && !isRoomHost
-                          ? "Wet canvas — only a host can switch this in public rooms"
+                          ? "Wet canvas, only a host can switch this in public rooms"
                           : roomWet
-                            ? "Wet canvas is ON — paints mix and smear. Tap to dry."
-                            : "Wet canvas — make paints mix and smear into each other"
+                            ? "Wet canvas is ON, paints mix and smear. Tap to dry."
+                            : "Wet canvas, make paints mix and smear into each other"
                     }
                   >
                     💧
@@ -12340,7 +12423,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   </div>
                 ) : null}
                 {mp.users.length > 0 ? (
-                  <div className="mp-participants" aria-label="People in this room — tap to find them on the canvas">
+                  <div className="mp-participants" aria-label="People in this room, tap to find them on the canvas">
                     {mp.users.map((u) => {
                       const isSelf = u.id === mp.self?.id;
                       const isHidden = hiddenPainters.has(u.id);
@@ -12380,7 +12463,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           />
         )}
 
-        {/* A live theme vote must be visible even with the chat panel closed —
+        {/* A live theme vote must be visible even with the chat panel closed -
             the same card floats over the canvas until the vote resolves. */}
         {roomVote && !showChat && !roomFingerPaint && !sketchbookPage ? (
           <div className="vote-card cc-vote-floating" role="group" aria-label="Theme vote">
@@ -12412,7 +12495,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         aria-hidden={layoutTier === "desktop" && !toolsOpen ? true : undefined}
       >
         {/* Desktop: the docked rail's own header with the collapse control.
-            (The compact tiers show .drawer-handle instead — CSS swaps them.) */}
+            (The compact tiers show .drawer-handle instead: CSS swaps them.) */}
         <div className="rail-head">
           <span className="rail-head-title">Tools</span>
           <button
@@ -12436,7 +12519,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <section className="tool-section mobile-actions">
           <h2>Actions</h2>
           <div className="mobile-actions-grid">
-            {/* Home / Rooms already sit in the desktop room bar — compact tiers only. */}
+            {/* Home / Rooms already sit in the desktop room bar, compact tiers only. */}
             <button type="button" className="compact-only-action" onClick={() => { window.location.href = "/"; }}>
               🏠 Home
             </button>
@@ -12521,7 +12604,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         </section>
 
         {roomAudience === "kid_safe" || inkOnly ? null : (
-          /* Public (kid_safe) rooms are brush-only — with a single forced chip the
+          /* Public (kid_safe) rooms are brush-only, with a single forced chip the
              whole section is pointless, so it's hidden there entirely. Ink-only
              (INKTOBER) rooms are brush-only by room rule, same treatment. */
           <section className="tool-section">
@@ -12625,7 +12708,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ) : null}
           </div>
           {pinnedFlagSheet ? (
-            <p className="tool-hint">🌍 This is a flag room from the Painted Planet — the flag stays on the page for everyone. Color it in together!</p>
+            <p className="tool-hint">🌍 This is a flag room from the Painted Planet, the flag stays on the page for everyone. Color it in together!</p>
           ) : null}
           {!inkOnly && !pinnedFlagSheet ? (
             <button type="button" className="sheet-browse-btn" onClick={() => setShowSheetModal(true)}>
@@ -12633,7 +12716,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             </button>
           ) : null}
           {/* Trace-a-photo: private rooms (friends) or the host of an owned
-              public room. The hostless public drawing rooms never see it — a
+              public room. The hostless public drawing rooms never see it, a
               photo shows on every screen instantly, so it needs an accountable
               uploader. */}
           {roomAudience !== "kid_safe" || isRoomHost ? (
@@ -12670,7 +12753,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                     className="sheet-browse-btn"
                     onClick={() => soundtrackInputRef.current?.click()}
                     disabled={soundtrackBusy}
-                    title="Music or a voice-over for the whole film (MP3, M4A, WAV, OGG — 8MB max)"
+                    title="Music or a voice-over for the whole film (MP3, M4A, WAV, OGG: 8MB max)"
                   >
                     {soundtrackBusy ? "Adding music…" : soundtrack ? `🎵 ${soundtrack.name}` : "🎵 Add a soundtrack"}
                   </button>
@@ -12749,7 +12832,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                       Remove clip
                     </button>
                   </div>
-                  <p className="account-note">Only you can see the clip. It never uploads or exports — your drawings do.</p>
+                  <p className="account-note">Only you can see the clip. It never uploads or exports, your drawings do.</p>
                 </div>
               ) : null}
             </div>
@@ -12769,13 +12852,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <section className="tool-section rail-top rail-top-1" ref={brushSectionRef}>
           <h2>Brushes</h2>
           {inkOnly ? (
-            <p className="tool-hint ink-only-note">✒️ Ink &amp; Pencil room — ink, pencil and the eraser only. Everything else stays on the shelf for Inktober.</p>
+            <p className="tool-hint ink-only-note">✒️ Ink &amp; Pencil room, ink, pencil and the eraser only. Everything else stays on the shelf for Inktober.</p>
           ) : null}
           <div className="brush-grid">
             {visibleBrushList(roomFingerPaint, roomBrushMode).filter((brush) => !inkOnly || INK_ONLY_BRUSHES.has(brush.id)).map((brush) => {
               const locked = brush.tier === "studio" && !studioUnlocked;
               // Private-room-only brushes (smudge) render ghosted in public
-              // rooms: not selectable, tap explains where they DO work — except
+              // rooms: not selectable, tap explains where they DO work, except
               // the finger-paint room, where smudge is a headline toy.
               const privateGated = Boolean(brush.privateOnly) && roomAudience === "kid_safe" && !roomFingerPaint;
               return (
@@ -12785,7 +12868,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   className={`brush-chip ${selectedTool === "brush" && selectedBrush === brush.id ? "is-active" : ""}${privateGated ? " is-private-gated" : ""}`}
                   onClick={() =>
                     privateGated
-                      ? showToast("Smudge works in private rooms — start one from Rooms!")
+                      ? showToast("Smudge works in private rooms, start one from Rooms!")
                       : chooseBrush(brush.id)
                   }
                   aria-disabled={privateGated}
@@ -12806,8 +12889,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <h2>Color</h2>
             <p className="tool-hint">
               {isSmudgeActive
-                ? "👉 Smudge works with the paint that's already on the canvas — no color needed. Pick Smudge or Blend and set how hard it pushes with Strength below."
-                : "🧽 The eraser clears back to paper — no color needed."}
+                ? "👉 Smudge works with the paint that's already on the canvas, no color needed. Pick Smudge or Blend and set how hard it pushes with Strength below."
+                : "🧽 The eraser clears back to paper, no color needed."}
             </p>
           </section>
         ) : (
@@ -12832,7 +12915,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 type="color"
                 value={selectedColor}
                 // Live-preview the color while dragging in the picker, but only
-                // add ONE swatch to recents when the pick is committed (on blur) —
+                // add ONE swatch to recents when the pick is committed (on blur) -
                 // otherwise every intermediate shade spawned a duplicate swatch.
                 onChange={(event) => setSelectedColor(event.target.value)}
                 onBlur={(event) => {
@@ -12919,8 +13002,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
               <p className="tool-hint">
                 {smudgeMode === "drag"
-                  ? "Smudge pulls paint along with your finger — colors travel and fade out."
-                  : "Blend softens the paint where you rub — edges melt without moving."}
+                  ? "Smudge pulls paint along with your finger, colors travel and fade out."
+                  : "Blend softens the paint where you rub, edges melt without moving."}
               </p>
             </div>
           ) : null}
@@ -13087,7 +13170,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               </div>
               <p className="tool-hint">
                 {inputPrefs.touch === "pen"
-                  ? "Only the pen paints. Fingers pan and pinch-zoom — the surest palm rejection with an Apple Pencil or a Wacom."
+                  ? "Only the pen paints. Fingers pan and pinch-zoom, the surest palm rejection with an Apple Pencil or a Wacom."
                   : "Fingers draw too. While a pen is in use a resting hand is ignored automatically; pick Pen only if palms still leave marks."}
               </p>
             </div>
@@ -13232,14 +13315,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         )}
         {/* Undo on its own at the end of the bar, behind a hairline: it is an
             action, not a tool, and the far end is the easiest thumb reach.
-            Takes back YOUR last stroke only — never a friend's. */}
+            Takes back YOUR last stroke only, never a friend's. */}
         <span className="qb-sep" aria-hidden="true" />
         <button
           type="button"
           className="qb-btn qb-undo"
           onClick={undo}
           disabled={historyCount === 0}
-          title="Undo my last stroke — nobody else's"
+          title="Undo my last stroke, nobody else's"
           aria-label="Undo my last stroke"
         >
           <span className="qb-ico" aria-hidden="true">↶</span>
@@ -13299,7 +13382,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         />
       ) : null}
 
-      {/* Artist studios: the owner's Studio panel — live paint requests,
+      {/* Artist studios: the owner's Studio panel, live paint requests,
           the approved-painter ACL (revoke works online + offline), and
           gallery publishing (ArtistRoomSettings wired to the real bearer
           API). Server-side every one of these is owner-only; this is just
@@ -13314,7 +13397,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-title-row">
-              <h2 id="aap-title">🖌 {roomTitle ? `“${roomTitle}”` : "Artist studio"} — access &amp; publishing</h2>
+              <h2 id="aap-title">🖌 {roomTitle ? `“${roomTitle}”` : "Artist studio"}, access &amp; publishing</h2>
               <button type="button" onClick={() => setShowArtistStudio(false)}>
                 Close
               </button>
@@ -13373,7 +13456,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       {signinGate ? (
         // A private room needed a real account. Never a dead end: the three exits
-        // are sign up, log in, or keep drawing in a public room — and under-13s
+        // are sign up, log in, or keep drawing in a public room, and under-13s
         // get the grown-up route rather than a wall, because a kid that young
         // can't create an account themselves.
         // Both sign-in exits carry `return` so the person lands back in THIS room
@@ -13386,7 +13469,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
               <>
                 <h2 id="signin-gate-title">Let&rsquo;s sign you in again</h2>
                 <p className="account-note">
-                  Your sign-in didn&rsquo;t go through for this private room — it may have expired.
+                  Your sign-in didn&rsquo;t go through for this private room, it may have expired.
                   Sign in again and you&rsquo;ll come straight back here.
                 </p>
                 <div className="account-actions">
@@ -13410,7 +13493,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 <h2 id="signin-gate-title">Private rooms need a free account</h2>
                 <p className="account-note">
                   Invite-only rooms are for a crew you know, so we ask for an account before you
-                  go in — that way a room always has someone we can reach if something goes wrong.
+                  go in, that way a room always has someone we can reach if something goes wrong.
                   You never need an account to draw in the public rooms.
                 </p>
                 <p className="account-note">
@@ -13439,7 +13522,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             <h2>{roomFull ? "This room is packed! 🎨" : "This room isn't available"}</h2>
             <p className="account-note">
               {roomFull
-                ? "Too many artists are painting in here right now — grab a spot somewhere else."
+                ? "Too many artists are painting in here right now, grab a spot somewhere else."
                 : "This room isn't available. Find another one or start your own."}
             </p>
             <div className="account-actions">
@@ -13547,13 +13630,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
       {/* The account panel renders LAST so the export gate's sign-in UX is
           always reachable above whichever modal (replay player, paint space…)
-          the export was attempted from — all modals share z-index 200, so DOM
+          the export was attempted from, all modals share z-index 200, so DOM
           order decides stacking. */}
       {showAccount ? (
         <AccountPanel
           onClose={() => setShowAccount(false)}
           onDeleted={() => {
-            // All local stores were wiped — reload so every in-memory locker
+            // All local stores were wiped, reload so every in-memory locker
             // (draft, gallery, paint space, economy, AI) starts from empty.
             window.setTimeout(() => window.location.reload(), 2500);
           }}

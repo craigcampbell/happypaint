@@ -29,7 +29,7 @@ async function apiFetch(path, { method = "GET", session = null, body = null } = 
 
 // Create OR resume the caller's book. Visibility is EXPLICIT: `public` is a
 // real boolean in the body every time (the server defaults omitted/false to
-// PRIVATE). Resume ignores it — an existing book comes back unchanged, so a
+// PRIVATE). Resume ignores it, an existing book comes back unchanged, so a
 // re-click can never silently flip an older book's visibility.
 export function createOrResumeSketchbook(session, { isPublic = false, title = "" } = {}) {
   return apiFetch("/api/sketchbooks", {
@@ -59,7 +59,7 @@ export function fetchSketchbook(bookId, session = null) {
   return apiFetch(`/api/sketchbooks/${encodeURIComponent(bookId)}`, { session });
 }
 
-// The paginated public gallery. offset/limit with an honest total — the
+// The paginated public gallery. offset/limit with an honest total, the
 // caller walks pages ("load more"), there is no silent cap.
 export function fetchSketchbookGallery(offset = 0, limit = 12) {
   return apiFetch(
@@ -67,9 +67,14 @@ export function fetchSketchbookGallery(offset = 0, limit = 12) {
   );
 }
 
-// Banner data for one page room (404 not_a_page for ordinary rooms).
-export function fetchSketchbookByRoom(roomCode, session = null) {
-  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}`, { session });
+// Banner data for one page room (404 not_a_page for ordinary rooms). The
+// optional `deviceKey` is THIS browser's own key ('drawesome:userkey:v1', the
+// same one the WS auth frame sends): for an UNSAVED (guest) book's page it is
+// the only way the server can tell the caller "this is your device's book"
+// (unsaved/isGuestOwner/canDraw). It never widens access to anyone else.
+export function fetchSketchbookByRoom(roomCode, session = null, deviceKey = null) {
+  const dk = deviceKey ? `?dk=${encodeURIComponent(deviceKey)}` : "";
+  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}${dk}`, { session });
 }
 
 export function addSketchbookPage(bookId, day, session) {
@@ -101,4 +106,24 @@ export function revokeSketchbookArtist(bookId, profileId, session) {
 
 export function acceptSketchbookInvite(token, session) {
   return apiFetch("/api/sketchbooks/accept", { method: "POST", session, body: { token } });
+}
+
+// MINT or RESUME this DEVICE's unsaved (guest) book and the page for `day`
+// (today's prompt while the event is active when day is omitted; the server
+// answers need_day/bad_day outside it). NO account needed. The reply carries
+// `token` ONCE, on first creation only: it is the book's one-time save token
+// and must be persisted immediately (utils/guestSketchbook.js) or the book can
+// never be claimed.
+export function startGuestSketchbook({ device, day = null } = {}) {
+  return apiFetch("/api/sketchbooks/guest", {
+    method: "POST",
+    body: { device, ...(day == null ? {} : { day }) },
+  });
+}
+
+// Save (claim) a device-started book under the signed-in account. The account
+// adopts the book; if it already has one for the event the unsaved pages MERGE
+// into it. 400 bad_token / 404 claim_invalid for an unknown or spent token.
+export function claimSketchbook(token, session) {
+  return apiFetch("/api/sketchbooks/claim", { method: "POST", session, body: { token } });
 }

@@ -1,21 +1,23 @@
-// Inktober event page — an anonymous, public, moderated gallery for the
+// Inktober event page, an anonymous, public, moderated gallery for the
 // shared INKTOBER room ("Ink & Pencil"). The event state (phase / day /
-// prompt) comes from GET /api/inktober (UTC-rollover, server-stamped — we
+// prompt) comes from GET /api/inktober (UTC-rollover, server-stamped, we
 // never stamp a day client-side); the gallery is explicit public wall
 // submissions filtered by the server-assigned event tag
 // (GET /api/wall?event=inktober-2026[&day=N]). The static prompt list in
 // src/data/inktober2026.json is only a display fallback for the day selector
-// when the API is unreachable — never a source of phase or "today's day".
+// when the API is unreachable, never a source of phase or "today's day".
 //
 // Independent community participation: prompts are attributed to the official
 // rules source; no affiliation/endorsement is claimed and no official logo is
-// used. Private art is never auto-published — posting to the wall stays the
+// used. Private art is never auto-published, posting to the wall stays the
 // explicit studio action it always was.
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import fallbackPrompts from "../data/inktober2026.json";
+import { startGuestSketchbook } from "../utils/sketchbookApi";
+import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../seasonal.css";
 import "../sketchbook.css";
 
@@ -61,6 +63,39 @@ export default function InktoberPage({ onNavigate }) {
     event.preventDefault();
     onNavigate(href);
   };
+
+  // The guest flow every prompt CTA here uses: mint/resume THIS device's
+  // unsaved sketchbook for a prompt day and go STRAIGHT into the page studio.
+  // No account, no /sketchbook detour. day == null = today's prompt
+  // (server-picked). Failures are honest: a notice plus the shared room door.
+  const guestBusyRef = useRef(false);
+  const drawPrompt = useCallback(async (day = null) => {
+    if (guestBusyRef.current) return;
+    const device = getDeviceKey();
+    if (!device) {
+      say("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
+      onNavigate(`/join/${ROOM_CODE}`);
+      return;
+    }
+    guestBusyRef.current = true;
+    try {
+      const r = await startGuestSketchbook({ device, day });
+      if (!r.ok || !r.json?.room) {
+        say(r.error === "need_day"
+          ? "Inktober hasn't started yet. You can warm up in the shared Ink & Pencil room."
+          : r.error === "bad_day"
+            ? "That prompt day isn't open yet. Try today's prompt instead."
+            : "Couldn't start your sketchbook just now. Try again, or draw in the shared Ink & Pencil room.");
+        return;
+      }
+      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      onNavigate(`/join/${r.json.room}`);
+    } catch {
+      say("Couldn't start your sketchbook just now. Try again, or draw in the shared Ink & Pencil room.");
+    } finally {
+      guestBusyRef.current = false;
+    }
+  }, [onNavigate, say]);
 
   // ---- event state (phase/day/prompt are server truth) ----------------------
   const loadEvent = useCallback(async () => {
@@ -108,7 +143,7 @@ export default function InktoberPage({ onNavigate }) {
   }, [day, loadGallery]);
 
   // ---- participating artist studios (real event-filtered gallery) ------------
-  // Same data as /gallery?event=inktober-2026; fail-soft — the browse link
+  // Same data as /gallery?event=inktober-2026; fail-soft, the browse link
   // below works even if this fetch doesn't.
   useEffect(() => {
     let active = true;
@@ -168,9 +203,9 @@ export default function InktoberPage({ onNavigate }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "reported from the Inktober gallery" }),
       });
-      say(res.ok ? "Thanks — a moderator will take a look. 🛡️" : "Couldn't send the report — try again!");
+      say(res.ok ? "Thanks, a moderator will take a look. 🛡️" : "Couldn't send the report, try again!");
     } catch {
-      say("Couldn't send the report — try again!");
+      say("Couldn't send the report, try again!");
     }
   }, [say]);
 
@@ -180,10 +215,10 @@ export default function InktoberPage({ onNavigate }) {
   const selectedPrompt = day !== "all" ? prompts.find((p) => String(p.day) === day) : null;
 
   const emptyMessage = () => {
-    if (phase === "upcoming") return "No Inktober art yet — the event hasn't started. Get ready! 🖋️";
-    if (day !== "all") return `No art for Day ${day} yet — be the first to draw it!`;
+    if (phase === "upcoming") return "No Inktober art yet, the event hasn't started. Get ready! 🖋️";
+    if (day !== "all") return `No art for Day ${day} yet, be the first to draw it!`;
     if (phase === "ended") return "No gallery posts were kept from this year's event.";
-    return "No Inktober art yet — be the first to post from the Ink & Pencil room!";
+    return "No Inktober art yet, be the first to post from the Ink & Pencil room!";
   };
 
   return (
@@ -216,7 +251,7 @@ export default function InktoberPage({ onNavigate }) {
           {inkStatus === "ready" && phase === "upcoming" ? (
             <div className="ink-phase-card" data-phase="upcoming">
               <p className="ink-phase-prompt">
-                <strong>Inktober is coming — get ready</strong>
+                <strong>Inktober is coming, get ready</strong>
                 <small>
                   Starts {utcDateLabel(ink.nextChangeAt) || "October 1"} · warm-up prompt: “{ink.prompt}”
                 </small>
@@ -233,9 +268,9 @@ export default function InktoberPage({ onNavigate }) {
                 <strong>Day {ink.day} of 31: “{ink.prompt}”</strong>
                 <small>New prompt {ink.nextChangeAt ? `on ${utcDateLabel(ink.nextChangeAt)}` : "tomorrow"} (UTC)</small>
               </p>
-              <a className="ink-join-btn" href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>
+              <button type="button" className="ink-join-btn" onClick={() => drawPrompt(null)}>
                 Draw today&rsquo;s page in your sketchbook →
-              </a>
+              </button>
               <a
                 className="ink-card-link"
                 href={`/join/${ROOM_CODE}`}
@@ -249,7 +284,7 @@ export default function InktoberPage({ onNavigate }) {
           {inkStatus === "ready" && phase === "ended" ? (
             <div className="ink-phase-card" data-phase="ended">
               <p className="ink-phase-prompt">
-                <strong>Inktober {ink.year} has wrapped — thanks for drawing with us!</strong>
+                <strong>Inktober {ink.year} has wrapped, thanks for drawing with us!</strong>
                 <small>The gallery below keeps the community&rsquo;s pinned pieces.</small>
               </p>
             </div>
@@ -282,12 +317,12 @@ export default function InktoberPage({ onNavigate }) {
         <section className="ink-studios" aria-labelledby="ink-books-title">
           <h2 id="ink-books-title">Inktober sketchbooks</h2>
           <p>
-            Public sketchbooks — one page per daily prompt, with the owner and up to five invited artists.
+            Public sketchbooks, one page per daily prompt, with the owner and up to five invited artists.
             Anyone can flip through these public books; private sketchbooks never appear here.
           </p>
-          <a className="ink-join-btn" href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>
+          <button type="button" className="ink-join-btn" onClick={() => drawPrompt(null)}>
             Start your own sketchbook →
-          </a>
+          </button>
           {booksStatus === "loading" ? (
             <p className="ink-status" role="status">Finding sketchbooks…</p>
           ) : null}
@@ -298,7 +333,7 @@ export default function InktoberPage({ onNavigate }) {
             </div>
           ) : null}
           {booksStatus === "ready" && books.length === 0 ? (
-            <p className="ink-status">No sketchbooks have artwork yet — yours could be the first.</p>
+            <p className="ink-status">No sketchbooks have artwork yet, yours could be the first.</p>
           ) : null}
           {books.length > 0 ? (
             <>
@@ -312,6 +347,7 @@ export default function InktoberPage({ onNavigate }) {
                     aria-label={`Flip through ${b.title || "an Inktober sketchbook"}`}
                   >
                     <span className="skb-card-title">{b.title || "Inktober sketchbook"}</span>
+                    {b.unsaved === true ? <span className="skb-badge skb-badge-unsaved skb-card-unsaved">✏️ Not saved yet</span> : null}
                     <span className="skb-card-days">
                       {b.days.slice(0, 8).map((d) => <span key={d}>Day {d}</span>)}
                     </span>
@@ -338,7 +374,7 @@ export default function InktoberPage({ onNavigate }) {
         <section className="ink-studios" aria-labelledby="ink-studios-title">
           <h2 id="ink-studios-title">Artist studios taking part</h2>
           <p>
-            Individual artists running Inktober studios — anyone can watch,
+            Individual artists running Inktober studios, anyone can watch,
             only the artist and their approved painters draw.
           </p>
           {studiosStatus === "loading" ? (
@@ -346,7 +382,7 @@ export default function InktoberPage({ onNavigate }) {
           ) : null}
           {studiosStatus === "ready" && studios.length === 0 ? (
             <p className="ink-status">
-              No artist studios have joined Inktober yet — yours could be the first.
+              No artist studios have joined Inktober yet, yours could be the first.
             </p>
           ) : null}
           {studiosStatus === "ready" && studios.length > 0 ? (
@@ -386,12 +422,17 @@ export default function InktoberPage({ onNavigate }) {
               <option value="all">All days</option>
               {prompts.map((p) => (
                 <option key={p.day} value={String(p.day)}>
-                  Day {p.day} — {p.prompt}
+                  Day {p.day}, {p.prompt}
                 </option>
               ))}
             </select>
             {selectedPrompt ? (
-              <span className="ink-selected-prompt">“{selectedPrompt.prompt}” · {utcDateLabel(selectedPrompt.date)}</span>
+              <>
+                <span className="ink-selected-prompt">“{selectedPrompt.prompt}” · {utcDateLabel(selectedPrompt.date)}</span>
+                <button type="button" className="ink-join-btn" onClick={() => drawPrompt(selectedPrompt.day)}>
+                  Draw this prompt →
+                </button>
+              </>
             ) : null}
           </div>
 
@@ -459,7 +500,7 @@ export default function InktoberPage({ onNavigate }) {
         <section className="ink-about" aria-labelledby="ink-about-title">
           <h2 id="ink-about-title">About this event</h2>
           <p>
-            The daily prompts come from the official Inktober list — see the{" "}
+            The daily prompts come from the official Inktober list, see the{" "}
             <a href={rulesSource} target="_blank" rel="noreferrer">official rules and prompt list</a>.
             Drawesome&rsquo;s Ink &amp; Pencil room is an <strong>independent community event</strong>: it is{" "}
             <strong>not affiliated with or endorsed by Inktober</strong>, and we don&rsquo;t use the official logo.

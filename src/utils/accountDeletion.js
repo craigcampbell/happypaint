@@ -52,6 +52,7 @@ const LOCAL_STORAGE_KEYS = [
   "happypaint:pen-pressure:v1", // learned stylus pressure ceiling (utils/penInput)
   "happypaint:input-prefs:v1", // handedness + pen-only touch mode (utils/inputPrefs)
   "drawesome:age-attestation:v1", // signup age/parent attestation
+  "drawesome:guestbook:v1", // unsaved (guest) sketchbook save token (utils/guestSketchbook)
 ];
 
 // Drafts are keyed per room (draft:v4:<ROOM>) plus a legacy un-suffixed key, so
@@ -126,7 +127,7 @@ async function fileServerDeletion(request) {
     // a true hard delete, not a scheduled request.
     const id = pb.authStore.record?.id;
     // Scrub this user's chat from the durable server audit logs FIRST, while the
-    // token is still valid — otherwise a "deleted" child's name + messages would
+    // token is still valid, otherwise a "deleted" child's name + messages would
     // persist in plaintext on the server (COPPA/GDPR erasure).
     const scrubResponse = await fetch("/api/account/scrub-chat", {
       method: "POST",
@@ -151,7 +152,7 @@ async function fileServerDeletion(request) {
 }
 
 // Clear every local store. Best-effort per key so one failure can't abort the
-// rest — App Review requires deletion to be reliable.
+// rest: App Review requires deletion to be reliable.
 export async function wipeLocalData() {
   const cleared = [];
 
@@ -164,7 +165,7 @@ export async function wipeLocalData() {
     }
   }
 
-  // Per-room localStorage draft fallbacks (happypaint:draft:v3:<ROOM>) — sweep by
+  // Per-room localStorage draft fallbacks (happypaint:draft:v3:<ROOM>), sweep by
   // prefix since the room set is dynamic.
   try {
     const draftPrefix = "happypaint:draft:v3";
