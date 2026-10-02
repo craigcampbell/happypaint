@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Moderation evidence — real-server verification (drives the actual server.js
+// Moderation evidence, real-server verification (drives the actual server.js
 // over WS + HTTP with a scratch DATA_DIR, synthetic benign PNGs only).
 //
 // Covers: capture→persist→admin retrieval, immutability across repaint,
@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
@@ -103,7 +103,7 @@ async function waitReady(base, child, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child && child.exitCode != null) {
-      throw new Error(`server at ${base} died at boot (code ${child.exitCode}) — a stale listener is squatting the port`);
+      throw new Error(`server at ${base} died at boot (code ${child.exitCode}), a stale listener is squatting the port`);
     }
     try {
       const r = await fetch(`${base}/healthz`);
@@ -214,7 +214,7 @@ async function main() {
   check("T1 admin retrieval 200 + sniffed PNG content-type", fetchEv1.status === 200 && (fetchEv1.headers.get("content-type") || "").includes("image/png"));
   check("T1 served bytes bit-identical to captured frame", sha256(ev1Body) === sha256(ev1.bytes));
 
-  // Repaint heavily — the live room changes; the frozen evidence must not.
+  // Repaint heavily, the live room changes; the frozen evidence must not.
   for (let i = 0; i < 20; i += 1) {
     t1.client.sendOp({ kind: "draw", strokeId: `repaint${i}`, points: [{ x: i, y: i }, { x: i + 1, y: i + 1 }] });
   }
@@ -260,7 +260,7 @@ async function main() {
       authed.headers.get("x-content-type-options") === "nosniff"
   );
   const traversal = [
-    // %2e%2e is normalized by the router to /api/admin/ BEFORE our handler —
+    // %2e%2e is normalized by the router to /api/admin/ BEFORE our handler -
     // rejected there (503 from the catch-all), never near the filesystem.
     ["%2e%2e", [400, 404, 503]],
     ["rep_x%2f..", [400]],
@@ -370,7 +370,7 @@ async function main() {
     check("T7 evicted global file 404s", g.status === 404);
   }
 
-  // --- T8: TTL — a resolved report's evidence expires on the sweep ------------
+  // --- T8: TTL, a resolved report's evidence expires on the sweep ------------
   {
     const room = "TTL1";
     const { report } = await electedFlag(WS1, BASE1, room, goodEvidence(30).payload);
@@ -397,7 +397,7 @@ async function main() {
   await stopServer(server);
 
   // ============ SERVER 2 (port 9002): lifecycle (delete/cap/scrub) ===========
-  // PB is CONFIGURED here (mock) — and with accounts configured, a guest is
+  // PB is CONFIGURED here (mock), and with accounts configured, a guest is
   // refused entry to a 'friends'-audience room (the default for a code-join),
   // so every WS client below signs in with a mock token.
   const pb = await startMockPocketbase();

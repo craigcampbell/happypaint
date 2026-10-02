@@ -40,7 +40,7 @@ const results = [];
 let assertions = 0;
 function check(name, value, detail = '') {
   assertions += 1;
-  assert.ok(value, `${name}${detail ? ` — ${detail}` : ''}`);
+  assert.ok(value, `${name}${detail ? `, ${detail}` : ''}`);
   console.log(`  PASS ${name}`);
 }
 async function part(name, fn) {
@@ -51,7 +51,7 @@ async function part(name, fn) {
     console.log(`PART ${name} OK`);
   } catch (err) {
     results.push({ part: name, ok: false, error: String(err && err.message || err) });
-    console.log(`PART ${name} FAIL — ${err && err.message}`);
+    console.log(`PART ${name} FAIL, ${err && err.message}`);
   }
 }
 
@@ -137,7 +137,7 @@ async function sendBurst(client, n, prefix, { points = 1, burst = 10, pauseMs = 
     if (i % burst === burst - 1) await sleep(pauseMs);
   }
 }
-// Keep painting until told to stop — returns the number of ops sent.
+// Keep painting until told to stop, returns the number of ops sent.
 function paintUntil(stopRef, client, prefix, { everyMs = 3, start = 0, frameId = null } = {}) {
   let i = start;
   const tick = () => {
@@ -160,7 +160,7 @@ async function setupAnimationRoom(host, extraScenes) {
   const seen = new Set(['s0']);
   for (let i = 0; i < extraScenes; i += 1) {
     host.send({ type: 'scene_add' });
-    // Match the echo for the NEW scene only — a buffered earlier echo would
+    // Match the echo for the NEW scene only, a buffered earlier echo would
     // otherwise satisfy this waiter instantly and collapse two scenes into one.
     const added = await host.waitFor((m) => m.type === 'scene_add' && m.scene && !seen.has(m.scene.id), { timeoutMs: 4000, label: 'scene_add echo' });
     seen.add(added.scene.id);
@@ -238,13 +238,13 @@ async function partB(srv) {
   await sendBurst(host, 250, 'sb', { points: 40, pauseMs: 15, frameId: sceneB.frameId });
   await sleep(500);
 
-  // Legacy (text) scene fetch — the reference payload.
+  // Legacy (text) scene fetch, the reference payload.
   const legacy = await srv.connect('ZZANIM');
   legacy.send({ type: 'scene_fetch', sceneId: sceneB.sceneId });
   const legacyB = await legacy.waitFor((m) => m.type === 'history' && m.sceneId === sceneB.sceneId, { timeoutMs: 8000, label: 'legacy scene B' });
   check('B1 legacy scene_fetch stays plain text', legacy.binaryFrames === 0);
 
-  // gz scene fetch — the cached binary frame path.
+  // gz scene fetch, the cached binary frame path.
   const gz = await srv.connect('ZZANIM', { gz: true });
   gz.send({ type: 'scene_fetch', sceneId: sceneB.sceneId });
   const gzB = await gz.waitFor((m) => m.type === 'history' && m.sceneId === sceneB.sceneId, { timeoutMs: 8000, label: 'gz scene B' });
@@ -495,8 +495,8 @@ async function partD(scratch) {
     check('D4 single-frame rooms still trim to the rolling cap (guard unchanged)',
       trimHistory.ops.length === 50 && trimHistory.ops[0].opId === 31, `${trimHistory.ops.length} ops from ${trimHistory.ops[0] && trimHistory.ops[0].opId}`);
     // Ingest limits REMAIN: the over-budget film accepts no new ops. (The
-    // budget rejection sends frame_full only for non-end batches — end markers
-    // relay so peers close their stroke buffers — so probe with an open batch.)
+    // budget rejection sends frame_full only for non-end batches, end markers
+    // relay so peers close their stroke buffers, so probe with an open batch.)
     const extra = drawOp('film-extra', 80, 2); extra.frameId = 'f2'; extra.end = false;
     film.sendOp(extra);
     const full = await film.waitFor((m) => m.type === 'frame_full', { timeoutMs: 4000, label: 'frame_full rejection' });

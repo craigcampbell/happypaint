@@ -6,7 +6,7 @@
 // only routes pen samples through the adaptive pen band when `pressure > 0`;
 // a pen sample with pressure 0 (the lightest real contact) falls into the
 // mouse/finger velocity synthesizer, which returns 0.65 for the first sample
-// of a stroke — so with the default "size" pressure mode the initial dab is
+// of a stroke, so with the default "size" pressure mode the initial dab is
 // ~65% of brush width instead of the 2% floor mapPenPressure(0) yields.
 //
 // This harness boots the REAL stack on isolated ports (vite dev :8993 +
@@ -86,7 +86,7 @@ function observeRoom() {
 const results = [];
 function check(name, ok, detail = "") {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 }
 
 async function main() {
@@ -170,7 +170,7 @@ async function main() {
     const canvas = document.querySelector(".display-canvas");
     const ctx2d = canvas.getContext("2d");
     // The canvas is pre-filled with an opaque paper color, so alpha alone
-    // can't find ink — count pixels that DIFFER from the paper background
+    // can't find ink, count pixels that DIFFER from the paper background
     // (sampled from an untouched corner).
     const bg = ctx2d.getImageData(4, 4, 1, 1).data;
     const rect = canvas.getBoundingClientRect();
@@ -190,7 +190,7 @@ async function main() {
     return n;
   }, { fx, fy });
 
-  // 1. Feather pen TAP (pressure 0 the whole contact) — the reported blob.
+  // 1. Feather pen TAP (pressure 0 the whole contact), the reported blob.
   let mark = observer.ops.length;
   await stroke({ pointerType: "pen", pressure: 0, from: [0.3, 0.3], to: [0.3, 0.3], tap: true });
   const tapOp = await nextDrawOp(mark, "pen tap pressure 0");
@@ -199,7 +199,7 @@ async function main() {
   await sleep(300);
   const tapPixels = await paintedPixels(0.3, 0.3);
 
-  // 2. Light pen DRAG held at pressure 0 — every sample stays at the floor.
+  // 2. Light pen DRAG held at pressure 0, every sample stays at the floor.
   mark = observer.ops.length;
   await stroke({ pointerType: "pen", pressure: 0, from: [0.3, 0.45], to: [0.5, 0.45] });
   const dragOp = await nextDrawOp(mark, "pen drag pressure 0");
@@ -230,7 +230,7 @@ async function main() {
   check("mouse drag → velocity baseline 0.65 preserved", mouseP === 0.65, `first point pressure=${mouseP}`);
 
   // 6. Finger keeps the velocity path too. (Wait out the pen-priority window
-  // — PEN_PRIORITY_MS = 1500 — or the app correctly ignores the finger as a
+  //: PEN_PRIORITY_MS = 1500, or the app correctly ignores the finger as a
   // resting hand right after pen activity.)
   await sleep(1700);
   mark = observer.ops.length;

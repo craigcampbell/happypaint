@@ -5,14 +5,14 @@
 // Boots the REAL server.js (anonymous: PB_URL empty) with
 // ENABLE_TRUSTED_CHECKPOINTS=1 + the real Chrome checkpoint worker on
 // :19141, serves the REAL studio through Vite dev (:19142, VITE_PB_URL
-// empty for the anonymous passes — the DEV-only __drawesome* introspection
+// empty for the anonymous passes, the DEV-only __drawesome* introspection
 // compiles out of production builds, so dev-serve is required to observe
 // the app), and drives real Chrome (playwright, explicit executable).
 // No fixture WS, no mock PocketBase, no source edits.
 //
 //   Film A: 150 DISTINCT frames / 3 scenes x 50 / 100ms hold = 15.0s
 //   Film B: 300 DISTINCT frames / 5 scenes x 60 / 100ms hold = 30.0s
-//   Every frame: 3 layers — L0 visible (scene band + 12-bit index barcode),
+//   Every frame: 3 layers: L0 visible (scene band + 12-bit index barcode),
 //   L1 HIDDEN (paint that must survive checkpoints), L2 visible opacity 0.5.
 //
 //   Rooms are STORAGE-SEEDED (sanctioned: data files may be seeded; all
@@ -72,8 +72,8 @@ const FFPROBE = [process.env.FFPROBE_PATH, 'ffprobe', '/usr/bin/ffprobe']
   .filter(Boolean).find((p) => { try { execFileSync(p, ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } });
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').split('=')[1] || 'all';
 
-if (!CHROME) { console.error('no chrome executable found — set CHECKPOINT_CHROME_PATH'); process.exit(2); }
-if (!FFPROBE) { console.error('no ffprobe found — set FFPROBE_PATH'); process.exit(2); }
+if (!CHROME) { console.error('no chrome executable found, set CHECKPOINT_CHROME_PATH'); process.exit(2); }
+if (!FFPROBE) { console.error('no ffprobe found, set FFPROBE_PATH'); process.exit(2); }
 fs.mkdirSync(ART, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -85,12 +85,12 @@ const results = [];
 const RESULTS_FILE = path.join(SCRATCH, `results-${ONLY}.json`);
 const check = (name, cond, detail) => {
   results.push({ name, ok: !!cond, detail: cond ? undefined : String(detail).slice(0, 400) });
-  out(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : ` — ${detail}`}`);
+  out(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : `, ${detail}`}`);
   fs.writeFileSync(RESULTS_FILE, JSON.stringify({ updated: new Date().toISOString(), results }, null, 1));
 };
 const note = (name, data) => {
   results.push({ name, ok: true, note: data });
-  out(`NOTE ${name} — ${typeof data === 'string' ? data : JSON.stringify(data)}`);
+  out(`NOTE ${name}, ${typeof data === 'string' ? data : JSON.stringify(data)}`);
   fs.writeFileSync(RESULTS_FILE, JSON.stringify({ updated: new Date().toISOString(), results }, null, 1));
 };
 
@@ -131,7 +131,7 @@ const decodeBitsVideo = (px) => { // luminance-only (compressed video: paper is 
 const FILMS = {
   // Whole-film pace is rasterization-bound on the real stack (~0.7s/cel for
   // 3-layer 4000x2500 cels in headless Chrome): the walker pauses on the last
-  // good frame while the next cel rasterizes — correct, not fast. Timeouts
+  // good frame while the next cel rasterizes, correct, not fast. Timeouts
   // budget ~2x the measured pace so a genuine hang still fails.
   film150: { key: 'film150', code: 'FF150A01', scenes: 3, per: 50, holdMs: 100, playbackTimeout: 300000, exportTimeout: 600000 },
   film300: { key: 'film300', code: 'FF300B01', scenes: 5, per: 60, holdMs: 100, playbackTimeout: 600000, exportTimeout: 900000 },
@@ -156,7 +156,7 @@ function seedFilmRoom(dataDir, film) {
     opId += 1;
     ops.push({
       kind: 'draw', strokeId: `ff-${opId}`,
-      // ink: crisp round dab, no commit passes — the cheap solid brush, so a
+      // ink: crisp round dab, no commit passes, the cheap solid brush, so a
       // 300-frame soak is hydration-bound by canvas work, not dab walks.
       settings: { brush: 'ink', color, size, opacity: 1, variation: 0, seed },
       points, end: true, frameId, layerId, opId, userId: 'useed',
@@ -389,7 +389,7 @@ const waitFor = async (page, fn, arg, timeoutMs = 60000, pollMs = 350) => {
     try {
       value = await page.evaluate(fn, arg);
     } catch (err) {
-      // A crashed/navigated renderer must not take the whole suite down —
+      // A crashed/navigated renderer must not take the whole suite down -
       // keep polling until the deadline and report a plain FAIL.
       lastError = String(err).slice(0, 160);
     }
@@ -446,7 +446,7 @@ async function waitJoinedDecoded(page, expectIdx, timeoutMs = 90000) {
 
 async function gotoSceneLast(page, film) {
   // The app FREEZES navigation while a scene's history replay is active
-  // (handleSelectScene/handleSelectFrame return silently) — and refs settle
+  // (handleSelectScene/handleSelectFrame return silently), and refs settle
   // before that gate opens. Click-and-verify with retries is the only honest
   // way through: a swallowed click is re-issued until the scene/cel takes.
   for (let s = 0; s < film.scenes - 1; s += 1) {
@@ -613,7 +613,7 @@ async function scenarioJoinPlayCancel(film) {
     for (let i = 0; i < N; i += 1) if (!painted.has(i)) missing.push(i);
     // A missing cel with painted cels within 3 on BOTH sides is recorder
     // starvation (the 30ms sampler loses races to scene-history replays on
-    // the main thread — the walker pauses on the last good frame and cannot
+    // the main thread, the walker pauses on the last good frame and cannot
     // skip). Whole runs of missing cels are true traversal gaps.
     const systematic = missing.filter((i) => {
       let left = false;
@@ -878,7 +878,7 @@ async function scenarioGateProbe(film) {
     const exported = await page.evaluate(() => !!window.__drawesomeLastExport);
     // Source policy (exportGate.js): cloud unset → refuse with the local-only
     // explanation, never silently bypass. The delegated brief expected
-    // "export gate on anonymous should work cloud unset" — record the ACTUAL
+    // "export gate on anonymous should work cloud unset", record the ACTUAL
     // verdict either way; nothing was weakened to force this.
     note(`${tag}: anonymous + cloud-unset export verdict`, `status="${status}" exported=${exported}`);
     check(`${tag}: anonymous cloud-unset export produces the policy explanation (no silent file)`,
@@ -913,7 +913,7 @@ async function scenarioExport(film) {
       if (Date.now() - lastStatusLog > 15000) {
         lastStatusLog = Date.now();
         const status = await page.evaluate(() => window.__drawesomeCheckpoint?.status?.() || '').catch(() => '(page gone)');
-        out(`  [export ${film.key}] still waiting — status="${status}"`);
+        out(`  [export ${film.key}] still waiting, status="${status}"`);
       }
       await sleep(1000);
     }
@@ -1082,7 +1082,7 @@ async function scenarioFlipbook() {
 async function main() {
   // Kill children on termination so an aborted run never orphans a server or
   // Vite bound to the reserved ports (a stale Vite with the wrong env once
-  // silently answered for its replacement — the "export stall").
+  // silently answered for its replacement, the "export stall").
   const onTerm = (sig) => {
     try { boot?.child.kill('SIGKILL'); } catch { /* gone */ }
     try { vite?.child.kill('SIGKILL'); } catch { /* gone */ }
@@ -1092,7 +1092,7 @@ async function main() {
   process.on('SIGTERM', () => onTerm('SIGTERM'));
   process.on('SIGINT', () => onTerm('SIGINT'));
   // A scenario that throws (crashed renderer, broken navigation) must record a
-  // FAIL and let the rest of the acceptance run — never take the suite down.
+  // FAIL and let the rest of the acceptance run, never take the suite down.
   const runScenario = async (name, fn) => {
     try {
       await fn();
@@ -1121,7 +1121,7 @@ async function main() {
 
   let vite = startVite(''); // anonymous client build: VITE_PB_URL empty
   await waitVite();
-  out(`vite dev on :${VITE_PORT} (VITE_PB_URL empty — anonymous)`);
+  out(`vite dev on :${VITE_PORT} (VITE_PB_URL empty, anonymous)`);
   browser = await chromium.launch({ executablePath: CHROME, headless: true });
 
   try {
@@ -1153,7 +1153,7 @@ async function main() {
     await stopVite(vite);
     vite = startVite(`http://127.0.0.1:${API_PORT}`);
     await waitVite();
-    out(`vite restarted on :${VITE_PORT} (VITE_PB_URL set — stored-session export)`);
+    out(`vite restarted on :${VITE_PORT} (VITE_PB_URL set, stored-session export)`);
     if (ONLY !== 'rejoin' && (want('export150') || want('film150'))) await runScenario('film150/export', () => scenarioExport(FILMS.film150));
     if (ONLY !== 'rejoin' && (want('export300') || want('film300'))) await runScenario('film300/export', () => scenarioExport(FILMS.film300));
   } finally {

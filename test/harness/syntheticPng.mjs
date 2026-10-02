@@ -1,6 +1,6 @@
 /* eslint-env node */
 // Minimal valid-PNG encoder for moderation-evidence tests. Produces small
-// synthetic BENIGN images (solid fills / stripes — never anything sexual) as
+// synthetic BENIGN images (solid fills / stripes, never anything sexual) as
 // data URLs, with correct CRCs, so the server's magic-byte + dimensions
 // validation sees exactly what a browser canvas would have produced.
 

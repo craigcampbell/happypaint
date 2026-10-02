@@ -13,12 +13,12 @@
 //   node scripts/brush-lab.mjs --golden-record     # guard + fixture --check + golden replay, REWRITE golden.json
 //   node scripts/brush-lab.mjs --guard             # static dab-path guard only (no browser)
 //   node scripts/brush-lab.mjs --only strokes,timing   # a subset of the full run's scenarios
-//   node scripts/brush-lab.mjs --gpu --only timing     # real-GPU canvas (see GPU_ARGS) — timing only
+//   node scripts/brush-lab.mjs --gpu --only timing     # real-GPU canvas (see GPU_ARGS), timing only
 //   BASE=http://127.0.0.1:5175 node scripts/brush-lab.mjs   # reuse a running dev server
 //
 // Renderer caveat: headless Chromium rasterises canvas 2D in SOFTWARE
 // (SwiftShader), where a rotated bilinear drawImage costs 5-10x a flat arc
-// fill per pixel — so the default timing table penalises the sprite dabs
+// fill per pixel, so the default timing table penalises the sprite dabs
 // relative to what every real device (GPU-accelerated 2D canvas) pays.
 // `--gpu` launches with the machine's GPU for a representative timing run;
 // keep golden / determinism on the default (software) renderer, whose AA is
@@ -27,7 +27,7 @@
 // Golden (Stage 0 baseline): scripts/lab/golden-ops.json is a frozen op
 // fixture (see scripts/lab/make-golden-ops.mjs); every group replays through
 // opReplay.replayFrameOnto onto a transparent 4000x2500 canvas and the SHA-256
-// of the pixels must equal scripts/lab/golden.json — proof that an engine
+// of the pixels must equal scripts/lab/golden.json, proof that an engine
 // change did not repaint persisted history. Groups flagged
 // `deterministic: false` (legacy seedless ops roll Math.random) are hashed
 // for information and never gate. The default run verifies too when a
@@ -45,10 +45,10 @@
 // renderer) and a <= 1-unit pixel wobble after a readback is tolerated in
 // mixPrefetch when the sample sequences match.
 //
-// Stage 4 gates (full run): the smudge scenario's checks — v3 drag / blend
+// Stage 4 gates (full run): the smudge scenario's checks, v3 drag / blend
 // feathered vs the legacy square (no hard edge across the motion, no
 // corner signature), the drag carry (color travels, then thins out; blend
-// carries nothing), rerun + batching determinism per mode — and the smudge
+// carries nothing), rerun + batching determinism per mode, and the smudge
 // per-dab budget on the real 4000x2500 layer (SMUDGE_BUDGET ms per dab for
 // drag and blend; the legacy column is the self-referential drawImage they
 // replace, ~8 ms per dab there, reported for contrast).
@@ -69,7 +69,7 @@ const GOLDEN_FILE = path.join(ROOT, "scripts/lab/golden.json");
 const FIXTURE_FILE = path.join(ROOT, "scripts/lab/golden-ops.json");
 // BRUSH_LAB_GUARD_FILE: point the guard at a scratch copy (self-test only).
 const DAB_PATH_FILE = process.env.BRUSH_LAB_GUARD_FILE || path.join(ROOT, "src/utils/brushes.js");
-const DEFAULT_PORT = 5199; // vite.config.js pins 5175 strictPort — stay off it
+const DEFAULT_PORT = 5199; // vite.config.js pins 5175 strictPort, stay off it
 // Default output: this session's scratchpad (override with --out).
 const DEFAULT_OUT = "C:/Users/CRAIGC~1/AppData/Local/Temp/claude/C--Users-Craig-Campbell-Projects-happypaint/66293c84-59a3-4ed7-ad44-97f3771b84dc/scratchpad/lab";
 
@@ -100,13 +100,13 @@ const GPU_ARGS = ["--use-angle=d3d11", "--enable-gpu-rasterization", "--ignore-g
 // renderer gets an allowance: a color that drifts across many 5-bit buckets
 // (a dry oil stroke settling over a contrasting color) re-tints a 128² tint
 // ring slot per transition, and SwiftShader rasterises that ~5x slower than
-// a GPU — a bounded per-transition cost, not a per-dab one, but it lands in
+// a GPU, a bounded per-transition cost, not a per-dab one, but it lands in
 // the same clock.
 const KM_BUDGET = 0.3;
 const KM_BUDGET_SOFTWARE = 0.5;
 const kmBudget = useGpu ? KM_BUDGET : KM_BUDGET_SOFTWARE;
 // Stage 4: max ms per dab for the v3 smudge modes (drag / blend, size 40,
-// pressure 0.7) on the real 4000x2500 layer — fenced, median of 3 runs.
+// pressure 0.7) on the real 4000x2500 layer, fenced, median of 3 runs.
 // The GPU number is the representative gate (measured ~0.06 / ~0.10 ms per
 // dab for drag / blend on an RTX 5090, against the legacy renderer's ~8 ms
 // self-referential drawImage on the software rasteriser). SwiftShader's
@@ -144,7 +144,7 @@ function fail(message) {
 // allocation (canvas, image, typed array). Comments are stripped first so a
 // "never a getImageData here" note can't trip it; a trailing `// guard-ok`
 // exempts one line (e.g. a `shadowBlur = 0` reset). save/restore are only
-// warned about — the brief says "avoid when setTransform will do".
+// warned about, the brief says "avoid when setTransform will do".
 const GUARD_FORBIDDEN = [
   { id: "getImageData", re: /\bgetImageData\s*\(/ },
   { id: "putImageData", re: /\bputImageData\s*\(/ },
@@ -213,7 +213,7 @@ function runGuard() {
     fail(`guard: DAB-PATH-BEGIN at line ${open + 1} never closed`);
   }
   if (!regions.length) {
-    console.log("brush-lab: guard — no // DAB-PATH-BEGIN / // DAB-PATH-END markers in src/utils/brushes.js yet (Stage 1 adds them); passing");
+    console.log("brush-lab: guard, no // DAB-PATH-BEGIN / // DAB-PATH-END markers in src/utils/brushes.js yet (Stage 1 adds them); passing");
     return { ok: true, regions: 0, hits: [], warnings: [] };
   }
   const hits = [];
@@ -237,7 +237,7 @@ function runGuard() {
     }
   }
   const scanned = regions.reduce((n, r) => n + (r.to - r.from - 1), 0);
-  console.log(`brush-lab: guard — ${regions.length} DAB-PATH region(s), ${scanned} lines: ${hits.length} forbidden, ${warnings.length} warning(s)`);
+  console.log(`brush-lab: guard, ${regions.length} DAB-PATH region(s), ${scanned} lines: ${hits.length} forbidden, ${warnings.length} warning(s)`);
   for (const hit of hits) {
     console.error(`  FORBIDDEN ${hit.id.padEnd(16)} brushes.js:${hit.line}  ${hit.code}`);
   }
@@ -259,7 +259,7 @@ let vite = null;
 const viteLog = [];
 async function startVite() {
   if (!(await portFree(port))) {
-    fail(`port ${port} is busy — stop whatever holds it, pass --port <n>, or BASE=<url> to reuse a running dev server`);
+    fail(`port ${port} is busy, stop whatever holds it, pass --port <n>, or BASE=<url> to reuse a running dev server`);
   }
   // Spawn node directly (not `npm run dev`) so kill() reaches the real process.
   const bin = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
@@ -288,7 +288,7 @@ async function startVite() {
         return base;
       }
       if (res.status === 404 || res.status === 403) {
-        fail(`vite served ${res.status} for ${LAB_PATH} — is scripts/lab/index.html under the project root?`);
+        fail(`vite served ${res.status} for ${LAB_PATH}, is scripts/lab/index.html under the project root?`);
       }
     } catch {
       /* not up yet */
@@ -317,7 +317,7 @@ const sha1 = (file) => createHash("sha1").update(fs.readFileSync(file)).digest("
 // --golden on a fixture that IS the recorded one. (The repo stores it LF, so
 // the normalized hash equals the byte hash of a clean checkout.)
 const sha1Text = (file) => createHash("sha1").update(fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n")).digest("hex").slice(0, 12);
-// Everything a golden replay passes through — recorded for provenance.
+// Everything a golden replay passes through, recorded for provenance.
 const engineFiles = [
   "src/utils/brushes.js",
   "src/utils/brushSprites.js",
@@ -397,10 +397,10 @@ function verifyGolden(result, { record, failures }) {
   const golden = record ? null : readGolden();
   const rows = [];
   if (!record && !golden) {
-    console.log("brush-lab: golden — no scripts/lab/golden.json yet; hashes below are unverified (run --golden-record to baseline)");
+    console.log("brush-lab: golden, no scripts/lab/golden.json yet; hashes below are unverified (run --golden-record to baseline)");
   }
   if (golden && golden.fixture !== fixtureSha) {
-    failures.push({ scenario: "golden", error: `golden-ops.json (${fixtureSha}) is not the fixture golden.json was recorded from (${golden.fixture}) — re-record deliberately` });
+    failures.push({ scenario: "golden", error: `golden-ops.json (${fixtureSha}) is not the fixture golden.json was recorded from (${golden.fixture}), re-record deliberately` });
   }
   for (const [name, g] of Object.entries(result.report)) {
     let status;
@@ -416,19 +416,19 @@ function verifyGolden(result, { record, failures }) {
       status = record ? "REC " : "NEW ";
     } else if (!golden.groups[name]) {
       status = "FAIL";
-      detail = "group missing from golden.json — re-record";
+      detail = "group missing from golden.json, re-record";
       failures.push({ scenario: "golden", error: `${name}: ${detail}` });
     } else if (useGpu) {
       // golden.json is recorded on the software renderer (see the header):
       // the GPU's anti-aliasing lands different bytes, so a --gpu run only
       // reports the comparison. Stability within the run still gates above.
       status = "GPU ";
-      detail = golden.groups[name].hash === g.hash ? "matches the software golden" : "GPU renderer AA differs from the software renderer golden.json was recorded with — informational";
+      detail = golden.groups[name].hash === g.hash ? "matches the software golden" : "GPU renderer AA differs from the software renderer golden.json was recorded with, informational";
     } else if (golden.groups[name].hash === g.hash) {
       status = "PASS";
     } else {
       status = "FAIL";
-      detail = `expected ${golden.groups[name].hash.slice(0, 12)} (painted ${golden.groups[name].painted})${g.machineBound ? " — machine-bound group (system fonts)" : ""}`;
+      detail = `expected ${golden.groups[name].hash.slice(0, 12)} (painted ${golden.groups[name].painted})${g.machineBound ? ", machine-bound group (system fonts)" : ""}`;
       failures.push({ scenario: "golden", error: `${name}: hash ${g.hash.slice(0, 12)} ≠ golden ${golden.groups[name].hash.slice(0, 12)}` });
     }
     rows.push({ status, name, g, detail });
@@ -468,7 +468,7 @@ function printGolden({ rows, golden, engine }) {
 // golden-ops.json embeds the v3 dabs via getAuthoringDab at generation time,
 // so a NATURAL_DABS edit without a regenerate (or a hand-edited fixture)
 // leaves golden.json's hashes describing ops the studio no longer persists.
-// `make-golden-ops.mjs --check` diffs the file against a fresh generation —
+// `make-golden-ops.mjs --check` diffs the file against a fresh generation -
 // run it before any golden replay so that drift fails the lab instead of
 // silently passing against stale ops.
 function checkFixture() {
@@ -478,14 +478,14 @@ function checkFixture() {
   if (result.status !== 0) {
     fail(`fixture check failed (make-golden-ops.mjs --check):\n${output}\n  regenerate deliberately (node scripts/lab/make-golden-ops.mjs), then --golden-record`);
   }
-  console.log(`brush-lab: fixture — ${output.split("\n")[0]}`);
+  console.log(`brush-lab: fixture, ${output.split("\n")[0]}`);
 }
 
 // ---- Main -----------------------------------------------------------------------
 const failures = [];
 const guard = runGuard();
 if (!guard.ok) {
-  failures.push({ scenario: "guard", error: `${guard.hits.length} forbidden call(s) on the dab path — see above` });
+  failures.push({ scenario: "guard", error: `${guard.hits.length} forbidden call(s) on the dab path, see above` });
 }
 if (mode === "guard") {
   process.exit(guard.ok ? 0 : 1);
@@ -521,7 +521,7 @@ try {
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (msg) => {
     // The lab's own getImageData readbacks trigger Chrome's willReadFrequently
-    // hint on every canvas — noise, not an engine problem.
+    // hint on every canvas, noise, not an engine problem.
     if (/willReadFrequently/.test(msg.text())) {
       return;
     }
@@ -569,7 +569,7 @@ try {
     const started = Date.now();
     let result;
     try {
-      // (page.evaluate has no timeout — the golden replay, 2 x 11 groups on a
+      // (page.evaluate has no timeout, the golden replay, 2 x 11 groups on a
       // 40MB canvas, runs to completion.)
       result = await page.evaluate((s) => window.lab.runScenario(s), { ...spec, brushes: brushFilter, gpu: useGpu });
     } catch (error) {
@@ -588,7 +588,7 @@ try {
       }
     }
     if (spec.kind === "determinism" && result.ok === false) {
-      failures.push({ scenario: spec.kind, error: "determinism mismatch — see report.scenarios.determinism" });
+      failures.push({ scenario: spec.kind, error: "determinism mismatch, see report.scenarios.determinism" });
     }
     if (spec.kind === "mixing" && result.ok === false) {
       for (const c of (result.checks || []).filter((c) => !c.pass)) {
@@ -638,7 +638,7 @@ try {
       }
     }
     if (spec.kind === "mixPrefetch" && result.ok === false) {
-      failures.push({ scenario: spec.kind, error: "wet-mix prefetch is not op-order-equivalent to the lazy flush (or the case lost its teeth) — see report.scenarios.mixPrefetch" });
+      failures.push({ scenario: spec.kind, error: "wet-mix prefetch is not op-order-equivalent to the lazy flush (or the case lost its teeth), see report.scenarios.mixPrefetch" });
     }
     if (spec.kind === "golden") {
       goldenResult = verifyGolden(result, { record: mode === "golden-record", failures });
@@ -669,7 +669,7 @@ if (Object.keys(timing).length) {
   }
   const kmRows = Object.entries(timing).flatMap(([brush, sizes]) => Object.entries(sizes).filter(([, t]) => t.km).map(([size, t]) => [brush, size, t]));
   if (kmRows.length) {
-    console.log("\nKM PATH (Stage 3; cpu = the dab walk against a no-op ctx, with vs without a sampling mix map — the pigment math + bucket bookkeeping alone, best-of-N;");
+    console.log("\nKM PATH (Stage 3; cpu = the dab walk against a no-op ctx, with vs without a sampling mix map, the pigment math + bucket bookkeeping alone, best-of-N;");
     console.log(`  Δcpu per 100 dabs is what the budget gates: ${KM_BUDGET} ms on the GPU renderer, ${KM_BUDGET_SOFTWARE} ms on the software one (its ring re-tints); this run: ${kmBudget}.`);
     console.log("  raster = the same stroke rasterised over blank paper / solid / gradient under-paint (best-of-N, prefetched map): context only)");
     console.log(`${pad("brush", 11)} ${pad("size", 4, true)} ${pad("path", 4)} ${pad("cpu", 7, true)} ${pad("cpu+km", 7, true)} ${pad("Δcpu/100", 9, true)} ${pad("blank", 7, true)} ${pad("solid", 7, true)} ${pad("grad", 7, true)} ${pad("Δsolid", 8, true)} ${pad("Δgrad", 8, true)}`);
@@ -696,7 +696,7 @@ if (Object.keys(strokes).length) {
 const determinism = report.scenarios.determinism?.report || {};
 if (Object.keys(determinism).length) {
   console.log("\nDETERMINISM (size 32: rerun = two fresh renderers, same seed, per-point flow; batch = 1-point vs 7-point feeding into pre-sized buffers;");
-  console.log("  growCopy = per-point-grow flow vs pre-sized buffer — informational: a buffer grow's drawImage copy is not pixel-lossless)");
+  console.log("  growCopy = per-point-grow flow vs pre-sized buffer, informational: a buffer grow's drawImage copy is not pixel-lossless)");
   for (const [brush, d] of Object.entries(determinism)) {
     const kmOk = !d.km || (d.km.rerunIdentical && d.km.batchIdentical);
     const flag = d.rerunIdentical && d.batchIdentical && kmOk ? "ok  " : "FAIL";
@@ -735,8 +735,8 @@ if (Object.keys(mixing).length) {
 const mixPrefetch = report.scenarios.mixPrefetch?.report || {};
 if (Object.keys(mixPrefetch).length) {
   console.log("\nMIX PREFETCH (idle prefetch + invalidatePrefetch vs the lazy flush, same op script; A = commit → eraser → wet stroke, B = commit → wet → eraser → wet;");
-  console.log("  equivalent = the dabs read the same sample bytes in the same order AND the pixels match (GPU renderer: a <= 1-unit wobble is tolerated) — gates;");
-  console.log("  teeth = the naive prefetch (no invalidate) reads different bytes than lazy on A — gates)");
+  console.log("  equivalent = the dabs read the same sample bytes in the same order AND the pixels match (GPU renderer: a <= 1-unit wobble is tolerated), gates;");
+  console.log("  teeth = the naive prefetch (no invalidate) reads different bytes than lazy on A, gates)");
   for (const [brush, scripts] of Object.entries(mixPrefetch)) {
     const a = scripts.A;
     const b = scripts.B;
@@ -748,7 +748,7 @@ if (Object.keys(mixPrefetch).length) {
 if (report.scenarios.smudge) {
   const s = report.scenarios.smudge.report;
   console.log("\nSMUDGE (legacy square vs v3 drag / blend over a red|blue field, size 40, strength 0.6, pressure 0.7; boundary band mean on white before=[" + s.boundaryMeanBefore + "];");
-  console.log("  edge = max / p99 color step ACROSS the motion inside the passes' bands, corners = px with a strong step along AND across — v3 must be below legacy)");
+  console.log("  edge = max / p99 color step ACROSS the motion inside the passes' bands, corners = px with a strong step along AND across, v3 must be below legacy)");
   console.log(`${pad("mode", 8)} ${pad("after", 16)} ${pad("blended", 8, true)} ${pad("edge max", 9, true)} ${pad("p99", 5, true)} ${pad("corners", 8, true)} ${pad("points", 7, true)} ${pad("ms", 8, true)}`);
   for (const [mode, m] of Object.entries(s.modes || {})) {
     console.log(`${pad(mode, 8)} ${pad(`[${m.boundaryMeanAfter}]`, 16)} ${pad(m.blendedColumnsAtRow150, 8, true)} ${pad(m.edge.maxAcross, 9, true)} ${pad(m.edge.p99Across, 5, true)} ${pad(m.edge.corners, 8, true)} ${pad(m.pointsFed, 7, true)} ${pad(m.ms, 8, true)}`);

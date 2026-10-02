@@ -1,4 +1,4 @@
-// Mobile UX audit — "does this feel like an app on a phone/iPad?"
+// Mobile UX audit: "does this feel like an app on a phone/iPad?"
 //
 // Read-only. Drives the real server + real build across Pixel 7, iPad Pro 11
 // (portrait AND landscape) and iPhone SE, and measures the things that decide
@@ -7,7 +7,7 @@
 // how many taps stand between "open the site" and "first stroke", and stray
 // page scroll.
 //
-// Every finding prints as `PASS/WARN/FAIL  name — detail` and is backed by a
+// Every finding prints as `PASS/WARN/FAIL  name, detail` and is backed by a
 // screenshot in the ux/ scratch dir.
 import { chromium, devices } from "playwright";
 import { WebSocket } from "ws";
@@ -35,7 +35,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const log = (level, name, detail = "") => {
   results.push({ level, name, detail });
-  console.log(`${level}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${level}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const shot = async (page, device, pageName, full = false) => {
@@ -45,7 +45,7 @@ const shot = async (page, device, pageName, full = false) => {
 };
 
 // ---------------------------------------------------------------- probes ---
-// U1 — tap targets. Anything a finger is meant to hit under 44x44 CSS px.
+// U1, tap targets. Anything a finger is meant to hit under 44x44 CSS px.
 const TAP_PROBE = () => {
   const out = [];
   const nodes = document.querySelectorAll("button, a, [role=button], input");
@@ -68,7 +68,7 @@ const TAP_PROBE = () => {
   return out;
 };
 
-// U2 — chrome collisions + unreachable chrome.
+// U2, chrome collisions + unreachable chrome.
 const CHROME_SELECTORS = [".mobile-quickbar", ".cc-pill", ".cc-panel", ".studio-rooms-fab",
   ".room-prompt-chip", ".wipe-chip", ".reaction-picker", ".zoom-controls", ".tool-rail",
   ".game-hud", ".phone-banner", ".vote-card"];
@@ -81,7 +81,7 @@ const OVERLAP_PROBE = (sels) => {
       if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) < 0.05) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) continue;
-      // A closed sheet is parked wholly outside the viewport by a transform —
+      // A closed sheet is parked wholly outside the viewport by a transform -
       // that's the design, not a layout bug. Only chrome that is at least
       // partly on screen counts. (Centering transforms like translateX(-50%)
       // keep the rect on screen, so they still count.)
@@ -121,7 +121,7 @@ const OVERLAP_PROBE = (sels) => {
   return { present: found.map((f) => f.sel), pairs, offscreen, onCanvas };
 };
 
-// U3 — legibility. Small text, plus contrast of chrome text against what is
+// U3, legibility. Small text, plus contrast of chrome text against what is
 // actually behind it (compositing rgba layers down onto the white canvas).
 const TEXT_PROBE = () => {
   const parse = (c) => {
@@ -248,7 +248,7 @@ const run = async () => {
       `scrollWidth=${homeScroll.scrollWidth} vw=${homeScroll.innerWidth}` +
       (homeScroll.widest ? ` worst=${homeScroll.widest.sel}@${homeScroll.widest.right}px` : "") + ` [${homeShot}]`);
 
-    // U5 — the homepage room-code input (iOS zooms in when font-size < 16px).
+    // U5, the homepage room-code input (iOS zooms in when font-size < 16px).
     const codeInput = await page.evaluate(() => {
       const el = document.querySelector('.home-page input, input[placeholder*="ode" i], input');
       if (!el) return null;
@@ -259,10 +259,10 @@ const run = async () => {
     if (codeInput) {
       log(codeInput.fs >= 16 ? "PASS" : "FAIL",
         `U5 homepage room-code input font-size (${prof.label})`,
-        `${codeInput.fs}px${codeInput.fs < 16 ? " — iOS will zoom the page on focus" : ""}, height=${codeInput.h}px [${homeShot}]`);
+        `${codeInput.fs}px${codeInput.fs < 16 ? ", iOS will zoom the page on focus" : ""}, height=${codeInput.h}px [${homeShot}]`);
     }
 
-    // U6 — first-stroke friction, measured once on the phone profile.
+    // U6, first-stroke friction, measured once on the phone profile.
     if (prof.key === "pixel7") {
       const steps = [];
       const blockers = await page.evaluate(() => {
@@ -289,7 +289,7 @@ const run = async () => {
         return d.map((e) => (typeof e.className === "string" ? e.className : "dialog").slice(0, 60));
       });
       firstStroke = { steps, ok, blockers, gate, shot: strokeShot };
-      // A canvas you can't touch yet isn't a drawable canvas — an interstitial
+      // A canvas you can't touch yet isn't a drawable canvas, an interstitial
       // sitting over it counts as another tap before the first stroke.
       const taps = steps.length + gate.length;
       log(ok && taps <= 1 ? "PASS" : ok ? "WARN" : "FAIL",
@@ -309,7 +309,7 @@ const run = async () => {
     smallText.push(...studioText.small.map((t) => ({ ...t, device: prof.label, page: "/join", shot: studioShot })));
     lowContrast.push(...studioText.low.map((t) => ({ ...t, device: prof.label, page: "/join", shot: studioShot })));
 
-    // U1 — call out the quickbar specifically; it's the primary tool surface.
+    // U1, call out the quickbar specifically; it's the primary tool surface.
     const qb = await page.evaluate(() => {
       const bar = document.querySelector(".mobile-quickbar");
       if (!bar) return null;
@@ -331,7 +331,7 @@ const run = async () => {
       log("WARN", `U1 quickbar not rendered (${prof.label})`, `no .mobile-quickbar at this width [${studioShot}]`);
     }
 
-    // U2 — chrome collisions.
+    // U2, chrome collisions.
     const ov = await page.evaluate(OVERLAP_PROBE, CHROME_SELECTORS);
     log(ov.pairs.length ? "WARN" : "PASS", `U2 chrome overlaps (${prof.label})`,
       `visible chrome: ${[...new Set(ov.present)].join(" ") || "none"}; collisions: ` +
@@ -344,7 +344,7 @@ const run = async () => {
       `${ov.onCanvas.length} element(s) sit on the drawing surface: ` +
       (ov.onCanvas.map((o) => `${o.sel} ${o.coverPct}%`).join(", ") || "none") + ` [${studioShot}]`);
 
-    // U8 — the studio must not scroll like a document.
+    // U8, the studio must not scroll like a document.
     const ss = await page.evaluate(SCROLL_PROBE);
     log(ss.scrollHeight <= ss.innerHeight + 2 ? "PASS" : "FAIL",
       `U8 studio does not scroll vertically (${prof.label})`,
@@ -354,7 +354,7 @@ const run = async () => {
       `scrollWidth=${ss.scrollWidth} vw=${ss.innerWidth}` +
       (ss.widest ? ` worst=${ss.widest.sel}@${ss.widest.right}px` : "") + ` [${studioShot}]`);
 
-    // U7 — landscape iPad: how much of that width becomes drawing surface?
+    // U7, landscape iPad: how much of that width becomes drawing surface?
     if (prof.key === "ipad-landscape") {
       landscape = await page.evaluate(() => {
         const c = document.querySelector("canvas");
@@ -383,7 +383,7 @@ const run = async () => {
       const chatTaps = await page.evaluate(TAP_PROBE);
       tapWorst.push(...chatTaps.map((t) => ({ ...t, device: prof.label, page: "/join chat", shot: chatShot })));
 
-      // U5 — chat input: font-size and does focusing it push the field off-screen.
+      // U5, chat input: font-size and does focusing it push the field off-screen.
       const input = page.locator(".cc-form input").first();
       if (await input.count()) {
         const before = await input.evaluate((el) => ({ fs: parseFloat(getComputedStyle(el).fontSize) }));
@@ -396,7 +396,7 @@ const run = async () => {
         });
         const kbShot = await shot(page, prof.key, "studio-chat-focus");
         log(before.fs >= 16 ? "PASS" : "FAIL", `U5 chat input font-size (${prof.label})`,
-          `${before.fs}px${before.fs < 16 ? " — iOS Safari zooms the whole page on focus" : ""} [${kbShot}]`);
+          `${before.fs}px${before.fs < 16 ? ", iOS Safari zooms the whole page on focus" : ""} [${kbShot}]`);
         log(after.bottom <= after.vh + 1 && after.top >= -1 ? "PASS" : "FAIL",
           `U5 focused chat input stays in the viewport (${prof.label})`,
           `top=${after.top} bottom=${after.bottom} vh=${after.vh} [${kbShot}]`);
@@ -467,7 +467,7 @@ const run = async () => {
       `scrollWidth=${rs.scrollWidth} vw=${rs.innerWidth}` +
       (rs.widest ? ` worst=${rs.widest.sel}@${rs.widest.right}px` : "") + ` [${roomsShot}]`);
 
-    // U9 evidence — app-shell tells that show up in computed styles.
+    // U9 evidence, app-shell tells that show up in computed styles.
     if (prof.key === "pixel7") {
       const polish = await page.evaluate(() => {
         const cs = getComputedStyle(document.documentElement);
@@ -511,7 +511,7 @@ const run = async () => {
   //   b) a LIVE vote card (.cc-vote-floating, same corner) clears it,
   //   c) the bottom-left .reaction-picker clears it,
   //   d) the top chrome rows (.studio-rooms-fab, .room-prompt-chip, .wipe-chip)
-  //      are exactly where they were — the fix moved zoom, not them.
+  //      are exactly where they were, the fix moved zoom, not them.
   //
   // Each profile gets its OWN room: the server enforces a 120s vote cooldown per
   // room, so a second vote_start in the same room would be denied.
@@ -522,7 +522,7 @@ const run = async () => {
 
   // Drive a REAL vote through a second raw-WS member of the room, exactly as a
   // friend tapping the vote button would. ZZB9* rooms are private ("friends"),
-  // where vote_start is open to any member — no host and no fixtures needed.
+  // where vote_start is open to any member, no host and no fixtures needed.
   const startVote = (roomCode) =>
     new Promise((resolve) => {
       let done = false;
@@ -561,7 +561,7 @@ const run = async () => {
     const ctx = await browser.newContext({ ...prof.opts, ignoreHTTPSErrors: true });
     const page = await ctx.newPage();
     await page.goto(`${BASE}/join/${prof.room}`, { waitUntil: "domcontentloaded" });
-    // The studio mounts asynchronously, so a fixed sleep races it — that is how
+    // The studio mounts asynchronously, so a fixed sleep races it, that is how
     // the 375x667 run once screenshotted a blank page and measured nothing. Wait
     // for the canvas itself, THEN let the floating chrome settle before probing.
     await page.waitForSelector(".overlay-canvas", { timeout: 15000 });
@@ -570,7 +570,7 @@ const run = async () => {
 
     // (d) The top-chrome rows. .wipe-chip only renders during a public room's
     // 3-day refresh cycle, so its row is measured from the shipped stylesheet
-    // with a probe element rather than skipped — that is the position a real
+    // with a probe element rather than skipped, that is the position a real
     // wipe chip would land on.
     const top = await page.evaluate(() => {
       const box = (sel) => {
@@ -693,7 +693,7 @@ const run = async () => {
   }
 
   // -------------------------------------------------- aggregate reporting ---
-  // U1 — the 15 worst tap targets across every device/page.
+  // U1, the 15 worst tap targets across every device/page.
   const dedup = new Map();
   for (const t of tapWorst) {
     const k = `${t.sel}|${t.w}x${t.h}|${t.device}`;
@@ -705,7 +705,7 @@ const run = async () => {
   worst.forEach((t, i) => console.log(
     `        ${String(i + 1).padStart(2)}. ${t.w}x${t.h}px  ${t.sel}  "${t.label}"  [${t.device} ${t.page}] ${t.shot}`));
 
-  // U3 — small text.
+  // U3, small text.
   const smallDedup = new Map();
   for (const t of smallText) if (!smallDedup.has(t.sel + t.fs)) smallDedup.set(t.sel + t.fs, t);
   const smalls = [...smallDedup.values()].sort((a, b) => a.fs - b.fs);
@@ -714,7 +714,7 @@ const run = async () => {
     smalls.slice(0, 8).map((s) => `${s.fs}px ${s.sel} "${s.text}"`).join(" | ") +
     (smalls[0] ? ` [${smalls[0].shot}]` : ""));
 
-  // U3 — contrast.
+  // U3, contrast.
   const lcDedup = new Map();
   for (const t of lowContrast) if (!lcDedup.has(t.sel + t.ratio)) lcDedup.set(t.sel + t.ratio, t);
   const lcs = [...lcDedup.values()].sort((a, b) => a.ratio - b.ratio);
@@ -723,7 +723,7 @@ const run = async () => {
     lcs.slice(0, 8).map((s) => `${s.ratio}:1 (need ${s.need}) ${s.sel} "${s.text}"`).join(" | ") +
     (lcs[0] ? ` [${lcs[0].shot}]` : ""));
 
-  // U4 — layout units, straight from the stylesheets.
+  // U4, layout units, straight from the stylesheets.
   const css = ["src/App.css", "src/studio-layout.css", "src/drawesome-theme.css", "src/index.css", "src/homepage-redesign.css"]
     .map((f) => { try { return { f, t: readFileSync(path.join(ROOT, f), "utf8") }; } catch { return null; } })
     .filter(Boolean);
@@ -742,7 +742,7 @@ const run = async () => {
   log(safeBottom > 0 ? "PASS" : "FAIL", "U4 bottom chrome honors env(safe-area-inset-bottom)",
     `${safeBottom} of ${safeCount} safe-area references target the bottom inset`);
 
-  // U5 — viewport meta.
+  // U5, viewport meta.
   const html = readFileSync(path.join(ROOT, "index.html"), "utf8");
   const meta = /content="([^"]*width=device-width[^"]*)"/.exec(html);
   const mc = meta ? meta[1] : "(not found)";
@@ -751,11 +751,11 @@ const run = async () => {
   log(/user-scalable=no|maximum-scale=1/.test(mc) ? "WARN" : "PASS",
     "U5 viewport blocks pinch-zoom",
     /user-scalable=no|maximum-scale=1/.test(mc)
-      ? "user-scalable=no / maximum-scale=1 — app-like, but ignored by iOS Safari 10+ and an a11y trade-off"
+      ? "user-scalable=no / maximum-scale=1, app-like, but ignored by iOS Safari 10+ and an a11y trade-off"
       : "pinch-zoom allowed");
   log(/viewport-fit=cover/.test(mc) ? "PASS" : "WARN", "U5 viewport-fit=cover (notch/home-indicator)", mc);
 
-  // Manifest — the "no download" install path.
+  // Manifest, the "no download" install path.
   let manifest = null;
   try { manifest = JSON.parse(readFileSync(path.join(ROOT, "dist/manifest.webmanifest"), "utf8")); } catch { /* none */ }
   log(manifest && manifest.display && manifest.display !== "browser" ? "PASS" : "WARN",

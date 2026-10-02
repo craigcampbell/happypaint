@@ -35,7 +35,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 let keySeq = 0;
@@ -132,7 +132,7 @@ async function soloScenario() {
   await sleep(8000);
   check("A solo: still not wiped at 8s", !has(a, m0, isClear));
   const got = await waitAfter(a, m0, isClear, 3500);
-  check("A solo: wiped at 10s — and the asker's own screen gets the clear", !!got && got.final === true && got.wipeMode === "solo", JSON.stringify(got));
+  check("A solo: wiped at 10s, and the asker's own screen gets the clear", !!got && got.final === true && got.wipeMode === "solo", JSON.stringify(got));
   const view = await joinerView(R);
   check("A solo: the mural is empty for a new joiner", view.ops === 0, `ops=${view.ops}`);
   check("A solo: the chat is kept", view.chat.includes("solo line survives"), JSON.stringify(view.chat));
@@ -164,7 +164,7 @@ async function pairScenario() {
   const ma = a.msgs.length;
   a.send({ type: "wipe_cancel", id: reqB.req.id });
   const canceled = await waitFor(b, ended("canceled"), 2000);
-  check("B pair: the asker cancels — everyone is told", !!canceled && !has(a, ma, isClear));
+  check("B pair: the asker cancels, everyone is told", !!canceled && !has(a, ma, isClear));
   const view = await joinerView(R);
   check("B pair: the mural survived the cancel", view.ops === 2, `ops=${view.ops}`);
 
@@ -185,8 +185,8 @@ async function pairScenario() {
 // C. Vote of 3: two yes is a majority, but it waits for the third; when
 // everyone has voted it skips to the final 3s and wipes.
 // A featured PUBLIC room like the other scenarios: hostless, so a member's
-// request becomes a room vote. (DINOS is a retired protected mural — member
-// wipe requests are refused there by design — and an ad-hoc friends room
+// request becomes a room vote. (DINOS is a retired protected mural, member
+// wipe requests are refused there by design, and an ad-hoc friends room
 // would make the first joiner guest host, whose request is a countdown.)
 async function votePassScenario() {
   const R = "SPOOKY";
@@ -332,7 +332,7 @@ async function tabsScenario() {
 }
 
 // J. Moderator reset: mural + chat gone for members AND homepage spectators,
-// a pending member request is called off, members can't undo it — the
+// a pending member request is called off, members can't undo it, the
 // moderator can, chat included.
 async function modResetScenario(adminKey) {
   const R = "VIBES";

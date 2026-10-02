@@ -5,7 +5,7 @@
 //   - "Share my timelapse" hands the OS share sheet a video/mp4 (H.264) file
 //     when WebCodecs H.264 is available, else an explicit finished-frame PNG.
 //     NEVER an image/gif (Instagram flattens GIFs to their near-blank first
-//     frame — see scratch replay-instagram-repro).
+//     frame, see scratch replay-instagram-repro).
 //   - The shared artifact is decoded for real (mp4 -> <video> seek to the
 //     final frames, png -> Image) and must contain the artwork (non-white).
 //   - Optional Inktober border lands on EXPORT pixels only (source snapshots
@@ -57,7 +57,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // ---- mock PocketBase -------------------------------------------------------
@@ -329,7 +329,7 @@ const run = async () => {
     await ctx.close();
   }
 
-  // ===================== G2: signed in — full share matrix =====================
+  // ===================== G2: signed in, full share matrix =====================
   {
     const { ctx, page, errors } = await newStudioPage(browser, { token: makeJwt(FUTURE) });
     await gotoStudio(page, "SPACE");
@@ -593,7 +593,7 @@ const run = async () => {
     ];
     for (const name of entryPoints) {
       const start = src.indexOf(`const ${name} = useCallback`);
-      // The gate is always at the TOP of the handler — a fixed window avoids
+      // The gate is always at the TOP of the handler, a fixed window avoids
       // any body parsing.
       const body = start === -1 ? "" : src.slice(start, start + 1500);
       check(`G6 ${name} runs the account gate`, start !== -1 && body.includes("gateExport"), start === -1 ? "NOT FOUND" : "");

@@ -1,15 +1,15 @@
 // Seasonal preview (snapshot mode) verification for LiveRoomCanvas.
 //
-// The story: the homepage wants a periodic MAIN thumbnail — a visitor-rendered
+// The story: the homepage wants a periodic MAIN thumbnail, a visitor-rendered
 // preview that replays the authoritative spectator stream but only repaints the
 // visible canvas every snapshotIntervalMs, instead of on every op like the live
 // view. This suite boots the REAL server (port 8954, throwaway DATA_DIR), serves
 // a scratch test page through a scratch Vite dev server (port 8955, proxies
-// /ws + /api to the backend — no repo file touched, no build needed), and drives
+// /ws + /api to the backend, no repo file touched, no build needed), and drives
 // two LiveRoomCanvas instances side by side in a real browser:
 //
-//   #snap — <LiveRoomCanvas roomCode="MAIN" snapshotIntervalMs={8000} />
-//   #live — <LiveRoomCanvas roomCode="MAIN" />            (unchanged default)
+//   #snap, <LiveRoomCanvas roomCode="MAIN" snapshotIntervalMs={8000} />
+//   #live, <LiveRoomCanvas roomCode="MAIN" />            (unchanged default)
 //
 // A raw-WS painter draws into MAIN; a modwatch admin wipes it. Asserts, on the
 // canvases' actual pixels:
@@ -58,7 +58,7 @@ const TEST_HTML = `<!doctype html>
 <style>
   body { margin: 0; font-family: sans-serif; }
   /* Viewport-relative so setViewportSize really resizes the canvas backing
-     store (which clears it) — the resize checks below prove the blit repaints. */
+     store (which clears it), the resize checks below prove the blit repaints. */
   .wrap { width: 80vw; height: 220px; border: 1px solid #ccc; }
   .live-room-canvas { width: 100%; height: 100%; display: block; }
 </style></head>
@@ -145,7 +145,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 function connectMember(room) {

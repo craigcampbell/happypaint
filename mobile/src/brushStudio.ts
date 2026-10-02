@@ -1,4 +1,4 @@
-// Brush Studio Lite — create + apply brush "recipes" (mirrors src/utils/brushStudio.js).
+// Brush Studio Lite, create + apply brush "recipes" (mirrors src/utils/brushStudio.js).
 //
 // A brush recipe is a small, adjustable parameter set built on top of an
 // existing base brush (marker/pencil/paint/spray/glow). The recipe is saved to

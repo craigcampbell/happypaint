@@ -37,7 +37,7 @@ const FILTER = process.env.AUDIT_FILTER || '';
 
 // Viewports. `mobileUX` = the app should show its touch/drawer experience here.
 // The owner wants LARGE TABLETS to feel mobile, so those are mobileUX:true even
-// though they're wide — the audit flags it if the desktop chrome shows instead.
+// though they're wide, the audit flags it if the desktop chrome shows instead.
 const DEVICES = [
   { id: 'phone',                 width: 390,  height: 844,  touch: true,  mobileUX: true },
   { id: 'tablet',                width: 820,  height: 1180, touch: true,  mobileUX: true },
@@ -347,12 +347,12 @@ async function main() {
   writeFileSync(join(OUT, 'findings.json'), JSON.stringify(report, null, 2));
 
   const lines = [
-    `Drawesome UI audit — ${report.generatedAt}`,
+    `Drawesome UI audit, ${report.generatedAt}`,
     `Base: ${BASE_URL}`,
     `Total findings: ${findings.length}  (${JSON.stringify(bySeverity)})`,
     `By type: ${JSON.stringify(byType)}`,
     '',
-    ...findings.map((f) => `[${f.severity}] ${f.device}/${f.route} ${f.type} — ${f.selector}\n    ${f.detail}`),
+    ...findings.map((f) => `[${f.severity}] ${f.device}/${f.route} ${f.type}, ${f.selector}\n    ${f.detail}`),
   ];
   writeFileSync(join(OUT, 'summary.txt'), lines.join('\n'));
   console.log(`\n${findings.length} findings → audit-results/findings.json`);

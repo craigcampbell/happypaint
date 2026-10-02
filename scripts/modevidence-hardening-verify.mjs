@@ -1,14 +1,14 @@
 /* eslint-env node */
-// Moderation evidence HARDENING — regression suite for the independent-review
+// Moderation evidence HARDENING, regression suite for the independent-review
 // blockers (SEC-1, LOG-1, LOG-2). Drives the real server.js over WS + HTTP
 // with scratch DATA_DIRs, synthetic benign PNGs only.
 //
 //   SEC-1: guest watcher identity is an HMAC of the client IP keyed by a
-//          PERSISTED server secret (.evidence-key, 0600) — never an unsalted,
+//          PERSISTED server secret (.evidence-key, 0600), never an unsalted,
 //          brute-forceable sha256 over the ~2^32 IPv4 space.
 //   LOG-1: a flag whose effective (clamped) op range is empty/inverted is
 //          rejected outright, and corroboration overlap uses the CLAMPED
-//          range — forged watermarks cannot manufacture an auto-hide.
+//          range, forged watermarks cannot manufacture an auto-hide.
 //   LOG-2: .reports.json persists atomically (tmp+rename), and startup
 //          reconciles the evidence dir: leftover .tmp staging files and
 //          evidence files no loaded report references are deleted.
@@ -41,7 +41,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 function goodEvidence(tag = 0) {
@@ -106,7 +106,7 @@ async function waitReady(base, child, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child && child.exitCode != null) {
-      throw new Error(`server at ${base} died at boot (code ${child.exitCode}) — a stale listener is squatting the port`);
+      throw new Error(`server at ${base} died at boot (code ${child.exitCode}), a stale listener is squatting the port`);
     }
     try {
       const r = await fetch(`${base}/healthz`);
@@ -184,7 +184,7 @@ async function main() {
   check("H1 report filed with evidence", !!t1.report?.evidence?.file);
   const watcher1 = t1.report?.evidence?.watcher;
   check("H1 guest identity uses ip-hmac scheme", typeof watcher1 === "string" && watcher1.startsWith("ip-hmac:"), watcher1);
-  // The pre-fix scheme: bare sha256(ip) truncated to 16 hex — brute-forceable
+  // The pre-fix scheme: bare sha256(ip) truncated to 16 hex, brute-forceable
   // over the ~2^32 IPv4 space. The stored identity must NEVER equal it.
   const legacyCandidates = ["127.0.0.1", "::ffff:127.0.0.1", "::1"].map(
     (ip) => `ip-sha256:${createHash("sha256").update(ip).digest("hex").slice(0, 16)}`
@@ -264,7 +264,7 @@ async function main() {
     JSON.stringify(listingCorrupt)
   );
 
-  // --- H6: atomic persist — a fresh flag rewrites .reports.json cleanly ------
+  // --- H6: atomic persist, a fresh flag rewrites .reports.json cleanly ------
   const t6 = await electedFlag(WS1, BASE1, "HID3", goodEvidence(3).payload);
   check("H6 flag after corruption files a fresh report", !!t6.report?.evidence?.file);
   let persistedOk = false;
@@ -319,7 +319,7 @@ async function main() {
     const history = c.messages.find((m) => m.type === "history");
     const visibleOpIds = (history?.ops || []).map((op) => op.opId);
     check(
-      "H3 empty/inverted effective range rejected — no manufactured auto-hide",
+      "H3 empty/inverted effective range rejected, no manufactured auto-hide",
       visibleOpIds.includes(1),
       `visible=${JSON.stringify(visibleOpIds)}`
     );

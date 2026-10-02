@@ -1,5 +1,5 @@
 // Moderator watch ("glass room") verification. The story: an admin can open ANY
-// room — private ones included — as an invisible observer. The socket never
+// room, private ones included, as an invisible observer. The socket never
 // enters room.users, so the room's roster, headcount, join beacons and analytics
 // never mention it; it can moderate (wipe, hide/restore/remove, kick, mute, lock)
 // but it can NOT draw, chat, or impersonate anyone; a bad key, an unknown room
@@ -35,7 +35,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // A normal member: the join handshake wants {type:'auth'} first (task #40), or
@@ -52,7 +52,7 @@ function connectMember(room) {
   });
 }
 
-// A moderator watcher: no auth frame, no token — it opens the modwatch mode and
+// A moderator watcher: no auth frame, no token, it opens the modwatch mode and
 // then proves the admin key in its first frame.
 function connectWatcher(room, key) {
   return new Promise((resolve) => {

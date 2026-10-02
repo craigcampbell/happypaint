@@ -1,6 +1,6 @@
 // Sprite lab: headless, numbers-and-pixels evaluation of src/utils/brushSprites.js.
 //
-// Spawns the vite dev server on its own port (5203 — the brush lab holds
+// Spawns the vite dev server on its own port (5203, the brush lab holds
 // 5199), opens scripts/lab/sprites.html in headless Chromium (Playwright,
 // same launch style as brush-lab.mjs), and:
 //   - asserts the module's BUILD code uses only the allowed math (static scan:
@@ -9,7 +9,7 @@
 //     bucket + 5000 exact lookups (must be 0), wash LATERAL rim/core ratios
 //     (> RIM_RATIO_MIN per variant), the sprite sheet + close-ups, the strokes
 //     preview, release/rebuild;
-//   - page B (a FRESH page): rebuilds every atlas and hashes the pixels —
+//   - page B (a FRESH page): rebuilds every atlas and hashes the pixels -
 //     the SHA-256 must equal page A's (determinism across builds);
 //   - writes the PNGs + sprite-lab-report.json to --out and exits non-zero on
 //     any failure.
@@ -131,7 +131,7 @@ let vite = null;
 const viteLog = [];
 async function startVite() {
   if (!(await portFree(port))) {
-    fail(`port ${port} is busy — stop whatever holds it, pass --port <n>, or BASE=<url> to reuse a running dev server`);
+    fail(`port ${port} is busy, stop whatever holds it, pass --port <n>, or BASE=<url> to reuse a running dev server`);
   }
   // Spawn node directly (not `npm run dev`) so kill() reaches the real process.
   const bin = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
@@ -160,7 +160,7 @@ async function startVite() {
         return base;
       }
       if (res.status === 404 || res.status === 403) {
-        fail(`vite served ${res.status} for ${LAB_PATH} — is scripts/lab/sprites.html under the project root?`);
+        fail(`vite served ${res.status} for ${LAB_PATH}, is scripts/lab/sprites.html under the project root?`);
       }
     } catch {
       /* not up yet */
@@ -255,7 +255,7 @@ try {
   }
   await pageA.context().close();
 
-  // Page B: a fresh page — the PACED prebuild first, so its per-piece times
+  // Page B: a fresh page, the PACED prebuild first, so its per-piece times
   // are COLD (page A's run is warm, after the synchronous build), then the
   // atlases it assembled are hashed against page A's.
   const pageB = await openLabPage(browser, pageErrors);
@@ -348,7 +348,7 @@ for (const [label, p] of [["paced", a.paced], ["paced-B", report.pageB.paced]]) 
     failures.push({ scenario: label, error: "a busy slice built or allocated something instead of deferring" });
   }
   if (!p.onePiecePerForcedSlot) {
-    failures.push({ scenario: label, error: `${p.pieces} forced slots for 45 pieces — a timed-out slot must build exactly one piece` });
+    failures.push({ scenario: label, error: `${p.pieces} forced slots for 45 pieces, a timed-out slot must build exactly one piece` });
   }
   if (!p.cachedCallNoop) {
     failures.push({ scenario: label, error: "a prebuild call after completion did work or re-scheduled" });

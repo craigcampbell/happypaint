@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Brush lab — a headless harness page for the brush engine.
+  Brush lab, a headless harness page for the brush engine.
 
   Served by the vite DEV server only (vite serves any .html under the project
   root in dev; this folder is NOT part of the production build, and nothing here
@@ -10,10 +10,10 @@
   server (open the console and call lab.runScenario({ kind: "contact" })).
 
   The page drives ONLY the engine's public exports (brushes.js, strokeBuffer.js,
-  mixMap.js, layers.js, opReplay.js) and mirrors how App.jsx uses them —
+  mixMap.js, layers.js, opReplay.js) and mirrors how App.jsx uses them -
   settings built with getAuthoringDab, one point per addPoints call,
   prepareStrokeCommit + commit at pen-up, markDirty on the mix map after every
-  commit — so it keeps working as the engine changes underneath it. No React,
+  commit, so it keeps working as the engine changes underneath it. No React,
   no app code. The `golden` scenario replays the frozen op fixture
   (golden-ops.json) through opReplay.replayFrameOnto and hashes the pixels;
   measurePenUpPop / flushGpu / hashCanvas are exported on window.lab for the
@@ -100,7 +100,7 @@
     // Standard S-curve stroke: ~600 points across a tile-relative box, pressure
     // 0.15 → 1 (at 55% of the path) → 0.3, quarter-px quantized coords, and a
     // stationary duplicate point every 97 points (the pressure-only updates a
-    // real pointer stream produces — the engine must skip them without moving
+    // real pointer stream produces, the engine must skip them without moving
     // its walk state). `flip` mirrors the curve vertically so a second stroke
     // crosses the first.
     const makeStroke = ({ x0 = 0, y0 = 0, w = TILE_W, h = TILE_H, flip = false, count = STROKE_POINTS, pressure = null } = {}) => {
@@ -147,7 +147,7 @@
       return { settings, fx: authoring ? authoring.dab : null };
     };
 
-    // A ctx Proxy that counts the raster calls the engine makes — so timing
+    // A ctx Proxy that counts the raster calls the engine makes, so timing
     // can be normalized per dab / per op. Forwards everything else untouched.
     const COUNTED = new Set(["fill", "stroke", "drawImage", "fillRect", "strokeRect", "fillText", "putImageData"]);
     const makeCountingCtx = (ctx) => {
@@ -186,7 +186,7 @@
     // ONE-READBACK RULE: fence a timed canvas once per clock, never in a
     // loop that spans frames. Chrome's willReadFrequently heuristic counts
     // getImageData calls per canvas across successive frames and, once it
-    // trips, demotes that canvas to CPU rasterisation for good — a second
+    // trips, demotes that canvas to CPU rasterisation for good, a second
     // fence on a timed buffer in a later frame would silently turn a --gpu
     // timing run into a software one for the rest of the page (the commit
     // column would read like the software table's, with no error anywhere).
@@ -204,11 +204,11 @@
     // segment, like the app's non-dab branch. Returns timing + op counts.
     // Timing: addMs stops only after flushGpu on the buffer (where the dabs
     // landed) AND the target (overflow banks), commitMs after a flush of the
-    // target — both are real raster time, not queue time.
+    // target, both are real raster time, not queue time.
     // Hooks: `beforeCommit(buf, settings, fx)` runs after the last point and
     // before prepareStrokeCommit (the pen-up-pop probe); `composite`
     // overrides the commit's blend mode (default: the stroke's own, from
-    // getStrokeComposite via the shared entry core — multiply for the v3
+    // getStrokeComposite via the shared entry core, multiply for the v3
     // marker / pencil / watercolor, source-over for everything else).
     const paintStroke = (targetCtx, brushId, points, opts) => {
       const { settings } = makeSettings(brushId, opts);
@@ -218,7 +218,7 @@
       const { buf, renderer, fx, drawSettings, pad } = makeStrokeEntryCore(settings, mix ? mix.sample : undefined);
       if (opts.composite) buf.composite = opts.composite;
       const totals = { ops: 0, fill: 0, stroke: 0, drawImage: 0, fillRect: 0, getImageData: 0, save: 0 };
-      // The buffer's ctx can be swapped by a grow (ensure) — re-wrap when it
+      // The buffer's ctx can be swapped by a grow (ensure), re-wrap when it
       // changes and fold the old counter into the totals.
       let counter = null;
       const absorb = () => {
@@ -241,7 +241,7 @@
       if (opts.preEnsure) {
         // Size the buffer over the WHOLE stroke up front so no mid-stroke
         // grow happens (a grow re-allocates and drawImage-copies the buffer,
-        // which is not pixel-lossless on AA edges — see the determinism
+        // which is not pixel-lossless on AA edges, see the determinism
         // scenario). Not the app's flow; used to isolate the renderer walk.
         for (const point of points) buf.ensure(point.x, point.y, pad);
       }
@@ -287,7 +287,7 @@
     };
 
     // RGB-on-white bytes for a rect of an RGBA canvas (what the viewer sees;
-    // raw RGBA deltas blow up at low alpha — see comparePixels).
+    // raw RGBA deltas blow up at low alpha, see comparePixels).
     const onWhiteBytes = (ctx, rect) => {
       const data = ctx.getImageData(rect.x, rect.y, rect.w, rect.h).data;
       const out = new Uint8ClampedArray((data.length / 4) * 3);
@@ -378,7 +378,7 @@
 
     // Composite a transparent work canvas onto white (the app's paper) for the
     // saved PNGs. The engine always paints onto TRANSPARENT layer canvases, so
-    // work canvases stay transparent — a white fill would make the wet mix map
+    // work canvases stay transparent, a white fill would make the wet mix map
     // pick up "white paint" everywhere.
     const onWhite = (work) => {
       const outCanvas = makeCanvas(work.width, work.height);
@@ -452,7 +452,7 @@
     // bytes getImageData hands back, which blows tiny differences up at low
     // alpha (alpha 2: premultiplied 1 vs 2 reads as 128 vs 255), so
     // `maxVisibleDelta` also reports the largest difference as SEEN on white
-    // paper — the number that says whether a mismatch is cosmetic.
+    // paper, the number that says whether a mismatch is cosmetic.
     const comparePixels = (a, b) => {
       const da = a.getContext("2d").getImageData(0, 0, a.width, a.height).data;
       const db = b.getContext("2d").getImageData(0, 0, b.width, b.height).data;
@@ -573,16 +573,16 @@
     // paint-like brushes. The second stroke runs ALONG the first for a stretch
     // (not just across it) so wet pickup has something to drag. Overlap
     // region = the shared stretch; its mean RGB on white is recorded, with
-    // its HSL hue / saturation — the Stage-3 gate:
+    // its HSL hue / saturation, the Stage-3 gate:
     //   km brushes (oil / acrylic / paint / gouache): yellow over blue reads
-    //     GREEN dry AND wet — hue 70..170°, saturation >= 0.2 (not gray);
-    //   watercolor: dry mixing is the multiply glaze (mix 0) — hue 70..170°
+    //     GREEN dry AND wet, hue 70..170°, saturation >= 0.2 (not gray);
+    //   watercolor: dry mixing is the multiply glaze (mix 0), hue 70..170°
     //     (its saturation floor is lower: a thin wash on white is pale);
     //   sample-free brushes (marker, ink, pencil, crayon, glow, spray): a
-    //     stroke pair with a mix map — dry or flagged wet — hashes identical
+    //     stroke pair with a mix map, dry or flagged wet, hashes identical
     //     to one without (they never sample, so Stage 3 can't touch them).
     // Plus CARRY RECOVERY (km brushes with a wet pickup): a wet yellow stroke
-    // crosses a blue patch, then runs 300 px on over blank paper — the mean
+    // crosses a blue patch, then runs 300 px on over blank paper, the mean
     // color of its last 20% must be closer to the brush color than to blue
     // (the carried color fades out; the legacy lerp never recovered).
     const MIX_BRUSHES = ["watercolor", "oil", "acrylic", "gouache", "marker", "paint"];
@@ -630,7 +630,7 @@
       const inHue = (hs) => hs.hue >= MIX_HUE[0] && hs.hue <= MIX_HUE[1];
       // Sample-free brushes: the same stroke pair with and without a mix map
       // (dry, and flagged wet) must hash identical. Every brush in the run
-      // without km params is checked — not just the mixing tiles'.
+      // without km params is checked, not just the mixing tiles'.
       const sampleFree = {};
       for (const brushId of brushes) {
         if (kmParams(brushId)) continue;
@@ -658,7 +658,7 @@
         const km = kmParams(brushId);
         const work = makeCanvas(TILE_W, TILE_H);
         const ctx = work.getContext("2d");
-        // One mix map over the whole work canvas — this canvas plays layer 0.
+        // One mix map over the whole work canvas, this canvas plays layer 0.
         const mix = createMixMap(() => work, work.width, work.height);
         report[brushId] = {};
         const cells = [
@@ -767,34 +767,34 @@
       return { images, report, sampleFree, checks, ok: checks.every((c) => c.pass) };
     };
 
-    // (c) SMUDGE (Stage 4): the three smudge renderers — the legacy square
-    // (ops without `v`), v3 "drag" and v3 "blend" — side by side over the
+    // (c) SMUDGE (Stage 4): the three smudge renderers, the legacy square
+    // (ops without `v`), v3 "drag" and v3 "blend", side by side over the
     // same hard red|blue field: four horizontal passes across the boundary
     // at pressure 0.7 plus one diagonal with the lab's pressure ramp, size
     // 40, strength 0.6, a fresh renderer (stroke) per pass, one point per
     // addPoints call. Smudge paints DIRECTLY on layer 0 (the work canvas).
     // Gated (checks):
-    //   edge — inside each horizontal pass's band, the largest color step
+    //   edge, inside each horizontal pass's band, the largest color step
     //     PERPENDICULAR to the motion (max channel |Δ| on white between
-    //     vertically adjacent pixels — red #e04b2a and blue #1e88e5 are
+    //     vertically adjacent pixels, red #e04b2a and blue #1e88e5 are
     //     near-isoluminant, so luminance alone would be blind here): the
     //     legacy square leaves its box edges as hard steps; drag / blend
     //     must feather (max AND 99th-percentile step below legacy's) and
     //     show no 90-degree corner signature (pixels with a strong step
-    //     both along AND across the motion — a square's edge meeting the
-    //     field boundary — fewer than legacy's and at most a handful);
-    //   carry — a drag stroke that starts inside a red field and runs 300
+    //     both along AND across the motion, a square's edge meeting the
+    //     field boundary, fewer than legacy's and at most a handful);
+    //   carry, a drag stroke that starts inside a red field and runs 300
     //     px onto blank paper: its first ~4 dabs past the field read closer
     //     to red than to paper (color travels with the finger), the last
     //     15% of the tail closer to paper (it thins out); blend must not
     //     carry (its tail is paper too);
-    //   timing — ms per dab at 900x600 AND the real 4000x2500 layer, one
+    //   timing, ms per dab at 900x600 AND the real 4000x2500 layer, one
     //     1x1 fence per timed canvas, legacy / drag / blend at size 40 (the
-    //     runner budgets drag / blend at 4000x2500 — the legacy column is
+    //     runner budgets drag / blend at 4000x2500, the legacy column is
     //     the ~8 ms self-referential drawImage it replaces);
-    //   determinism — rerun + batch 1 vs 7 per v3 mode, pixel-identical.
+    //   determinism, rerun + batch 1 vs 7 per v3 mode, pixel-identical.
     const SMUDGE_MODES = ["legacy", "drag", "blend"];
-    // Target drawImage calls per dab, per renderer — the engine contract the
+    // Target drawImage calls per dab, per renderer, the engine contract the
     // timing's dab count is derived from: legacy re-stamps its square once,
     // drag lays the carry once, blend lays the blurred footprint once.
     const SMUDGE_TARGET_DRAWS = { legacy: 1, drag: 1, blend: 1 };
@@ -848,11 +848,11 @@
       strokes.push(diagonal);
       return strokes;
     };
-    // Feed strokes the way every consumer does — `batch` points per
+    // Feed strokes the way every consumer does, `batch` points per
     // addPoints call (1 = the app, 7 = the wire's batches), a fresh
     // renderer per stroke. Legacy: the direct renderer on the work canvas
     // (layer 0). v3: the buffered path (makeStrokeEntryCore with the work
-    // canvas as smudgeSource — its renderer samples the pre-stroke paper,
+    // canvas as smudgeSource, its renderer samples the pre-stroke paper,
     // the buffer commits at pen-up), exactly like App / opReplay.
     const feedSmudge = (ctx, work, mode, strokes, batch = 1) => {
       let fed = 0;
@@ -977,7 +977,7 @@
         points.push({ x: q4(120 + (x1 - 120) * t), y: q4(y), pressure: SMUDGE_PRESSURE });
       }
       feedSmudge(ctx, strip, mode, [points]);
-      // Dab geometry at pressure 0.7 — the engine's numbers (minSize 0.3,
+      // Dab geometry at pressure 0.7, the engine's numbers (minSize 0.3,
       // pressure^1.35, spacing 0.18 drag / 0.22 blend).
       const dabPx = SMUDGE_SIZE * (0.3 + 0.7 * Math.pow(SMUDGE_PRESSURE, 1.35));
       const step = (mode === "blend" ? 0.22 : 0.18) * dabPx;
@@ -999,7 +999,7 @@
     // Per-dab cost per renderer at both canvas sizes: a 700-px, 600-point
     // stroke through a red|blue band, `runs` fenced runs (median), then ONE
     // untimed Proxy-counted run for the dab count (target drawImage calls ÷
-    // SMUDGE_TARGET_DRAWS). Fresh canvas per run — one fence per canvas.
+    // SMUDGE_TARGET_DRAWS). Fresh canvas per run, one fence per canvas.
     const smudgeTiming = ({ runs = 3 } = {}) => {
       const dims = [
         { key: "900x600", w: TILE_W, h: TILE_H },
@@ -1143,7 +1143,7 @@
       SMUDGE_MODES.forEach((mode, index) => {
         sctx.drawImage(tiles[mode], index * TILE_W, 0);
         const e = modes[mode].edge;
-        label(sctx, `smudge ${mode}  size ${SMUDGE_SIZE}  strength ${SMUDGE_STRENGTH}  pressure ${SMUDGE_PRESSURE}  —  edge step max ${e.maxAcross} p99 ${e.p99Across}, corners ${e.corners}`, index * TILE_W + 12, 10, 14);
+        label(sctx, `smudge ${mode}  size ${SMUDGE_SIZE}  strength ${SMUDGE_STRENGTH}  pressure ${SMUDGE_PRESSURE}  -  edge step max ${e.maxAcross} p99 ${e.p99Across}, corners ${e.corners}`, index * TILE_W + 12, 10, 14);
         tiles[mode].width = 0;
       });
       ["drag", "blend"].forEach((mode, index) => {
@@ -1165,9 +1165,9 @@
     };
 
     // (c2) GOO (Stage 6): displacement + pigment in one dab walk. Checks:
-    //   pigment — a yellow stroke on blank paper must read yellow (not white);
-    //   determinism — two reruns over a field + mix map are pixel-identical;
-    //   timing — per-dab cost on the real 4000x2500 layer (budgeted).
+    //   pigment, a yellow stroke on blank paper must read yellow (not white);
+    //   determinism, two reruns over a field + mix map are pixel-identical;
+    //   timing, per-dab cost on the real 4000x2500 layer (budgeted).
     const scenarioGoo = ({ runs = 3 }) => {
       const images = [];
       const checks = [];
@@ -1200,7 +1200,7 @@
         return pts;
       };
       // Pigment on blank paper: the stroke's OWN pixels (alpha > 0) must read
-      // yellow, not white — measure only what the goo actually laid down.
+      // yellow, not white, measure only what the goo actually laid down.
       const pigment = makeCanvas(TILE_W, TILE_H / 2);
       paintGoo(pigment, gooSettings(0.5), straight(), null);
       const mean = pixelStats(pigment).meanRgb;
@@ -1285,7 +1285,7 @@
     // drawImage-copies the old canvas, and that copy is not pixel-lossless on
     // anti-aliased edges (measured: a few px, tiny deltas), and batching moves
     // the grow relative to the dabs. The app's consumers all ensure() per
-    // point, so they share one grow history — that lossiness is reported
+    // point, so they share one grow history, that lossiness is reported
     // separately as `growCopy` (informational, not a failure).
     const scenarioDeterminism = ({ brushes, size = 32 }) => {
       const report = {};
@@ -1314,7 +1314,7 @@
         };
         if (!rerun.identical || !batching.identical || painted === 0) allIdentical = false;
         [one, two, onePre, sevenPre].forEach((c) => { c.width = 0; });
-        // Stage 3: the same pair with the km path ACTIVE — a committed
+        // Stage 3: the same pair with the km path ACTIVE, a committed
         // under-stroke + mix map, then the tested stroke wet (pickup) or dry
         // (mix) over it, so its dabs sample and mix. The under-stroke is dry
         // and deterministic, so only the km walk varies.
@@ -1344,7 +1344,7 @@
     };
 
     // (e) TIMING: 5 runs of the 600-point stroke per brush/size (median ms,
-    // plain ctx — no Proxy in the timed runs), commit timed separately, then
+    // plain ctx, no Proxy in the timed runs), commit timed separately, then
     // ONE extra counted run through the Proxy for raster-op totals. Dabs are
     // estimated from ops ÷ ops-per-dab, where ops-per-dab is calibrated from
     // isolated single-point taps (the engine contract: a first point stamps
@@ -1387,7 +1387,7 @@
           const opsPerDab = tapOps / taps;
           const dabsEst = opsPerDab > 0 ? counted.counts.ops / opsPerDab : 0;
           const addMedian = median(addTimes);
-          // Stage 3: the same stroke with the km path sampling on EVERY dab —
+          // Stage 3: the same stroke with the km path sampling on EVERY dab -
           // over a solid under-fill (the typical case: crossing a stroke, the
           // carry settles, few color-bucket changes) and over a gradient
           // (the worst case: the bucket changes every few dabs, so the tint
@@ -1399,7 +1399,7 @@
           const params = kmParams(brushId);
           if (params) {
             const wet = !params.dry;
-            // Interleaved runs — blank / solid / gradient per iteration — so
+            // Interleaved runs, blank / solid / gradient per iteration, so
             // a machine-state drift between separate loops can't read as a
             // km cost (the software rasteriser drifts by more than the budget
             // between loops); best-of-N per case, KM_RUNS iterations.
@@ -1439,9 +1439,9 @@
             const per100 = (ms) => (dabsEst > 0 ? +((ms / dabsEst) * 100).toFixed(3) : null);
             // The km CPU cost on its own: the same dab walk against a no-op
             // ctx (nothing rasterises), with and without a sampling mix map.
-            // What is left is exactly what Stage 3 added per dab — the mix
+            // What is left is exactly what Stage 3 added per dab, the mix
             // (3 mixLatent + latentToRgb), the bucket bookkeeping and the
-            // odd tint-ring re-tint on a bucket change — free of the raster
+            // odd tint-ring re-tint on a bucket change, free of the raster
             // clock, whose run-to-run swing on either renderer is several
             // times this budget. Interleaved, best-of-KM_RUNS. This is the
             // number the KM budget gates on; the raster deltas above are
@@ -1549,8 +1549,8 @@
 
     // (g) GOLDEN: replay the frozen op fixture (scripts/lab/golden-ops.json,
     // built by make-golden-ops.mjs) group by group through
-    // opReplay.replayFrameOnto — the film-export / spectator consumer, with
-    // its own fresh mix map and per-stroke buffers per call — onto ONE reused
+    // opReplay.replayFrameOnto, the film-export / spectator consumer, with
+    // its own fresh mix map and per-stroke buffers per call, onto ONE reused
     // transparent 4000x2500 world canvas (replayFrameOnto clears it), and
     // SHA-256 the full RGBA readback. Each group replays `runs` times so an
     // intra-run wobble shows up as `stable: false` before anyone compares
@@ -1569,7 +1569,7 @@
     const loadFixture = async () => {
       const res = await fetch("/scripts/lab/golden-ops.json", { cache: "no-store" });
       if (!res.ok) {
-        throw new Error(`golden-ops.json: HTTP ${res.status} — run node scripts/lab/make-golden-ops.mjs`);
+        throw new Error(`golden-ops.json: HTTP ${res.status}, run node scripts/lab/make-golden-ops.mjs`);
       }
       return res.json();
     };
@@ -1610,7 +1610,7 @@
           replayMs: +(replayMs / runs).toFixed(1),
         };
         if (previews) {
-          // 1/4-scale on white for the eyeball — the hash is on the full canvas.
+          // 1/4-scale on white for the eyeball, the hash is on the full canvas.
           const sheet = makeCanvas(CANVAS_WIDTH / 4, CANVAS_HEIGHT / 4);
           const sctx = sheet.getContext("2d");
           sctx.fillStyle = "#ffffff";
@@ -1630,13 +1630,13 @@
     // the other clients) flushes lazily inside sample(). The two must read
     // the same bytes at the same op-order points (P5), and layer 0 has
     // writers that never markDirty (eraser / smudge / shape / text draw the
-    // layer directly) — so the map keeps a ledger of what its prefetches read
+    // layer directly), so the map keeps a ledger of what its prefetches read
     // and invalidatePrefetch() (called by App at every unmarked write) hands
     // it back. One op script, rendered three ways:
-    //   lazy     — markDirty after commits, sample() flushes (opReplay);
-    //   prefetch — + mix.flush() after every commit (the idle prefetch) and
+    //   lazy, markDirty after commits, sample() flushes (opReplay);
+    //   prefetch, + mix.flush() after every commit (the idle prefetch) and
     //              mix.invalidatePrefetch() after every unmarked write (App);
-    //   naive    — flush after every commit, never invalidate (the bug).
+    //   naive, flush after every commit, never invalidate (the bug).
     // Script A: dry blue stroke, eraser straight through it (direct, unmarked),
     // wet yellow stroke along the same path. A wet dab over the erased stretch
     // must see paper (the lazy map re-reads after the eraser); a prefetch that
@@ -1645,12 +1645,12 @@
     // Script B: dry blue, a wet stroke (its first dab is the lazy flush
     // point), eraser, a second wet stroke over the erased stretch. The lazy
     // mirror is stale there by design (no mark, no re-read), and the ledger
-    // must NOT re-dirty past a sample — prefetch must still equal lazy.
+    // must NOT re-dirty past a sample, prefetch must still equal lazy.
     // What is compared: the SAMPLE SEQUENCE every variant's dabs read (P5's
-    // actual invariant — the same bytes at the same op-order points) and the
+    // actual invariant, the same bytes at the same op-order points) and the
     // pixels. On the GPU renderer a readback (the prefetch's flush draws
     // layer 0 into the mirror) can leave a ±1 rounding wobble on a couple
-    // of pixels of the strokes that follow — raster noise, not op order —
+    // of pixels of the strokes that follow, raster noise, not op order -
     // so there, identical samples with a <= 1-unit visible pixel delta still
     // count as equivalent; the software renderer (golden's) must be exact.
     // Teeth = the naive prefetch READS different bytes than lazy on A.
@@ -1819,7 +1819,7 @@
       loadFixture,
       runScenario,
     };
-    status.textContent = `engine loaded — brushes: ${listBrushes().join(", ")}. Call lab.runScenario({ kind }) — kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
+    status.textContent = `engine loaded, brushes: ${listBrushes().join(", ")}. Call lab.runScenario({ kind }), kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
   </script>
 </body>
 </html>

@@ -22,7 +22,7 @@ const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
   // Accounts deliberately UNCONFIGURED for this suite. server.js loads the
   // repo-root .env, which sets PB_URL, and with accounts configured a guest is
-  // refused entry to a private ('friends') room — that is the intended product
+  // refused entry to a private ('friends') room, that is the intended product
   // rule, but it would stop this suite's plain `kid` client from entering
   // PRIVSPEC to set up its spectator-lockdown case. This suite is about
   // moderation, not auth, so it pins the auth-independent deployment shape; the
@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // A bare spectator/notify socket that records every frame.
@@ -152,7 +152,7 @@ const run = async () => {
 
   // ---- 3. First-frame auth + no-token wait ---------------------------------
   {
-    // SimClient now authenticates via first frame (token:null) — a normal join
+    // SimClient now authenticates via first frame (token:null), a normal join
     // must still complete fast.
     const t0 = Date.now();
     const c = new SimClient(BASE_WS, { room: "AUTHCHK", name: "c" });
@@ -180,7 +180,7 @@ const run = async () => {
   // ---- 4b. Flag self-corroboration is closed --------------------------------
   {
     // Two guest sockets from the SAME machine (loopback IP) must NOT be able to
-    // corroborate a Tier-2 auto-hide between them — they're one "person".
+    // corroborate a Tier-2 auto-hide between them, they're one "person".
     const host = new SimClient(BASE_WS, { room: "MAIN", name: "host" });
     await host.connect();
     const s1 = new SimClient(BASE_WS, { room: "MAIN", name: "s1" });

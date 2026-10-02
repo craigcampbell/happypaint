@@ -43,7 +43,7 @@ server.err.log
 # Default local DATA_DIR (server.js resolveDataDir)
 .data/
 
-# Local secrets / config — never commit
+# Local secrets / config, never commit
 .env
 .session-secret
 
@@ -52,7 +52,7 @@ pb_data/
 app_data/
 backups/
 
-# Coloring-sheet library (1GB+ of images — served from a volume, never committed)
+# Coloring-sheet library (1GB+ of images, served from a volume, never committed)
 coloring-library/
 src/coloring-sheets/
 

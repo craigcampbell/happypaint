@@ -1,10 +1,10 @@
 // Regression harness for the 2026-09 security audit. Every check is an attack
 // from the audit, run against throwaway servers (scratch DATA_DIR, mock
 // PocketBase, env ADMIN_KEY):
-//   server A — TRUSTED_PROXY_HOSTS names an address that is NOT our peer, so
+//   server A: TRUSTED_PROXY_HOSTS names an address that is NOT our peer, so
 //              cf-connecting-ip must be ignored (the "origin reached directly"
 //              case), plus tiny gallery ceiling + join-miss budget.
-//   server B — trusts loopback, i.e. behaves like production behind the tunnel.
+//   server B, trusts loopback, i.e. behaves like production behind the tunnel.
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -20,7 +20,7 @@ const results = { checks: [], pass: 0, fail: 0 };
 const check = (name, ok, extra = '') => {
   results.checks.push({ name, ok, extra });
   if (ok) results.pass += 1; else results.fail += 1;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? ` — ${extra}` : ''}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? `, ${extra}` : ''}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -132,7 +132,7 @@ check('…while a small one under the ceiling is fine', (await saveArt(A, { user
   // Bare `node server.js` must not listen on the LAN.
   const lan = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal);
   if (!lan) {
-    check('default bind is loopback-only (no LAN interface to test — skipped)', true);
+    check('default bind is loopback-only (no LAN interface to test, skipped)', true);
   } else {
     const reachable = await new Promise((resolve) => {
       const sock = net.connect({ host: lan.address, port: B.port });

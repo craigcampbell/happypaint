@@ -1,4 +1,4 @@
-// AI Assist v1 — LOCAL & DETERMINISTIC helpers (docs/ai-policy.md §"Allowed AI v1").
+// AI Assist v1: LOCAL & DETERMINISTIC helpers (docs/ai-policy.md §"Allowed AI v1").
 // Mirrors src/utils/aiAssist.js, adapted to RN/AsyncStorage + Happy Paint types.
 //
 // Per the AI policy, v1 favors local deterministic helpers: they work offline,
@@ -83,12 +83,12 @@ export async function saveAiConsent(record: {
   try {
     await AsyncStorage.setItem(CONSENT_KEY, JSON.stringify(value));
   } catch {
-    // non-fatal — consent just won't persist in a blocked store
+    // non-fatal, consent just won't persist in a blocked store
   }
   return value;
 }
 
-// Revoke consent (immediate, never gated — policy §Revocation).
+// Revoke consent (immediate, never gated, policy §Revocation).
 export async function revokeAiConsent(): Promise<AiConsent> {
   const current = (await loadAiConsent()) ?? {
     version: AI_POLICY_VERSION,
@@ -107,7 +107,7 @@ export async function revokeAiConsent(): Promise<AiConsent> {
 }
 
 // Is AI usable right now? Consent must be present, for the current policy
-// version, not revoked, and — for a child account — guardian-approved.
+// version, not revoked, and, for a child account, guardian-approved.
 export function isAiConsented(consent: AiConsent | null | undefined): boolean {
   if (!consent) {
     return false;
@@ -315,7 +315,7 @@ export function shufflePrompt(seed?: number): PromptGeneration {
 
 // ---- Brush recipe from plain language (kind: 'brush_recipe') ---------------
 // Maps phrases to existing Happy Paint brush parameters. Produces a recipe, not
-// images (policy). Deterministic keyword matching — no model.
+// images (policy). Deterministic keyword matching, no model.
 
 const BRUSH_KEYWORDS: Array<{ match: string[]; settings: Partial<BrushRecipe> }> = [
   // base brush types

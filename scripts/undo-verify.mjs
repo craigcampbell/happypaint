@@ -1,4 +1,4 @@
-// Undo takes back MY last stroke — and nobody else's.
+// Undo takes back MY last stroke, and nobody else's.
 //
 // Since layers became shared room state, a friend's op paints into the same
 // layer stack we do, so the snapshot an undo entry holds ("my layer before my
@@ -10,11 +10,11 @@
 //
 // What it checks, with two Chromium clients (A = us, B = a friend) in one room:
 //   A. Placement: undo is the floating pill over the canvas top-right on
-//      desktop and its own button at the end of the quick bar on a phone —
+//      desktop and its own button at the end of the quick bar on a phone -
 //      and it is GONE from the tool rail's Actions list in both.
 //   B. Interleaved strokes: A·B·A·B, then two undos and a redo. Only A's own
 //      strokes move; B's stay exactly where they were, every step.
-//   C. Crossing strokes: B's stroke drawn ACROSS A's survives A's undo — the
+//   C. Crossing strokes: B's stroke drawn ACROSS A's survives A's undo, the
 //      case the old snapshot restore always destroyed.
 //   D. The known edge: a local undo does not retract the op from the room, so
 //      B still sees A's undone stroke. Asserted so the limit stays visible.
@@ -54,7 +54,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 const guard = async (name, fn) => {
   try { await fn(); } catch (e) { check(name, false, "harness threw: " + String(e).slice(0, 220)); }
@@ -144,7 +144,7 @@ async function drawStroke(page, g, from, to, steps = 14) {
   await sleep(300); // the stroke's end op + its wire flush
 }
 
-// Four columns that never touch, plus the probe box over each — in canvas
+// Four columns that never touch, plus the probe box over each, in canvas
 // pixels, sized to the SHORTER of the two clients so every point exists on both.
 function lanes(gA, gB) {
   const w = Math.min(gA.cw, gB.cw);
@@ -198,7 +198,7 @@ try {
     const menuUndo = await A.$$eval(".topbar-actions button", (els) => els.filter((e) => /^undo$/i.test(e.textContent.trim())).length);
     check("A4 undo is gone from the tool rail's Actions", railUndo === 0, `${railUndo} found`);
     check("A5 undo is gone from the desktop studio menu", menuUndo === 0, `${menuUndo} found`);
-    // Redo stayed where it was — only undo was promoted.
+    // Redo stayed where it was, only undo was promoted.
     const railRedo = await A.$$eval(".mobile-actions-grid button", (els) => els.filter((e) => /redo/i.test(e.textContent)).length);
     check("A6 redo is still in the rail", railRedo === 1, `${railRedo} found`);
     await A.screenshot({ path: path.join(SHOTS, "desktop-fab.png") });

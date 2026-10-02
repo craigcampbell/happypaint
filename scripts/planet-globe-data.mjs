@@ -3,14 +3,14 @@
 //
 // Source (public domain): Natural Earth 1:110m admin-0 countries GeoJSON,
 //   https://github.com/nvkelso/natural-earth-vector (geojson/ne_110m_admin_0_countries.geojson)
-//   Natural Earth data is free of copyright (public domain) — see
+//   Natural Earth data is free of copyright (public domain), see
 //   https://www.naturalearthdata.com/about/terms-of-use/
 // ISO alpha-2 codes use ISO_A2_EH (the "earshot" code Natural Earth keeps
 //   filled where ISO_A2 is -99). Country *names* are the curated set already
 //   shipped in src/data/world-paths.json so the globe, the server flag names
 //   and the flag rooms never disagree.
 // Tiny nations too small to have a 110m polygon keep a lon/lat centroid (see
-//   DOT_CENTROIDS below — approximate territory centres, degrees).
+//   DOT_CENTROIDS below, approximate territory centres, degrees).
 //
 // Usage:  node scripts/planet-globe-data.mjs [path-to-ne110.geojson]
 // (fetches the GeoJSON when no path is given; needs network once)
@@ -71,7 +71,7 @@ function cleanRing(ring) {
   return out;
 }
 
-function ringArea2(r) { // signed shoelace in deg² — only used to rank rings
+function ringArea2(r) { // signed shoelace in deg², only used to rank rings
   let a = 0;
   for (let i = 0; i < r.length; i += 1) {
     const [x1, y1] = r[i];
@@ -137,7 +137,7 @@ async function main() {
   }
 
   const out = {
-    source: "Natural Earth 1:110m admin-0 countries (public domain — naturalearthdata.com), via github.com/nvkelso/natural-earth-vector geojson; lon/lat degrees, 0.1° quantised, antimeridian-unwrapped. Tiny-nation centroids approximate. Built by scripts/planet-globe-data.mjs.",
+    source: "Natural Earth 1:110m admin-0 countries (public domain, naturalearthdata.com), via github.com/nvkelso/natural-earth-vector geojson; lon/lat degrees, 0.1° quantised, antimeridian-unwrapped. Tiny-nation centroids approximate. Built by scripts/planet-globe-data.mjs.",
     names: wp.names,
     countries,
     dots,

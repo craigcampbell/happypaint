@@ -1,4 +1,4 @@
-// Shared layer stack — the SERVER boundary. Raw WS, no browser: this is where
+// Shared layer stack, the SERVER boundary. Raw WS, no browser: this is where
 // "a reload, a rejoin and a collaborator all see the same stack" is won or lost.
 //
 //  P1  every frame materializes one base layer (legacy rooms included)
@@ -39,7 +39,7 @@ server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const check = (n, ok, d = "") => {
-  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? " — " + d : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? ": " + d : ""}`);
   if (!ok) fails += 1;
 };
 
@@ -171,7 +171,7 @@ const run = async () => {
   await sleep(300);
   const capped = last(A, "layer_add");
   check("P7 the layer cap holds at 6 with a clear reason",
-    capped?.layers?.length === 6 && typeof capDenied?.reason === "string", `${capped?.layers?.length} layers — "${capDenied?.reason}"`);
+    capped?.layers?.length === 6 && typeof capDenied?.reason === "string", `${capped?.layers?.length} layers: "${capDenied?.reason}"`);
 
   // ---- Delete purges the layer's ops --------------------------------------
   // Use a layer that is NOT at index 0: the bottom layer is protected.
@@ -201,7 +201,7 @@ const run = async () => {
   const soloHist = await waitFor(soloJoiner, (m) => m.type === "history");
   const survivors = soloHist?.frames?.[0]?.layers || [];
   check("P8c the bottom layer can never be deleted (goo/wet-mix read layer 0)",
-    survivors.some((l) => l.id === baseId) && !!baseDenied, `${survivors.length} layers — "${baseDenied?.reason}"`);
+    survivors.some((l) => l.id === baseId) && !!baseDenied, `${survivors.length} layers: "${baseDenied?.reason}"`);
 
   // ---- Legacy ops + persistence -------------------------------------------
   A.msgs.length = 0;

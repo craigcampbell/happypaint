@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { chromium } from 'playwright';
 
-// Phase4 CLIENT FIXTURE realtime proof — NOT a server-integration claim. A
+// Phase4 CLIENT FIXTURE realtime proof: NOT a server-integration claim. A
 // fixture WebSocket (+ mock PocketBase auth-refresh) impersonates the future
 // phase4 backend (animation history.checkpoint subsets, scene_fetch with
 // frameId, rate_limited resync, frameTiming) while the REAL studio client runs
@@ -78,7 +78,7 @@ wss.on('connection', (ws, req) => {
     }));
     setTimeout(() => script.onConnect?.(ws, record), 60);
   }
-  // Any other room (homepage previews etc.): leave it hanging — read-only wait.
+  // Any other room (homepage previews etc.): leave it hanging, read-only wait.
 });
 await new Promise((r) => server.listen(FIXTURE_PORT, '127.0.0.1', r));
 
@@ -106,7 +106,7 @@ async function waitForVite(timeoutMs = 90000) {
 const results = [];
 const check = (name, cond, detail) => {
   results.push({ name, ok: !!cond });
-  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : ` — ${detail}`}`);
+  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : `, ${detail}`}`);
 };
 
 let browser;
@@ -137,10 +137,10 @@ try {
     const marker = (id, color, dy, seed) => stroke(id, { brush: 'marker', color, size: 500, opacity: 1, variation: 0, seed }, band(dy));
     const wetOil = (id, color, dy, seed) => stroke(id, { brush: 'oil', color, size: 420, opacity: 1, variation: 0.1, seed, v: 2, wet: true }, band(dy));
 
-    // Scene 1 cels: f0 red (marker prefix + WET OIL tail — exercises the mix
+    // Scene 1 cels: f0 red (marker prefix + WET OIL tail, exercises the mix
     // continuation), f1 blue, f2 purple, f3 orange. Scene 2: g0 green, g1 yellow.
     // Bands straddle the doc center (1250) so center-pixel probes always land
-    // on paint (a ±150 pair leaves a transparent gap at 1250 — measured).
+    // on paint (a ±150 pair leaves a transparent gap at 1250, measured).
     const opsF0 = [...marker('f0a', '#e02030', -60, 11), ...wetOil('f0b', '#e02030', 60, 12)];
     const opsF1 = [...marker('f1a', '#2040e0', -60, 21), ...marker('f1b', '#2040e0', 60, 22)];
     const opsF2 = [...marker('f2a', '#8020c0', -60, 31), ...marker('f2b', '#8020c0', 60, 32)];
@@ -188,7 +188,7 @@ try {
     const fullF0PlusLiveW = await replay([...opsF0, ...liveW]);
     // Mix continuation samples the FULL replay's layer-0 map answers after the
     // last op, as a continuation (dirty rects re-read from the final canvas on
-    // demand — the same thing the live app's idle prefetch produces; the raw
+    // demand, the same thing the live app's idle prefetch produces; the raw
     // ledger itself is legitimately timing-dependent, so samples are the check).
     const probes = [[1300, 1190], [2000, 1190], [2700, 1310], [2000, 1310], [500, 500], [2000, 1250]];
     const probeMap = createMixMap(() => full.f0.canvas, W, H);
@@ -355,8 +355,8 @@ try {
     const { context, page } = await openRoom(ROOM);
     const ready = await waitFor(page, () => (window.__drawesomeCheckpoint?.joinStep() >= 3 ? true : null), null, 90000);
     check('BUDGET: room joined', ready === true);
-    // Activate cel 4 (index 3): the radius wants frames 1..5 hydrated — 5 ×
-    // 2-layer? (1 layer here) — 5 × 40MB = 200MB ≤ 240MB budget... so also
+    // Activate cel 4 (index 3): the radius wants frames 1..5 hydrated: 5 ×
+    // 2-layer? (1 layer here): 5 × 40MB = 200MB ≤ 240MB budget... so also
     // confirm accounting shape: never above budget, active always hydrated.
     await page.evaluate(() => { [...document.querySelectorAll('.fs-cel-thumb')][3]?.click(); });
     const settled = await waitFor(page, () => {
@@ -387,7 +387,7 @@ try {
         const bad = { schemaVersion: 1, rendererVersion: fixture.rendererVersion, frames: [corrupt(fixture.desc.f0)] };
         ws.send(JSON.stringify(historyMsg('sc1', ['f0', 'f1', 'f2', 'f3'], [...fixture.ops.f0.slice(2), ...opsOf(['f1', 'f2', 'f3'])], bad.frames)));
         // A live op lands DURING the (doomed) decode: deferred behind the
-        // replay, it must NOT be drained after the nack — the full baseline
+        // replay, it must NOT be drained after the nack, the full baseline
         // below already carries it.
         setTimeout(() => {
           for (const op of fixture.liveB) ws.send(JSON.stringify({ type: 'op', op }));
@@ -677,7 +677,7 @@ try {
     await context.close();
   }
 
-  // ===== Scenario I: post-join live wet stroke — cp joiner vs full joiner ==========
+  // ===== Scenario I: post-join live wet stroke, cp joiner vs full joiner ==========
   {
     const ROOM_CP = 'P4I000CP';
     const ROOM_FULL = 'P4IFULL';

@@ -5,7 +5,7 @@
 //   - the deadline is DERIVED from a persisted timestamp, so a restart can
 //     neither skip nor double-fire a wipe (the lesson from the daily wipe);
 //   - rooms with their own faster cycle (DAILY, GUESS, PHONE) are excluded;
-//   - private rooms are never wiped — someone's own room is not a commons;
+//   - private rooms are never wiped, someone's own room is not a commons;
 //   - the room can VOTE to keep the canvas (needs 2 distinct people);
 //   - anyone can fork the art into a private room, leaving the public one alone.
 //
@@ -35,7 +35,7 @@ writeFileSync(path.join(ROOM_DIR, "MAIN.json"), JSON.stringify({
   history: staleOps, audience: "kid_safe", listed: true,
   wipeAt: Date.now() - 10 * 60_000, savedAt: Date.now() - 10 * 60_000,
 }));
-// A PRIVATE room, equally old — must NOT be touched.
+// A PRIVATE room, equally old, must NOT be touched.
 writeFileSync(path.join(ROOM_DIR, "ZZPRIV.json"), JSON.stringify({
   history: staleOps, audience: "friends", listed: false,
   wipeAt: Date.now() - 10 * 60_000, savedAt: Date.now() - 10 * 60_000,
@@ -52,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 let deviceSeed = 0;
@@ -133,7 +133,7 @@ const run = async () => {
   const dup = [...a.msgs].reverse().find((m) => m.type === "wipe_state");
   check("the same person cannot vote twice", !dup || dup.wipe.keepVotes === 1);
 
-  // REGRESSION (review): reconnecting / a second tab must NOT count again —
+  // REGRESSION (review): reconnecting / a second tab must NOT count again -
   // a fresh socket reusing the same device key is still one person.
   const aAgain = await connect("MAIN", a.deviceKey);
   aAgain.msgs.length = 0;
@@ -188,7 +188,7 @@ const run = async () => {
     !!capDenied && (!capState || capState.wipe.wipeAt <= beforeCap + 60_000),
     capDenied ? `denied: ${capDenied.reason}` : `no denial; horizon ${((beforeCap - Date.now()) / DAY).toFixed(2)}d out`);
 
-  // A guard that refuses must SAY so — silent failure was a confirmed finding.
+  // A guard that refuses must SAY so, silent failure was a confirmed finding.
   const priv2 = await connect("ZZPRIV");
   priv2.send({ type: "fork_private" });
   const forkDenied = await waitFor(priv2, (m) => m.type === "fork_denied", 3000);

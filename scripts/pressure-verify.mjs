@@ -1,5 +1,5 @@
 /* eslint-env browser, node */
-// Run: node scripts/pressure-verify.mjs  (Chromium via CDP — the one way to dispatch a PEN with force)
+// Run: node scripts/pressure-verify.mjs  (Chromium via CDP, the one way to dispatch a PEN with force)
 // Pressure mode check: for each Hand & pen "Pressure" mode, draw one pen
 // stroke whose force ramps 0.08 -> 1.0 left to right, then compare the light
 // end and the heavy end of the stroke on the display canvas:

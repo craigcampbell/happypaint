@@ -45,10 +45,10 @@ const setClock = (iso) => writeFileSync(CLOCK_FILE, iso);
 setClock("2026-09-15T12:00:00.000Z");
 
 // Pre-seed BEFORE boot:
-//  ARTOLD — a LISTED artist studio last saved 40 days ago. Two things ride on
+//  ARTOLD, a LISTED artist studio last saved 40 days ago. Two things ride on
 //    it: the gallery must source persisted (offline) rooms, and the idle sweep
 //    must NOT delete artist work on the ordinary short cycle.
-//  OLDFRN — an unowned friends room saved 2 days ago: the ordinary sweep DOES
+//  OLDFRN, an unowned friends room saved 2 days ago: the ordinary sweep DOES
 //    reap it (control proving the protection is artist-specific).
 mkdirSync(path.join(SCRATCH, ".rooms"), { recursive: true });
 writeFileSync(path.join(SCRATCH, ".rooms", "ARTOLD.json"), JSON.stringify({
@@ -105,7 +105,7 @@ const PB = `http://127.0.0.1:${mock.address().port}`;
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 220) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 220) : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -362,7 +362,7 @@ const run = async () => {
   const pStroke = sendDraw(stranger, { brush: "ink", color: "#111", size: 5 });
   check("approved painter's draw op relays", !!(await gotStroke(owner, pStroke)));
 
-  // Approved painter tries host/moderation powers — all denied, incl. clear.
+  // Approved painter tries host/moderation powers, all denied, incl. clear.
   stranger.ws.send(JSON.stringify({ type: "lock" }));
   stranger.ws.send(JSON.stringify({ type: "kick", targetId: oConn.userId }));
   stranger.ws.send(JSON.stringify({ type: "clear" }));
@@ -538,7 +538,7 @@ const run = async () => {
   check("spectator roster stays count-only", (lastOf(spec, "userList") || {}).count >= 0 && !(lastOf(spec, "userList") || {}).users);
   await connect(FR + "ZZ", { spectate: true }).catch(() => null);
   const frGuest = await connect(FR, { token: null });
-  // FR converted to artist_public above — make a NEW private room for the checks.
+  // FR converted to artist_public above, make a NEW private room for the checks.
   const pv = await api("/api/rooms", { method: "POST", token: "painter_token", body: { audience: "friends", title: "pv" } });
   const PV = pv.json.code;
   const pvGuest = await connect(PV, { token: null });
@@ -588,7 +588,7 @@ const run = async () => {
 
   // Wall stamps from an opted-in artist room: server-assigned, client can't forge.
   // Attribution requires the poster to BE the studio's verified owner (or an
-  // approved painter) — painter_token owns this studio, so the stamp applies.
+  // approved painter), painter_token owns this studio, so the stamp applies.
   const wallRes = await api("/api/wall", {
     method: "POST",
     token: "painter_token",

@@ -1,7 +1,7 @@
 // Native-app feel on phones and iPads.
 //
 // Reported bug: while kids are DRAWING, the platform's long-press UI keeps
-// interrupting — Android Chrome's "Save image / Copy image" sheet, iOS's
+// interrupting: Android Chrome's "Save image / Copy image" sheet, iOS's
 // "Copy · Look Up · Translate" callout, a drag-ghost peeling off an image,
 // the page zooming on a double tap or an input focus.
 //
@@ -28,7 +28,7 @@ try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 
 // Seed the public wall so /wall and the homepage strip actually render <img>
-// tiles — an empty wall would silently SKIP every image check, which is
+// tiles, an empty wall would silently SKIP every image check, which is
 // exactly where "Save image / Copy image" bites. The server loads these at
 // boot from DATA_DIR/.wall; nothing in the app is modified.
 const PNG_1PX = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAHElEQVQoz2NkYPjPQApgYhhVMKpgVMGoAtIUAABuVQEBSk1DPQAAAABJRU5ErkJggg==";
@@ -56,11 +56,11 @@ const results = [];
 let device = "";
 const check = (name, ok, detail = "") => {
   results.push({ device, name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 const skip = (name, detail = "") => {
   results.push({ device, name, ok: true, skipped: true });
-  console.log(`SKIP  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`SKIP  ${name}${detail ? ": " + detail : ""}`);
 };
 // One crash in a probe must never hide the rest of the suite.
 const guard = async (name, fn) => {
@@ -86,7 +86,7 @@ const HOT = {
 };
 
 // Capture + bubble listeners. The bubble one reads defaultPrevented in a
-// setTimeout so it reports the state AFTER every handler on the page ran —
+// setTimeout so it reports the state AFTER every handler on the page ran -
 // that is what the browser itself consults before showing the callout.
 const INIT = () => {
   window.__cm = [];
@@ -110,7 +110,7 @@ async function targetBox(page, sel) {
     const el = document.querySelector(s);
     if (!el) return { present: false };
     let r = el.getBoundingClientRect();
-    // A finger can reach anything below the fold — scroll it up before probing.
+    // A finger can reach anything below the fold, scroll it up before probing.
     if (r.height > 1 && (r.bottom <= 0 || r.top >= window.innerHeight)) {
       el.scrollIntoView({ block: "center" });
       r = el.getBoundingClientRect();
@@ -160,7 +160,7 @@ async function clearSelection(page) {
 }
 
 // -webkit-touch-callout is a touch-platform property. Playwright's desktop
-// WebKit build may not expose it to getComputedStyle at all — in that case an
+// WebKit build may not expose it to getComputedStyle at all, in that case an
 // empty computed value means "engine can't report it", NOT "the rule is
 // missing". Probe body (which index.css sets to none) to tell the two apart.
 async function calloutReportable(page) {
@@ -201,10 +201,10 @@ async function runPage(page, cdp, engine, pageName, url) {
       if (!box.present) { skip(P(`C1 long-press ${sel}`), "not on this page"); return; }
       if (!box.sized) { skip(P(`C1 long-press ${sel}`), "zero-size element"); return; }
 
-      // (a) Synthetic probe — deterministic, isolates THIS element's handler.
+      // (a) Synthetic probe, deterministic, isolates THIS element's handler.
       const syn = await syntheticContextMenu(page, sel);
       check(P(`C1 contextmenu prevented (synthetic) ${sel}`), !!syn?.prevented,
-        syn?.prevented ? "preventDefault() called" : "NOT prevented — platform menu would open");
+        syn?.prevented ? "preventDefault() called" : "NOT prevented, platform menu would open");
 
       if (!box.onScreen) { skip(P(`C1 long-press ${sel}`), "off-screen; synthetic probe only"); return; }
 
@@ -243,13 +243,13 @@ async function runPage(page, cdp, engine, pageName, url) {
       // WebKit retargets pointer/mouse events to whatever still holds pointer
       // capture (the overlay canvas grabs it on pointerdown). If the event did
       // not land on the element under the press point, the result says nothing
-      // about THIS target — report it as unmeasured rather than a false pass.
+      // about THIS target, report it as unmeasured rather than a false pass.
       const landed = bubble[0]?.target || "";
       const retargeted = bubble.length
         && !(landed.startsWith(box.hit) || box.hit.startsWith(landed));
       if (retargeted) {
         skip(P(`C1 long-press ${sel}`),
-          `event retargeted to "${landed}" (pointer capture) while the press point holds "${box.hit}" — not measurable on this engine`);
+          `event retargeted to "${landed}" (pointer capture) while the press point holds "${box.hit}", not measurable on this engine`);
       } else if (!bubble.length) {
         skip(P(`C1 long-press ${sel}`), `no contextmenu reached the page (hit=${box.hit})`);
       } else {
@@ -275,7 +275,7 @@ async function runPage(page, cdp, engine, pageName, url) {
     if (engine === "webkit" && !calloutTestable) {
       skip(P("C3 -webkit-touch-callout is reportable"),
         `this WebKit build does not expose -webkit-touch-callout to getComputedStyle ` +
-        `(body="${callout.value || "(empty)"}", CSS.supports=${callout.supports}) — assertion cannot run`);
+        `(body="${callout.value || "(empty)"}", CSS.supports=${callout.supports}), assertion cannot run`);
     }
     const styles = await page.evaluate((sels) => {
       const out = [];
@@ -375,7 +375,7 @@ async function runPage(page, cdp, engine, pageName, url) {
 
   // ---- C5b: the same question asked of the shipped stylesheet ------------
   // Only a handful of inputs are mounted at any moment (the chat composer is
-  // not even reachable on a phone — .cc-pill is display:none at mobile
+  // not even reachable on a phone, .cc-pill is display:none at mobile
   // widths), so a runtime-only sweep silently misses the fields that matter.
   // Read the CSSOM instead: every rule that sets a font-size on an input.
   if (pageName === "room") {
@@ -467,7 +467,7 @@ async function runPage(page, cdp, engine, pageName, url) {
       shell.viewport.slice(0, 110));
     if (!shell.overscroll && !shell.overscrollSupported) {
       skip(P("C8 body overscroll-behavior none"),
-        "this engine build does not support/report overscroll-behavior — rubber-band containment untestable here");
+        "this engine build does not support/report overscroll-behavior, rubber-band containment untestable here");
     } else {
       check(P("C8 body overscroll-behavior none"), /none/.test(shell.overscroll), shell.overscroll || "(empty)");
     }
@@ -562,7 +562,7 @@ async function runDrawing(page, cdp, engine) {
 
 async function runDevice(label, engineName, launcher, descriptor, note) {
   device = label;
-  console.log(`\n${"=".repeat(72)}\n${label}  [${engineName}${note ? " — " + note : ""}]\n${"=".repeat(72)}`);
+  console.log(`\n${"=".repeat(72)}\n${label}  [${engineName}${note ? ": " + note : ""}]\n${"=".repeat(72)}`);
   let browser = null;
   try {
     browser = await launcher.launch({ headless: true });
@@ -603,7 +603,7 @@ const run = async () => {
 
   const pick = (...names) => {
     for (const n of names) if (devices[n]) return { name: n, d: devices[n] };
-    return { name: names[0] + " (missing — using iPhone 12 fallback)", d: devices["iPhone 12"] };
+    return { name: names[0] + " (missing, using iPhone 12 fallback)", d: devices["iPhone 12"] };
   };
   const pixel = pick("Pixel 7", "Pixel 5");
   const ipad = pick("iPad Pro 11", "iPad Pro 11 landscape", "iPad (gen 7)");
@@ -620,8 +620,8 @@ const run = async () => {
   } catch (e) { webkitErr = String(e).split("\n")[0].slice(0, 140); }
   device = "setup";
   check("webkit engine available", webkitOk,
-    webkitOk ? "playwright webkit installed — iOS sections run on the real WebKit engine"
-      : `WebKit could not launch (${webkitErr}); iOS sections RUN IN CHROMIUM with iOS device descriptors — -webkit-touch-callout and the iOS callout itself are NOT tested`);
+    webkitOk ? "playwright webkit installed, iOS sections run on the real WebKit engine"
+      : `WebKit could not launch (${webkitErr}); iOS sections RUN IN CHROMIUM with iOS device descriptors, -webkit-touch-callout and the iOS callout itself are NOT tested`);
   const iosEngineName = webkitOk ? "webkit" : "chromium";
   const iosLauncher = webkitOk ? webkit : chromium;
   const iosNote = webkitOk ? "" : "SUBSTITUTED CHROMIUM";

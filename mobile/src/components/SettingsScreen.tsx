@@ -149,7 +149,7 @@ export function SettingsScreen({
   const handleDelete = useCallback(() => {
     Alert.alert(
       "Delete my data & account?",
-      "This permanently erases ALL Happy Paint data on this device — every painting, loop, replay, saved brush, palette, wallet balance, and settings. This cannot be undone.\n\nDeletion is free and always available; it is never tied to an account or purchase.",
+      "This permanently erases ALL Happy Paint data on this device, every painting, loop, replay, saved brush, palette, wallet balance, and settings. This cannot be undone.\n\nDeletion is free and always available; it is never tied to an account or purchase.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -200,7 +200,7 @@ export function SettingsScreen({
         </View>
       </View>
 
-      {/* --- Account & cloud sync (OPTIONAL — Store Review) ------------------ */}
+      {/* --- Account & cloud sync (OPTIONAL: Store Review) ------------------ */}
       <Text style={styles.groupLabel}>Account & sync</Text>
       <View style={styles.section}>
         <View style={styles.row}>
@@ -213,7 +213,7 @@ export function SettingsScreen({
               {session
                 ? `${label}. Cloud sync keeps your work across devices.`
                 : isCloudConfigured
-                  ? "Sign in to sync your work across devices. An account is optional — Happy Paint works fully without one."
+                  ? "Sign in to sync your work across devices. An account is optional: Happy Paint works fully without one."
                   : LOCAL_ONLY_MESSAGE}
             </Text>
           </View>
@@ -292,7 +292,7 @@ export function SettingsScreen({
                   : consentRevoked
                     ? "You turned AI Assist off. Open AI Assist to opt in again."
                     : consentStale
-                      ? "The AI policy changed — open AI Assist to review and opt in again."
+                      ? "The AI policy changed, open AI Assist to review and opt in again."
                       : isChildAccount
                         ? "AI Assist is off. On a child account a guardian must approve AI before it can be turned on."
                         : "Not enabled yet. Open AI Assist to opt in to local AI helpers."}

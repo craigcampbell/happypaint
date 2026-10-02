@@ -1,19 +1,19 @@
 // Brush-engine 3-way parity harness (Playwright, against a server serving
-// dist/ — `npm run build` then `PORT=8790 node server.js`; BASE defaults to
+// dist/, `npm run build` then `PORT=8790 node server.js`; BASE defaults to
 // server.js's own default port).
 //
 // Part 1 (Stage 2, kept): the v2 dab marker at 50% keeps uniform opacity and
 // ±14-luma parity across local / live remote / history reload.
 // Part 2 (Stage 2, kept): every listed brush draws.
-// Part 3 (Brush Engine Stage 1 + 2 + 3): EXACT parity — v3 oil, acrylic
+// Part 3 (Brush Engine Stage 1 + 2 + 3): EXACT parity, v3 oil, acrylic
 // (sprite `loaded` + ribbons, source-over), watercolor (wash sprites + bleed /
 // wet-edge / granulation passes, MULTIPLY commit), marker (multiply), pencil
 // (graphite sprites, multiply), and a paint + gouache pigment-mixing rect
 // (Stage 3: three strokes in three colors crossing each other, so the dry
-// `mix` of the later strokes samples the mix map — exactness there proves
+// `mix` of the later strokes samples the mix map, exactness there proves
 // the idle prefetch / lazy flush equivalence end to end), and a smudge rect
 // (Stage 4: two v3 marker strokes, then a Smudge (drag) stroke straight
-// through and a Blend stroke crossing — the room is private by
+// through and a Blend stroke crossing, the room is private by
 // construction, ROOM being a random code rather than MAIN, so the chip is
 // live and the server relays the v:3 smudge ops) must each hash
 // SHA-256-identical on the display canvas (the rect's screen area) on the
@@ -23,7 +23,7 @@
 // same browser lands the same bytes on all three. The display canvas is the
 // doc drawn through the page's view, so both pages must lay out identically:
 // the host's header carries more pills and wraps to a second row below
-// ~1500px, which shifts the canvas and changes the fit zoom — hence the wide
+// ~1500px, which shifts the canvas and changes the fit zoom, hence the wide
 // viewport, and `layout` reports the two geometries. The rects sit in two
 // columns above and below Part 1's X (its pixels would otherwise land inside
 // a rect); every rect is hashed only after ALL of Part 3 has landed, so a
@@ -99,7 +99,7 @@ const hc = await sample(p2, cx, cy), hb = await sample(p2, cx - 80, cy - 80);
 
 // --- Part 3 (runs BEFORE the legacy spray of Part 2 lands anywhere near):
 // exact display-canvas hashes for v3 oil + acrylic strokes. Each stroke gets
-// its own screen rect (CSS px, the same on every page — same viewport, same
+// its own screen rect (CSS px, the same on every page, same viewport, same
 // default view), read back from the display canvas in canvas px.
 await setOpacity(95);
 const hashRect = (page, rect) => page.evaluate(({ rect }) => {
@@ -129,7 +129,7 @@ const v3 = [
   { name: 'Pencil', y: cy + 200, x0: cx - 460, strokes: [{ brush: 'Pencil' }] },
   // Stage 3: blue gouache, yellow paint crossing it (paint's dry `mix`
   // samples the gouache), red gouache straight through both (gouache's dry
-  // `mix` samples both) — three km strokes in one rect.
+  // `mix` samples both), three km strokes in one rect.
   {
     name: 'PaintGouache',
     y: cy + 200,

@@ -1,5 +1,5 @@
 /* eslint-env node */
-// FIXTURE — deliberately CORRUPT checkpoint renderer for the phase-3
+// FIXTURE, deliberately CORRUPT checkpoint renderer for the phase-3
 // corrupt-response integration test (test/checkpoint-server.integration.mjs).
 // Not the real worker: it speaks the IPC protocol (ready/result) but returns
 // frames that fail the service's decode/hash validation. Selected via

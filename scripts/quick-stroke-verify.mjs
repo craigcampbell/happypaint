@@ -5,7 +5,7 @@
 //      zoom cluster: present, the bar fits the viewport, tap opens the brush
 //      menu / the color wheel, a chip switches the brush, a ring tap changes
 //      the color, a drag on the pill resizes the brush.
-//   B. Palm rejection (Chromium only — CDP is the one way to dispatch a PEN):
+//   B. Palm rejection (Chromium only: CDP is the one way to dispatch a PEN):
 //      fingers still draw with no pen around; a pen draws; in a pen session a
 //      finger stroke is held then replayed (300ms drag + 90ms flick both
 //      draw, a stationary tap is dropped); a pen landing during the hold
@@ -35,7 +35,7 @@ const server = spawn(process.execPath, ["server.js"], {
   // PB_URL blanked: ZZQS is an ordinary code, so it is an invite-only room, and
   // the door gate turns those away without an account on a deploy that HAS
   // accounts. With a PocketBase in the ambient env this harness drew nothing at
-  // all — every interaction check failed behind the sign-in modal.
+  // all, every interaction check failed behind the sign-in modal.
   cwd: ROOT, env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, PB_URL: "" }, stdio: "pipe",
 });
 server.stderr.on("data", (d) => { if (process.env.SRV_LOG) process.stderr.write("[srv] " + d); });
@@ -45,11 +45,11 @@ const results = [];
 let device = "";
 const check = (name, ok, detail = "") => {
   results.push({ device, name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 const skip = (name, detail = "") => {
   results.push({ device, name, ok: true, skipped: true });
-  console.log(`SKIP  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`SKIP  ${name}${detail ? ": " + detail : ""}`);
 };
 const guard = async (name, fn) => {
   try { await fn(); } catch (e) { check(name, false, "harness threw: " + String(e).slice(0, 200)); }
@@ -120,7 +120,7 @@ const mid = (b) => ({ x: Math.round(b.x + b.w / 2), y: Math.round(b.y + b.h / 2)
 // ---- CDP input ----------------------------------------------------------------
 // `r` = contact radius; PointerEvent width/height = 2r. Chromium on a phone
 // reports a fingertip at ~10-25px wide, but iPad/iPhone Safari reports
-// 2 × UITouch.majorRadius — a real fingertip there is ~40-85px wide (a kid
+// 2 × UITouch.majorRadius, a real fingertip there is ~40-85px wide (a kid
 // pressing the pad of a finger flat sits at the top of that). IPAD_FINGER_R
 // and KID_FINGER_R reproduce those widths; a resting palm is far larger.
 const IPAD_FINGER_R = 21;
@@ -260,13 +260,13 @@ async function runPalm(page, cdp, shot) {
       { x: Math.round(L.x + L.w * tx), y: Math.round(L.y + L.h * ty) },
     ];
 
-    // B1: no pen has been near — a finger draws at once.
+    // B1: no pen has been near, a finger draws at once.
     let l0 = (await inkIn(page, L)).ink;
     await touchDrag(cdp, lFrom, lTo);
     let l1 = await settledInk(page, L, l0, true);
     check("B1 a finger draws when no pen is in play", l1.ink > l0 + 2, `ink ${l0} → ${l1.ink}`);
 
-    // B1b/c: the same with iPad-Safari-sized contacts (42px / 84px wide) — a
+    // B1b/c: the same with iPad-Safari-sized contacts (42px / 84px wide), a
     // real fingertip, and a 5-year-old's flat finger pad. These used to be
     // thrown away as "palms" (the old 45px palm cut-off), so fingers on an
     // iPad mostly drew nothing at all.
@@ -328,7 +328,7 @@ async function runPalm(page, cdp, shot) {
     check("B5 a stationary tap in a pen session is dropped", l1.ink <= l0 + 2, `ink ${l0} → ${l1.ink}`);
 
     await sleep(1700);
-    // B6: finger lands, pen lands 60ms later — the finger stroke never starts.
+    // B6: finger lands, pen lands 60ms later, the finger stroke never starts.
     l0 = (await inkIn(page, L)).ink;
     r0 = (await inkIn(page, R)).ink;
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: tp(lFrom.x, lFrom.y) });
@@ -338,7 +338,7 @@ async function runPalm(page, cdp, shot) {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: tp(lFrom.x + 40, lFrom.y + 20) });
     await sleep(20);
     await penDrag(cdp, rFrom, rTo);
-    // The hand keeps sliding while the pen writes — none of it may paint.
+    // The hand keeps sliding while the pen writes, none of it may paint.
     for (let i = 3; i <= 8; i += 1) {
       await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: tp(lFrom.x + i * 15, lFrom.y + i * 8) });
       await sleep(30);
@@ -372,7 +372,7 @@ async function runPalm(page, cdp, shot) {
       `finger region ${l0} → ${lLive.ink} (live) → ${l1.ink} (after pen); pen region ${r0} → ${r1.ink}`);
     await shot("palm-after");
 
-    // B8: Pen only mode — a finger never paints, two fingers still zoom.
+    // B8: Pen only mode, a finger never paints, two fingers still zoom.
     await page.evaluate(() => localStorage.setItem("happypaint:input-prefs:v1", JSON.stringify({ hand: "right", touch: "pen", penSeen: true, palmTipShown: true })));
     await openRoom(page);
     const rg2 = await regions(page);

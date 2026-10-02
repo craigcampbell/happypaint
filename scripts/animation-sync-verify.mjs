@@ -2,7 +2,7 @@
 // + film-strip gating + video export. Drives a LOCAL isolated server.
 //
 // The story under test: the strip only exists in FLIPBOOK (and private rooms
-// that opt in); frames are shared state — B sees A's frames/strokes live, and
+// that opt in); frames are shared state: B sees A's frames/strokes live, and
 // someone who leaves and rejoins sees everything done while they were gone.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
@@ -29,10 +29,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
-// Count "inky" (dark) pixels on the visible display canvas — strokes are drawn
+// Count "inky" (dark) pixels on the visible display canvas, strokes are drawn
 // with the default near-black marker, paper is light, so this is a robust
 // "is there art on the frame I'm looking at" probe.
 async function darkPixels(page) {
@@ -118,7 +118,7 @@ const run = async () => {
   const aAfter = await darkPixels(pageA);
   check("A sees B's stroke live on the same frame", aAfter > aBefore + 30, `${aBefore} -> ${aAfter}`);
 
-  // 5.5) CREW PRESENCE — both A and B are on frame 2 (index 1); each should
+  // 5.5) CREW PRESENCE, both A and B are on frame 2 (index 1); each should
   // see the other's colored pip on that cel, and it should follow B on a hop.
   await sleep(900); // presence relays on frame-select (cold path)
   const pipsAt = async (page, index) => page.locator(".fs-cel").nth(index).locator(".fs-pip").count();
@@ -130,7 +130,7 @@ const run = async () => {
     `cel1=${await pipsAt(pageA, 0)} cel2=${await pipsAt(pageA, 1)}`);
   await selectCel(pageB, 1); // back to frame 2 alongside A
 
-  // 5.7) CONFETTI CHEERS — A cheers frame 2; B (on frame 2) sees confetti pop.
+  // 5.7) CONFETTI CHEERS: A cheers frame 2; B (on frame 2) sees confetti pop.
   await pageA.locator(".fs-cheer-toggle").click();
   await sleep(200);
   await pageA.locator(".fs-cheer-menu button").first().click();
@@ -140,7 +140,7 @@ const run = async () => {
   await sleep(1800); // confetti auto-clears
   check("confetti auto-clears after the burst", (await pageB.locator(".fs-confetti").count()) === 0);
 
-  // 5.6) BEACON — B taps "Come look!"; A gets a tap-to-jump card.
+  // 5.6) BEACON: B taps "Come look!"; A gets a tap-to-jump card.
   await selectCel(pageA, 0); // A is on frame 1, B on frame 2
   await sleep(700);
   await pageB.locator(".fs-beacon").click();
@@ -167,7 +167,7 @@ const run = async () => {
 
   // 7) Per-frame clear: A clears frame 3 for everyone; frame 2 survives.
   // On desktop the studio actions live in the "Studio ⋮" dropdown, which
-  // animates its visibility — click a direct .first() Clear can race that
+  // animates its visibility, click a direct .first() Clear can race that
   // transition. Deterministically ensure the dropdown is open, then click.
   const studioToggle = pageA.locator(".desktop-studio-toggle");
   if (await studioToggle.isVisible().catch(() => false)) {
@@ -205,7 +205,7 @@ const run = async () => {
   }
   check("video export produces a real file", videoOk, videoDetail);
 
-  // 9) SCENES — host-only, in a private room (first joiner = guest-host).
+  // 9) SCENES, host-only, in a private room (first joiner = guest-host).
   await pageA.goto(`${BASE}/join/ZZSCENES`, { waitUntil: "domcontentloaded" });
   await sleep(2500);
   await pageA.locator(".mp-anim-toggle").click(); // host unlocks the film strip
@@ -231,9 +231,9 @@ const run = async () => {
   await pageB.locator(".fs-scenes button", { hasText: "⏮" }).click();
   await sleep(1500);
   const bBack = await darkPixels(pageB);
-  check("B pages back — scene 1 still blank (isolation)", bBack < 20, `darkPixels=${bBack}`);
+  check("B pages back, scene 1 still blank (isolation)", bBack < 20, `darkPixels=${bBack}`);
 
-  // 9.5) PRODUCTIONS — host links segment rooms into one film via the
+  // 9.5) PRODUCTIONS, host links segment rooms into one film via the
   // storyboard, B works in Part 2, host exports the whole film offline.
   await pageA.goto(`${BASE}/join/ZZSCENES`, { waitUntil: "domcontentloaded" });
   await sleep(2500);
@@ -241,7 +241,7 @@ const run = async () => {
   await sleep(500);
   await pageA.getByRole("button", { name: /start a production/i }).click();
   await sleep(1200);
-  check("production created — storyboard shows Part 1", (await pageA.locator(".sb-panel:not(.sb-add)").count()) === 1);
+  check("production created, storyboard shows Part 1", (await pageA.locator(".sb-panel:not(.sb-add)").count()) === 1);
   check("host is marked on their part", await pageA.locator(".sb-panel.is-here").isVisible().catch(() => false));
   await pageA.locator(".sb-add").click();
   await sleep(1200);
@@ -260,13 +260,13 @@ const run = async () => {
   await sleep(300);
   await drawStroke(pageB, 0.5, 0.5);
   // Cross-Part beacon: B (in Part 2) summons the crew; A (in Part 1, a DIFFERENT
-  // room) must receive the beacon — the fan-out across every segment room.
+  // room) must receive the beacon, the fan-out across every segment room.
   await sleep(3200); // clear B's 1/3s beacon cap from earlier
   await pageB.locator(".fs-beacon").click();
   await sleep(900);
   check("cross-Part beacon reaches A in another Part", await pageA.locator(".beacon-card").isVisible().catch(() => false));
   await pageA.locator(".beacon-dismiss").click().catch(() => {});
-  // Host exports the whole film — both segments render offline into one video.
+  // Host exports the whole film, both segments render offline into one video.
   const filmDownload = pageA.waitForEvent("download", { timeout: 90000 }).catch(() => null);
   await pageA.getByRole("button", { name: /export the whole film/i }).click();
   const filmFile = await filmDownload;
@@ -283,7 +283,7 @@ const run = async () => {
   check("whole-film export produces a real video", filmOk, filmDetail);
   await pageA.locator(".sb-close").click().catch(() => {});
 
-  // 10) FINGERS — toddler room: no chat anywhere, chunky wet brushes only,
+  // 10) FINGERS, toddler room: no chat anywhere, chunky wet brushes only,
   // smudge present and NOT gated.
   await pageA.goto(`${BASE}/join/FINGERS`, { waitUntil: "domcontentloaded" });
   await sleep(2500);
@@ -294,7 +294,7 @@ const run = async () => {
   check("FINGERS: smudge is NOT gated there", gatedCount === 0, `gated=${gatedCount}`);
   check("FINGERS: no film strip (it's a paint room)", !(await pageA.locator(".film-strip").isVisible().catch(() => false)));
 
-  // 10.5) SMUDGE UX — smudge carries no pigment: picking it hides the color
+  // 10.5) SMUDGE UX, smudge carries no pigment: picking it hides the color
   // palette (a hint replaces it) and swaps the Opacity slider for a Strength
   // slider. This is the fix for "smudge acts like a brush + asks me to pick a
   // color"; smudge is reachable in FINGERS where it's ungated.

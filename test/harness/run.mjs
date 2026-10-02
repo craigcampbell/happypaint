@@ -13,7 +13,7 @@
 // (audience gating, POST /api/rooms, opId, text moderation, mod_hide/restore/
 // remove, watcher election + corroboration). They are written to define the
 // contract and are designed to FAIL LOUDLY (with a clear reason) until the
-// server work lands — never to pass silently. A scenario whose endpoint 404s
+// server work lands, never to pass silently. A scenario whose endpoint 404s
 // reports FAIL with the reason, it does not throw and abort the suite.
 
 import { spawn } from 'child_process';
@@ -51,7 +51,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Minimal JSON fetch wrapper that never throws on a non-2xx — returns
+// Minimal JSON fetch wrapper that never throws on a non-2xx, returns
 // { status, body, ok, networkError? } so scenarios can assert on status codes
 // (e.g. expect 401/403) and treat a 404 as "feature missing" -> clear FAIL.
 async function api(baseHttp, path, { method = 'GET', token, body, adminKey } = {}) {
@@ -96,7 +96,7 @@ function scenario(name, fn) {
 // and either returns (PASS) or throws an Error (FAIL). Assertion failures and
 // "feature missing" both surface as a thrown Error with a readable message.
 
-// A: Audience gating — friends room hidden from public discovery; kid_safe shown.
+// A: Audience gating, friends room hidden from public discovery; kid_safe shown.
 scenario('A. Audience gating: kid_safe listed, friends not', async (ctx) => {
   // Create a kid_safe (public) room as a signed-in grown-up.
   const made = await api(ctx.baseHttp, '/api/rooms', {
@@ -104,7 +104,7 @@ scenario('A. Audience gating: kid_safe listed, friends not', async (ctx) => {
     token: ctx.signedInToken,
     body: { audience: 'kid_safe', title: 'Public Fingerpaints', listed: true },
   });
-  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404) — audience gating cannot be verified');
+  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404), audience gating cannot be verified');
   assert.strictEqual(made.status, 200, `expected 200 creating kid_safe room, got ${made.status}`);
   assert.ok(made.body && typeof made.body.code === 'string', 'create should return { code }');
   const kidCode = made.body.code;
@@ -117,7 +117,7 @@ scenario('A. Audience gating: kid_safe listed, friends not', async (ctx) => {
 
   // Create a friends room (private). Lazy-create via WS join is the documented
   // path for friends rooms, so reach it by code over WS. Keep this socket open
-  // too, so the only reason it could be hidden is its audience — not emptiness.
+  // too, so the only reason it could be hidden is its audience, not emptiness.
   const friendsCode = 'FRNDS1';
   const friend = new SimClient(ctx.baseWs, { room: friendsCode, name: 'friend' });
   await friend.connect();
@@ -133,7 +133,7 @@ scenario('A. Audience gating: kid_safe listed, friends not', async (ctx) => {
     assert.ok(codes.includes(kidCode), `kid_safe room ${kidCode} should appear in public list (got ${JSON.stringify(codes)})`);
     assert.ok(!codes.includes(friendsCode), `friends room ${friendsCode} must NOT appear in public list`);
     // Sanitized shape: never leak owner ids / names / raw strokes. Allowlist of
-    // safe metadata (counts, emoji, prompt strings) — anything new must be
+    // safe metadata (counts, emoji, prompt strings), anything new must be
     // reviewed here before it ships in discovery.
     const allowed = new Set(['code', 'emoji', 'featured', 'hasHost', 'lastActivity', 'ops', 'prompt', 'sheetId', 'title', 'users']);
     for (const r of list) {
@@ -208,7 +208,7 @@ scenario('C. Ops carry a monotonic opId', async (ctx) => {
   }
 });
 
-// D: Text moderation — severe text blocked + auto-report + mod_alert in kid_safe;
+// D: Text moderation, severe text blocked + auto-report + mod_alert in kid_safe;
 //    NOT moderated in a friends room.
 scenario('D. Text moderation: kid_safe blocks+reports+alerts, friends does not', async (ctx) => {
   // A kid_safe room owned by a signed-in host so a mod_alert has a recipient.
@@ -217,7 +217,7 @@ scenario('D. Text moderation: kid_safe blocks+reports+alerts, friends does not',
     token: ctx.signedInToken,
     body: { audience: 'kid_safe', title: 'Moderated', listed: true },
   });
-  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404) — cannot stand up a kid_safe room for moderation');
+  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404), cannot stand up a kid_safe room for moderation');
   assert.strictEqual(made.status, 200, `kid_safe create must be 200, got ${made.status}`);
   const kidCode = made.body.code;
 
@@ -271,7 +271,7 @@ scenario('D. Text moderation: kid_safe blocks+reports+alerts, friends does not',
   await fa.connect();
   await fb.connect();
   try {
-    // SEVERE: dropped — the sender gets chat_blocked, the peer never sees it.
+    // SEVERE: dropped, the sender gets chat_blocked, the peer never sees it.
     fa.sendChat('you are a fucking idiot retard');
     await fa.waitFor(
       (m) => m.type === 'chat_blocked',
@@ -301,7 +301,7 @@ scenario('E. mod_hide/restore/remove by opId', async (ctx) => {
     token: ctx.signedInToken,
     body: { audience: 'kid_safe', title: 'Hideable', listed: true },
   });
-  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404) — cannot stand up an owned room for hide/restore');
+  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404), cannot stand up an owned room for hide/restore');
   assert.strictEqual(made.status, 200, `kid_safe create must be 200, got ${made.status}`);
   const code = made.body.code;
 
@@ -336,7 +336,7 @@ scenario('E. mod_hide/restore/remove by opId', async (ctx) => {
     assert.ok(!ids1.includes(target), `hidden op ${target} must be absent from replayed history (got ${JSON.stringify(ids1)})`);
     await joiner1.close();
 
-    // Restore it — a fresh joiner sees it again.
+    // Restore it, a fresh joiner sees it again.
     host.modRestore([target]);
     await sleep(200);
     const joiner2 = new SimClient(ctx.baseWs, { room: code, name: 'joiner2' });
@@ -346,7 +346,7 @@ scenario('E. mod_hide/restore/remove by opId', async (ctx) => {
     assert.ok(ids2.includes(target), `restored op ${target} must reappear in replayed history (got ${JSON.stringify(ids2)})`);
     await joiner2.close();
 
-    // Remove it permanently — restore can no longer bring it back.
+    // Remove it permanently, restore can no longer bring it back.
     host.modRemove([target]);
     await sleep(150);
     host.modRestore([target]);
@@ -374,7 +374,7 @@ scenario('F. Watcher election + flag corroboration (Tier 2, never auto-kick)', a
     token: ctx.signedInToken,
     body: { audience: 'kid_safe', title: 'Watched', listed: true },
   });
-  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404) — cannot stand up a kid_safe room for watcher tests');
+  if (made.status === 404) throw new Error('POST /api/rooms not implemented (404), cannot stand up a kid_safe room for watcher tests');
   assert.strictEqual(made.status, 200, `kid_safe create must be 200, got ${made.status}`);
   const code = made.body.code;
 
@@ -521,7 +521,7 @@ async function main() {
   process.stdout.write(`${line}\n  ${pass} passed, ${fail} failed, ${results.length} total\n${line}\n`);
 
   if (fail > 0) {
-    // Surface server output on failure — invaluable when a feature is missing.
+    // Surface server output on failure, invaluable when a feature is missing.
     if (serverLog.length) {
       process.stdout.write('\n  --- server output (tail) ---\n');
       process.stdout.write(serverLog.slice(-25).map((l) => `  ${l}`).join('\n'));

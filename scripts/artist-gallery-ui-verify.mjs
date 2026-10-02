@@ -12,7 +12,7 @@
 //     are fulfilled by Playwright with fixtures clearly labeled SYNTHETIC,
 //     shaped exactly after the contract.
 //   * ArtistRoomSettings never fetches directly (callbacks props by design),
-//     so its "API" is the harness's recording stubs — also SYNTHETIC.
+//     so its "API" is the harness's recording stubs, also SYNTHETIC.
 // A REAL server.js still boots on :8962 (scratch DATA_DIR) so the script can
 // report whether the real endpoints have landed (INFO lines; not failures)
 // and proxy every unrelated API call. Final integration against the real API
@@ -20,7 +20,7 @@
 //
 // No production ports: Vite UI on :8961, API on :8962 (prod is :8787).
 // The script writes two throwaway Vite entry files at the repo root
-// (__artist-rooms-harness.html/.jsx) and deletes them in cleanup — Router.jsx
+// (__artist-rooms-harness.html/.jsx) and deletes them in cleanup: Router.jsx
 // and main.jsx are owned by other agents and stay untouched.
 //
 // Run: node scripts/artist-gallery-ui-verify.mjs
@@ -42,7 +42,7 @@ const HARNESS_JSX = path.join(ROOT, "__artist-rooms-harness.jsx");
 // ---------------------------------------------------------------- fixtures --
 // SYNTHETIC: shaped after docs/ARTIST-ROOMS-CONTRACT.md
 // (GET /api/rooms/gallery → {rooms:[{code,title,description,tags,users,ops,event,canWatch}],total,topTags}).
-// No account ids, emails, or location fields anywhere — the contract forbids them.
+// No account ids, emails, or location fields anywhere, the contract forbids them.
 const GALLERY_ROOMS = [ // SYNTHETIC
   { code: "ARTAAA", title: "Coastal Studies", description: "Slow seascapes in ink, one horizon a day.", tags: ["seascape", "ink"], users: 3, ops: 412, event: null, canWatch: true },
   { code: "ARTBBB", title: "Pixel Meadow", description: "", tags: ["pixel-art"], users: 0, ops: 87, event: null, canWatch: true },
@@ -61,7 +61,7 @@ writeFileSync(HARNESS_HTML, `<!doctype html>
 <body><div id="root"></div><script type="module" src="/__artist-rooms-harness.jsx"></script></body>
 </html>
 `);
-writeFileSync(HARNESS_JSX, `// THROWAWAY harness entry — written and deleted by scripts/artist-gallery-ui-verify.mjs.
+writeFileSync(HARNESS_JSX, `// THROWAWAY harness entry, written and deleted by scripts/artist-gallery-ui-verify.mjs.
 import React from "react";
 import { createRoot } from "react-dom/client";
 import "./src/index.css";
@@ -151,7 +151,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 async function waitUp(url, tries = 80) {
@@ -178,7 +178,7 @@ const run = async () => {
   // Informational: has the backend agent landed the artist endpoints yet?
   let realGallery = false;
   try { realGallery = (await fetch(API + "/api/rooms/gallery")).ok; } catch { /* absent */ }
-  console.log(`INFO  real /api/rooms/gallery on server: ${realGallery ? "yes" : "no — using SYNTHETIC fixtures"}`);
+  console.log(`INFO  real /api/rooms/gallery on server: ${realGallery ? "yes" : "no, using SYNTHETIC fixtures"}`);
 
   // ---- static ownership / hygiene checks ------------------------------------
   const gallerySrc = readFileSync(path.join(ROOT, "src/components/ArtistGalleryPage.jsx"), "utf8");
@@ -345,7 +345,7 @@ const run = async () => {
   await page.waitForTimeout(1400);
   fx.galleryMode = "ok";
 
-  // Guest creation gating — no fake identity
+  // Guest creation gating, no fake identity
   check("guest sees sign-in note, no create form", (await page.locator(".ag-create-form").count()) === 0 && /verified account/i.test(await page.locator(".ag-create").innerText()));
   fx.createPosted = null;
   check("guest fired no POST /api/rooms", fx.createPosted === null);
@@ -469,7 +469,7 @@ const run = async () => {
     /Load blew up/.test(await page.locator(".ars-error").innerText()) && (await page.locator(".ars-error button").count()) === 1);
 
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? " — FAILURES:" : ""}`);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ": FAILURES:" : ""}`);
   for (const f of failed) console.log("  ✗ " + f.name);
   process.exitCode = failed.length ? 1 : 0;
 };

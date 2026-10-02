@@ -25,7 +25,7 @@ test("cardinal directions: north is screen-up, south down, east right", () => {
   assert.ok(project(0, -90, 0, 0).y > 0.999, "south pole must be at the bottom (y > 0)");
   assert.ok(project(90, 0, 0, 0).x > 0.999, "east must be right (x > 0)");
   assert.ok(project(-90, 0, 0, 0).x < -0.999, "west must be left (x < 0)");
-  // a point north of the view center sits above it, south below — with tilt
+  // a point north of the view center sits above it, south below, with tilt
   for (const [rl, rp] of [[0, 0], [40, 25], [-120, -35], [210, 50]]) {
     const n = project(rl, Math.min(85, rp + 10), rl, rp);
     const s = project(rl, Math.max(-85, rp - 10), rl, rp);
@@ -238,7 +238,7 @@ test("clipRing fills match spherical containment (no false cutouts, no disc fill
 test("clipRing joins fragments split by a limb-grazing vertex", () => {
   // Armenia at rot (144,10): one vertex dips to z ≈ -0.004, splitting the
   // coastal run into an 11-pt and a 3-pt fragment at nearby crossings. Both
-  // must close SHORT — before the fix the micro-fragment closed the long way
+  // must close SHORT, before the fix the micro-fragment closed the long way
   // and painted the whole disc.
   const am = geo.countries.find((c) => c.code === "AM");
   const segs = clipRing(am.rings[0], 144, 10);

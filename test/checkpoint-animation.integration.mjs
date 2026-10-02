@@ -1,12 +1,12 @@
 /* eslint-env node */
-// Phase-4 trusted ANIMATION checkpoints — raw-WS server integration with the
+// Phase-4 trusted ANIMATION checkpoints, raw-WS server integration with the
 // REAL renderer worker (Chromium). Boots the real server.js (anonymous: no
 // PocketBase) with ENABLE_TRUSTED_CHECKPOINTS=1 and drives bare WebSocket
 // clients through multi-scene, multi-layer flipbook rooms:
 //
 //   1. lazy requested-frame builds: a capable join gets the ordinary scene
 //      baseline while the FIRST frame's checkpoint renders in the background
-//      — never an eager whole-film render;
+//, never an eager whole-film render;
 //   2. warm join PARTIAL COVERAGE: history.checkpoint.frames is a SUBSET of
 //      history.frames, ops keep global order (tail above the watermark for
 //      checkpointed frames, FULL ops for uncached frames), 3-layer assets +
@@ -15,7 +15,7 @@
 //      the next fetch covers it too (bounded: no rebuild storm);
 //   4. checkpoint_nack resends the CURRENT scene via ordinary scene history
 //      (not all room frames), disables cp for that connection only;
-//   5. appended ops ride the tail — the cached frame is REUSED (no rebuild);
+//   5. appended ops ride the tail, the cached frame is REUSED (no rebuild);
 //   6. moderation hide DURING a build: result invalidated, never served;
 //   7. a layer change on ANOTHER frame keeps the cached frame servable; a
 //      layer change on the CACHED frame invalidates only it;
@@ -45,7 +45,7 @@ const CHROME = [process.env.CHECKPOINT_CHROME_PATH, '/usr/bin/google-chrome', '/
 const PORT = 19131;
 
 if (!CHROME) {
-  console.error('no chrome executable found — set CHECKPOINT_CHROME_PATH');
+  console.error('no chrome executable found, set CHECKPOINT_CHROME_PATH');
   process.exit(2);
 }
 
@@ -299,7 +299,7 @@ async function main() {
     assert.equal(hCold.ops.length, 7, 'ordinary baseline carries all scene-1 ops');
     await waitMetric((m) => m.builds >= 1, 'lazy first-frame build');
     const m1 = await metrics();
-    assert.equal(m1.entries, 1, 'exactly one frame cached — no eager film render');
+    assert.equal(m1.entries, 1, 'exactly one frame cached, no eager film render');
 
     const warm = new CpClient({ room: FILM, cp: VERSION, name: 'warm' });
     await warm.ready;
@@ -336,7 +336,7 @@ async function main() {
     assert.ok(hist.ops.every((op) => op.frameId === f3));
     assertMonotonic(hist.ops, 'covering fetch');
     const m2 = await metrics();
-    assert.equal(m2.builds, m1.builds + 1, 'exactly one new build — no rebuild storm');
+    assert.equal(m2.builds, m1.builds + 1, 'exactly one new build, no rebuild storm');
     assert.ok(m2.entries <= 2, 'cache stays bounded to requested frames');
     c.close();
   });
@@ -347,7 +347,7 @@ async function main() {
     await c.ready;
     await c.waitFor((m) => m.type === 'history' && m.checkpoint, 'join checkpoint');
     const before = await metrics();
-    // Move to scene 2 (ordinary baseline — scene 2 has no cached frames yet),
+    // Move to scene 2 (ordinary baseline, scene 2 has no cached frames yet),
     // then nack: the resend must be scene 2's ordinary history, NOT the whole
     // room and NOT another checkpoint.
     let mark = c.mark();
@@ -421,7 +421,7 @@ async function main() {
   await scenario('layer struct change: other frame survives, cached frame invalidates', async () => {
     const m1 = await metrics();
     // A real structural change on a frame with no cache entry (f0 is already
-    // at the 3-layer animation cap, so patch opacity — the canonical layers
+    // at the 3-layer animation cap, so patch opacity, the canonical layers
     // key covers visibility/opacity).
     const f3Layer = film.host.messages.find((m) => m.type === 'history')?.frames?.find((f) => f.id === f3)?.layers?.[0]?.id || 'L0';
     film.host.send({ type: 'layer_patch', frameId: f3, layerId: f3Layer, patch: { opacity: 0.5 } });
@@ -485,7 +485,7 @@ async function main() {
     assert.ok(h.ops.every((op) => op.frameId !== f0), 'the cleared frame stays cleared');
 
     // Capable join: ordinary first, then the requested frame's checkpoint
-    // rebuilds lazily (f0 was cleared above — it can never checkpoint, so ask
+    // rebuilds lazily (f0 was cleared above, it can never checkpoint, so ask
     // for f2 exactly like a client paging to it would).
     const cold = new CpClient({ room: FILM, cp: VERSION, name: 'restart-cold' });
     await cold.ready;

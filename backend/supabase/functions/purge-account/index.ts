@@ -1,4 +1,4 @@
-// Happy Paint — purge-account Edge Function (Deno / Supabase).
+// Happy Paint, purge-account Edge Function (Deno / Supabase).
 //
 // WHAT THIS DOES
 // Processes DUE account_deletion_requests (scheduled_purge_at <= now() and
@@ -6,7 +6,7 @@
 // they own across the public schema, then the auth.users record via the Admin
 // API. Marks each request 'completed'.
 //
-// HOW IT RUNS — NEVER FROM A CLIENT.
+// HOW IT RUNS: NEVER FROM A CLIENT.
 // This uses the SERVICE ROLE key (full read/write, bypasses RLS) and must only
 // run server-side on a schedule or by an admin:
 //   * Supabase scheduled function / pg_cron hitting this function's URL, OR
@@ -16,7 +16,7 @@
 //
 // IDEMPOTENCY
 // Deletes are "delete where owner = uid" (safe to repeat). auth.admin.deleteUser
-// tolerates an already-deleted user (404) — we treat that as success. If a run
+// tolerates an already-deleted user (404), we treat that as success. If a run
 // dies partway, the request stays 'processing' and the next run finishes it.
 //
 // DEPLOY: see ../README.md (supabase functions deploy purge-account + secrets).

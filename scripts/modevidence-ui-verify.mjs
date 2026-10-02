@@ -1,11 +1,11 @@
 /* eslint-env node */
-// Moderation evidence — admin UI verification (Playwright, real server +
+// Moderation evidence, admin UI verification (Playwright, real server +
 // built dist, synthetic benign PNG only).
 //
 // Drives a real flag with frozen evidence over WS, then opens /admin as the
 // owner and asserts the report row shows: the frozen snapshot (fetched with
 // the admin header, decoded by the browser), the op range, and the explicit
-// "client-supplied corroboration, NOT proof" trust framing — never an
+// "client-supplied corroboration, NOT proof" trust framing, never an
 // identity accusation. Screenshot saved for eyeballing.
 
 import { chromium } from "playwright";
@@ -28,7 +28,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 rmSync(SCRATCH, { recursive: true, force: true });
@@ -51,7 +51,7 @@ process.on("exit", () => {
 
 const run = async () => {
   for (let i = 0; i < 60; i += 1) {
-    if (server.exitCode != null) throw new Error(`server died at boot (code ${server.exitCode}) — stale listener on ${PORT}?`);
+    if (server.exitCode != null) throw new Error(`server died at boot (code ${server.exitCode}), stale listener on ${PORT}?`);
     try {
       const r = await fetch(`${BASE}/healthz`);
       if (r.ok) break;
@@ -116,7 +116,7 @@ const run = async () => {
     /client-supplied corroboration, NOT proof/i.test(blockText)
   );
   check("forge warning present", /modified client can forge pixels/i.test(blockText));
-  check("no identity accusation — 'suspected — review required'", /suspected — review required/i.test(blockText));
+  check("no identity accusation: 'suspected, review required'", /suspected, review required/i.test(blockText));
   check("op range attributed to the room canvas, not a person", /room canvas between ops 0–1/.test(blockText));
   check("metadata: score + model + format", /Score 0\.93/.test(blockText) && /heuristic/.test(blockText) && /PNG/.test(blockText), blockText.slice(0, 160));
 

@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 // timing helpers, byte-budgeted bitmap LRU, freshMixState birth parity,
 // post-nack tail-only detection, and the retained-tail local-op tolerance.
 // Driven in a real browser against fixtures generated with the EXISTING
-// renderer (replayFrameOnto + onMixState capture) — the same interpreter the
+// renderer (replayFrameOnto + onMixState capture), the same interpreter the
 // backend worker uses.
 //
 //   node scripts/room-loading-phase4-module-verify.mjs           # GREEN (work tree)
@@ -323,7 +323,7 @@ try {
   });
 
   const failures = [];
-  const check = (name, cond, detail) => { if (cond) { console.log(`PASS ${name}`); } else { failures.push(name); console.log(`FAIL ${name}${detail ? ` — ${detail}` : ''}`); } };
+  const check = (name, cond, detail) => { if (cond) { console.log(`PASS ${name}`); } else { failures.push(name); console.log(`FAIL ${name}${detail ? `, ${detail}` : ''}`); } };
   assert.ok(!result.moduleMissing, `phase4 modules missing/incompatible: ${result.moduleMissing}`);
 
   check('frameTiming: validates wire shape', result.timingNormalize === true, JSON.stringify(result.timingNormalize));

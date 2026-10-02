@@ -1,7 +1,7 @@
 // Draft autosave round-trip on REAL WebKit (iPhone 14). WebKit refuses PNG Blobs
 // in IndexedDB, so the autosave must fall back to dataURLs, latch that verdict
 // (one warning, no repeated Blob attempts), persist across reload, and survive a
-// navigate-away mid-tick with zero page errors — the teardown race that used to
+// navigate-away mid-tick with zero page errors, the teardown race that used to
 // log "Cannot load blob: … due to access control checks".
 // Usage: node scripts/draft-roundtrip-verify.mjs   (ROOM env overrides the room)
 import { webkit, devices } from "playwright";
@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 for (let i = 0; i < 40; i++) { try { const r = await fetch(BASE + "/"); if (r.ok) break; } catch { /* booting */ } await sleep(250); }
 
 let fails = 0;
-const check = (n, ok, d = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? " — " + d : ""}`); if (!ok) fails++; };
+const check = (n, ok, d = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? ": " + d : ""}`); if (!ok) fails++; };
 
 const browser = await webkit.launch();
 const ctx = await browser.newContext({ ...devices["iPhone 14"] });

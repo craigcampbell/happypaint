@@ -1,16 +1,16 @@
 /* eslint-env node */
-// Room-loading fidelity — Phase 1 regression suite (PERMANENT).
+// Room-loading fidelity: Phase 1 regression suite (PERMANENT).
 //
 // Asserts the FIXED behavior for the three divergences reproduced in
 // happypaint-evidence/room-loading-evaluation-2026-09-29 (REPORT.md §2):
 //
-//   A. Seeded eraser determinism — local / remote / offline replay must roll
+//   A. Seeded eraser determinism, local / remote / offline replay must roll
 //      the same per-point dice (pointRand(seed, x, y)). Legacy ops WITHOUT a
 //      seed keep Math.random: reseeding them would repaint saved history, so
 //      seedless erasers stay a DOCUMENTED divergence (tested functionally,
 //      never gated on determinism).
 //   B. Never-hydrated cold-frame rasters must honor the frame's ordered
-//      layer stack (routing, visibility, opacity) — same structure coolFrame
+//      layer stack (routing, visibility, opacity), same structure coolFrame
 //      encodes from live layers. Cold frames with NO layer metadata (legacy
 //      rooms) keep the flat replay: locked here as the explicit policy.
 //   C. Offline image replay must route through the supplied targetFor layer
@@ -42,7 +42,7 @@ const CHROME = process.env.CHROME_PATH || "/usr/bin/google-chrome";
 const results = [];
 function check(name, ok, detail = "") {
   results.push({ name, ok: !!ok, detail: String(detail) });
-  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : ` — ${detail}`}`);
+  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : `, ${detail}`}`);
 }
 
 // ---- Part 1: source guards on the owned callsites ---------------------------
@@ -218,7 +218,7 @@ try {
     }
 
     // A5: legacy SEEDLESS eraser still erases (functional; determinism NOT
-    // gated — the documented legacy divergence).
+    // gated, the documented legacy divergence).
     {
       const c = createLayerCanvas(256, 256);
       await replayFrameOnto(c, [rect(0, 0, 256, 256, "#c04030", "L0"), eraserOp(null, 0.3)]);
@@ -258,13 +258,13 @@ try {
       out.coldLayerOpacity = { pixel: probe(c, 560, 340) };
     }
     {
-      // B3: STACK ORDER beats op order — L1 (upper) blue op FIRST, L0 red op
+      // B3: STACK ORDER beats op order: L1 (upper) blue op FIRST, L0 red op
       // SECOND: layered composite shows blue; the flat replay showed red.
       const meta = [{ id: "L0", visible: true, opacity: 1 }, { id: "L1", visible: true, opacity: 1 }];
       const ops = [bigRect("#0000ff", "L1"), bigRect("#ff0000", "L0")];
       const c = await decodeToCanvas(await rasterizeOps(ops, meta));
       out.coldLayerOrder = { pixel: probe(c, 560, 340) };
-      // B4: no metadata (legacy room) stays flat — explicit policy lock.
+      // B4: no metadata (legacy room) stays flat, explicit policy lock.
       const flat = await decodeToCanvas(await rasterizeOps(ops));
       out.coldNoMetaFlat = { pixel: probe(flat, 560, 340) };
     }
@@ -314,7 +314,7 @@ try {
       out.imageRouting = { basePixel: probe(l0, 4, 4), upperPixel: probe(l1, 4, 4) };
     }
     {
-      // C2: layered composite — image on L1 shows when visible, not when hidden.
+      // C2: layered composite, image on L1 shows when visible, not when hidden.
       const meta = [{ id: "L0", visible: true, opacity: 1 }, { id: "L1", visible: true, opacity: 1 }];
       const shown = createLayerCanvas(128, 128);
       await replayFrameComposite(shown, meta, [imageOp("L1")]);
@@ -324,7 +324,7 @@ try {
       out.imageComposite = { shownPixel: probe(shown, 4, 4), hiddenPixel: probe(hidden, 4, 4) };
     }
     {
-      // C3: no router (flat consumer) — the image lands on the base canvas.
+      // C3: no router (flat consumer), the image lands on the base canvas.
       const c = createLayerCanvas(128, 128);
       await replayFrameOnto(c, [imageOp("L1")], 128, 128);
       out.imageFlatLegacy = { pixel: probe(c, 4, 4) };

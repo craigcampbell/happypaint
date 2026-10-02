@@ -4,13 +4,13 @@
 // It wraps the existing `ws` dependency with the few affordances the scenarios
 // need: connect to a room (optionally signed-in via a token), send ops/messages,
 // buffer every server->client message, and `await` a predicate over that buffer
-// with a timeout. Deliberately tiny — no app logic, just transport + a mailbox.
+// with a timeout. Deliberately tiny, no app logic, just transport + a mailbox.
 
 import { WebSocket } from 'ws';
 import { gunzipSync } from 'node:zlib';
 
 export class SimClient {
-  // baseUrl: e.g. "ws://127.0.0.1:PORT" — the harness appends the /ws path.
+  // baseUrl: e.g. "ws://127.0.0.1:PORT", the harness appends the /ws path.
   // opts: { room, token, name }
   constructor(baseUrl, opts = {}) {
     this.baseUrl = baseUrl;
@@ -42,7 +42,7 @@ export class SimClient {
     if (this.gz) params.set('gz', '1');
     if (this.spectate) params.set('spectate', '1');
     // Like the real client, identity goes in the FIRST frame ({type:'auth'}),
-    // never the URL — see the 'open' handler below.
+    // never the URL, see the 'open' handler below.
     const url = `${this.baseUrl}/ws?${params.toString()}`;
     this.ws = new WebSocket(url);
 
@@ -84,7 +84,7 @@ export class SimClient {
           resolve(null);
           return;
         }
-        // First frame is always auth (token or null) — mirrors the web client.
+        // First frame is always auth (token or null), mirrors the web client.
         try { this.ws.send(JSON.stringify({ type: 'auth', token: this.token || null })); } catch { /* close handler reports */ }
         // Resolve on the 'connected' frame, or immediately if it already landed.
         if (this.connected) {

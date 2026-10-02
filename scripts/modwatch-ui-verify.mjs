@@ -28,7 +28,7 @@ server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,7 +89,7 @@ const run = async () => {
   const body = await watch.innerText("body");
   check("the watch view opens straight into observer mode", /Observer mode/i.test(body) && /Watching WATCHDE1/i.test(body));
   check("the watcher is told they are invisible", /nobody in this room can see you/i.test(body));
-  // The room itself must not learn about the watcher — check the painter's own
+  // The room itself must not learn about the watcher, check the painter's own
   // screen before any moderation happens, while the only thing to notice would
   // be a join/roster entry.
   const painterBefore = await painter.innerText("body");
@@ -109,7 +109,7 @@ const run = async () => {
   check("the stroke list attributes the paint to its author", /brush/i.test(strokesText) && /pts/i.test(strokesText),
     strokesText.split("\n").slice(0, 3).join(" / ").slice(0, 120));
 
-  // No drawing tools anywhere on the watch page — not even hidden.
+  // No drawing tools anywhere on the watch page, not even hidden.
   const tools = await watch.evaluate(() => ({
     brushButtons: document.querySelectorAll('.brush-grid button, .brush-selector, [class*="quickbar"]').length,
     studioShell: document.querySelectorAll(".studio-shell").length,

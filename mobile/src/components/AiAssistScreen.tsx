@@ -40,7 +40,7 @@ function ConsentGate({ onConsent }: { onConsent: (record: { guardianApproved: bo
     <View style={styles.panel}>
       <Text style={styles.panelTitle}>Turn on AI Assist</Text>
       <Text style={styles.bodyText}>
-        AI Assist v1 runs entirely on your device — no data leaves it, no external model is called. It helps you start
+        AI Assist v1 runs entirely on your device, no data leaves it, no external model is called. It helps you start
         art (palettes, prompts, brush recipes); it never makes finished art for you.
       </Text>
       <Text style={styles.noteText}>
@@ -232,7 +232,7 @@ export function AiAssistScreen({ onBack, onApplyPalette, onApplyRecipe }: Props)
                   {Math.round(recipe.output.brush_recipe.opacity * 100)}%
                 </Text>
                 <Text style={styles.noteText}>
-                  {recipe.input.matched ? "AI-assisted" : "No keywords matched — using a sensible default"}.
+                  {recipe.input.matched ? "AI-assisted" : "No keywords matched, using a sensible default"}.
                 </Text>
                 <Pressable
                   accessibilityRole="button"

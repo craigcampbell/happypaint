@@ -63,7 +63,7 @@ export function replaySnapshotPath(replayId: string, seq: number) {
   return `${REPLAY_DIR}/replay-${replayId}-${seq}.png`;
 }
 
-// Timelapse GIF/sprite export path (cache dir — shareable, regenerable).
+// Timelapse GIF/sprite export path (cache dir, shareable, regenerable).
 export function timelapseExportPath(replayId: string, extension: "gif" | "png") {
   return `${FileSystem.cacheDirectory ?? DOCUMENT_ROOT}/happy-paint-timelapse-${replayId}.${extension}`;
 }
@@ -75,7 +75,7 @@ export async function deleteReplaySnapshotFile(uri: string) {
       await FileSystem.deleteAsync(uri, { idempotent: true });
     }
   } catch {
-    // non-fatal — a missing file is fine
+    // non-fatal, a missing file is fine
   }
 }
 
@@ -376,7 +376,7 @@ export const STORAGE_KEYS = [
 // Delete the entire on-disk Happy Paint document tree (project bodies, previews,
 // imports, paint-space asset bitmaps, and the replay snapshot dir) plus any
 // cache-dir exports we wrote (PNG/GIF/loop/timelapse). Best-effort and never
-// throws so the wipe can never half-abort — App Review requires deletion to be
+// throws so the wipe can never half-abort: App Review requires deletion to be
 // reliable. Returns a list of the paths it attempted to remove (for an audit
 // summary in the confirmation UI).
 export async function wipeStorageFiles(): Promise<string[]> {
@@ -391,7 +391,7 @@ export async function wipeStorageFiles(): Promise<string[]> {
     }
     removed.push(DOCUMENT_ROOT);
   } catch {
-    // keep going — a missing/locked dir must not abort the rest of the wipe
+    // keep going, a missing/locked dir must not abort the rest of the wipe
   }
 
   // 2) Cache-dir exports (shareable, regenerable PNG/GIF files we wrote). We

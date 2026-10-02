@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const PNG_1PX =
@@ -73,7 +73,7 @@ const run = async () => {
   const faqAnswers = new Map((faqSchema?.mainEntity || []).map((entry) => [entry.name, entry.acceptedAnswer?.text || ""]));
   check("FAQ structured data states image-scanning and supervision limits", /when a capable device is present/.test(faqAnswers.get("Is Drawesome safe for my kid?") || "") && /can miss harmful content/.test(faqAnswers.get("Is Drawesome safe for my kid?") || ""));
   check("FAQ structured data discloses public chat and artwork previews", /artwork, chat, and display names/.test(faqAnswers.get("Who can see a public room?") || ""));
-  check("FAQ structured data discloses signed-out server storage", /server storage, including when you are signed out/.test(faqAnswers.get("What information do you collect — and can I delete it?") || ""));
+  check("FAQ structured data discloses signed-out server storage", /server storage, including when you are signed out/.test(faqAnswers.get("What information do you collect, and can I delete it?") || ""));
   check("FAQ reporting does not promise immediate response", /does not guarantee an immediate response/.test(faqAnswers.get("How do I report something bad?") || ""));
   check("FAQ schema does not repeat obsolete ads, streak-sync or complete-erasure claims", !/No ads and no real-money purchases|art and streak|wipes your saved art/i.test(JSON.stringify(faqSchema)));
 

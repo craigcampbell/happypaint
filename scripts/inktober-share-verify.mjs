@@ -5,12 +5,12 @@
 // scratch Vite dev server (port 8984), then drives the real studio in a real
 // browser. Two legs:
 //
-//   A. Module leg — dynamic-imports src/utils/inviteCard.js in the page and
+//   A. Module leg, dynamic-imports src/utils/inviteCard.js in the page and
 //      asserts the RENDERED PIXELS of the Inktober card: 1080×1080, cream
 //      paper, real ink pixels, bundled Caveat lettering loaded, the full art
 //      aspect preserved (corner marks survive uncropped), and ZERO ink
 //      decoration inside the drawn-art rectangle. Classic theme unchanged.
-//   B. Studio leg — draws in a fresh room, opens the Invite sheet, and checks
+//   B. Studio leg, draws in a fresh room, opens the Invite sheet, and checks
 //      the seasonal default theme + user toggle, the TikTok/Instagram
 //      image-native share payload via a navigator.share interception (share
 //      BEFORE clipboard, cancellation triggers no download), the "Share
@@ -21,8 +21,8 @@
 //      with honest attach guidance, the link-only native share with the
 //      SEASONAL caption, X intent, mobile 375px layout, and the ended- AND
 //      upcoming-phase defaults flipping to Classic.
-//   U. Upcoming leg — September clock: the warm-up phase defaults to Classic.
-//   G. Pinned leg — mounts ShareInviteSheet standalone with a fixed
+//   U. Upcoming leg: September clock: the warm-up phase defaults to Classic.
+//   G. Pinned leg, mounts ShareInviteSheet standalone with a fixed
 //      inktoberPage ({ year, day, prompt }) under a November clock: Inktober
 //      default + DAY chip survive after October, /api/inktober is skipped,
 //      and invalid metadata falls back to the live event.
@@ -44,7 +44,7 @@ const CLOCK_FILE = path.join(SCRATCH, "inktober-clock.txt");
 const PORT = 8983; // realtime backend (never 8787)
 const VPORT = 8984; // scratch Vite dev server, proxies /ws + /api → backend
 const HOME = `http://127.0.0.1:${VPORT}`;
-const ROOM = "MAIN"; // public open studio — guests join without an account
+const ROOM = "MAIN"; // public open studio, guests join without an account
 const JOIN = `${HOME}/join/${ROOM}`;
 
 const setClock = (iso) => writeFileSync(CLOCK_FILE, iso);
@@ -76,7 +76,7 @@ export default {
 
 // Standalone mount harness for the pinned-inktoberPage leg: renders the real
 // ShareInviteSheet (JSX-transformed by the same Vite pipeline) with whatever
-// props the test hands it — no App.jsx changes needed.
+// props the test hands it, no App.jsx changes needed.
 const ENTRY = path.join(SCRATCH, "pinned-entry.jsx");
 writeFileSync(ENTRY, `
 import React from "react";
@@ -121,7 +121,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // Share/clipboard/download/window.open interception. Event order is recorded
@@ -231,10 +231,10 @@ const openStudioAndSheet = async (page, { draw = true } = {}) => {
       await sleep(700);
     }
   }
-  // The sheet fetches /api/inktober on mount — capture it so the seasonal
+  // The sheet fetches /api/inktober on mount, capture it so the seasonal
   // default has settled before we assert on the toggle.
   const inkResp = page.waitForResponse((r) => r.url().includes("/api/inktober"), { timeout: 15000 }).catch(() => null);
-  // The room-loading curtain can demand an OK click after replay completes —
+  // The room-loading curtain can demand an OK click after replay completes -
   // wait for it (it appears late), click through, and wait for the curtain
   // to actually detach before reaching for the fab.
   for (let i = 0; i < 60; i += 1) {
@@ -335,7 +335,7 @@ const run = async () => {
 
       const noArt = await mod.renderInviteCard({ art: null, roomId: "SHAREINK", joinUrl: "http://127.0.0.1:8984/join/SHAREINK", theme: "inktober" });
 
-      // Pinned sketchbook page (inktoberPage prop) — module level.
+      // Pinned sketchbook page (inktoberPage prop), module level.
       const pinnedState = mod.pinnedInktoberState({ year: 2026, day: 7, prompt: "shell" });
       const pinnedCard = pinnedState
         ? await mod.renderInviteCard({
@@ -436,7 +436,7 @@ const run = async () => {
     let ev = await drainEvents(page);
     check("B8 Save image downloads the inktober PNG", ev.some((e) => e.t === "download" && e.name === `drawesome-inktober-${ROOM}.png`), JSON.stringify(ev));
 
-    // Reopen: TikTok happy path — share BEFORE clipboard, file payload.
+    // Reopen: TikTok happy path, share BEFORE clipboard, file payload.
     await page.locator("button.mp-invite:visible, button.fab-invite:visible").first().click();
     await page.locator(".share-invite-preview img").waitFor({ timeout: 15000 });
     await drainEvents(page);
@@ -510,7 +510,7 @@ const run = async () => {
     const restored = await waitForCard(page);
     check("B20 toggle back to Inktober restores cream card", !!restored && restored.corners.every(isCream), restored ? JSON.stringify(restored.corners[0]) : "no preview");
 
-    // "Share image…" — the native file share (pick Messages/Mail). Happy
+    // "Share image…", the native file share (pick Messages/Mail). Happy
     // path: card file + seasonal caption, and the clipboard is NEVER touched.
     // The button renders only when the canShare(files) probe passes, so set
     // the flag BEFORE reopening the sheet (the probe runs at render time).
@@ -553,7 +553,7 @@ const run = async () => {
       ev.some((e) => e.t === "download" && e.name === `drawesome-inktober-${ROOM}.png`)
       && !ev.some((e) => e.t === "share" && e.files && e.files.length), JSON.stringify(ev.map((e) => e.t)));
 
-    // Reopen: flipping the theme invalidates the old card IMMEDIATELY — its
+    // Reopen: flipping the theme invalidates the old card IMMEDIATELY, its
     // blob URL is revoked up front, so no handler can share a stale image.
     await page.locator("button.mp-invite:visible, button.fab-invite:visible").first().click();
     await page.locator(".share-invite-preview img").waitFor({ timeout: 15000 });
@@ -589,7 +589,7 @@ const run = async () => {
     await sleep(800);
     const classicPressed = await page.locator('.share-card-theme button:has-text("Classic")').getAttribute("aria-pressed").catch(() => null);
     check("C1 outside October the default card style is Classic", classicPressed === "true", `pressed=${classicPressed}`);
-    // The native link share must follow the SAME seasonal theme — Classic
+    // The native link share must follow the SAME seasonal theme: Classic
     // here, so no #inktober tag leaks into the caption.
     await drainEvents(page);
     await page.locator("button.share-native").click();
@@ -605,7 +605,7 @@ const run = async () => {
 
   // ---- Leg U: upcoming phase defaults to Classic (regression) -------------
   {
-    setClock("2026-09-20T12:00:00Z"); // upcoming warm-up — NOT the season yet
+    setClock("2026-09-20T12:00:00Z"); // upcoming warm-up: NOT the season yet
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     await ctx.addInitScript(INTERCEPT);
     const page = await ctx.newPage();
@@ -645,7 +645,7 @@ const run = async () => {
   // The sheet is mounted STANDALONE (no App.jsx changes) with a fixed
   // { year, day, prompt } page while the live clock says November (ended).
   {
-    setClock("2026-11-05T12:00:00Z"); // ended — an unpinned sheet would go Classic
+    setClock("2026-11-05T12:00:00Z"); // ended, an unpinned sheet would go Classic
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     await ctx.addInitScript(INTERCEPT);
     await ctx.addInitScript(FETCHSPY);

@@ -40,7 +40,7 @@ writeFileSync(join(DATA_DIR, ".analytics.json"), JSON.stringify({
 
 // The server derives the flag list from dist/flags-lineart (build output).
 // This worktree has no build, so mirror public/flags-lineart the way a build
-// would — only when dist doesn't already provide it.
+// would, only when dist doesn't already provide it.
 if (!existsSync(join(ROOT, "dist", "flags-lineart"))) {
   mkdirSync(join(ROOT, "dist"), { recursive: true });
   symlinkSync(join(ROOT, "public", "flags-lineart"), join(ROOT, "dist", "flags-lineart"), "dir");
@@ -345,7 +345,7 @@ try {
   // ---- browser: pick() under real DPR transforms -------------------------------
   // Click the PROJECTED center of a known country (Australia) with an actual
   // pointer at DPR 1 / 2 / 2.5. isPointInPath used to run under the DPR
-  // transform, which shifts the hit point dpr× off — these fail before the fix.
+  // transform, which shifts the hit point dpr× off, these fail before the fix.
   const AU = geo.countries.find((c) => c.code === "AU").c;
   for (const dpr of [1, 2, 2.5]) {
     const ctxD = await browser.newContext({ viewport: { width: 500, height: 720 }, deviceScaleFactor: dpr });

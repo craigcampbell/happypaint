@@ -607,7 +607,7 @@ type PictureBlockProps = {
 
 // Builds (and memoizes) one SkPicture for a contiguous run of flattenable items.
 // Recomputed only when the run's items array, the paper color, or the canvas
-// size changes — not on every live-stroke frame.
+// size changes, not on every live-stroke frame.
 const PictureBlock = memo(function PictureBlock({ items, paperBackground, canvasWidth, canvasHeight }: PictureBlockProps) {
   const picture = useMemo<SkPicture>(
     () =>
@@ -730,7 +730,7 @@ export function StudioScreen({
   const [canvasSize, setCanvasSize] = useState<CanvasSize>({ width: MIN_CANVAS_WIDTH, height: MIN_CANVAS_WIDTH / CANVAS_ASPECT_RATIO });
   const [exporting, setExporting] = useState(false);
   // When set, the canvas renders ONLY this frame's layers (no paper/texture/import)
-  // for one render so we can snapshot it — used by GIF export and loop saving.
+  // for one render so we can snapshot it, used by GIF export and loop saving.
   const [exportFrameId, setExportFrameId] = useState<string | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [renameLayer, setRenameLayer] = useState<{ id: string; value: string } | null>(null);
@@ -834,7 +834,7 @@ export function StudioScreen({
   // render-time closure snapshot. Two commits in the same tick (e.g. a sticker
   // apply landing alongside a stroke finish) would otherwise both read the same
   // stale `latestProject` and the second would clobber the first, dropping an
-  // item. This ref always holds the latest project we know about — updated on
+  // item. This ref always holds the latest project we know about, updated on
   // every render from the incoming props AND synchronously on every local commit
   // (commitProject) so the next mutation in the same tick sees the prior one.
   const latestProjectRef = useRef<DrawingProject>(latestProject);
@@ -909,7 +909,7 @@ export function StudioScreen({
       } catch {
         // M17: the project body was already persisted on commit, so do NOT fire
         // another full onProjectChange here (it was a redundant whole-project
-        // save). Only the PREVIEW snapshot failed — just retry it later.
+        // save). Only the PREVIEW snapshot failed, just retry it later.
         reschedulePreviewRef.current?.(nextProject);
       }
     },
@@ -1213,7 +1213,7 @@ export function StudioScreen({
 
   // RNGH replaces the old PanResponder (finding M10). `.maxPointers(1)` means a
   // second finger or a resting palm can never feed coordinates into the active
-  // stroke — the gesture simply won't recognize a 2+ pointer interaction — so the
+  // stroke, the gesture simply won't recognize a 2+ pointer interaction, so the
   // manual `touches.length > 1` JS guards are gone. With NO reanimated installed,
   // these callbacks run on the JS thread by default, so the existing JS stroke
   // logic / refs / state setters are called directly (no runOnJS, no worklets).
@@ -1740,7 +1740,7 @@ export function StudioScreen({
   // offscreen Skia surface so stored frames stay small/bounded.
   const captureReplaySnapshot = useCallback(async (): Promise<CapturedSnapshot | null> => {
     if (exportInFlightRef.current) {
-      return null; // an export owns the canvas — decline, don't block
+      return null; // an export owns the canvas, decline, don't block
     }
     exportInFlightRef.current = true;
     try {

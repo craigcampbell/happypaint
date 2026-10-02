@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Moderation evidence — controller/worker race tests (pure Node, no server).
+// Moderation evidence, controller/worker race tests (pure Node, no server).
 //
 // Drives createNsfwWatcher with a fake worker and stubbed canvas globals to
 // prove the evidence-freeze contract:
@@ -7,7 +7,7 @@
 //   2. Sampling is PAUSED while the encode is in flight (the next scan would
 //      overwrite the very pixels being frozen).
 //   3. An encode answer whose generation does not match the flagged scan is
-//      dropped — newer pixels can never be bound to an older score.
+//      dropped, newer pixels can never be bound to an older score.
 //   4. A stale/failed/timed-out encode never blocks the flag; it just goes
 //      out without pixels.
 // Plus direct unit tests of the worker-side generation guard.
@@ -19,7 +19,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // --- Browser-global stubs (the watcher touches these on the main thread) ----
@@ -159,7 +159,7 @@ async function main() {
   // -- 3. THE RACE: newer image must never bind to the older score ------------
   {
     // Worker answers the encode with a MISMATCHED generation (it scanned again
-    // before encoding — exactly the async race). Controller must drop the
+    // before encoding, exactly the async race). Controller must drop the
     // pixels and still fire the flag.
     const worker = fakeWorker({ score: 0.9 });
     const { flags, watcher, bumpOps } = makeWatcher(worker);

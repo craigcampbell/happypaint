@@ -152,7 +152,7 @@ function EventCard({
 
 export function EventsPanel({ onEnterStudio, matches }: Props) {
   const [votedPostIds, setVotedPostIds] = useState<string[]>([]);
-  const [notice, setNotice] = useState("Daily and weekend events. Kid-safe and friends only — no adult events.");
+  const [notice, setNotice] = useState("Daily and weekend events. Kid-safe and friends only, no adult events.");
 
   useEffect(() => {
     let active = true;

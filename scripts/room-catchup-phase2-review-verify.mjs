@@ -4,11 +4,11 @@
 //   Part F  (unit)  phase-3 seam: createCatchup must export runCatchup /
 //                   isCurrent / sendFresh; the seam gates, orders and flushes.
 //   Part G  (unit)  catch-up gate queue accounts BYTES (UTF-8), not UTF-16
-//                   string length — a multibyte payload trips the byte bound.
+//                   string length, a multibyte payload trips the byte bound.
 //   Part H  (unit)  historyFrame freezes nested metadata: a layer/stack
 //                   mutation landing MID-BUILD must not tear the frame bytes.
 //   Part I  (:19111) a rate-limited scene_fetch is answered EXPLICITLY
-//                   (resync retry signal) — never silently dropped while the
+//                   (resync retry signal), never silently dropped while the
 //                   client holds a scene waiter.
 //   Part J  (:19111) a scene DELETED during its in-flight fetch: the fetcher
 //                   still gets a baseline + the scene_del, in order, alive.
@@ -41,7 +41,7 @@ const results = [];
 let assertions = 0;
 function check(name, value, detail = '') {
   assertions += 1;
-  assert.ok(value, `${name}${detail ? ` — ${detail}` : ''}`);
+  assert.ok(value, `${name}${detail ? `, ${detail}` : ''}`);
   console.log(`  PASS ${name}`);
 }
 async function part(name, fn) {
@@ -52,7 +52,7 @@ async function part(name, fn) {
     console.log(`PART ${name} OK`);
   } catch (err) {
     results.push({ part: name, ok: false, error: String(err && err.message || err) });
-    console.log(`PART ${name} FAIL — ${err && err.message}`);
+    console.log(`PART ${name} FAIL, ${err && err.message}`);
   }
 }
 
@@ -262,7 +262,7 @@ async function partH() {
   const expected = JSON.stringify({ type: 'history', ops, frames });
   const build = buildGzippedHistoryFrame({ variant: 'full', gen: 1, hiddenGen: 0, framesKey: 'k', msg, budgetMs: 1 });
   // Mutate the LIVE nested metadata mid-build (an add+remove pair of structural
-  // edits can leave the invalidation key unchanged — the bytes must still be
+  // edits can leave the invalidation key unchanged, the bytes must still be
   // the frozen snapshot, never a torn old/new mix).
   setTimeout(() => {
     frames[0].layers.push({ id: 'L9', name: 'TEAR', visible: true, opacity: 1, locked: false });
@@ -283,7 +283,7 @@ async function partI(srv) {
   await sleep(400);
   const member = await srv.connect('ZZRL', { gz: true });
   await member.waitFor((m) => m.type === 'history', { timeoutMs: 8000, label: 'member join' });
-  // Wait for the Nth history by COUNT — a sceneId-only predicate would match a
+  // Wait for the Nth history by COUNT, a sceneId-only predicate would match a
   // stale buffered frame from an earlier fetch and clear the waiter early.
   let expectedHistories = 1; // the join baseline
   for (const sceneId of [sB.sceneId, sA.sceneId, sB.sceneId]) { // 3 tokens
@@ -335,7 +335,7 @@ async function partJ(srv) {
   check('J5 remaining scenes fetch cleanly afterwards', !!historyA);
 }
 
-// ---- Part K: bounded outgoing queue — durable reliable, ephemeral maydrop ----
+// ---- Part K: bounded outgoing queue, durable reliable, ephemeral maydrop ----
 // A stalled (paused) consumer: durable ops must ALL arrive in order once the
 // socket drains (queued, never silently discarded); ephemeral cursors under
 // backpressure may be dropped instead of growing memory.

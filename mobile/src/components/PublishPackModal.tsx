@@ -1,7 +1,7 @@
 // Publish a Community Brush Pack from the locker.
 //
 // Lets the user name a pack, pick which of their saved brush/sticker/palette/
-// template assets go in it, choose visibility (private / friends / public —
+// template assets go in it, choose visibility (private / friends / public -
 // public requires review) and a remix permission, then "Submit for review".
 // The host (PaintSpaceScreen) owns persistence via onPublish, which calls
 // brushPacks.publishPack (writes the asset_packs row + asset_moderation_queue

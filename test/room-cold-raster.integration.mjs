@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Cold-raster invalidation — INTEGRATION: render-affecting layer metadata
+// Cold-raster invalidation: INTEGRATION: render-affecting layer metadata
 // changes landing on a COLD frame in the real app (phase-1 review blocker).
 //
 // Spawns the REAL server.js on 127.0.0.1:19101 against a throwaway DATA_DIR
@@ -7,9 +7,9 @@
 // one random private animation room:
 //   1. p1 (host) enables animation, draws on TWO layers of frame 1, then adds
 //      five more frames and sits on the last one. p2 joins late and parks on
-//      the last frame — frame 1 goes COLD for p2 with a fresh raster.
+//      the last frame, frame 1 goes COLD for p2 with a fresh raster.
 //   2. p1 steps back to frame 1 and HIDES layer 2. p2's frame 1 op count
-//      never changes — before the fix its raster stayed fresh-looking
+//      never changes, before the fix its raster stayed fresh-looking
 //      forever (stale check was rasterCount vs ops.length only, and the
 //      bitmap cache key was `id:rasterCount`).
 //   3. Assert on p2: rasterFresh flips false (invalidated), then true again
@@ -38,7 +38,7 @@ const CHROME = process.env.CHROME_PATH || "/usr/bin/google-chrome";
 const ROOM = `ZZC1${Math.floor(Math.random() * 900 + 100)}`;
 
 if (!fs.existsSync(path.join(ROOT, "dist", "index.html"))) {
-  console.error("dist/index.html missing — run `npm run build` first (server.js serves dist/).");
+  console.error("dist/index.html missing, run `npm run build` first (server.js serves dist/).");
   process.exit(2);
 }
 
@@ -69,7 +69,7 @@ async function waitForHealth() {
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : ` — ${detail}`}`);
+  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : `, ${detail}`}`);
 };
 const sha = (text) => createHash("sha256").update(String(text)).digest("hex").slice(0, 16);
 
@@ -163,7 +163,7 @@ try {
   }
   check("precondition: six frames, host parked on the last", true);
 
-  // p2 joins late (history catch-up) and parks on frame 6 — frames 1–3 go
+  // p2 joins late (history catch-up) and parks on frame 6, frames 1–3 go
   // cold for it (hydrated radius ±2).
   const p2 = await ctx.newPage();
   await p2.goto(`${BASE}/join/${ROOM}`, { waitUntil: "networkidle" });
@@ -186,7 +186,7 @@ try {
   const thumbBefore = await waitThumb(p2, 0, (src) => src.startsWith("data:"), "frame 1 thumbnail on p2");
   const genBefore = settled[0].rasterGen;
 
-  // ---- THE BUG: hide layer 2 on frame 1 — p2's op count never changes. ----
+  // ---- THE BUG: hide layer 2 on frame 1, p2's op count never changes. ----
   await p1.click('button[aria-label="Frame 1"]');
   await p1.waitForFunction(() => document.querySelectorAll(".layer-panel .layer-row").length === 2, null, { timeout: 10000 });
   await p1.waitForTimeout(1500); // let the hydration replay land before the patch

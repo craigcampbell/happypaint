@@ -1,4 +1,4 @@
-// Room Replay & Timelapse — SNAPSHOT-BASED process capture (not per-stroke).
+// Room Replay & Timelapse: SNAPSHOT-BASED process capture (not per-stroke).
 // Mirrors src/utils/replay.js, adapted to RN (expo-file-system + AsyncStorage +
 // Skia capture handed in by the studio).
 //
@@ -37,7 +37,7 @@ import {
 } from "./storage";
 import type { ReplaySnapshot, ReplaySnapshotKind } from "./types";
 
-// Downscaled snapshot size — small enough that ~80 PNGs is a few MB, and a good
+// Downscaled snapshot size, small enough that ~80 PNGs is a few MB, and a good
 // source resolution for the GIF timelapse (which can downscale further).
 export const SNAPSHOT_WIDTH = 480;
 export const SNAPSHOT_HEIGHT = 360;
@@ -149,12 +149,12 @@ export async function clearAllReplayIndexes(): Promise<void> {
       await AsyncStorage.multiRemove(replayKeys);
     }
   } catch {
-    // non-fatal — a failed clear must not abort the wider deletion
+    // non-fatal, a failed clear must not abort the wider deletion
   }
 }
 
 // A lightweight live recorder. The studio creates one per artwork. It does NOT
-// own a canvas — the caller hands it an async `capture()` that returns a
+// own a canvas, the caller hands it an async `capture()` that returns a
 // downscaled base64 PNG (export-lock-aware). The recorder writes each snapshot
 // to a file, maintains the index, decimates, and persists.
 //
@@ -204,7 +204,7 @@ export function createReplayRecorder(options: {
       await ensureReplayDirReady();
       await writeIndex(replayId, snapshots);
     } catch {
-      // non-fatal — the series stays in memory and retries next persist
+      // non-fatal, the series stays in memory and retries next persist
     }
   }
 
@@ -246,7 +246,7 @@ export function createReplayRecorder(options: {
       await persist();
       notify();
     } catch {
-      // swallow — a capture failure must never break the draw loop
+      // swallow, a capture failure must never break the draw loop
     } finally {
       capturing = false;
     }

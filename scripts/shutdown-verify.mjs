@@ -8,7 +8,7 @@ import { createServer, request } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 
 // Rooms persist as <CODE>.json (meta) + <CODE>.history.json (base) + <CODE>.ops.jsonl
-// (appended ops) — read them back the way the server does on boot.
+// (appended ops), read them back the way the server does on boot.
 function readRoomHistory(scratch, code) {
   const dir = join(scratch, '.rooms');
   let history = [];

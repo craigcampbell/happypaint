@@ -2,7 +2,7 @@
 // whether a room history replay reproduces the drawing 1:1.
 //
 //  C1  a joiner mid-session gets ONE layer and every stroke on it
-//  C2  a joiner's stroke lands on layer 0 of a layered artist's canvas — i.e.
+//  C2  a joiner's stroke lands on layer 0 of a layered artist's canvas, i.e.
 //      their help arrives UNDER the artist's upper-layer work (invisible)
 //  C3  a replay is not 1:1: an eraser stroke the artist aimed at layer 0 (with
 //      an upper layer covering the hole, so nothing visibly changed) is replayed
@@ -35,10 +35,10 @@ server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const check = (n, ok, d = "") => {
-  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? " — " + d : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? ": " + d : ""}`);
   if (!ok) fails += 1;
 };
-const note = (n, d = "") => console.log(`      ${n}${d ? " — " + d : ""}`);
+const note = (n, d = "") => console.log(`      ${n}${d ? ": " + d : ""}`);
 
 // Regions as fractions of the canvas box (screen space).
 const R = [0.08, 0.30, 0.42, 0.37]; // the erase / 1:1 region
@@ -176,7 +176,7 @@ const run = async () => {
   note("A baseline", `R=${inkR0} U=${inkU0}`);
 
   // Layer 0 stroke in R, then layer 2 gets a stroke in R and a solid block of
-  // ink (a filled rectangle) over U — so anything the joiner paints in U on
+  // ink (a filled rectangle) over U, so anything the joiner paints in U on
   // layer 0 is completely covered on the artist's canvas.
   await stroke(A, boxA, R[0], ROW_Y, R[2], ROW_Y);
   await addLayer(A);
@@ -217,14 +217,14 @@ const run = async () => {
 
   // ---- The joiner's stroke, seen by the layered artist --------------------
   // A fresh joiner's active layer is the TOP of the shared stack, so their ink
-  // lands where the artist's own work is — visible immediately, on the SAME
+  // lands where the artist's own work is, visible immediately, on the SAME
   // layer, not buried under it.
   const inkV0 = await regionInk(A, V);
   await stroke(B, boxB, V[0], ROW_Y_V, V[2], ROW_Y_V);
   await sleep(900);
   let inkVAfterHelp = await regionInk(A, V);
   // A dropped pointer-down (canvas still settling on a fresh join) shouldn't be
-  // read as "collaboration is broken" — give the stroke a couple of tries.
+  // read as "collaboration is broken", give the stroke a couple of tries.
   for (let attempt = 0; attempt < 3 && inkVAfterHelp <= inkV0 + 200; attempt += 1) {
     await stroke(B, boxB, V[0], ROW_Y_V, V[2], ROW_Y_V);
     await sleep(900);
@@ -263,7 +263,7 @@ const run = async () => {
     `R ink ${inkRAfterLayer2} → ${inkRBeforeReplay}`);
 
   // Force a plain room history replay: hide one op, then put it back. The final
-  // rebuild replays the FULL op stream — whatever the artist now sees is what
+  // rebuild replays the FULL op stream, whatever the artist now sees is what
   // the room hands every client that loads this drawing.
   const adminKey = readFileSync(path.join(SCRATCH, ".admin-key"), "utf8").trim();
   const watcher = await connectWatcher(CODE, adminKey);

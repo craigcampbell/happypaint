@@ -1,5 +1,5 @@
 // Playwright verification for the film-strip + onion-skin MVP.
-// Drives a LOCAL isolated server (scratch DATA_DIR) — never production.
+// Drives a LOCAL isolated server (scratch DATA_DIR), never production.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
 import { mkdirSync, rmSync } from "fs";
@@ -11,7 +11,7 @@ const PORT = 8917;
 const BASE = `http://localhost:${PORT}`;
 const SHOTS = process.argv[2] || ".";
 
-// Frames persist server-side now — start every run from a clean room store.
+// Frames persist server-side now, start every run from a clean room store.
 try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
 mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok, detail });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const run = async () => {
@@ -125,7 +125,7 @@ const run = async () => {
   // 9) Desktop screenshot.
   await page.screenshot({ path: path.join(SHOTS, "filmstrip-desktop.png") });
 
-  // 10) Mobile viewport — a FRESH phone load (chat starts closed on phones),
+  // 10) Mobile viewport, a FRESH phone load (chat starts closed on phones),
   // not a resized desktop session dragging its open chat window along.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${BASE}/join/FLIPBOOK`, { waitUntil: "domcontentloaded" });

@@ -1,7 +1,7 @@
 // Modal scrolling on phones.
 //
 // Reported bug: in a room on mobile, opening the 🌐 rooms dialog shows a list
-// you can TAP but cannot SCROLL — the rooms below the fold are unreachable.
+// you can TAP but cannot SCROLL, the rooms below the fold are unreachable.
 // Cause: .modal-backdrop is position:fixed and .studio-modal had no
 // max-height/overflow, so a list taller than the viewport simply spilled off
 // screen with no scroll container anywhere.
@@ -31,11 +31,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 // The scrollable box is whichever of the modal / its backdrop actually
-// overflows — mirrors how a real finger-drag finds a scroller.
+// overflows, mirrors how a real finger-drag finds a scroller.
 async function probeModal(page, selector) {
   return page.evaluate((sel) => {
     const modal = document.querySelector(sel);
@@ -56,7 +56,7 @@ async function probeModal(page, selector) {
   }, selector);
 }
 
-// Actually move the scroller and confirm the position changes — CSS alone
+// Actually move the scroller and confirm the position changes: CSS alone
 // can look right while the box still refuses to move.
 async function canScroll(page, selector) {
   return page.evaluate((sel) => {
@@ -105,7 +105,7 @@ const run = async () => {
   check("the rooms dialog opens on mobile", !!lobby, lobby ? `${lobby.modalHeight}px tall` : "not found");
 
   if (lobby) {
-    // The whole modal must sit inside the screen — a modal taller than the
+    // The whole modal must sit inside the screen, a modal taller than the
     // viewport puts its top/bottom permanently out of reach.
     check("rooms dialog fits within the phone viewport",
       lobby.modalHeight <= lobby.viewport && lobby.modalTop >= -1 && lobby.modalBottom <= lobby.viewport + 1,

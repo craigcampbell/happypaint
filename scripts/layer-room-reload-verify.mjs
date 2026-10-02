@@ -1,5 +1,5 @@
 // Does a ROOM drawing with LAYERS survive? Layer stacks are client-local (the
-// wire op carries kind/strokeId/points/settings/frameId — never a layer), so a
+// wire op carries kind/strokeId/points/settings/frameId, never a layer), so a
 // room history replay clears every layer and repaints the whole op stream onto
 // layer 0. This drives a real browser against a scratch server to show what a
 // reload (and an in-place resync) actually does to a 2-layer drawing.
@@ -31,10 +31,10 @@ server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const check = (n, ok, d = "") => {
-  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? " — " + d : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${n}${d ? ": " + d : ""}`);
   if (!ok) fails += 1;
 };
-const note = (n, d = "") => console.log(`      ${n}${d ? " — " + d : ""}`);
+const note = (n, d = "") => console.log(`      ${n}${d ? ": " + d : ""}`);
 
 // ---------------------------------------------------------------- page helpers
 const layerRows = (page) => page.$$eval(".layer-panel .layer-row", (rows) =>
@@ -117,7 +117,7 @@ const halves = async (page, tag) => {
 };
 
 // Every draft record in IndexedDB, with each layer's non-transparent pixel count
-// (decoded from its blob/dataURL) — i.e. what the LOCAL autosave would restore.
+// (decoded from its blob/dataURL), i.e. what the LOCAL autosave would restore.
 const draftSummary = (page) =>
   page.evaluate(async () => {
     const out = [];
@@ -247,7 +247,7 @@ const run = async () => {
   check("R3 both strokes are on screen locally",
     t1.l > base.l + 200 && t1.r > base.r + 200, `left ${base.l}→${t1.l}, right ${base.r}→${t1.r}`);
 
-  // Which layer holds which stroke? Hide the BOTTOM row (Canvas) — stroke A only.
+  // Which layer holds which stroke? Hide the BOTTOM row (Canvas), stroke A only.
   await clickRowControl(page, 1, ".layer-visibility");
   const t2 = await halves(page, "bottom layer hidden");
   await clickRowControl(page, 1, ".layer-visibility"); // show again

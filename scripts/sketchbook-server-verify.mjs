@@ -100,7 +100,7 @@ const PB = `http://127.0.0.1:${mock.address().port}`;
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 260) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 260) : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -174,7 +174,7 @@ async function api(pathname, { method = "GET", token = null, body = null, adminK
   return { status: res.status, json };
 }
 const roomFileJson = (code) => JSON.parse(readFileSync(path.join(SCRATCH, ".rooms", `${code}.json`), "utf8"));
-// Room meta persistence is write-behind (~2.5s schedule) — poll for the file.
+// Room meta persistence is write-behind (~2.5s schedule), poll for the file.
 async function waitRoomFileJson(code, ms = 8000) {
   const start = Date.now();
   for (;;) {
@@ -258,7 +258,7 @@ const run = async () => {
   // ==========================================================================
   // 2. Pages: server-stamped prompt metadata, validation, caps, races
   // ==========================================================================
-  // The prompt is the SERVER's truth for the faked clock day — never hardcoded.
+  // The prompt is the SERVER's truth for the faked clock day, never hardcoded.
   const inkDay5 = await api("/api/inktober");
   const DAY5_PROMPT = inkDay5.json?.prompt;
   check("event is active on day 5 under the test clock", inkDay5.json?.phase === "active" && inkDay5.json?.day === 5 && !!DAY5_PROMPT,
@@ -316,7 +316,7 @@ const run = async () => {
     JSON.stringify(meta5.sketchbook));
   check("page rooms never list in the artist room gallery", meta5.gallery?.listed !== true);
 
-  // Direct room publish/unpublish must refuse book-managed pages loudly —
+  // Direct room publish/unpublish must refuse book-managed pages loudly -
   // listing + the Inktober flag belong to the BOOK (409 book_managed).
   const pagePublish = await api(`/api/rooms/${PAGE5}/publish`, {
     method: "POST", token: "owner_token", body: { inktober: false, description: "hijack", tags: ["x"] },
@@ -527,7 +527,7 @@ const run = async () => {
 
   // The direct room-ACL endpoint on a page room ROUTES through the book:
   // revoking artist2 from ONE page strips them book-wide (the only honest
-  // semantics — a room-local edit would be re-granted by the next sync).
+  // semantics, a room-local edit would be re-granted by the next sync).
   const a2tab = await connect(PAGE1, { token: "artist2_token" });
   check("artist2 holds a live tab on page 1", lastOf(a2tab, "connected")?.canPaint === true);
   const roomRevoke = await api(`/api/rooms/${PAGE1}/painters/revoke`, {
@@ -656,8 +656,8 @@ const run = async () => {
   check("moderation-hidden book leaves the gallery",
     !(afterBookHide.json?.books || []).some((b) => b.id === BOOK));
 
-  // A hidden book closes to the public EVERYWHERE — reader, banner,
-  // spectator, member joins — while the owner/team keep managing it.
+  // A hidden book closes to the public EVERYWHERE, reader, banner,
+  // spectator, member joins, while the owner/team keep managing it.
   check("hidden book: reader 404s for guests", (await api(`/api/sketchbooks/${BOOK}`)).status === 404);
   check("hidden book: reader 404s for non-owner accounts",
     (await api(`/api/sketchbooks/${BOOK}`, { token: "stranger_token" })).status === 404);
@@ -874,7 +874,7 @@ const run = async () => {
   check("book still references the lost page", (book10.json?.book?.pages || []).some((p) => p.room === PRIVPAGE));
 
   // A STRANGER lands on the code first: it must rematerialize as the book's
-  // page — never as a generic, ownable room the stranger could squat on.
+  // page, never as a generic, ownable room the stranger could squat on.
   const squatter = await connect(PRIVPAGE, { token: "stranger_token", port: PORT_RESTART });
   const squatHello = lastOf(squatter, "connected");
   check("missing page rematerializes as artist_public on first touch (no takeover)",
@@ -946,7 +946,7 @@ const run = async () => {
   if (madeStubDist) { try { rmSync(distDir, { recursive: true, force: true }); } catch { /* leave it */ } }
 
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ` — ${failed.length} FAILED` : ""}`);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? `, ${failed.length} FAILED` : ""}`);
   if (failed.length) {
     console.log("server log tail:\n" + serverLog.join("").slice(-1200));
     process.exit(1);

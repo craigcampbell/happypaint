@@ -1,4 +1,4 @@
-// Inktober sketchbook UI smoke — real backend, real vite dev server, real
+// Inktober sketchbook UI smoke, real backend, real vite dev server, real
 // browser; ONLY auth is mocked (fake-JWT PocketBase, same pattern as
 // artist-studio-verify). Isolated: scratch DATA_DIR, backend 9023, vite 9024
 // (9003/9004 belong to the backend child's suite). Never touches 8787 or
@@ -15,7 +15,7 @@
 //   API: POST /api/sketchbooks without `public` defaults to private; a
 //     private book 404s the public reader + by-room for strangers and is
 //     absent from the gallery; invited artists pass after accepting
-//   reader: guest on a private book gets the honest "private — or not here"
+//   reader: guest on a private book gets the honest "private, or not here"
 //     card with a sign-in return path; the owner visibility toggle asks an
 //     explicit confirm before going public (dismiss = no POST)
 //   guest /sketchbook/invite/:token -> sign-in links carry return=<this exact
@@ -79,7 +79,7 @@ const PB = `http://127.0.0.1:${mock.address().port}`;
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 240) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 240) : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -141,7 +141,7 @@ const run = async () => {
   await sleep(500);
   ws.close();
 
-  // Mint an invitation for the invite-page checks (token used in URLs only —
+  // Mint an invitation for the invite-page checks (token used in URLs only -
   // never printed by this suite).
   const minted = await api(`/api/sketchbooks/${BOOK}/invites`, { method: "POST", token: OWNER_JWT });
   const INVITE_TOKEN = minted.json?.token;
@@ -163,7 +163,7 @@ const run = async () => {
   const PRIV_INVITE = privMinted.json?.token;
   check("seed: private book invitation minted", typeof PRIV_INVITE === "string" && PRIV_INVITE.length > 8);
 
-  // Strangers get the same 404 as a missing book — reader AND by-room.
+  // Strangers get the same 404 as a missing book, reader AND by-room.
   const guestRead = await api(`/api/sketchbooks/${PRIVBOOK}`);
   check("private book reader 404s for a guest", guestRead.status === 404, String(guestRead.status));
   const outsiderRead = await api(`/api/sketchbooks/${PRIVBOOK}`, { token: NEWBIE_JWT });
@@ -277,7 +277,7 @@ const run = async () => {
   check("guest signup link returns to /sketchbook after sign-up",
     signupUrl.pathname === "/signup" && signupUrl.searchParams.get("return") === "/sketchbook", guestStart2.url());
 
-  // 2. Owner /sketchbook: GET mine auto-resume ONLY — not a single create POST.
+  // 2. Owner /sketchbook: GET mine auto-resume ONLY, not a single create POST.
   const ownerPage = await newPage({ auth: ownerAuth });
   const ownerPosts = trackCreatePosts(ownerPage);
   await ownerPage.goto(`${BASE}/sketchbook`, { waitUntil: "domcontentloaded" });
@@ -369,7 +369,7 @@ const run = async () => {
   await deniedGuest.goto(`${BASE}/sketchbook/${PRIVBOOK}`, { waitUntil: "domcontentloaded" });
   let denialShown = true;
   try {
-    await deniedGuest.waitForSelector("text=This sketchbook is private — or isn’t here", { timeout: 15000 });
+    await deniedGuest.waitForSelector("text=This sketchbook is private, or isn’t here", { timeout: 15000 });
   } catch { denialShown = false; }
   check("guest on a private book gets the honest private-or-missing card", denialShown);
   if (denialShown) {
@@ -408,7 +408,7 @@ const run = async () => {
     !!(await artieAccept.$("text=Open the page studio to view & draw →")));
   check("private reader hides the public Watch-live route", !(await artieAccept.$("text=Watch live")));
 
-  // 2f. Owner visibility toggle: PUBLIC needs the explicit confirm — a
+  // 2f. Owner visibility toggle: PUBLIC needs the explicit confirm, a
   // dismissed confirm must not POST; an accepted one POSTs { public: true }
   // exactly once and the badge flips.
   const privOwner = await newPage({ auth: privAuth });
@@ -514,7 +514,7 @@ run()
     try { server.kill("SIGKILL"); } catch { /* gone */ }
     mock.close();
     const failed = results.filter((r) => !r.ok);
-    console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ` — ${failed.length} FAILED` : ""}`);
+    console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? `, ${failed.length} FAILED` : ""}`);
     if (failed.length) {
       console.log("server log tail:\n" + serverLog.join("").slice(-1000));
       process.exit(1);

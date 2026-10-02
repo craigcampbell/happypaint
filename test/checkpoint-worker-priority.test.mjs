@@ -5,7 +5,7 @@
 // FIFO is kept INSIDE one priority band, the queue stays bounded (overflow
 // rejects queue_full, never grows), and single-argument submit(job) callers
 // behave exactly as before. Uses test/fixtures/echoCheckpointWorker.mjs (a
-// stub child — no browser needed).
+// stub child, no browser needed).
 //
 //   node --test test/checkpoint-worker-priority.test.mjs
 import assert from 'node:assert/strict';

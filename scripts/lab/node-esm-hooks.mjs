@@ -1,7 +1,7 @@
 // Node ESM resolve hook for running engine modules outside vite.
 //
 // src/ imports extensionless relative specifiers ("./strokeBuffer",
-// "./brushSprites") — vite resolves them, Node's ESM loader does not
+// "./brushSprites"), vite resolves them, Node's ESM loader does not
 // (ERR_MODULE_NOT_FOUND). Scripts that import the engine in Node (the golden
 // fixture generator) register this hook first, then dynamic-import the
 // engine:

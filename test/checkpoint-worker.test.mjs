@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Phase-3 trusted checkpoint WORKER tests — real Chromium, real renders.
+// Phase-3 trusted checkpoint WORKER tests, real Chromium, real renders.
 //
 // Covers (contract stage gate 1 + security cases):
 //  - real worker roundtrip: per-layer full-res transparent PNGs (magic +

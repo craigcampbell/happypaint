@@ -19,7 +19,7 @@ mkdirSync(SCRATCH, { recursive: true });
 
 // REGRESSION (review): the midnight wipe must be DERIVED, not RAM-latched.
 // Pre-seed a DAILY room file that claims YESTERDAY's challenge date + a stale
-// mural — a boot (i.e. a deploy that restarted across midnight) must wipe it.
+// mural, a boot (i.e. a deploy that restarted across midnight) must wipe it.
 const { writeFileSync } = await import("fs");
 mkdirSync(path.join(SCRATCH, ".rooms"), { recursive: true });
 const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
@@ -37,7 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -49,7 +49,7 @@ const run = async () => {
   }
 
   // The pre-seeded stale DAILY mural (yesterday's dailyDate) must be wiped at
-  // boot — the derived rollover, not a RAM latch, owns the midnight contract.
+  // boot, the derived rollover, not a RAM latch, owns the midnight contract.
   const { WebSocket } = await import("ws");
   const staleCheck = await new Promise((resolve) => {
     const ws = new WebSocket(`ws://localhost:${PORT}/ws?room=DAILY`);

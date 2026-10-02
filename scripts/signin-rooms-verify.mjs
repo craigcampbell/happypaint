@@ -1,5 +1,5 @@
 /* eslint-env browser, node */
-// Sign-in loop + "My rooms" + longer films, end to end — with NO real account.
+// Sign-in loop + "My rooms" + longer films, end to end, with NO real account.
 //
 // A mock PocketBase answers the server's token checks (tokens are fake JWTs;
 // a payload id starting "BAD" is rejected). The browser gets the same fake
@@ -11,13 +11,13 @@
 //      first frame, no "needs an account" gate (the race that caused the loop).
 //   B. A token the server rejects: "sign in again", not the sign-UP pitch.
 //   C. A guest at a private room: both sign-in exits carry return=/join/CODE.
-//   D. /rooms for a signed-in person: their rooms first — owner badge, their
+//   D. /rooms for a signed-in person: their rooms first, owner badge, their
 //      OWN last chat line, never someone else's words.
-//   E. /signup while signed in: continue / new room / sign out — no dead end.
+//   E. /signup while signed in: continue / new room / sign out, no dead end.
 //   F. API: 401 without a token, a stranger sees none of your private rooms or
 //      their pictures.
 //   G. Films: the public FLIPBOOK offers 240 frames, and a big private film
-//      (> the old 20k reload trim) reloads with every op — frame 1 intact.
+//      (> the old 20k reload trim) reloads with every op, frame 1 intact.
 import { chromium } from "playwright";
 import WebSocket from "ws";
 import http from "http";
@@ -39,7 +39,7 @@ const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: pa
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64url");

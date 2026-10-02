@@ -3,7 +3,7 @@
 // seeds room ADMQA with strokes from a real browser member and a chat line
 // from a raw socket, waits for the thumbnail sweep, then logs into /admin and
 // checks the overview (traffic, room card with thumbnail + trends) and the
-// Chat log tab — through the UI and the API. Screenshots land in the scratch dir.
+// Chat log tab, through the UI and the API. Screenshots land in the scratch dir.
 import { chromium } from "playwright";
 import WebSocket from "ws";
 import { spawn } from "child_process";
@@ -30,7 +30,7 @@ const server = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...pro
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
 
 const results = [];
-const check = (name, ok, detail = "") => { results.push({ name, ok }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`); };
+const check = (name, ok, detail = "") => { results.push({ name, ok }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`); };
 
 const run = async () => {
   for (let i = 0; i < 80; i += 1) { try { const r = await fetch(BASE + "/"); if (r.ok) break; } catch { /* boot */ } await sleep(250); }

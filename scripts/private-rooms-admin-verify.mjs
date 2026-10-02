@@ -2,14 +2,14 @@
 // retention rule that goes with requiring an account for them:
 //   1. a guest refused at a private room's door leaves NO room behind (phantoms
 //      are reaped and never listed);
-//   2. /api/admin/radar lists every private room — live AND asleep on disk —
+//   2. /api/admin/radar lists every private room, live AND asleep on disk -
 //      with its owning account, and /api/admin/users-index hangs each account's
 //      private rooms on its row; a moderator can Watch a dormant one without
 //      resetting its idle clock;
 //   3. an account-OWNED private room outlives the short guest TTL (30d floor),
 //      while an unowned one and a long-dead owned one are still swept.
 //
-// Throwaway server, scratch DATA_DIR, mock PocketBase, ADMIN_KEY from env — the
+// Throwaway server, scratch DATA_DIR, mock PocketBase, ADMIN_KEY from env, the
 // real key never appears here.
 import { spawn } from 'node:child_process';
 import http from 'node:http';
@@ -27,7 +27,7 @@ const results = { checks: [], pass: 0, fail: 0 };
 const check = (name, ok, extra = '') => {
   results.checks.push({ name, ok, extra });
   if (ok) results.pass += 1; else results.fail += 1;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? ` — ${extra}` : ''}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? `, ${extra}` : ''}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

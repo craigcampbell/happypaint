@@ -1,19 +1,19 @@
-// Auth / cloud sync layer — ENV-GATED provider abstraction with a graceful
+// Auth / cloud sync layer: ENV-GATED provider abstraction with a graceful
 // local-only fallback (RN / Expo).
 //
 // docs/social-backend.md: "Happy Paint should stay useful without an account.
 // Accounts unlock cross-device sync, friend invites, planned sessions, and live
 // painting." and §"Store Review Notes": "Keep login optional until the user
-// chooses sync or social features." So login is OPTIONAL — the whole app works
+// chooses sync or social features." So login is OPTIONAL, the whole app works
 // signed out; auth only gates sync/social.
 //
 // Mode is decided once from Expo env at module load and never throws:
 //   - CLOUD: both EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY set.
 //     A Supabase client is created LAZILY (only on first use) with AsyncStorage
 //     as the auth storage adapter, persistSession + autoRefreshToken on, and
-//     detectSessionInUrl off (required on RN — there is no browser URL bar).
+//     detectSessionInUrl off (required on RN, there is no browser URL bar).
 //   - LOCAL (no env): same interface, every call resolves to a clear
-//     "Cloud sync not configured — your work is saved on this device." status.
+//     "Cloud sync not configured, your work is saved on this device." status.
 //     No network calls are ever made and no client is ever instantiated.
 //
 // RN client requirements wired here:
@@ -36,7 +36,7 @@ export const isCloudConfigured: boolean = Boolean(SUPABASE_URL && SUPABASE_ANON_
 
 // Shown anywhere we need to explain the local-only state honestly.
 export const LOCAL_ONLY_MESSAGE =
-  "Cloud sync not configured — your work is saved on this device.";
+  "Cloud sync not configured, your work is saved on this device.";
 
 // Deep link the auth provider redirects back to (must match app.json `scheme`).
 // Used for magic-link `emailRedirectTo` and OAuth `redirectTo`.
@@ -77,7 +77,7 @@ function toAuthSession(session: Session | null): AuthSession | null {
   return { user: { id: session.user.id, email: session.user.email ?? null } };
 }
 
-// ---- LocalProvider — active while cloud sync is unconfigured ----------------
+// ---- LocalProvider, active while cloud sync is unconfigured ----------------
 // Same interface as the Supabase provider, but never touches the network: there
 // is no session, sign-in reports the local-only status, and auth state never
 // changes. No client is ever created.
@@ -160,7 +160,7 @@ export function getActiveProfileId(): string | null {
   return cachedProfileId;
 }
 
-// ---- SupabaseProvider — real implementation when configured -----------------
+// ---- SupabaseProvider, real implementation when configured -----------------
 const SupabaseProvider: AuthProvider = {
   async getSession() {
     const client = getSupabaseClient();

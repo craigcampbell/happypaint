@@ -20,7 +20,7 @@
 //      clear countdown; the admin moderation wipe is retained
 //   8. wall event attribution: INKTOBER self-submission still stamps (prompt
 //      participation, not proof of medium), but an artist-studio stamp
-//      requires the poster to be the verified owner or an approved painter —
+//      requires the poster to be the verified owner or an approved painter -
 //      a stranger quoting the room code gets NO event, offline rooms included
 import { spawn } from "child_process";
 import http from "http";
@@ -41,12 +41,12 @@ mkdirSync(SCRATCH, { recursive: true });
 writeFileSync(CLOCK_FILE, "2026-10-05T12:00:00.000Z");
 
 // Pre-seed BEFORE boot:
-//  SECWALL — an OFFLINE Inktober-opted-in artist studio (owner sec_owner1,
+//  SECWALL, an OFFLINE Inktober-opted-in artist studio (owner sec_owner1,
 //    approved painter sec_paint2). Never joined before the wall tests, so the
 //    persisted-file attribution path is exercised, not just the live one.
-//  SECFRN — a private friends room with art: a spectate probe (even through
+//  SECFRN, a private friends room with art: a spectate probe (even through
 //    an alias) must never make it watchable.
-//  DINOS — the retired seasonal mural: member wipes refused, art preserved.
+//  DINOS, the retired seasonal mural: member wipes refused, art preserved.
 mkdirSync(path.join(SCRATCH, ".rooms"), { recursive: true });
 writeFileSync(path.join(SCRATCH, ".rooms", "SECWALL.json"), JSON.stringify({
   audience: "artist_public",
@@ -75,8 +75,8 @@ writeFileSync(path.join(SCRATCH, ".rooms", "DINOS.history.json"), JSON.stringify
   history: [{ kind: "draw", strokeId: "dino1", points: [{ x: 3, y: 3 }], userId: "u_dino", opId: 1 }],
 }));
 // The INKTOBER mural as production has it: a public (kid_safe) seasonal room.
-// Without a file getRoom would default it to 'friends', and — with accounts
-// configured in this suite — guest joiners would be turned away at the door.
+// Without a file getRoom would default it to 'friends', and, with accounts
+// configured in this suite, guest joiners would be turned away at the door.
 writeFileSync(path.join(SCRATCH, ".rooms", "INKTOBER.json"), JSON.stringify({
   audience: "kid_safe", listed: true, title: "Ink & Pencil", opCount: 0,
   savedAt: Date.now(), createdAt: Date.now() - 86400000,
@@ -119,7 +119,7 @@ const PB = `http://127.0.0.1:${mock.address().port}`;
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 220) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 220) : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -210,7 +210,7 @@ async function api(pathname, { method = "GET", token = null, body = null, adminK
   return { status: res.status, json };
 }
 const roomFileJson = (code) => JSON.parse(readFileSync(path.join(SCRATCH, ".rooms", `${code}.json`), "utf8"));
-// persistRoom is debounced — poll the file until the predicate holds.
+// persistRoom is debounced, poll the file until the predicate holds.
 async function roomFileWait(code, pred, ms = 5000) {
   const start = Date.now();
   while (Date.now() - start < ms) {
@@ -334,7 +334,7 @@ const run = async () => {
   // Guests join the public MAIN hall (private rooms need an account here).
   for (let i = 0; i < 5; i += 1) await connect("MAIN", { headers: { "x-country-code": "FR" } }); // spoof attempt
   for (let i = 0; i < 5; i += 1) await connect("MAIN", { headers: { "cf-ipcountry": "DE" } }); // trusted edge header
-  for (let i = 0; i < 5; i += 1) await connect("MAIN", { headers: { "cf-ipcountry": "T1" } }); // Tor — excluded
+  for (let i = 0; i < 5; i += 1) await connect("MAIN", { headers: { "cf-ipcountry": "T1" } }); // Tor, excluded
   const jarRes = await api("/api/paintjar");
   const jar = jarRes.json;
   const bag = Object.fromEntries((jar?.countries || []).map((c) => [c.code, c.count]));
@@ -437,7 +437,7 @@ const run = async () => {
   // ==========================================================================
   const aliasSpec = await spectate("SECWALL..");
   const aliasConn = lastOf(aliasSpec, "connected");
-  check("an artist studio is watchable through an ALIAS — canonicalized to one room id",
+  check("an artist studio is watchable through an ALIAS, canonicalized to one room id",
     !!aliasConn && aliasConn.spectator === true && aliasConn.roomId === "SECWALL",
     aliasConn && `roomId=${aliasConn.roomId}`);
   const privAlias = await spectate("SECFRN!!");

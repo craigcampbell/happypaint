@@ -2,12 +2,12 @@
 // Phase-4 safe-cut guard + retry-watermark unit tests (module level, no
 // browser): the phase-3 independent review found
 //  1. selectPrefix/deep-copy ran on EVERY op for rooms that could never
-//     checkpoint (text-first MAIN-like) — O(history) + two JSON freezes per
+//     checkpoint (text-first MAIN-like): O(history) + two JSON freezes per
 //     op. Fixed with verdict-classified retry watermarks: ineligible content
 //     rescans only on a generation change; a not-yet/too-small prefix retries
-//     after the op deficit grows — never per op.
+//     after the op deficit grows, never per op.
 //  2. Stroke identity: the review's proposed "reject repeated settings" fix
-//     was WRONG — the apps legitimately repeat identical settings batches
+//     was WRONG, the apps legitimately repeat identical settings batches
 //     mid-stroke. The REAL hazards are the same strokeId open under a
 //     DIFFERENT author, and a mid-stroke brush/seed change (e.g. switching to
 //     eraser before `end` leaves the renderer buffer open). Both end the
@@ -90,7 +90,7 @@ test('same strokeId open under a DIFFERENT author ends the prefix conservatively
   const { room, svc } = mockService([
     draw('u1', 's0', { opId: 1 }),                 // closed earlier prefix exists
     draw('u1', 's1', { opId: 2, end: false }),     // u1 opens s1
-    draw('u2', 's1', { opId: 3, end: false }),     // u2 opens the SAME id — ambiguous
+    draw('u2', 's1', { opId: 3, end: false }),     // u2 opens the SAME id, ambiguous
     draw('u1', 's1', { opId: 4, settingsless: true }),
   ]);
   const sel = await svc.selectPrefix(room);

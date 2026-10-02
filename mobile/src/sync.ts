@@ -6,17 +6,17 @@
 //
 // SCOPE (this build): drawings (project_snapshots) + paint space (space_assets).
 // DEFERRED (noted, not wired here): economy ledger, events, room replay, and
-// the image/replay BINARY files (PNG previews, replay snapshots, GIF exports) —
+// the image/replay BINARY files (PNG previews, replay snapshots, GIF exports) -
 // those belong in Storage buckets. We sync the JSON project SHAPE (layers/frames)
 // into project_snapshots, never the image files. previewUri / sticker uris point
 // at local file paths and are intentionally left out of the synced payload.
 //
 // Tables + keys (EXACT backend contract):
-//   project_snapshots — UPSERT on (profile_id, client_id). client_id = the
+//   project_snapshots: UPSERT on (profile_id, client_id). client_id = the
 //     device-local DrawingProject.id. Columns we set: profile_id, client_id,
 //     title, layers (jsonb), frames (jsonb), frame_count, updated_at (ms epoch
 //     from the local project, ISO), updated_device.
-//   space_assets — UPSERT on (owner_profile_id, client_id). client_id = the
+//   space_assets: UPSERT on (owner_profile_id, client_id). client_id = the
 //     device-local SpaceAsset.id. Columns: owner_profile_id, kind, title,
 //     payload (jsonb), client_id, updated_at, visibility, moderation_status,
 //     brush_recipe.
@@ -39,7 +39,7 @@ export type SyncStatus =
   | "idle" // not signed in / sync inactive
   | "syncing"
   | "synced"
-  | "offline"; // last attempt failed (likely no network) — local is safe
+  | "offline"; // last attempt failed (likely no network), local is safe
 
 let status: SyncStatus = "idle";
 let lastSyncedAt: number | null = null;
@@ -88,7 +88,7 @@ export function syncStatusLabel(forStatus: SyncStatus = status): string {
     case "synced":
       return "Synced to the cloud.";
     case "offline":
-      return "Saved on this device — will sync when you're back online.";
+      return "Saved on this device, will sync when you're back online.";
     case "idle":
     default:
       return "Cloud sync ready.";
@@ -202,7 +202,7 @@ async function pullProjects(profileId: string) {
       continue;
     }
     const existing = localById.get(remoteId);
-    // LWW: skip if local copy is the same age or newer — never clobber newer
+    // LWW: skip if local copy is the same age or newer, never clobber newer
     // local edits.
     if (existing && existing.updatedAt >= remoteUpdated) {
       continue;
@@ -261,7 +261,7 @@ async function pullSpace(profileId: string) {
     }
     const existing = localById.get(remoteId);
     if (existing && existing.updatedAt >= remoteUpdated) {
-      continue; // local newer/equal — keep it
+      continue; // local newer/equal, keep it
     }
     const merged: SpaceAsset = {
       ...(existing ?? { createdAt: remoteUpdated }),

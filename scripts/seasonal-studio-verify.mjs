@@ -18,7 +18,7 @@
 //   5. seasonal_prompt consumption: an injected seasonal_prompt frame updates
 //      the prompt chip live.
 //   6. Drawing anonymity: relayed op frames carry only the server's anonymous
-//      userId — no token/email/userKey/name leaks.
+//      userId, no token/email/userKey/name leaks.
 //   7. Regression: a normal public room (DOODLE) keeps the full brush list.
 //
 // Stack: server.js on 8953 (scratch DATA_DIR), Vite dev on 8952. No prod.
@@ -56,7 +56,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 async function waitHttp(url, tries = 160) {
@@ -171,7 +171,7 @@ const run = async () => {
   const gifImportVisible = await page.locator('button:has-text("🖼 GIF"):visible').count();
   check("GIF/image import button is hidden in the ink room", gifImportVisible === 0, `${gifImportVisible} visible`);
 
-  // Gallery modal: draft restore is a divergent-art path — closed here.
+  // Gallery modal: draft restore is a divergent-art path, closed here.
   await page.locator('button:has-text("🖼️ Gallery"):visible').first().click();
   await sleep(600);
   const restoreVisible = await page.locator('button:has-text("Restore last draft"):visible').count();
@@ -286,7 +286,7 @@ const run = async () => {
       constructor(url, protocols) {
         super(url, protocols);
         // Per-socket flag: the app may open more than one socket (main +
-        // watcher) — inject the seasonal_prompt push on whichever socket(s)
+        // watcher), inject the seasonal_prompt push on whichever socket(s)
         // receive the room's connected frame.
         this.__seasonalInjected = false;
         this.addEventListener("message", (event) => {
@@ -321,7 +321,7 @@ const run = async () => {
   check("seasonal_prompt message updates the live prompt chip", (chipText || "").includes("TestPromptXYZ"), (chipText || "").trim().slice(0, 80));
   await ctx2.close();
 
-  // ---- 7: regression — a normal room keeps everything ---------------------
+  // ---- 7: regression, a normal room keeps everything ---------------------
   const ctx3 = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page3 = await ctx3.newPage();
   page3.on("pageerror", (e) => errors.push(String(e)));

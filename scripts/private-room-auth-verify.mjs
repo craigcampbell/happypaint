@@ -19,7 +19,7 @@ const results = { checks: [], pass: 0, fail: 0 };
 const check = (name, ok, extra = '') => {
   results.checks.push({ name, ok, extra });
   if (ok) results.pass += 1; else results.fail += 1;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? ` — ${extra}` : ''}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra && !ok ? `, ${extra}` : ''}`);
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

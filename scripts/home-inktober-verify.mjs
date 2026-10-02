@@ -14,7 +14,7 @@
 //   4. UTC rollover: with the page open, midnight passes (Date shim) and the
 //      card flips to the next day's prompt WITHOUT a reload.
 //   5. Error fallback: a failed refresh past the announced rollover drops the
-//      event state entirely — the generic "A shared canvas is waiting." card
+//      event state entirely, the generic "A shared canvas is waiting." card
 //      returns instead of a stale or invented "today".
 //   6. Upcoming/ended phases render their readable alternatives.
 //   7. Screenshots at 375px and 1280px land in output/home-inktober/.
@@ -92,7 +92,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const inktoberApi = async () => {

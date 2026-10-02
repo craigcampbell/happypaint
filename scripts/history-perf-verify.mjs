@@ -19,7 +19,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 let assertions = 0;
 function check(name, value, detail = '') {
-  assert.ok(value, `${name}${detail ? ` — ${detail}` : ''}`);
+  assert.ok(value, `${name}${detail ? `, ${detail}` : ''}`);
   assertions += 1;
   console.log(`PASS ${name}`);
 }
@@ -96,7 +96,7 @@ async function withServer({ env = {}, scratch = null }, run) {
 }
 
 // Pace sends under the bucket (burst 120 / 30 per second by default) so a
-// legitimate stream of N ops is never dropped — mirrors a real client's cadence.
+// legitimate stream of N ops is never dropped, mirrors a real client's cadence.
 async function sendPaced(client, n, prefix) {
   for (let i = 0; i < n; i += 1) {
     client.sendOp(drawOp(`${prefix}-${i}`, i));
@@ -140,7 +140,7 @@ await withServer({ env: { OP_RATE_PER_SEC: '10', OP_RATE_BURST: '40' } }, async 
   await sleep(2500);
   painter.sendOp(drawOp('after-refill', 0));
   await observer.waitFor((m) => m.type === 'op' && m.op.strokeId === 'after-refill', { timeoutMs: 3000, label: 'op after refill' });
-  check('bucket refills — a normal op goes through again', true);
+  check('bucket refills, a normal op goes through again', true);
 });
 
 // ---- 2 + 3 + 4. join cache, persistence, restart merge, public cap ----------
@@ -186,14 +186,14 @@ await withServer({ scratch, env: { HISTORY_CACHE_MIN_OPS: '200', HISTORY_CACHE_T
   const firstOpIdx = tailJoiner.messages.findIndex((m) => m.type === 'op');
   check('tail ops are delivered AFTER the history frame', histIdx >= 0 && firstOpIdx > histIdx);
 
-  // Past the tail cap the frame is rebuilt — every op in one frame again.
+  // Past the tail cap the frame is rebuilt, every op in one frame again.
   await sendPaced(painter, 40, 'c');
   const rebuiltJoiner = await connect('ZZCACHE', { gz: true });
   await sleep(300);
   check('tail past HISTORY_CACHE_TAIL_MAX rebuilds the frame', rebuiltJoiner.binaryFrames === 1 && historyOf(rebuiltJoiner).ops.length === 370 && opsOf(rebuiltJoiner).length === 0, `${historyOf(rebuiltJoiner).ops.length} in frame, ${opsOf(rebuiltJoiner).length} tail`);
 
   // Spectators share the mechanism.
-  // (Private rooms refuse spectators by design — watch the public MAIN room.)
+  // (Private rooms refuse spectators by design, watch the public MAIN room.)
   const spectator = await connect('MAIN', { gz: true, spectate: true });
   check('homepage spectator gets the gzip frame too', spectator.binaryFrames === 1 && historyOf(spectator).ops.length === 250, `${spectator.binaryFrames} frames, ${historyOf(spectator)?.ops?.length} ops`);
   spectator.ws.terminate();
@@ -244,7 +244,7 @@ await withServer({ scratch, env: {} }, async ({ connect, scratch: dir }) => {
   painter.sendOp(drawOp('post-restart', 1));
   await sleep(3000);
   // The base (empty since the clear) is reused as-is; the new op appends to the
-  // log behind the 25 that were already there — no compaction, no rewrite.
+  // log behind the 25 that were already there, no compaction, no rewrite.
   const base = JSON.parse(readFileSync(join(dir, '.rooms', 'ZZCACHE.history.json'), 'utf8'));
   const merged = readRoomHistory(dir, 'ZZCACHE');
   check('a restart keeps appending to the same base (no compaction needed)', base.history.length === 0 && merged.length === 26 && merged[25].strokeId === 'post-restart', `base ${base.history.length}, merged ${merged.length}`);

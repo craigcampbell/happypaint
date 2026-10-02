@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Room-loading fidelity — Phase 1 INTEGRATION: seeded-eraser 3-way parity in
+// Room-loading fidelity: Phase 1 INTEGRATION: seeded-eraser 3-way parity in
 // the real app (local painter vs live remote vs remote after history reload).
 //
 // Spawns the REAL server.js on 127.0.0.1:19101 against a throwaway DATA_DIR
@@ -8,7 +8,7 @@
 //   1. p1 draws a marker X and erases a band through it at 30% size variation.
 //   2. The display-canvas rect is SHA-256 hashed on p1 (local render), p2
 //      (live remote render) and p2 after a full reload (history replay).
-//   3. All three hashes must be identical — the seeded eraser rolls the same
+//   3. All three hashes must be identical, the seeded eraser rolls the same
 //      per-point dice on every path (pointRand(seed, x, y) over the WIRE
 //      points). Before the phase-1 fix all three eraser paths rolled
 //      Math.random and this test fails.
@@ -31,7 +31,7 @@ const CHROME = process.env.CHROME_PATH || "/usr/bin/google-chrome";
 const ROOM = `ZZF1${Math.floor(Math.random() * 900 + 100)}`;
 
 if (!fs.existsSync(path.join(ROOT, "dist", "index.html"))) {
-  console.error("dist/index.html missing — run `npm run build` first (server.js serves dist/).");
+  console.error("dist/index.html missing, run `npm run build` first (server.js serves dist/).");
   process.exit(2);
 }
 
@@ -62,7 +62,7 @@ async function waitForHealth() {
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok });
-  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : ` — ${detail}`}`);
+  console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${ok ? "" : `, ${detail}`}`);
 };
 
 let browser;

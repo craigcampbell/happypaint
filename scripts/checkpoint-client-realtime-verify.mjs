@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 import { chromium } from 'playwright';
 import { checkpointRendererVersion } from '../server/checkpointVersion.js';
 
-// FIXTURE realtime proof — phase3 CLIENT only, NOT a server-integration claim.
+// FIXTURE realtime proof, phase3 CLIENT only, NOT a server-integration claim.
 // A fixture WebSocket impersonates the future backend checkpoint sender
 // (history.checkpoint + tail ops, full baseline on checkpoint_nack) while the
 // REAL studio client runs under Vite dev (:19123, VITE_WS_URL → fixture :19124)
@@ -30,7 +30,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---- fixture WS server -------------------------------------------------------
 // Scripted by `plan`: { history(ws) } runs after the handshake. Records the
 // join query + any checkpoint_nack frames per room code.
-const connections = new Map(); // room -> { query, nacks: [] , ws }
+const connections = new Map(); // room -> { query, nacks: [], ws }
 let plan = null;
 const wss = new WebSocketServer({ port: WS_PORT, host: '127.0.0.1' });
 wss.on('connection', (ws, req) => {
@@ -53,11 +53,11 @@ wss.on('connection', (ws, req) => {
     record.historySent.push('connected');
     setTimeout(() => script(ws, record), 50);
   }
-  // Any other room (homepage previews etc.): leave it hanging — read-only wait.
+  // Any other room (homepage previews etc.): leave it hanging, read-only wait.
 });
 
 // ---- Vite dev server ---------------------------------------------------------
-// Spawn vite's bin DIRECTLY (not via npx — the wrapper makes the dev server a
+// Spawn vite's bin DIRECTLY (not via npx, the wrapper makes the dev server a
 // grandchild that survives a kill and holds our stdio pipes open).
 const vite = spawn(process.execPath, [fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url)), '--port', String(VITE_PORT), '--strictPort'], {
   cwd: root,
@@ -83,7 +83,7 @@ async function waitForVite(timeoutMs = 60000) {
 const results = [];
 const check = (name, cond, detail) => {
   results.push({ name, ok: !!cond });
-  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : ` — ${detail}`}`);
+  console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${cond ? '' : `, ${detail}`}`);
 };
 
 let browser;
@@ -149,7 +149,7 @@ try {
     const fullHashes = [];
     for (const canvas of full.canvases) fullHashes.push(await sha256Hex(rgbaOf(canvas)));
     // What the full replay's layer-0 mix map answers AFTER the last op, as a
-    // continuation (dirty rects re-read from the layer-0 canvas on demand) —
+    // continuation (dirty rects re-read from the layer-0 canvas on demand) -
     // the ledger itself (dirty/prefetched) is legitimately timing-dependent in
     // the live app, so the wire equality check is on SAMPLES, not the ledger.
     const probes = [[275, 425], [500, 550], [700, 600], [900, 700], [300, 500], [600, 850], [100, 100], [2000, 2000], [1700, 350], [2100, 850], [550, 520], [800, 760]];
@@ -243,7 +243,7 @@ try {
         const digest = await crypto.subtle.digest('SHA-256', data);
         hashes.push([...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join(''));
       }
-      // Image ops land async — wait until the hidden layer matches too.
+      // Image ops land async, wait until the hidden layer matches too.
       if (!hashes.every((h, i) => h === fullHashes[i])) return null;
       return { joinStep: dbg.joinStep(), hashes };
     }, fixture.fullHashes, 120000);

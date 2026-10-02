@@ -2,11 +2,11 @@
 /* global window, document */
 // Drives the REAL studio (src/App.jsx + useMultiplayer + ArtistAccessPanel)
 // against the REAL artist-room backend (server.js artist rooms are live) with
-// a mock PocketBase — the full contract loop in browsers:
+// a mock PocketBase, the full contract loop in browsers:
 //
 //   A. Guest viewer: sees the art, gets "Sign in to request access", and
 //      CANNOT alter the local canvas by pointer, hotkeys (Cmd+Z included) or
-//      image import — pan/zoom/chat stay available. No optimistic drawing.
+//      image import, pan/zoom/chat stay available. No optimistic drawing.
 //   B. Owner paint is visible to a viewer (shared truth, no reload).
 //   C. Signed-in friend: Request paint access -> owner approves (WS targetId)
 //      -> friend paints (visible to owner, NO host powers) -> owner revokes
@@ -17,11 +17,11 @@
 //   E. Inktober opt-in: an artist studio follows the SERVER event phase live
 //      (warm-up = full rail; October active = ink/pencil/eraser only) via
 //      seasonal_prompt, no reload.
-//   F. Regression: the anonymous commons (DOODLE) is untouched — a guest
+//   F. Regression: the anonymous commons (DOODLE) is untouched, a guest
 //      draws immediately, no banner, no Studio button.
 //
 // Stack: server.js on 8971 (scratch DATA_DIR, mock PB), Vite dev on 8972
-// (REST proxied to the server through Playwright routes — Vite has no proxy
+// (REST proxied to the server through Playwright routes: Vite has no proxy
 // and vite.config.js is not owned here). No prod ports, no build.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
@@ -57,7 +57,7 @@ const TOKENS = new Map(Object.values(IDENTITIES).map((rec) => [makeJwt(rec.id), 
 const jwtFor = (key) => [...TOKENS.entries()].find(([, rec]) => rec.id === IDENTITIES[key].id)[0];
 
 const mock = http.createServer((req, res) => {
-  // The browser SDK calls the mock directly (session refresh, gallery sync) —
+  // The browser SDK calls the mock directly (session refresh, gallery sync) -
   // answer CORS preflights and tag every response so nothing reads as a
   // console error. Unknown collections 404 like a real PB without the data.
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -113,7 +113,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 200) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 200) : ""}`);
 };
 async function waitHttp(url, tries = 160) {
   for (let i = 0; i < tries; i += 1) {
@@ -273,7 +273,7 @@ const run = async () => {
   const arrived = await waitProbeChange(guestS.page, guestBase, 40);
   check("owner's stroke becomes visible to the watching guest", arrived >= 40, `${arrived} changed samples`);
 
-  // ---- A: guest lockdown — no optimistic drawing by ANY local path --------
+  // ---- A: guest lockdown, no optimistic drawing by ANY local path --------
   const signinCta = guestS.page.locator('.aap-banner button:has-text("Sign in to request access")');
   check("guest gets the sign-in-to-request CTA", (await signinCta.count()) === 1, `${await signinCta.count()}`);
   const ctaHref = await guestS.page.evaluate(() => {
@@ -338,7 +338,7 @@ const run = async () => {
   const friendLanded = await waitProbeChange(ownerS.page, ownerBase, 40);
   check("approved painter's stroke is visible to the owner", friendLanded >= 40, `${friendLanded} changed samples`);
 
-  // Owner revokes (REST ACL — works online AND offline) -> friend locks live.
+  // Owner revokes (REST ACL, works online AND offline) -> friend locks live.
   await ownerS.page.locator(".aap-painter .aap-danger").click();
   await friendS.page.locator('.aap-banner button:has-text("Request paint access"), .aap-banner button:has-text("Ask again")')
     .first().waitFor({ state: "visible", timeout: 8000 }).catch(() => null);
@@ -356,7 +356,7 @@ const run = async () => {
 
   // ============== D: publish from the real UI -> real gallery ==============
   const descBox = ownerS.page.locator("#ars-desc");
-  await descBox.fill("Slow harbours, one a week — ink and wash.");
+  await descBox.fill("Slow harbours, one a week, ink and wash.");
   await ownerS.page.locator("#ars-tags").fill("seascape, ink");
   await ownerS.page.locator('button:has-text("Publish to gallery…")').click();
   await ownerS.page.locator('.ars-confirm button:has-text("Yes, publish it")').click();

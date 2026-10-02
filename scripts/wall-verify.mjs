@@ -17,7 +17,7 @@ mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
   // WALL_HIDE_REPORTS=1: report auto-hide now counts DISTINCT reporters (by IP),
-  // and this local harness only has one IP — so drop the threshold to 1 to
+  // and this local harness only has one IP, so drop the threshold to 1 to
   // exercise the hide→admin→restore flow with a single reporter.
   env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY, WALL_HIDE_REPORTS: "1" },
   stdio: "pipe",
@@ -28,10 +28,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
-// A tiny real PNG (1x1 white) as a data URL — enough for the API contract.
+// A tiny real PNG (1x1 white) as a data URL, enough for the API contract.
 const PNG_1PX =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -123,7 +123,7 @@ const run = async () => {
   check("same voter can't double-heart", topFeed.posts.find((p) => p.id === post1.id)?.votes === 1);
   check("top sort puts the hearted post first", topFeed.posts[0]?.id === post1.id);
   check("viewer sees their own heart (liked=true)", topFeed.posts[0]?.liked === true);
-  // 7a) SECURITY: anon votes bind to the request IP, not the client userKey —
+  // 7a) SECURITY: anon votes bind to the request IP, not the client userKey -
   // so rotating userKeys from one machine can't forge extra hearts.
   for (const k of ["u_forge1", "u_forge2", "u_forge3"]) {
     await jpost(`/api/wall/${post1.id}/vote`, { userKey: k, on: true });
@@ -170,7 +170,7 @@ const run = async () => {
   res = await fetch(`${BASE}/api/wall?sort=new`);
   check("restored post is back on the wall", (await res.json()).posts.some((p) => p.id === post2.id));
   // A reporter who reported BEFORE the restore can report again (clean slate),
-  // rather than being permanently deduped — proves reportedBy was cleared.
+  // rather than being permanently deduped, proves reportedBy was cleared.
   await jpost(`/api/wall/${post2.id}/report`, { reason: "after restore" }, rip("203.0.113.7"));
   res = await fetch(`${BASE}/api/admin/wall`, { headers: { "x-admin-key": ADMIN_KEY } });
   check("prior reporter counts again after restore", (await res.json()).items?.find((p) => p.id === post2.id)?.reports === 1);
@@ -195,7 +195,7 @@ const run = async () => {
 
   // 12) Frame caps: 9 frames rejected, oversize frame rejected.
   res = await jpost("/api/wall", { userKey: "u_capper", title: "Too many", frames: Array(9).fill(PNG_1PX) });
-  const nineOk = res.ok; // server slices to 8 — accepting-with-cap is fine; assert it capped
+  const nineOk = res.ok; // server slices to 8, accepting-with-cap is fine; assert it capped
   const nine = nineOk ? await res.json() : null;
   if (nineOk) {
     const f = await fetch(`${BASE}/api/wall?q=too+many`);
@@ -234,7 +234,7 @@ const run = async () => {
   await page.locator(".wall-search").fill("");
   await sleep(900);
 
-  // Animated card cycles frames — sample several times (a single before/after
+  // Animated card cycles frames, sample several times (a single before/after
   // pair can alias with the cycle period and see the same frame twice).
   const animImg = page.locator(".wall-card:has(.wall-anim-badge) .wall-art img").first();
   const seenSrcs = new Set();
@@ -259,7 +259,7 @@ const run = async () => {
   await page.mouse.up();
   await sleep(600);
   // The 🧲 Wall button lives in the desktop "Studio ⋮" dropdown (visibility
-  // animates) — open it deterministically before clicking so we don't race it.
+  // animates), open it deterministically before clicking so we don't race it.
   const wallToggle = page.locator(".desktop-studio-toggle");
   if (await wallToggle.isVisible().catch(() => false)) {
     const opened = await page.evaluate(() => document.querySelector(".topbar")?.className.includes("is-open"));

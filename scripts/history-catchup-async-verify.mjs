@@ -1,5 +1,5 @@
 // Async join-catch-up regression + benchmark (Tier-1 "no event-loop stall"
-// acceleration for long-lived rooms — see docs/CATCHUP-IMPLEMENTATION.md).
+// acceleration for long-lived rooms, see docs/CATCHUP-IMPLEMENTATION.md).
 //
 //   Part 0  unit: sliced stringify is BYTE-IDENTICAL to JSON.stringify;
 //           frame builder snapshots the ops array (no leak/corruption when
@@ -10,7 +10,7 @@
 //   Part 2  proactive prebuild (ports 8992 on / 8993 off): with prebuild a
 //           joiner finds a warm frame (mid-stream lastOpId, small tail); the
 //           contrast server proves the lazy path would rebuild at join time.
-//   Part 3  stall benchmark (port 8994): 12000 heavy ops (~72MB frame) —
+//   Part 3  stall benchmark (port 8994): 12000 heavy ops (~72MB frame) -
 //           event-loop lag (server's own loopLag.maxMs) during a cold gz join.
 //
 // Baseline comparison: CATCHUP_BENCH_ONLY=1 CATCHUP_BENCH_ROOT=<tree> runs
@@ -38,7 +38,7 @@ const ADMIN_KEY = 'isolated-history-test';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 let assertions = 0;
 function check(name, value, detail = '') {
-  assert.ok(value, `${name}${detail ? ` — ${detail}` : ''}`);
+  assert.ok(value, `${name}${detail ? `, ${detail}` : ''}`);
   assertions += 1;
   console.log(`PASS ${name}`);
 }
@@ -113,7 +113,7 @@ async function sendBurst(client, n, prefix, { points = 1, burst = 10, pauseMs = 
   }
 }
 
-// ---- Part 0: unit — byte-faithful sliced stringify + snapshot isolation ----
+// ---- Part 0: unit, byte-faithful sliced stringify + snapshot isolation ----
 if (!BENCH_ONLY) {
   const pointHeavy = [];
   for (let p = 0; p < 170; p += 1) pointHeavy.push({ x: 1.5 + p * 0.30000000000000004, y: -0, pressure: 1e21 });
@@ -145,7 +145,7 @@ if (!BENCH_ONLY) {
   }
   check('sliced stringify is byte-identical to JSON.stringify (7 payloads × 2 budgets)', true);
 
-  // Snapshot isolation: mutate the source ops array mid-build — the frame must
+  // Snapshot isolation: mutate the source ops array mid-build, the frame must
   // still contain exactly the 100 ops captured at build start.
   const srcOps = Array.from({ length: 100 }, (_, i) => ({ ...drawOp(`iso-${i}`, i), userId: 'u', opId: i + 1 }));
   const originalJson = JSON.stringify({ type: 'history', ops: srcOps, frames });
@@ -277,7 +277,7 @@ if (!BENCH_ONLY) {
   });
   await withServer({ port: 8993, env: { ...prebuildEnv, HISTORY_CACHE_PREBUILD_TAIL: '0' } }, async ({ connect }) => {
     const { second, frameOps, tailLen } = await drive({ connect });
-    check('contrast (prebuild off): the same join pays a lazy rebuild — frame covers everything, tail empty', second.binaryFrames === 1 && frameOps === 290 && tailLen === 0, `frame ${frameOps}, tail ${tailLen}`);
+    check('contrast (prebuild off): the same join pays a lazy rebuild, frame covers everything, tail empty', second.binaryFrames === 1 && frameOps === 290 && tailLen === 0, `frame ${frameOps}, tail ${tailLen}`);
   });
 }
 

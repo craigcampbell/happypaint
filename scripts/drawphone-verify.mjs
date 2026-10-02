@@ -1,5 +1,5 @@
 // Draw Phone (telephone) verification. The story: N players each get a secret
-// prompt "book", draw it PRIVATELY, then pass it on — the next player guesses,
+// prompt "book", draw it PRIVATELY, then pass it on, the next player guesses,
 // the next draws the guess, until the books reveal. The secrets: your book's
 // contents only ever reach the ONE player whose turn it is (never broadcast);
 // drawings are private (draw ops are dropped while a game runs); guess text is
@@ -28,7 +28,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -131,7 +131,7 @@ const run = async () => {
     typeof b.pages[1].content === "string" && b.pages[1].content.startsWith("pp_"));
   check("reveal: 3 complete books (prompt→draw→guess→draw)", shapeOk, `books=${books.length}`);
 
-  // The mild-profanity guess was masked — no book carries the raw word.
+  // The mild-profanity guess was masked, no book carries the raw word.
   const anyRaw = books.some((b) => b.pages.some((p) => p.type === "guess" && /crap/i.test(String(p.content))));
   check("mild-profanity guess is masked in the reveal", !anyRaw);
 
@@ -154,7 +154,7 @@ const run = async () => {
   check("public lobby never leaks a pp_ page id",
     !(lobby.rooms || []).some((r) => String(r.sheetId || "").startsWith("pp_")));
 
-  // REGRESSION (review): set_sheet must REFUSE a pp_ id — otherwise a guesser
+  // REGRESSION (review): set_sheet must REFUSE a pp_ id, otherwise a guesser
   // could re-broadcast an in-progress drawing to the whole room as the underlay.
   const shroom = await connect("ZZSHEET");
   shroom.msgs.length = 0;
@@ -177,7 +177,7 @@ const run = async () => {
   await page.goto(`${BASE}/join/PHONE`, { waitUntil: "domcontentloaded" });
   await sleep(3800);
   // The browser joins the same featured room Part A just finished, so the HUD
-  // mounts in SOME phase — the reveal viewer (Part A's books) or, once that
+  // mounts in SOME phase, the reveal viewer (Part A's books) or, once that
   // clears, a fresh waiting banner. Either proves the panel renders from state.
   const hud = await page.evaluate(() =>
     !!document.querySelector(".phone-banner, .phone-reveal, .phone-guess-card"));
@@ -185,7 +185,7 @@ const run = async () => {
 
   // CRITICAL regression: the reveal drawings must actually RENDER. PageImage
   // fetches /api/sheets/pp_ (JSON) and sets the .image data URL as the <img>
-  // src — a raw <img src="/api/sheets/pp_…"> would be a broken image. If the
+  // src, a raw <img src="/api/sheets/pp_…"> would be a broken image. If the
   // reveal is showing, at least one page <img> should resolve to a data: URL.
   if (await page.locator(".phone-reveal").count()) {
     const dataImg = await page.waitForFunction(

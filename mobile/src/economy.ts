@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { makeId } from "./ids";
 
-// Happy Paint economy — local mock wallet model (docs/paint-economy.md).
+// Happy Paint economy, local mock wallet model (docs/paint-economy.md).
 //
 // This is a MOCK economy surface: NO real payments, NO real purchase SDK, NO
 // network. It mirrors the backend economy tables (backend/supabase/schema.sql
@@ -20,7 +20,7 @@ import { makeId } from "./ids";
 //   - The ledger is append-only; balances are a projection of it.
 //   - Every entry has a positive amount, a currency_type, and a direction.
 //   - Paid Drops do not expire. No user-to-user currency transfer.
-//   - No loot boxes / no randomized packs — every product is a transparent bundle.
+//   - No loot boxes / no randomized packs, every product is a transparent bundle.
 
 const ECONOMY_KEY = "happy-paint:economy:v1";
 
@@ -65,7 +65,7 @@ export type DropProduct = {
 
 export type StoreCategory = "packs" | "themes" | "tokens" | "events";
 
-// Store catalog row — spendable-with-Drops items. Each item is a transparent
+// Store catalog row, spendable-with-Drops items. Each item is a transparent
 // bundle (no randomized contents / loot boxes). `grants` is a mock entitlement
 // key that owning the item confers (e.g. "studio" unlocks the studio tier).
 export type StoreItem = {
@@ -125,7 +125,7 @@ export const STORE_ITEMS: StoreItem[] = [
     id: "creator-brushes",
     category: "packs",
     title: "Creator Brushes",
-    description: "Glow neon brush, Night paper, and the Poster palette — unlocks the studio brush tier.",
+    description: "Glow neon brush, Night paper, and the Poster palette, unlocks the studio brush tier.",
     price_drops: 150,
     grants: "studio"
   },
@@ -200,7 +200,7 @@ export function formatPrice(cents: number): string {
 }
 
 // Approximate local-money value of a Drops amount, derived from the best $/Drop
-// rate in the catalog (largest pack — best value). Shown near spend moments per
+// rate in the catalog (largest pack, best value). Shown near spend moments per
 // the doc ("always show approximate local-money equivalent").
 export function dropsToApproxMoney(drops: number): string {
   const best = DROP_PRODUCTS.reduce((acc, product) =>
@@ -226,7 +226,7 @@ export function emptyState(): EconomyState {
 // Derive balances from the append-only ledger so they stay consistent (schema:
 // "Balances are cached projections of the append-only ledger"). drops/kudos use
 // the standard balance; creator credits land in BOTH creator_balance and
-// locked_balance (tips are locked until payouts are eligible — Phase 1).
+// locked_balance (tips are locked until payouts are eligible: Phase 1).
 export function projectBalances(ledger: WalletLedgerEntry[]): WalletBalances {
   const wallet: WalletBalances = { drops_balance: 0, kudos_balance: 0, creator_balance: 0, locked_balance: 0 };
   for (const entry of ledger) {
@@ -375,7 +375,7 @@ export function awardKudos(
 // Send a Drops tip. Spends Drops from the sender and records the tip into the
 // (mock) creator's locked balance via a creator-currency credit. In this local
 // surface the sender IS the creator (single profile), so both sides land in the
-// same wallet — the ledger still records the spend and the locked credit
+// same wallet, the ledger still records the spend and the locked credit
 // separately, which is what the backend would do across two profiles.
 export function sendTip(
   state: EconomyState,
@@ -428,7 +428,7 @@ export function ownsItem(state: EconomyState | null | undefined, itemId: string)
   return Boolean(state?.owned?.includes(itemId));
 }
 
-// True when the account is a minor (child/teen) — drives guardian-control copy.
+// True when the account is a minor (child/teen), drives guardian-control copy.
 export function isMinorAccount(state: EconomyState | null | undefined): boolean {
   return state?.profile_kind === "child" || state?.profile_kind === "teen";
 }

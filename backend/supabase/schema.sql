@@ -1678,7 +1678,7 @@ create table public.asset_moderation_queue (
 comment on table public.asset_moderation_queue is 'Review queue for community brushes/stamps/assets and packs (safety, copyright, adult content, spam, misleading names) before public/featured publishing.';
 
 -- =====================================================================
--- AI Assist (docs/product-research.md §AI) — safety-gated, consent-gated.
+-- AI Assist (docs/product-research.md §AI), safety-gated, consent-gated.
 -- Under-13 spaces require a guardian on the consent record; generated assets flow
 -- through a moderation status before becoming public ("safety queue for generated assets").
 -- =====================================================================
@@ -1742,7 +1742,7 @@ create table public.account_deletion_requests (
 comment on table public.account_deletion_requests is 'In-app account deletion requests with grace window and purge scheduling; always available to the owning profile (App Review requirement).';
 
 -- =====================================================================
--- Cross-device sync (light) — docs/social-backend.md: accounts unlock cross-device sync.
+-- Cross-device sync (light), docs/social-backend.md: accounts unlock cross-device sync.
 -- Sync uses existing auth + profiles for identity and project_snapshots as the
 -- authoritative per-project state; clients sync drawing as stroke_events, not image
 -- streams. We do NOT build a full sync engine here. device_sync_state is a thin
@@ -2040,7 +2040,7 @@ comment on column public.space_assets.updated_device is 'Identifier of the devic
 -- request_account_deletion() upserts the caller's account_deletion_requests
 -- row: status 'requested', requested_at now(), scheduled_purge_at now()+30d
 -- (a 30-day grace window). security definer so it can write the row regardless
--- of the in-flight request state, but it always scopes to auth.uid() — a caller
+-- of the in-flight request state, but it always scopes to auth.uid(), a caller
 -- can only ever schedule deletion of THEIR OWN account. Returns the request row.
 -- The actual hard purge runs out-of-band in the purge-account Edge Function.
 -- ---------------------------------------------------------------------

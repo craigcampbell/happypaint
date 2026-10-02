@@ -14,7 +14,7 @@ import {
 } from "../src/utils/penInput.js";
 
 // The getPoint seam: which pressure does ONE pointer sample produce? A pen
-// sample must ALWAYS resolve through the adaptive pen band — even pressure 0
+// sample must ALWAYS resolve through the adaptive pen band, even pressure 0
 // (the lightest real contact, which iPads report for feather Pencil touches).
 // Only mouse/touch may use the velocity synthesizer. Regression coverage for
 // the "light stylus touch paints a full-size blob" bug, where a pen sample

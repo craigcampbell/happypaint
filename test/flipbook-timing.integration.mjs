@@ -1,12 +1,12 @@
 /* eslint-env node */
-// Phase-4 FLIPBOOK frame timing — raw-WS server integration.
+// Phase-4 FLIPBOOK frame timing, raw-WS server integration.
 //
 // Contract (PHASE4-CONTRACT.md "Timing handshake"):
 //  - `connected.frameTiming = {minMs,maxMs,defaultMs}`: EXACTLY
 //    {1000,3000,1000} for room code FLIPBOOK, {40,10000,120} everywhere else
 //    (public, private animation, local defaults unchanged);
 //  - the server ENFORCES the FLIPBOOK 1–3s hold on new frames, duplicated
-//    frames, frame_duration messages and persisted frame loads — malicious
+//    frames, frame_duration messages and persisted frame loads, malicious
 //    values (1ms, 30s, NaN junk) clamp into range;
 //  - `room_animation` broadcasts carry frameTiming when the mode changes;
 //  - a legacy persisted FLIPBOOK film with out-of-range holds is normalized
@@ -194,7 +194,7 @@ async function main() {
     d = await host.waitFor((m) => m.type === 'frame_duration' && m.frameId === fid && m.durationMs !== 40, 'duration 99999');
     assert.equal(d.durationMs, 10000, 'private room ceiling stays 10000ms');
 
-    // Permissions preserved: scene_add is host-only — a second member is denied.
+    // Permissions preserved: scene_add is host-only, a second member is denied.
     const guest = new Client(roomId, 'guest');
     await guest.ready;
     guest.send({ type: 'scene_add' });

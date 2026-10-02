@@ -1,15 +1,15 @@
-// Cold-raster invalidation — MODULE regression checks (real browser, no room).
+// Cold-raster invalidation: MODULE regression checks (real browser, no room).
 // Covers the phase-1 review blocker: a render-affecting layer-metadata change
 // on a COLD frame must invalidate its raster even though the op count never
 // moved, and an async raster build must never install a blob built from
 // superseded inputs.
 //
-//   layerRenderSig      — fingerprints ordered ids/visibility/opacity ONLY
-//   coldRasterStale     — the one staleness contract (count OR sig)
-//   rasterTicket        — async generation guard (meta/clear/op mid-build)
-//   bitmap cache keys   — blob identity, not `id:rasterCount`: a regenerated
+//   layerRenderSig, fingerprints ordered ids/visibility/opacity ONLY
+//   coldRasterStale, the one staleness contract (count OR sig)
+//   rasterTicket, async generation guard (meta/clear/op mid-build)
+//   bitmap cache keys, blob identity, not `id:rasterCount`: a regenerated
 //                         same-opcount raster decodes to NEW pixels
-//   composite scratch   — rasterizeOps reuses one pooled layer stack, not N
+//   composite scratch, rasterizeOps reuses one pooled layer stack, not N
 //                         full-size canvases per cel; releaseWorldCanvas frees
 //
 // Serves the repo with the vite dev server and drives the public modules in
@@ -106,7 +106,7 @@ try {
     check("restored meta revives the ticket", rasterTicketCurrent(frame, ticket));
     frame.ops.push({}); // an op arrived mid-build (same array, in place)
     check("op arrival mid-build kills the ticket", !rasterTicketCurrent(frame, ticket));
-    frame.ops.pop(); // revoked — identity and count match again
+    frame.ops.pop(); // revoked, identity and count match again
     check("revoked op revives the ticket", rasterTicketCurrent(frame, ticket));
     frame.ops = []; // a clear replaced the list
     check("clear mid-build kills the ticket", !rasterTicketCurrent(frame, ticket));
@@ -115,7 +115,7 @@ try {
 
     // ---- Same-opcount regeneration must decode NEW pixels -------------------
     // Two layers, one block of color each: L1 red on the left, L2 blue on
-    // the right. Hiding L2 keeps the op count at 2 — the exact case the old
+    // the right. Hiding L2 keeps the op count at 2, the exact case the old
     // `id:rasterCount` bitmap key served stale pixels for.
     const ops = [
       { kind: "shape", tool: "rect", layerId: "L1", start: { x: 0, y: 0 }, end: { x: 2000, y: 2500 }, opts: { color: "#ff0000", opacity: 1, fillShape: true, size: 1 } },
@@ -141,7 +141,7 @@ try {
     check("both layers composite into the raster (blue right half)", rightVisible[2] > 150 && rightVisible[3] > 200, rightVisible.join(","));
     check("peek serves the decoded bitmap", peekFrameBitmap(drawFrame) === bmp1);
 
-    // Regenerate with L2 hidden — SAME ops, SAME count, new blob.
+    // Regenerate with L2 hidden: SAME ops, SAME count, new blob.
     const hiddenMeta = meta.map((m, i) => (i === 1 ? { ...m, visible: false } : m));
     drawFrame.raster = await rasterizeOps(ops, hiddenMeta);
     drawFrame.rasterSig = layerRenderSig(hiddenMeta);
@@ -174,8 +174,8 @@ try {
     check("frame re-decodes after a drop", !!bmp3);
 
     // ---- Pooled composite scratch: bounded allocation -----------------------
-    // createElement("canvas") returns a 300x150 element — the caller sizes it
-    // afterwards — so collect the created elements and count the ones that
+    // createElement("canvas") returns a 300x150 element, the caller sizes it
+    // afterwards, so collect the created elements and count the ones that
     // END UP full-size after each call.
     releaseWorldCanvas();
     const realCreate = document.createElement.bind(document);
@@ -230,7 +230,7 @@ try {
   let failed = 0;
   for (const { name, pass, detail } of checks) {
     if (!pass) failed += 1;
-    console.log(`${pass ? "PASS" : "FAIL"} ${name}${pass ? "" : ` — ${detail}`}`);
+    console.log(`${pass ? "PASS" : "FAIL"} ${name}${pass ? "" : `, ${detail}`}`);
   }
   assert.ok(failed === 0, `${failed} cold-raster module check(s) failed`);
   console.log(`All ${checks.length} cold-raster module checks passed.`);

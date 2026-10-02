@@ -7,7 +7,7 @@ import { chromium } from 'playwright';
 // Phase3 CLIENT module proof (no server integration claimed): the checkpoint
 // decode/validate/restore utility in src/utils/checkpointClient.js, driven in a
 // real browser against fixtures generated with the EXISTING renderer
-// (replayFrameOnto + onMixState capture) — the same interpreter + hooks the
+// (replayFrameOnto + onMixState capture), the same interpreter + hooks the
 // backend worker uses. Proves prefix+checkpoint+tail === full replay for
 // seeded marker/eraser, wet oil + wet acrylic (mix-map continuation), legacy
 // smudge, an inline image, and a 3-layer stack with a hidden + an opacity
@@ -306,7 +306,7 @@ try {
 
   assert.ok(!result.moduleMissing, `checkpointClient module missing: ${result.moduleMissing}`);
   const failures = [];
-  const check = (name, cond, detail) => { if (cond) { console.log(`PASS ${name}`); } else { failures.push(name); console.log(`FAIL ${name}${detail ? ` — ${detail}` : ''}`); } };
+  const check = (name, cond, detail) => { if (cond) { console.log(`PASS ${name}`); } else { failures.push(name); console.log(`FAIL ${name}${detail ? `, ${detail}` : ''}`); } };
 
   check('support gate: empty without renderer version', result.supportWithoutVersion === true);
   check('support gate: version when define + WebCrypto present', result.supportWithVersion === true);

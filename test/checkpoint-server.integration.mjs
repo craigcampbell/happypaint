@@ -1,12 +1,12 @@
 /* eslint-env node */
-// Phase-3 trusted checkpoints — raw-WS server integration. Boots the REAL
+// Phase-3 trusted checkpoints, raw-WS server integration. Boots the REAL
 // server.js (anonymous: no PocketBase) with ENABLE_TRUSTED_CHECKPOINTS=1 and a
 // real Chromium renderer worker, then drives bare WebSocket clients:
 //
 //   1. ready-checkpoint generation (background build on qualifying ops, seen
 //      via /api/admin/metrics) and a WARM JOIN: history.checkpoint present,
 //      ops = empty tail, per-layer PNGs + hashes + mix state validate;
-//   2. appended tail: ops after the watermark ride history.ops — the cache is
+//   2. appended tail: ops after the watermark ride history.ops, the cache is
 //      REUSED, old ops never truncated from the room (a legacy join still
 //      gets the full list);
 //   3. renderer-version mismatch and legacy (no cp) clients: ordinary full
@@ -47,7 +47,7 @@ const CHROME = [process.env.CHECKPOINT_CHROME_PATH, '/usr/bin/google-chrome', '/
 const CORRUPT_WORKER = path.join(ROOT, 'test', 'fixtures', 'corruptCheckpointWorker.mjs');
 
 if (!CHROME) {
-  console.error('no chrome executable found — set CHECKPOINT_CHROME_PATH');
+  console.error('no chrome executable found, set CHECKPOINT_CHROME_PATH');
   process.exit(2);
 }
 
@@ -434,7 +434,7 @@ async function main() {
     await j.ready;
     const h = await j.waitFor((m) => m.type === 'history' && m.checkpoint, 'oil checkpoint');
     // The whole point: the seeded wet mix (oil/knife + eraser + image +
-    // marker) is NOT gated away — a checkpoint exists and prefix+tail cover
+    // marker) is NOT gated away, a checkpoint exists and prefix+tail cover
     // the full history exactly.
     const frame = validateCheckpoint(h, { layerCount: 1 });
     const covered = h.ops.map((op) => op.opId);

@@ -114,7 +114,7 @@ export function ReplayScreen({ project, onBack, onRemixFromSnapshot }: Props) {
   // existing async-yielding encoder (gif.ts). Returns the export uri.
   const buildTimelapseGif = useCallback(async (): Promise<{ uri: string; frameCount: number; durationMs: number }> => {
     if (count < 2) {
-      throw new Error("Keep painting — a timelapse needs at least 2 snapshots.");
+      throw new Error("Keep painting, a timelapse needs at least 2 snapshots.");
     }
     const rgbaFrames: RgbaFrame[] = [];
     for (const snap of snapshots) {
@@ -207,7 +207,7 @@ export function ReplayScreen({ project, onBack, onRemixFromSnapshot }: Props) {
   const subtitle = useMemo(
     () =>
       count === 0
-        ? "Keep painting — snapshots are captured automatically while you draw."
+        ? "Keep painting, snapshots are captured automatically while you draw."
         : `${count} snapshot${count === 1 ? "" : "s"} of your process. Snapshot-based replay (not stroke-by-stroke).`,
     [count]
   );

@@ -1,5 +1,5 @@
 // Trace-a-photo verification. The story: a user photo becomes the room's traced
-// underlay for everyone — but ONLY where there's an accountable uploader
+// underlay for everyone, but ONLY where there's an accountable uploader
 // (private "friends" rooms, or the host of an owned public room). The hostless
 // public rooms (MAIN) must refuse it. Non-raster payloads (SVG) are rejected.
 // Part A drives raw WS (the security-critical gate + validation + serve); Part B
@@ -27,7 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -147,7 +147,7 @@ const run = async () => {
   await pageA.locator("input[type=file][accept='image/*']").setInputFiles(pngFile);
   await sleep(2500); // NSFW pre-check (returns null/low headless) + relay
   // B's sheet overlay is active once the sheet message arrives and its image
-  // loads — the "Lines on top" toggle only renders when a sheet is set.
+  // loads, the "Lines on top" toggle only renders when a sheet is set.
   const bHasSheet = await pageB.waitForFunction(() => {
     // the client stores the loaded sheet; a re-render draws it. Probe the toggle
     // that only appears once a sheet is active.

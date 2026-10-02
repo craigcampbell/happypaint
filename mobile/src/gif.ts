@@ -362,7 +362,7 @@ export async function encodeGif(frames: RgbaFrame[]): Promise<Uint8Array> {
     // disposal=2 ("restore to background", i.e. clear to transparency) gives a
     // clean transparent frame every tick with no ghosting of the prior frame.
     // disposal=1 (leave in place) would let one frame's transparent holes reveal
-    // the previous frame underneath — that is the ghosting case to avoid here.
+    // the previous frame underneath, that is the ghosting case to avoid here.
     writer.byte(0x09); // packed: disposal=2 (restore bg), transparent flag=1
     writer.word(delayCs);
     writer.byte(transparentIndex & 0xff); // transparent color index

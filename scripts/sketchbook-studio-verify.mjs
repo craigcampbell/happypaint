@@ -5,7 +5,7 @@
 // the Hermes scratch cache, backend 9013, vite 9014, mock PB 9015. Never
 // touches 8787, production app_data, or any process it did not spawn.
 //
-// The clock is pinned to 2026-11-15 — AFTER the event ended — so every
+// The clock is pinned to 2026-11-15: AFTER the event ended, so every
 // "pinned, not today" assertion is honest: the live event is Classic/ended,
 // only the server-stamped page metadata can produce an Inktober Day chip.
 //
@@ -30,7 +30,7 @@
 //      overlap, no canvas blocking) and fits the viewport.
 //   H. Regression: chat (pill/panel/quickbar button) and the host Animation
 //      toggle are ABSENT on sketchbook pages, and zero chat frames go over
-//      the socket — ordinary rooms keep both.
+//      the socket, ordinary rooms keep both.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
 import http from "http";
@@ -85,7 +85,7 @@ const mock = http.createServer((req, res) => {
 });
 await new Promise((r) => mock.listen(PB_PORT, "127.0.0.1", r));
 
-// ---- processes (ONLY these two are ever killed — our own tracked handles) --
+// ---- processes (ONLY these two are ever killed, our own tracked handles) --
 const procs = [];
 const serverLog = [];
 const spawnBg = (argv, env) => {
@@ -113,7 +113,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 240) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 240) : ""}`);
 };
 async function waitHttp(url, tries = 160) {
   for (let i = 0; i < tries; i += 1) {
@@ -193,7 +193,7 @@ async function newStudioPage({ identity = null, viewport = { width: 1280, height
   return { ctx, page };
 }
 // The proven studio settle (artist-studio-verify): overlay visible, load
-// curtain dismissed, any modal backdrop gone — THEN the canvas takes strokes.
+// curtain dismissed, any modal backdrop gone: THEN the canvas takes strokes.
 async function settleStudio(page) {
   await sleep(2500); // WS handshake + canPaint role flip must land first
   const okCurtain = page.locator("button.load-ok");
@@ -227,7 +227,7 @@ const run = async () => {
   check("vite dev server up", await waitHttp(`${BASE}/`));
   browser = await chromium.launch();
 
-  // Seed: owner's public book with ONE page — day 1 (today is Nov 15; day 1
+  // Seed: owner's public book with ONE page, day 1 (today is Nov 15; day 1
   // is an OLD pinned prompt, never derivable from the live event).
   const created = await api("/api/sketchbooks", {
     method: "POST", token: jwtFor("owner"), body: { event: "inktober-2026", public: true, title: "Olive's Studio Book" },
@@ -239,7 +239,7 @@ const run = async () => {
   const PROMPT1 = day1.json?.page?.prompt;
   check("seed: day-1 page with server-stamped prompt", !!ROOM1 && !!PROMPT1);
   const live = await api("/api/inktober");
-  check("clock is AFTER the event (live phase ended — pin is the only inktober source)",
+  check("clock is AFTER the event (live phase ended, pin is the only inktober source)",
     live.json?.phase === "ended", JSON.stringify(live.json?.phase));
 
   // ---- A. Owner opens the page room: banner pins the OLD prompt -----------
@@ -274,7 +274,7 @@ const run = async () => {
   check("B: new room's banner pins Day 2 with its own prompt", chip2.includes("Day 2") && !chip2.includes(PROMPT1), chip2);
   const ops2Before = await pageOps(2);
   check("B: page 2 canvas starts EMPTY (pages are separate canvases)", ops2Before === 0, `ops=${ops2Before}`);
-  await settleStudio(owner.page); // the banner hop is a full load — settle again before drawing
+  await settleStudio(owner.page); // the banner hop is a full load, settle again before drawing
   await drawStroke(owner.page);
   const ops2 = await waitOps(BOOK, 2, 1);
   await sleep(1200);
@@ -375,7 +375,7 @@ const run = async () => {
   }
 
   // ---- H. Chat + animation are OFF on sketchbook pages (regression) --------
-  // The owner is a HOST in this room — in any ordinary host room both the
+  // The owner is a HOST in this room, in any ordinary host room both the
   // chat pill and the animation toggle render. Here neither may exist, and
   // the whole session must not have sent a single chat frame.
   check("H: no chat pill/panel on the page room (desktop)", !(await owner.page.$(".cc-pill")) && !(await owner.page.$(".cc-panel")));
@@ -400,7 +400,7 @@ run()
     killAll(); // ONLY our own tracked child handles + the mock listener
     await sleep(400);
     const failed = results.filter((r) => !r.ok);
-    console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ` — ${failed.length} FAILED` : ""}`);
+    console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? `, ${failed.length} FAILED` : ""}`);
     if (failed.length) {
       console.log("server log tail:\n" + serverLog.join("").slice(-1200));
       process.exit(1);

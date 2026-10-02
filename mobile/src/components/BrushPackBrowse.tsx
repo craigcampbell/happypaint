@@ -91,7 +91,7 @@ export function BrushPackBrowse({ matches }: Props) {
       <View style={styles.complianceRow}>
         <ShieldCheck size={15} color="#0f766e" strokeWidth={2.4} />
         <Text style={styles.complianceText}>
-          Packs are reviewed before going public or featured. Browse by pack and topic — there is no people search.
+          Packs are reviewed before going public or featured. Browse by pack and topic, there is no people search.
         </Text>
       </View>
 

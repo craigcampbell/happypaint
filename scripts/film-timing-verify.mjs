@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 let assertions = 0;
 function check(name, value, detail = '') {
-  assert.ok(value, `${name}${detail ? ` — ${detail}` : ''}`);
+  assert.ok(value, `${name}${detail ? `, ${detail}` : ''}`);
   assertions += 1;
   console.log(`PASS ${name}`);
 }

@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 function connect(room) {
@@ -138,7 +138,7 @@ const run = async () => {
   check("mild profanity still masks in public rooms", !!masked && !/crap/.test(masked.message), masked && masked.message);
   pub.ws.close(); pub2.ws.close();
 
-  // 10) Draw & Guess: the word is still intercepted — even after machine-gun
+  // 10) Draw & Guess: the word is still intercepted, even after machine-gun
   //     guessing (REGRESSION: the flood guard must never eat a correct guess).
   const g1 = await connect("GUESS");
   const g2 = await connect("GUESS");
@@ -149,7 +149,7 @@ const run = async () => {
     const drawer = g1.msgs.some((m) => m.type === "game_role" && m.role === "drawer") ? g1 : g2;
     const guesser = drawer === g1 ? g2 : g1;
     guesser.msgs.length = 0;
-    // REGRESSION (review): the DRAWER can't smuggle the word as a DRAWING —
+    // REGRESSION (review): the DRAWER can't smuggle the word as a DRAWING -
     // doodles from word-knowers are spoiler-blocked while the round is LIVE
     // (so this runs before the correct guess ends the round).
     const PNGSPOIL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -160,7 +160,7 @@ const run = async () => {
     const spoilLeak = guesser.msgs.some((m) => m.type === "chat" && m.doodle);
     check("the drawer can't doodle the secret word into chat", !!spoilBlock && !spoilLeak);
 
-    // 25 rapid wrong guesses first — way past any flood cap.
+    // 25 rapid wrong guesses first, way past any flood cap.
     guesser.msgs.length = 0;
     for (let i = 0; i < 25; i += 1) guesser.send({ type: "chat", message: `zzguess${i}` });
     guesser.send({ type: "chat", message: role.word });
@@ -185,7 +185,7 @@ const run = async () => {
 
   // 12) Doodle replies: a valid raster doodle relays as a cd_ id + serves;
   //     junk is rejected with feedback; doodles rate-limit separately.
-  //     Fresh client — `a` deliberately burned its chat budget in check 8.
+  //     Fresh client, `a` deliberately burned its chat budget in check 8.
   const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const d = await connect("ZZCHAT");
   b.msgs.length = 0;
@@ -207,8 +207,8 @@ const run = async () => {
   const dlimit = await waitFor(d, (m) => m.type === "chat_blocked" && m.reason === "slow_down", 3000);
   check("doodles have their own tighter rate limit", !!dlimit);
 
-  // REGRESSION (review): a decompression bomb — tiny bytes claiming enormous
-  // pixel dimensions — must be rejected by the server's header parse.
+  // REGRESSION (review): a decompression bomb, tiny bytes claiming enormous
+  // pixel dimensions, must be rejected by the server's header parse.
   const bomb = Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), // PNG magic
     Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"),
@@ -227,7 +227,7 @@ const run = async () => {
   const gifRej = await waitFor(d2, (m) => m.type === "chat_blocked" && m.reason === "doodle", 3000);
   check("GIF doodles are rejected (PNG/JPEG only)", !!gifRej);
 
-  // REGRESSION (review): rejects must NOT burn the doodle quota — after the
+  // REGRESSION (review): rejects must NOT burn the doodle quota, after the
   // two rejects above, a fresh client still sends a valid doodle first try.
   d2.msgs.length = 0;
   d2.send({ type: "chat", message: "quota check", doodle: PNG });
@@ -245,7 +245,7 @@ const run = async () => {
   d2.ws.close();
   d.ws.close();
 
-  // 13) Spectators now get the conversation (Craig-approved stance change) —
+  // 13) Spectators now get the conversation (Craig-approved stance change) -
   //     in PUBLIC listed rooms only (private rooms stay unwatchable): history
   //     on join + live chat + hype, a count-only roster, still read-only.
   const mtalk = await connect("MAIN");
@@ -374,7 +374,7 @@ const run = async () => {
   mainTalker.ws.close();
 
   // REGRESSION (review, was CRITICAL): on a phone the doodle pad + composer
-  // must FIT the bottom sheet — the Send button was clipped off-screen.
+  // must FIT the bottom sheet, the Send button was clipped off-screen.
   const mctx = await browser.newContext({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
   const mpage = await mctx.newPage();
   await mpage.goto(`${BASE}/join/ZZMOBILE`, { waitUntil: "domcontentloaded" });

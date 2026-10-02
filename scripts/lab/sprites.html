@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Sprite lab — a headless harness page for src/utils/brushSprites.js.
+  Sprite lab, a headless harness page for src/utils/brushSprites.js.
 
   Served by the vite DEV server only (vite serves any .html under the project
   root in dev; nothing here is imported by src/). Driven by
@@ -10,7 +10,7 @@
 
   It drives ONLY the module's public exports and stamps dabs exactly the way
   Stage 2 will (setTransform composing base x rotation x aspect, globalAlpha =
-  flow, one drawImage of the tinted slot — no save/restore), so the strokes
+  flow, one drawImage of the tinted slot, no save/restore), so the strokes
   row is an honest preview of what the engine will produce.
 -->
 <html lang="en">
@@ -76,7 +76,7 @@
     const HALF = SPRITE_PX / 2;
 
     // Mirrors brushes.js mulberry32 for the harness's own dice (variant /
-    // jitter rolls in the strokes preview) — fixed seed, so every run rolls
+    // jitter rolls in the strokes preview), fixed seed, so every run rolls
     // the same dice and two runs differ only by the sprites.
     const mulberry32 = (seed) => {
       let state = seed >>> 0;
@@ -173,11 +173,11 @@
     };
 
     // (c) ALLOC: the tint ring's hit AND miss paths must allocate no canvas.
-    // 5000 lookups over rotating families / variants / colors — far more
+    // 5000 lookups over rotating families / variants / colors, far more
     // than 32 distinct keys, so most lookups are misses (re-tint in place).
     const runAlloc = () => {
       const stampable = FAMILIES.filter((f) => f.id !== "softMask");
-      // Warm-up: first use allocates the ring (if prebuild didn't) — that is
+      // Warm-up: first use allocates the ring (if prebuild didn't), that is
       // the one allowed allocation, outside the dab path.
       getTintedSprite("wash", 0, 30, 136, 229);
       const before = alloc.canvas;
@@ -205,7 +205,7 @@
       }
       const hitMs = performance.now() - t1;
       // Exact-key path (dry strokes, Stage 2): 5000 rotating 24-bit colors
-      // through the same ring — still no allocation, and the two namespaces
+      // through the same ring, still no allocation, and the two namespaces
       // must not collide (a bucket hit right after must still be a hit).
       const t2 = performance.now();
       for (let i = 0; i < 5000; i += 1) {
@@ -244,13 +244,13 @@
       };
     };
 
-    // (d) RIM: per wash variant, mean alpha in the rim band (0.7-0.9 rho —
+    // (d) RIM: per wash variant, mean alpha in the rim band (0.7-0.9 rho -
     // where the ring rises, 0.45 -> 0.74, before the lateral feather starts
     // at 0.84) over the core (0-0.5 rho), rho in SPRITE_UNIT radii like the
     // module. The wash is anisotropic (Stage 2): a pooled rim ACROSS the
     // stroke (the sprite's y axis, |sin| >= 0.87 = within 30 degrees of it)
-    // and a soft feather along it, so `ratio` is the lateral band — the
-    // formula's actual claim — and `along` (within 30 degrees of the x axis)
+    // and a soft feather along it, so `ratio` is the lateral band, the
+    // formula's actual claim, and `along` (within 30 degrees of the x axis)
     // is informational.
     const runRim = () => {
       const atlas = getAtlas("wash");
@@ -359,7 +359,7 @@
       const scratchOk = getSmudgeScratch().width === 256 && getCarryScratch().width === 256 && getSmudgeScratch() !== getCarryScratch();
       emit(images, "sprites.png", sheet);
 
-      // Close-ups: one PNG per family — white row + the three tints.
+      // Close-ups: one PNG per family, white row + the three tints.
       for (const family of FAMILIES) {
         const atlas = getAtlas(family.id);
         const closeup = makeCanvas(family.variants * SPRITE_PX, SPRITE_PX * 4);
@@ -386,7 +386,7 @@
     // 'multiply' (its Stage-2 composite); the rest source-over.
     const STROKE_PARAMS = {
       // wash is anisotropic (firm rim across the stroke, soft along it), so
-      // it follows the tangent with only a small wobble — like the engine.
+      // it follows the tangent with only a small wobble, like the engine.
       wash: { flow: 0.17, spacing: 0.13, aspect: 1, rotJitter: 0.3, scatter: 0.04, composite: "multiply" },
       "wash+bloom": { family: "wash", flow: 0.17, spacing: 0.13, aspect: 1, rotJitter: 0.3, scatter: 0.04, composite: "multiply", bloom: 0.33 },
       graphite: { flow: 0.72, spacing: 0.14, aspect: 1.15, rotJitter: 0, scatter: 0.05, composite: "multiply" },
@@ -412,14 +412,14 @@
 
     // Walk `dabs` dabs along a sine path by arc length (spacing x size apart)
     // into a transparent buffer, then commit the buffer once onto `target`
-    // with the family's composite — the engine's flow-then-commit model.
+    // with the family's composite, the engine's flow-then-commit model.
     const paintStroke = (target, name, { x0, y0, w, h, flip, size, dabs, color, seed, pressure }) => {
       const params = STROKE_PARAMS[name];
       const familyId = params.family || name;
       const family = FAMILIES[spriteFamilyIndex(familyId)];
       const rand = mulberry32(seed);
       // loaded: the lanes are per variant, so a coherent streak along the
-      // stroke needs ONE variant per stroke (rolled from the seed) — the
+      // stroke needs ONE variant per stroke (rolled from the seed), the
       // recommendation to Stage 2; every other family rolls per dab.
       const strokeVariant = familyId === "loaded" ? Math.floor(rand() * family.variants) : -1;
       const buffer = makeCanvas(w, h);
@@ -541,12 +541,12 @@
     // (h) PACED: the idle prebuild driven piece by piece, the way App's
     // requestIdleCallback would, with the browser's scheduler stubbed so
     // the prebuild's self-reschedule hands its continuation back here.
-    //   forced  — every slot is a timed-out one (timeRemaining 0): the
+    //   forced, every slot is a timed-out one (timeRemaining 0): the
     //             prebuild must build exactly ONE piece per slot, so the
     //             per-piece times below are what a slot costs a busy page;
-    //   busy    — the first slot arrives with a pointer down: the busy
+    //   busy, the first slot arrives with a pointer down: the busy
     //             predicate must defer it without allocating anything;
-    //   sliced  — ~24 ms idle slots: several pieces per slot, re-scheduled
+    //   sliced, ~24 ms idle slots: several pieces per slot, re-scheduled
     //             once under IDLE_STEP_MS remain.
     // Both drives must hash identical to the cold synchronous build (page A's
     // `hash` scenario): a row assembled a variant at a time is the same row.
@@ -642,7 +642,7 @@
     };
 
     window.lab = { ...sprites, ready: true, error: null, alloc, scenarios: Object.keys(SCENARIOS), run };
-    status.textContent = `sprites module loaded — families: ${FAMILIES.map((f) => `${f.id}(${f.variants})`).join(", ")}. Call lab.run(kind) — kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
+    status.textContent = `sprites module loaded, families: ${FAMILIES.map((f) => `${f.id}(${f.variants})`).join(", ")}. Call lab.run(kind), kinds: ${Object.keys(SCENARIOS).join(", ")}.`;
   </script>
 </body>
 </html>

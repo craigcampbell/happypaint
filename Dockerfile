@@ -43,7 +43,7 @@ COPY src/utils ./src/utils
 EXPOSE 8787
 # The server runs as the unprivileged `node` user. The container still STARTS as
 # root, for one job: a bind-mounted ./app_data arrives owned by whoever made it
-# on the host, so make it writable, then drop privileges for good (exec — node
+# on the host, so make it writable, then drop privileges for good (exec, node
 # stays PID 1 and gets SIGTERM for the graceful-shutdown path). Inline rather
 # than a .sh file so a CRLF checkout on Windows can't break the shebang.
 ENTRYPOINT ["/bin/sh", "-c", "if [ \"$(id -u)\" = 0 ]; then mkdir -p \"$DATA_DIR\"; su-exec node test -w \"$DATA_DIR\" || chown -R node:node \"$DATA_DIR\" || true; exec su-exec node \"$@\"; fi; exec \"$@\"", "--"]

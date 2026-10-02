@@ -2,7 +2,7 @@
 //   1. Moves the source PNGs into coloring-library/full/.
 //   2. Generates a 256px webp thumbnail per sheet in coloring-library/thumbs/.
 //   3. Builds coloring-library/index.json (id + title + searchable text) from the
-//      descriptive filenames — no AI classifier needed.
+//      descriptive filenames, no AI classifier needed.
 //
 // Run: node scripts/prep-sheets.mjs
 // Re-runnable: only missing thumbnails are regenerated.

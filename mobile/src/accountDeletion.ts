@@ -126,7 +126,7 @@ async function fileServerDeletion(
     }
     void request;
     // Server-side filing: the backend RPC inserts an account_deletion_requests
-    // row + schedules the purge Edge Function. Best-effort — the LOCAL wipe +
+    // row + schedules the purge Edge Function. Best-effort, the LOCAL wipe +
     // sign-out below are the source of truth on this device and proceed
     // regardless of the result.
     const { error } = await client.rpc("request_account_deletion");
@@ -140,7 +140,7 @@ async function fileServerDeletion(
 }
 
 // Clear every local store. Best-effort per group so one failure can't abort the
-// rest — App Review requires deletion to be reliable. Returns the list of
+// rest: App Review requires deletion to be reliable. Returns the list of
 // things it cleared for an audit summary.
 export async function wipeLocalData(): Promise<string[]> {
   const cleared: string[] = [];

@@ -1,17 +1,17 @@
-// Community Brush Packs — publish (submit-for-review) + browse + get.
+// Community Brush Packs, publish (submit-for-review) + browse + get.
 //
 // MOCK / LOCAL ONLY (no backend, no network), shaped to mirror the schema (and
 // the web build's src/utils/brushPacks.js for cross-platform consistency):
 //   - asset_packs            (id, owner_profile_id, title, visibility, version,
 //                             status: draft -> pending -> approved -> rejected)
 //                            check: visibility public/featured requires status approved
-//   - asset_pack_items       (pack_id, asset_id, position) — pack membership
+//   - asset_pack_items       (pack_id, asset_id, position), pack membership
 //   - asset_moderation_queue (id, target_kind 'pack', target_id, submitted_by,
-//                             status 'pending', submitted_at) — review queue entry
+//                             status 'pending', submitted_at), review queue entry
 //   - asset_uses             (id, asset_id, used_by_profile_id, context, source_id)
 //                             recorded when a browsed pack is "Got" into the locker
 //   - space_assets           (kind 'brush', brush_recipe, remix_permission,
-//                             visibility) — the assets inside a pack
+//                             visibility), the assets inside a pack
 //
 // User-facing scope ONLY: publish (submit) + browse approved + get. Admin-side
 // review/approval of submitted packs is a SEPARATE later agent. We seed a few
@@ -289,7 +289,7 @@ export async function readAssetUses(): Promise<AssetUse[]> {
 export type PublishResult = { pack: AssetPack; queued: boolean };
 
 // Publish a pack from a set of locker assets. Builds an asset_packs row + its
-// asset_pack_items, and — when visibility needs review (public or friends) — an
+// asset_pack_items, and, when visibility needs review (public or friends), an
 // asset_moderation_queue entry. Public/friends submissions are 'pending'; private
 // packs are stored as 'draft' (no review needed).
 export async function publishPack(input: {

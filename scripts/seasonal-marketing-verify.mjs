@@ -99,7 +99,7 @@ spawnProc([process.execPath, "server.js"], {
 }, "srv");
 spawnProc([process.execPath, path.join(ROOT, "node_modules/vite/bin/vite.js"), "--port", String(UI_PORT), "--strictPort", "--host", "127.0.0.1"], {
   // VITE_PB_URL is set so the nav auth CTA (Sign in / My account) is exercised;
-  // the dummy origin is never called — guests have no stored PocketBase record
+  // the dummy origin is never called, guests have no stored PocketBase record
   // and the signed-in check seeds a local-only synthetic auth record.
   env: { ...process.env, VITE_PB_URL: `http://127.0.0.1:${API_PORT}` },
 }, "vite");
@@ -108,7 +108,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 };
 
 async function waitUp(url, tries = 80) {
@@ -222,7 +222,7 @@ const run = async () => {
     }
   };
 
-  // ONE catch-all handler with internal dispatch — Playwright routes are
+  // ONE catch-all handler with internal dispatch: Playwright routes are
   // matched last-registered-wins, so stacked specific + generic patterns let
   // the generic one swallow requests. A single handler is deterministic.
   const handleApi = async (route) => {
@@ -299,8 +299,8 @@ const run = async () => {
   const bannerText = (await banner.innerText()).replace(/\s+/g, " ");
   const expectedPhase = realInktober ? realInkState.phase : "upcoming";
   if (expectedPhase === "upcoming") {
-    check(`homepage banner: 'Inktober is coming — get ready' (upcoming, ${MODE})`,
-      bannerPhase === "upcoming" && /Inktober is coming — get ready/i.test(bannerText), bannerText.slice(0, 90));
+    check(`homepage banner: 'Inktober is coming, get ready' (upcoming, ${MODE})`,
+      bannerPhase === "upcoming" && /Inktober is coming, get ready/i.test(bannerText), bannerText.slice(0, 90));
   } else {
     check(`homepage banner matches real phase '${expectedPhase}'`, bannerPhase === expectedPhase, bannerText.slice(0, 90));
   }
@@ -386,7 +386,7 @@ const run = async () => {
   const day3Rendered = await page.locator(".ink-gallery .wall-card").count();
   check(`/inktober day=3 gallery matches API (${MODE})`, day3Rendered === day3Expected, `${day3Rendered}/${day3Expected}`);
 
-  // Empty state (a day with no posts — day 31 in real mode, fixture in synthetic).
+  // Empty state (a day with no posts, day 31 in real mode, fixture in synthetic).
   if (!realInktober) fx.wallEvent = "empty";
   await daySelect.selectOption("31");
   await page.waitForTimeout(800);
@@ -406,7 +406,7 @@ const run = async () => {
   await page.waitForTimeout(800);
   check("/inktober retry recovers the gallery", (await page.locator(".ink-gallery .ink-error").count()) === 0);
 
-  // Active phase copy (SYNTHETIC fixture only — the real phase is time-bound).
+  // Active phase copy (SYNTHETIC fixture only, the real phase is time-bound).
   if (!realInktober) {
     fx.inktober = INKTOBER_ACTIVE;
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -455,7 +455,7 @@ const run = async () => {
   check("/paintjar honors prefers-reduced-motion (scene still)", sunAnim === "none", sunAnim);
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
-  // Error state (no fake numbers) — simulated outage in both modes.
+  // Error state (no fake numbers), simulated outage in both modes.
   fx.forceJarFail = true;
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
@@ -487,7 +487,7 @@ const run = async () => {
   await page.waitForURL("**/signup**", { timeout: 10000 });
   check("guest: Sign in routes to the existing login page", page.url().includes("/signup") && page.url().includes("mode=login"), page.url());
 
-  // ---- auth CTA: signed in (SYNTHETIC local auth record — the exact shape
+  // ---- auth CTA: signed in (SYNTHETIC local auth record, the exact shape
   // PocketBase's LocalAuthStore keeps in localStorage; no network involved) ----
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const synToken = `${b64({ alg: "HS256", typ: "JWT" })}.${b64({ id: "u_syn", type: "auth", exp: Math.floor(Date.now() / 1000) + 3600 })}.synthetic`;
@@ -513,7 +513,7 @@ const run = async () => {
   await authCtx.close();
 
   const failed = results.filter((r) => !r.ok);
-  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? " — FAILURES:" : ""}`);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ": FAILURES:" : ""}`);
   for (const f of failed) console.log("  ✗ " + f.name);
   process.exitCode = failed.length ? 1 : 0;
 };

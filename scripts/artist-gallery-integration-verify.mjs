@@ -1,16 +1,16 @@
-// Artist gallery route/nav + Inktober discoverability — INTEGRATION verify.
+// Artist gallery route/nav + Inktober discoverability: INTEGRATION verify.
 /* global window */
 //
 // Unlike scripts/artist-gallery-ui-verify.mjs (SYNTHETIC fixtures), this suite
 // uses ONLY the real stack:
-//   * mock PocketBase (throwaway port) — the only endpoint server.js calls is
+//   * mock PocketBase (throwaway port), the only endpoint server.js calls is
 //     POST /api/collections/users/auth-refresh; the browser never calls PB
 //     because the session is seeded into localStorage as the SDK's own record.
-//   * real server.js on :8966 with an isolated DATA_DIR — rooms are created
+//   * real server.js on :8966 with an isolated DATA_DIR, rooms are created
 //     and PUBLISHED through the real REST API (docs/ARTIST-ROOMS-CONTRACT.md).
 //   * real Vite dev server on :8967 serving the REAL Router (/gallery route),
 //     SiteNav, InktoberPage and ArtistGalleryPage. Playwright proxies /api/**
-//     to the real server (Vite has no proxy config) — no route is stubbed.
+//     to the real server (Vite has no proxy config), no route is stubbed.
 //
 // Covers:
 //   /gallery route renders real published studios; search/tag/event filters
@@ -104,7 +104,7 @@ spawnProc([process.execPath, path.join(ROOT, "node_modules/vite/bin/vite.js"),
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? " — " + String(detail).slice(0, 220) : ""}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail && !ok ? ": " + String(detail).slice(0, 220) : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function waitUp(url, tries = 100) {

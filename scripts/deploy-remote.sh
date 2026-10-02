@@ -37,7 +37,7 @@ SSH="ssh -o BatchMode=yes -o ConnectTimeout=10"
 # --- 1. pre-flight -------------------------------------------------------
 echo "==> Pre-flight: current state"
 $SSH "$HOST" "cd $REMOTE_DIR && docker compose ps" || {
-  echo "ERROR: cannot reach $REMOTE_DIR on $HOST — is the droplet up?" >&2; exit 1; }
+  echo "ERROR: cannot reach $REMOTE_DIR on $HOST, is the droplet up?" >&2; exit 1; }
 
 echo "==> Capturing rollback image + neighbor container IDs"
 $SSH "$HOST" "cd $REMOTE_DIR && \\
@@ -58,7 +58,7 @@ rsync -a --delete \
   --exclude backups --exclude .deploy.json \
   "$ROOT/" "$HOST:$REMOTE_DIR/"
 # .env rides along in the sync (it is NOT excluded) so env changes ship with
-# the code in the same swap — the local-docker-production-release rule.
+# the code in the same swap, the local-docker-production-release rule.
 
 # --- 3. build + swap -----------------------------------------------------
 echo "==> Building the app image on the droplet"

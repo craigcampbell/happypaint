@@ -4,7 +4,7 @@
 --   session_status, timed_event_status, account_deletion_status
 --
 -- STATUS: NOT APPLIED TO PRODUCTION.
---   This Supabase backend is the legacy/optional reference backend — the
+--   This Supabase backend is the legacy/optional reference backend, the
 --   production app runs on PocketBase, which has no such enum. Apply this
 --   migration manually (supabase db execute / psql) to any environment that
 --   actually provisioned schema.sql BEFORE the rename; fresh provisions of
@@ -12,7 +12,7 @@
 --
 -- Idempotent: each DO block no-ops when the 'cancelled' label is absent
 -- (fresh schema, or a database where the rename already ran). Existing rows
--- are preserved in place — ALTER TYPE ... RENAME VALUE rewrites the label,
+-- are preserved in place: ALTER TYPE ... RENAME VALUE rewrites the label,
 -- not the data, and works on values used by table columns.
 --
 -- Requires PostgreSQL 10+ (ALTER TYPE ... RENAME VALUE).

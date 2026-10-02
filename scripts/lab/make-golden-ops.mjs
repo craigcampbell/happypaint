@@ -1,4 +1,4 @@
-// Emits scripts/lab/golden-ops.json — the FROZEN op fixture behind the golden
+// Emits scripts/lab/golden-ops.json, the FROZEN op fixture behind the golden
 // pixel hash (`node scripts/brush-lab.mjs --golden`). Deterministic from
 // FIXTURE_SEED, so `node scripts/lab/make-golden-ops.mjs --check` proves the
 // committed JSON is byte-for-byte what this script emits.
@@ -7,7 +7,7 @@
 // opReplay.replayFrameOnto (the film-export / spectator consumer) onto a
 // transparent 4000x2500 world canvas, and the per-group SHA-256 of the pixels
 // (scripts/lab/golden.json) must not move while the engine changes underneath
-// — "history is forever". The original v3 groups use the frozen authoring
+//: "history is forever". The original v3 groups use the frozen authoring
 // dabs captured in golden-stage2-dabs.json, just as saved rooms retain their
 // inline dabs. New authoring presets belong in appended groups; they must
 // never replace the ops and hashes that protect previously saved artwork.
@@ -18,7 +18,7 @@
 //   - quarter-px points with 3-dp pressure, wire-level duplicate dedupe, a
 //     stationary pressure-only update every 41 points (survives dedupe);
 //   - ~7-point batches per op with the settings object on EVERY op (only
-//     inline-stamp strokes send settings once), end:true on the last op — for
+//     inline-stamp strokes send settings once), end:true on the last op, for
 //     every 4th stroke as an empty end-only op, which a pen-up right after a
 //     flush produces.
 //
@@ -30,7 +30,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The engine's relative imports are extensionless (vite resolves them; Node
-// doesn't) — register the resolve hook BEFORE importing it.
+// doesn't), register the resolve hook BEFORE importing it.
 register("./node-esm-hooks.mjs", import.meta.url);
 const { brushCatalog, getAuthoringDab } = await import("../../src/utils/brushes.js");
 const { normalizeSymmetry } = await import("../../src/utils/symmetry.js");
@@ -43,7 +43,7 @@ const FIXTURE_SEED = 0x5eed0001;
 // The shared world canvas (layers.js CANVAS_WIDTH/HEIGHT). Hard-coded rather
 // than imported: the fixture must not silently follow a future canvas resize.
 const CANVAS = { width: 4000, height: 2500 };
-const BATCH = 7; // points per draw op — the wire's ~40ms batches at pointer rate
+const BATCH = 7; // points per draw op, the wire's ~40ms batches at pointer rate
 const SIZES = [12, 40, 90];
 const COLORS = { blue: "#2f6fd6", red: "#e04b2a", yellow: "#f9d423", mixBlue: "#1e88e5" };
 // Legacy-path brushes: no `dab` (spray, eraser) plus the pre-Stage-2 history
@@ -62,7 +62,7 @@ function mulberry32(seed) {
   };
 }
 const rng = mulberry32(FIXTURE_SEED);
-// startStroke: Math.floor(Math.random() * 2 ** 31) — same range, fixed dice.
+// startStroke: Math.floor(Math.random() * 2 ** 31), same range, fixed dice.
 const nextSeed = () => Math.floor(rng() * 2 ** 31);
 
 let strokeCounter = 0;
@@ -116,7 +116,7 @@ const flatLine = (box, y, { count = 40, pressure = 0.9 } = {}) => {
 };
 
 // The lab's mixPath: `along` = a gentle 3-lobe wave across the cell; otherwise
-// a path that dives onto that wave, rides it for the middle 40%, then leaves —
+// a path that dives onto that wave, rides it for the middle 40%, then leaves -
 // so wet pickup has a stretch of under-paint to drag.
 const wavePath = (box, along, { count = 130, pressure = 0.75 } = {}) => {
   const points = [];
@@ -161,7 +161,7 @@ const longWave = (from, to, { count = 400, amp = 120, lobes = 3 } = {}) => {
 // What the studio actually puts on the wire (App.jsx drawBrushFromEvent):
 // quarter-px coords, dedupe of a point that lands on the previous one with
 // |Δpressure| < 0.01, a stationary pressure-only update every 41 points
-// (Δp = 0.02 survives dedupe) — and Stage 5 tilt: integer-degree tx/ty,
+// (Δp = 0.02 survives dedupe), and Stage 5 tilt: integer-degree tx/ty,
 // attached only when nonzero, with a >= 10° lean change surviving the dedupe.
 // (Tilt-less raw points produce byte-identical output to the pre-tilt rule,
 // which is what keeps every pre-Stage-5 group frozen.)
@@ -221,7 +221,7 @@ const legacySettings = (brush, { color, size, opacity = 1, variation = 0, seeded
 
 const v2Settings = (brush, { color, size, opacity = 1, symmetry = null }) => {
   const authoring = getAuthoringDab(brush);
-  if (!authoring) throw new Error(`${brush} has no dab — not a v2 brush`);
+  if (!authoring) throw new Error(`${brush} has no dab, not a v2 brush`);
   const settings = { brush, color, size, opacity, variation: 0, seed: nextSeed() };
   if (symmetry && symmetry.copies > 1) settings.symmetry = symmetry;
   settings.v = 2; // persisted v2 history resolves through the static catalog
@@ -240,7 +240,7 @@ const v3Settings = (brush, { color, size, opacity = 1, wet = false, symmetry = n
 };
 
 // The inline dabs the studio embedded for v3 oil / acrylic when this fixture
-// was first recorded (Stage 0) — frozen LITERALS, byte-for-byte what those
+// was first recorded (Stage 0), frozen LITERALS, byte-for-byte what those
 // ops carry in golden-ops.json, NOT getAuthoringDab: Stage 2 replaced the
 // oil / acrylic NATURAL_DABS entries (shape "loaded"), and the Stage-0 groups
 // are exactly the persisted history that must keep replaying unchanged. Key
@@ -270,7 +270,7 @@ const smudgeSettings = ({ size, strength }) => ({
 });
 
 // Goo ops exactly as startStroke puts them on the wire: v:3 + gooiness
-// (opacity forced to 1 — gooiness IS goo's strength).
+// (opacity forced to 1, gooiness IS goo's strength).
 const gooSettings = ({ size, gooiness }) => ({
   brush: "goo",
   color: COLORS.yellow,
@@ -287,7 +287,7 @@ const gooSettings = ({ size, gooiness }) => ({
 // seeded = pointRand (deterministic). Eraser rows first lay a marker field to
 // cut through. NOTE the eraser branch never receives pointRand (opReplay /
 // applyRemoteOp pass no `rand`), so a seeded eraser with variation > 0 still
-// rolls Math.random — the seeded group pins eraser variation at 0.
+// rolls Math.random, the seeded group pins eraser variation at 0.
 const legacyGroup = (seeded) => {
   const ops = [];
   const cell = grid(SIZES.length, LEGACY_BRUSHES.length);
@@ -311,7 +311,7 @@ const legacyGroup = (seeded) => {
   return ops;
 };
 
-// (b) v2 for every catalog brush with a dab (oil/acrylic included — their
+// (b) v2 for every catalog brush with a dab (oil/acrylic included, their
 // pre-NATURAL_DABS history is v2 and resolves through brushCatalog).
 const v2Group = () => {
   const brushes = brushCatalog.filter((b) => b.dab).map((b) => b.id);
@@ -327,7 +327,7 @@ const v2Group = () => {
   return ops;
 };
 
-// (c) Stage-0 v3 oil / acrylic with the inline dab embedded — dry, then wet
+// (c) Stage-0 v3 oil / acrylic with the inline dab embedded, dry, then wet
 // over a v2 gouache under-layer (so pickup has paint to sample and drag).
 const V3_BRUSHES = ["oil", "acrylic"];
 const v3DryGroup = () => {
@@ -398,7 +398,7 @@ const symmetryQuadGroup = () => {
 };
 // Radial 8 pins a consumer quirk: opReplay / applyRemoteOp cap concurrent
 // buffers at 4 (MAX_STROKE_BUFFERS / REMOTE_BUFFER_CAP), and all 8 copies of
-// one stroke are open at once — copies 5-8 fall to the legacy direct-segment
+// one stroke are open at once, copies 5-8 fall to the legacy direct-segment
 // path (no dabs, no commit passes) while the local studio buffers every copy.
 const symmetryRadialGroup = () => {
   const radial = normalizeSymmetry({ mode: "radial", copies: 8 });
@@ -413,7 +413,7 @@ const overflowGroup = () => [
   ...strokeOps("overflowOil", v3Stage0Settings("oil", { color: COLORS.red, size: 60 }), longWave({ x: 300, y: 2250 }, { x: 3700, y: 2250 }, { amp: 60, lobes: 5 })),
 ];
 
-// (g) Shape ops (drawShape) and a text op (drawText) — App.jsx shapeOpts /
+// (g) Shape ops (drawShape) and a text op (drawText): App.jsx shapeOpts /
 // textOp field-for-field.
 const shapesGroup = () => [
   { kind: "shape", tool: "line", start: { x: 300, y: 300 }, end: { x: 1500, y: 900 }, opts: { color: COLORS.blue, size: 14, opacity: 1, fillShape: false } },
@@ -429,8 +429,8 @@ const textGroup = () => [
 
 // ---- Stage 2 groups (appended AFTER the Stage-0 groups so their seeds and
 // stroke ids are untouched) ----------------------------------------------------------
-// (h) One v3 stroke pair per Stage-2 shape — the marker's multiply disc and
-// every sprite family — with the inline dabs originally persisted at Stage 2.
+// (h) One v3 stroke pair per Stage-2 shape, the marker's multiply disc and
+// every sprite family, with the inline dabs originally persisted at Stage 2.
 const V3_STAGE2_BRUSHES = ["marker", "pencil", "crayon", "paint", "gouache", "watercolor", "oil", "acrylic", "glow"];
 const v3SpritesGroup = () => {
   const ops = [];
@@ -446,7 +446,7 @@ const v3SpritesGroup = () => {
 };
 
 // (i) Marker multiply: blue / yellow crossing (yellow over blue glazes dark
-// green), a red one at 0.8 opacity through both, and a WHITE marker — the
+// green), a red one at 0.8 opacity through both, and a WHITE marker, the
 // luma guard commits that one source-over (white multiplied would vanish).
 const v3MarkerMultiplyGroup = () => {
   const box = { x0: 400, y0: 400, w: 3200, h: 1700 };
@@ -461,7 +461,7 @@ const v3MarkerMultiplyGroup = () => {
 // (j) Watercolor glaze: dry yellow over blue (the multiply commit is the
 // mixing), then wet blue over a v3 gouache under-layer (recorded in Stage 2
 // with the legacy pickup lerp; Stage 3 moved it to the pigment mixer before
-// anything shipped — the dab's own pickup 0.35 either way).
+// anything shipped, the dab's own pickup 0.35 either way).
 const v3WaterGlazeGroup = () => {
   const cell = grid(2, 1, 80);
   const dry = cell(0);
@@ -482,7 +482,7 @@ const v3SymmetryWashGroup = () => {
 };
 
 // (l) Overflow-sized wash stroke (> 2048 px span): the buffer cap banks
-// mid-stroke chunks — the passes run per chunk and the renderer's walked
+// mid-stroke chunks, the passes run per chunk and the renderer's walked
 // distance (startFlow) survives the restarts.
 const v3OverflowWashGroup = () =>
   strokeOps("overflowWash", v3Settings("watercolor", { color: COLORS.mixBlue, size: 60, opacity: 0.9 }), longWave({ x: 300, y: 400 }, { x: 3700, y: 1900 }));
@@ -490,7 +490,7 @@ const v3OverflowWashGroup = () =>
 // ---- Stage 3 group ------------------------------------------------------------------
 // (m) Pigment mixing: for each km brush (oil / acrylic / paint / gouache),
 // a DRY blue stroke crossing a v3 gouache yellow under-layer (the dry `mix`
-// samples the mix map), the same WET (pickup + drag), and CARRY RECOVERY —
+// samples the mix map), the same WET (pickup + drag), and CARRY RECOVERY -
 // a wet stroke through a fill-rect blue patch that runs on over blank paper
 // (the carried color must fade back to the brush color). Dabs embedded
 // via getAuthoringDab at generation time, like every Stage-2 group.
@@ -573,7 +573,7 @@ const v3SmudgeGroup = () => {
   ops.push(...strokeOps("dragSoft", v3SmudgeSettings({ size: 90, strength: 0.3, mode: "drag" }), pass(1850, boundary - 400, boundary + 400, 200)));
   ops.push(...strokeOps("blendSoft", v3SmudgeSettings({ size: 90, strength: 0.3, mode: "blend" }), pass(2000, boundary + 400, boundary - 400, 200)));
   // Carry: from inside the red field (x 1000) out past its left edge (x 600)
-  // and 500 px on over blank paper — the load fades to nothing.
+  // and 500 px on over blank paper, the load fades to nothing.
   ops.push(...strokeOps("dragCarry", drag, pass(1300, 1000, 100, 160)));
   // Unknown mode: normalizeSmudgeSettings must read it as "drag" forever.
   ops.push(...strokeOps("dragUnknownMode", v3SmudgeSettings({ size: 40, strength: 0.6, mode: "wobble" }), pass(470, boundary - 260, boundary + 260)));
@@ -597,12 +597,12 @@ const v3SeptemberPaintGroup = () => {
 // ---- Stage 5 group --------------------------------------------------------------
 // Brush physics (all dabs embed the CURRENT authoring presets, like the
 // september group):
-// - tilt: pen lean rides the wire as integer tx/ty — a lean ramp at a fixed
+// - tilt: pen lean rides the wire as integer tx/ty, a lean ramp at a fixed
 //   azimuth (oil, dry then wet over gouache) and a full twist (acrylic);
 // - splay: the lab's pressure ramp works the bristle fan on the same strokes;
 // - charge: a long watercolor stroke drains the reservoir mid-way (and spans
 //   > 2048 px, so the buffer banks a chunk with the reservoir half-empty);
-// - diffuse: wet-into-wet — dry watercolor swells and blooms over a gouache
+// - diffuse: wet-into-wet, dry watercolor swells and blooms over a gouache
 //   under-layer, and a wet Wet Wash crosses a paint patch onto blank paper.
 const v3PhysicsGroup = () => {
   const ops = [];
@@ -626,7 +626,7 @@ const v3PhysicsGroup = () => {
   ops.push(...strokeOps("oilLeanDry", v3Settings("oil", { color: COLORS.blue, size: 40, current: true }), leanStroke(sCurve(boxL0))));
   ops.push(...strokeOps("oilLeanUnder", v3Settings("gouache", { color: COLORS.yellow, size: 56, current: true }), wavePath(boxR0, true)));
   ops.push(...strokeOps("oilLeanWet", v3Settings("oil", { color: COLORS.mixBlue, size: 40, wet: true, current: true }), leanStroke(wavePath(boxR0, false))));
-  // Acrylic: the twist — constant lean, rotating azimuth (the splay follows
+  // Acrylic: the twist, constant lean, rotating azimuth (the splay follows
   // the pressure ramp of the S-curve too).
   ops.push(...strokeOps("acrylicTwist", v3Settings("acrylic", { color: COLORS.red, size: 48, current: true }), twistStroke(sCurve(boxL1))));
   // Watercolor, dry over a gouache wave: diffuse swells and blooms the dabs
@@ -648,7 +648,7 @@ const v3PhysicsGroup = () => {
 // A red|blue field, thick + runny goo passes across the boundary (displacement
 // smears it, the yellow pigment lays on top), and a goo stroke that leaves the
 // field onto blank paper (the carried paint thins out). Deterministic: goo has
-// no dice — it is a pure function of the points + the sampled layer 0.
+// no dice, it is a pure function of the points + the sampled layer 0.
 const v3GooGroup = () => {
   const boundary = 2000;
   const ops = [
@@ -687,7 +687,7 @@ const groups = [
   { name: "symmetry-radial8", deterministic: true, note: "radial 8 copies: pins the 4-buffer cap quirk (copies 5-8 replay on the legacy segment path)", ops: symmetryRadialGroup() },
   { name: "overflow", deterministic: true, note: "strokes spanning > 2200 px so the 2048² buffer cap banks mid-stroke chunks", ops: overflowGroup() },
   { name: "shapes", deterministic: true, note: "drawShape line / rect / ellipse, stroked and filled", ops: shapesGroup() },
-  { name: "text", deterministic: true, machineBound: true, note: "drawText with system-ui — stable per machine, differs across OS font stacks", ops: textGroup() },
+  { name: "text", deterministic: true, machineBound: true, note: "drawText with system-ui, stable per machine, differs across OS font stacks", ops: textGroup() },
   // Stage 2 (appended; Stage-0 groups above are untouched).
   { name: "v3-sprites", deterministic: true, note: "Stage 2: v:3 marker/pencil/crayon/paint/gouache/watercolor/oil/acrylic/glow with the inline dab embedded, sizes 12/40/90, blue @1 + red @0.7 crossing", ops: v3SpritesGroup() },
   { name: "v3-marker-multiply", deterministic: true, note: "v:3 marker (blend multiply): blue x yellow crossing, red @0.8 through both, white (luma guard → source-over)", ops: v3MarkerMultiplyGroup() },
@@ -702,7 +702,7 @@ const groups = [
   // Stage 5 (appended).
   { name: "v3-physics", deterministic: true, note: "Stage 5/6: pen tilt (lean ramp + twist) on oil/acrylic, splay under pressure, the wash reservoir draining over a long stroke (charge), wet-into-wet spread over under-paint (diffuse), and the leaned-mop pools-downhill shift (pool)", ops: v3PhysicsGroup() },
   // Stage 6 goo (appended).
-  { name: "v3-goo", deterministic: true, note: "Stage 6: gooey finger paint (displacement + pigment) — thick and runny passes over a red|blue field plus a carry stroke that leaves the field", ops: v3GooGroup() },
+  { name: "v3-goo", deterministic: true, note: "Stage 6: gooey finger paint (displacement + pigment), thick and runny passes over a red|blue field plus a carry stroke that leaves the field", ops: v3GooGroup() },
 ];
 
 const fixture = {
@@ -746,7 +746,7 @@ if (process.argv.includes("--check")) {
     console.log(`make-golden-ops: ${path.relative(process.cwd(), OUT_FILE)} matches the generator\n${summary}`);
     process.exit(0);
   }
-  console.error(`make-golden-ops: ${path.relative(process.cwd(), OUT_FILE)} ${existing == null ? "is missing" : "DIFFERS from the generator"} — regenerate deliberately (see the header comment)`);
+  console.error(`make-golden-ops: ${path.relative(process.cwd(), OUT_FILE)} ${existing == null ? "is missing" : "DIFFERS from the generator"}, regenerate deliberately (see the header comment)`);
   process.exit(1);
 }
 fs.writeFileSync(OUT_FILE, text);
