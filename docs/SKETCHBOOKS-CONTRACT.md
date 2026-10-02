@@ -201,3 +201,88 @@ flip + downgrade tab closure, public-view privacy, restart persistence,
 idle-sweep protection (page rooms survive, plain studios reap), missing
 page-file rematerialization (no squatting), missing-book fail-closed WS
 approve/revoke, and safe admin page-room deletion.
+`node scripts/sketchbook-guest-verify.mjs` — the unsaved (guest) book suite
+(see the section below): no-account creation and resume, device-scoped drawing
+rights, gallery labelling, the save/claim flow incl. the merge path, room flip
+and demotion, abuse refusals, the empty-book sweep, and restart persistence.
+
+## Unsaved (guest) public sketchbooks
+
+A visitor with NO account taps an Inktober prompt and is IN the drawing
+experience immediately: no sign-in wall, no empty-state page, no modal. What
+they draw in is a PUBLIC, UNSAVED sketchbook page, and the studio tells them
+what that means: "Sign up to save your sketchbook. We don't send spam."
+
+Product
+- The unsaved book belongs to the DEVICE that started it (the same per-browser
+  key the WS auth frame already carries as `userKey`). That device draws;
+  everyone else watches, chats and reacts normally.
+- The book is public from the first stroke and appears in the Inktober
+  sketchbook strip as soon as it holds real drawing, labelled "Not saved yet".
+  Its pages carry the same server-stamped, immutable day/prompt/date.
+- SIGNING UP SAVES IT: the device's one-time save token is handed to
+  `POST /api/sketchbooks/claim` under the new session, the book becomes that
+  account's, and every page room becomes an ordinary artist studio owned by the
+  account. An account that already has a book for the event keeps it and the
+  unsaved pages MERGE into it (nothing painted is ever dropped by saving).
+- The sign-up strip is shown only to the device that started the book, and only
+  while accounts are configured. It disappears once the book is saved.
+- An unsaved book with NO artwork is reaped 14 days after it was started
+  (`SKETCHBOOK_GUEST_MAX_EMPTY_MS`). One with artwork is never reaped by that
+  sweep: artwork is never destroyed, and the device can still save it later.
+
+Data
+- `book.guest = { device, claimHash, createdAt }` with `ownerProfileId: null`.
+  A guest book is always `public: true`, with `artists: []` and `invites: []`
+  (there is no account to invite). `claimHash` is the SHA-256 of the ONE-TIME
+  save token; the token itself is never stored and never appears in any
+  response except the single creation reply.
+- Page rooms of an unsaved book are ordinary PUBLIC rooms: `audience:
+  kid_safe`, `listed: false`, `inktober: true`, no `ownerProfileId`, no
+  painters. The drawing right is enforced per CONNECTION (the device key), not
+  by an ACL, and in every other respect the room behaves exactly like the
+  shared Ink & Pencil room (kid-safe chat filtering, ink & pencil while the
+  event is active, no host powers).
+- READ endpoints accept `?dk=<device key>`; it only ever ADDS the caller's own
+  device-owner flags (`unsaved`, `isGuestOwner`, `canDraw`) and never widens
+  access to anyone else's book.
+
+REST
+- `POST /api/sketchbooks/guest` `{ device, day? }` (NO account) → mints or
+  resumes the device's unsaved book AND the page for that day (today's prompt
+  when the day is omitted during the active event; `need_day` before it
+  starts). Returns `{ ok, unsaved, resumed, bookId, page, room, url, token? }`
+  with the save token ONCE, on first creation only. One book per device+event,
+  and a resumed tap always gets the same book and the artwork already on it.
+- `POST /api/sketchbooks/claim` `{ token }` (verified account) → `{ ok,
+  adopted | merged, bookId, book }` (owner view). 401 `accounts_required`
+  without a session, 400 `bad_token`, 404 `claim_invalid` for an unknown or
+  spent token. The check → adopt → persist runs synchronously.
+- `GET /api/sketchbooks/by-room/:code?dk=` → adds `unsaved`,
+  `isGuestOwner`, and `canDraw` (device-aware).
+- `GET /api/sketchbooks` cards and `GET /api/sketchbooks/:id` views carry
+  `unsaved: true` for an unsaved book; hidden/private gating is unchanged.
+
+WS
+- On join: `canPaint = canPaintIn(room, user)`; for an UNSAVED page,
+  `canPaint = guestOwnsBook(book, deviceKey)` instead. A `canPaint: false`
+  member of a page room is held to the same read/social/request allowlist as an
+  artist-room viewer: draw ops, clears, sheets, imports, layers, frames and
+  every other mutation are dropped before the switch.
+- Saving RE-ROLES every connected member at once: the account that saved draws,
+  everybody else (including other anonymous tabs of the same device) becomes a
+  viewer, exactly like any other artist studio.
+- Ink & pencil is enforced on a sketchbook page (saved or unsaved) while the
+  event is active, and the handshake carries the PAGE's pinned prompt.
+
+Frontend
+- `/inktober` prompt CTA, the homepage Inktober hero CTA and the studio's
+  Ink & Pencil prompt CTA all go STRAIGHT into the guest page studio for the
+  chosen (or today's) prompt.
+- The studio's own strip for the guest device: "Sign up to save your
+  sketchbook" + "We don't send spam" + one button to sign up (carrying the
+  return path back to the same room). While signed in on a device that has an
+  unsaved book, the client claims it automatically and reconnects its socket so
+  the fresh session owns the page.
+- The Inktober sketchbook strip labels unsaved books "Not saved yet" and the
+  reader explains that the artist has not signed up yet.

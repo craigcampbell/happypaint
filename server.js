@@ -38,10 +38,11 @@ import {
 } from './server/artistRooms.js';
 import {
   SKETCHBOOK_EVENT, SKETCHBOOK_MAX_ARTISTS, SKETCHBOOK_MAX_PAGES,
-  SKETCHBOOK_MAX_ACTIVE_INVITES, SKETCHBOOK_TITLE_MAX,
-  mintBookId, mintInviteToken, hashInviteToken,
+  SKETCHBOOK_MAX_ACTIVE_INVITES, SKETCHBOOK_TITLE_MAX, SKETCHBOOK_GUEST_MAX_EMPTY_MS,
+  mintBookId, mintInviteToken, hashInviteToken, mintClaimToken, hashClaimToken,
   normalizeSketchbookRef, normalizeBook, promptForDay,
   isBookOwner, isBookArtist, bookHasCapacity,
+  isGuestBook, guestOwnsBook, guestBookMatchesClaim,
   bookPublicView, bookGalleryEligible, bookGalleryCard,
 } from './server/sketchbooks.js';
 import { questMissions, questSetFor } from './server/questDeck.js';
@@ -1187,6 +1188,10 @@ const SKETCHBOOK_DIR = join(DATA_DIR, '.sketchbooks');
 const sketchbooks = new Map(); // id -> normalized book
 let sketchbooksLoaded = false;
 const bookByOwnerEvent = new Map(); // `${profileId}:${event}` -> book id
+// UNSAVED (guest) books: one per DEVICE + event. Keyed by the same per-browser
+// device key the client sends in its WS auth frame, so a visitor who taps a
+// prompt gets the SAME book back on the next tap (art intact) until saved.
+const guestBookByDevice = new Map(); // `${device}:${event}` -> book id
 // Page room code -> book id: the RESERVATION record. A referenced page code
 // can never be re-minted for or squatted by a generic room — even while the
 // page's room file is (temporarily) missing, getRoom rematerializes the page
@@ -2888,7 +2893,7 @@ if (AUTO_CLOSE_ENABLED) {
 // never joined, nothing drawn or said, nothing on disk, nothing being saved.
 const PHANTOM_ROOM_GRACE_MS = Number(process.env.PHANTOM_ROOM_GRACE_MS || 5 * 60 * 1000);
 function isPhantomRoom(room, id) {
-  return !room.everJoined && !room.fromDisk && !FEATURED_CODES.has(id)
+  return !room.everJoined && !room.fromDisk && !FEATURED_CODES.has(id) && !room.sketchbook
     && room.users.size === 0 && room.history.length === 0 && !(room.chat && room.chat.length)
     && !room.ownerProfileId && !room.productionId
     && !(room.spectators && room.spectators.size) && !(room.mods && room.mods.size)
@@ -2981,7 +2986,11 @@ if (inktoberRolloverTimer.unref) inktoberRolloverTimer.unref();
 function inkEnforcedFor(room) {
   if (!room) return false;
   if (room.inkOnly) return true; // the shared INKTOBER room
-  return isArtistRoom(room) && room.inktober === true && inktoberState().phase === 'active';
+  if (room.inktober !== true || inktoberState().phase !== 'active') return false;
+  // An Inktober artist studio, and every Inktober sketchbook page (saved or
+  // unsaved): the page's prompt is an ink prompt, so ink & pencil is what it
+  // is drawn with.
+  return isArtistRoom(room) || !!room.sketchbook;
 }
 
 // ---- Public canvas refresh (3-day cycle) -----------------------------------
@@ -4406,12 +4415,20 @@ wss.on('connection', async (ws, req) => {
         return;
       }
     }
-    if (!live && existsSync(roomFile(roomId)) && storedRoomAudience(roomId) === ARTIST_AUDIENCE) {
-      // Only an artist studio materializes for a viewer — a private room file
-      // is never pulled into the live map by a spectate probe.
+    // Sketchbook page rooms are watchable by anyone while their book is public:
+    // a SAVED page is an artist studio, an UNSAVED page is a public mural room
+    // kept out of the lobby listing (listed:false). Watching a page is the
+    // BOOK's discovery, never the room list's.
+    const watchableBook = skbRef ? sketchbookById(skbRef.book) : null;
+    if (!live && existsSync(roomFile(roomId))
+      && (storedRoomAudience(roomId) === ARTIST_AUDIENCE
+        || (storedRoomAudience(roomId) === 'kid_safe' && watchableBook && watchableBook.public === true))) {
+      // Only an artist studio or a public sketchbook page materializes for a
+      // viewer — a private room file is never pulled into the live map by a
+      // spectate probe.
       live = getRoom(roomId); // audience already confirmed server-persisted
     }
-    if (!live || (live.audience === 'kid_safe' && !live.listed)
+    if (!live || (live.audience === 'kid_safe' && !live.listed && !live.sketchbook)
       || (live.audience !== 'kid_safe' && live.audience !== ARTIST_AUDIENCE)) {
       ws.send(JSON.stringify({ type: 'room_blocked', reason: 'not_watchable' }));
       ws.close(1008, 'not watchable');
@@ -4861,6 +4878,16 @@ wss.on('connection', async (ws, req) => {
   // painter). Other audiences leave the existing guards in charge (true here
   // only means "not view-only", never an override of lock/host rules).
   user.canPaint = canPaintIn(room, user);
+  // UNSAVED sketchbook pages are public rooms anyone may watch, but only the
+  // device that started the book may draw on them until the book is saved. The
+  // page carries the book's back-reference; the connection carries the same
+  // per-browser device key the client already sends in its auth frame (no new
+  // handshake field, no new secret). A saved book is an ordinary artist studio
+  // and is decided by canPaintIn alone.
+  if (room.sketchbook) {
+    const pageBook = sketchbookById(room.sketchbook.book);
+    if (pageBook && isGuestBook(pageBook)) user.canPaint = guestOwnsBook(pageBook, deviceKey);
+  }
   notePeak();
   analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
@@ -4912,13 +4939,15 @@ wss.on('connection', async (ws, req) => {
     // in every other audience; canPaint is true there (existing guards rule).
     canPaint: user.canPaint !== false,
     roomProfile: roomProfileFor(room, isArtistRoom(room) && room.inktober ? inktoberState() : null),
-    prompt: isArtistRoom(room) && room.inktober ? inktoberState().prompt : roomPrompt,
+    // A sketchbook page keeps its OWN pinned prompt (the shared Ink & Pencil
+    // room and artist studios carry the live event prompt).
+    prompt: room.sketchbook ? room.sketchbook.prompt : (isArtistRoom(room) && room.inktober ? inktoberState().prompt : roomPrompt),
     // Ink & Pencil room: the client restricts itself to ink/pencil tools, and
     // the same derived event state /api/inktober serves rides the handshake.
     // An Inktober-opted-in artist studio reports the same state and enforces
     // ink-only only while the event is active (see inkEnforcedFor).
     inkOnly: inkEnforcedFor(room),
-    event: (room.inkOnly || (isArtistRoom(room) && room.inktober)) ? inktoberState() : null,
+    event: (room.inkOnly || (room.inktober === true && (isArtistRoom(room) || !!room.sketchbook))) ? inktoberState() : null,
     wetCanvas: !!room.wetCanvas,
     brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
     moderated: room.audience === 'kid_safe',
@@ -5130,6 +5159,12 @@ wss.on('connection', async (ws, req) => {
     if (isArtistRoom(room)) {
       if (user.canPaint === false && !ARTIST_VIEWER_ALLOWLIST.has(data.type)) return;
       if (!isHost(room, user) && ARTIST_MANAGE_HOST_ONLY.has(data.type)) return;
+    } else if (room.sketchbook && user.canPaint === false && !ARTIST_VIEWER_ALLOWLIST.has(data.type)) {
+      // UNSAVED sketchbook page: the same read/social/request allowlist decides
+      // for the watchers of a public mural whose drawing right belongs to the
+      // device that started the book — mutations are dropped BEFORE the switch,
+      // so no draw/clear/sheet/import bypass exists on the page either.
+      return;
     }
 
     switch (data.type) {
@@ -10247,7 +10282,10 @@ function loadSketchbooks() {
       const book = normalizeBook(JSON.parse(readFileSync(join(SKETCHBOOK_DIR, f), 'utf8')));
       if (!book) continue;
       sketchbooks.set(book.id, book);
-      bookByOwnerEvent.set(`${book.ownerProfileId}:${book.event}`, book.id);
+      // Two indexes, never both: an account book is found by owner+event, an
+      // UNSAVED book by its device+event (until it is saved by an account).
+      if (isGuestBook(book)) guestBookByDevice.set(`${book.guest.device}:${book.event}`, book.id);
+      else bookByOwnerEvent.set(`${book.ownerProfileId}:${book.event}`, book.id);
       for (const page of book.pages) bookPageIndex.set(page.room, book.id);
     } catch { /* unreadable/mid-write — skipped, never fatal */ }
   }
@@ -10290,24 +10328,183 @@ function sketchbookPageInfo(book, sharedDormant = null) {
   return info;
 }
 
-// A page's room: a plain artist studio (publicly VIEWABLE, never publicly
-// editable), inktober-opted so ink/pencil enforcement + the server event state
-// ride the existing paths, with the immutable page metadata stamped on it.
-function materializeSketchbookPageRoom(book, page) {
-  const room = getRoom(page.room); // fresh server-minted code
-  room.audience = ARTIST_AUDIENCE;
+// The shared stamp of a page room: public metadata, the inktober opt-in and
+// the IMMUTABLE page back-reference. `guest` pages are ordinary PUBLIC rooms
+// (anonymous drawing is allowed there exactly like the shared Ink & Pencil
+// room) whose drawing right is held by ONE device until the book is saved;
+// account pages are artist studios, publicly viewable and never publicly
+// editable. Discovery comes from the BOOK in both cases: listed is always false.
+function stampSketchbookPageRoom(room, book, page) {
   room.listed = false;
-  const base = book.title ? `${book.title} — Day ${page.day}` : `Inktober sketchbook — Day ${page.day}`;
+  const base = book.title ? `${book.title}, Day ${page.day}` : `Inktober sketchbook, Day ${page.day}`;
   room.title = base.slice(0, 40);
-  room.ownerProfileId = book.ownerProfileId;
-  room.hostUserId = null; // no guest-host fallback in artist studios
-  room.painters = normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId));
+  room.hostUserId = null; // no guest-host fallback on a page
   room.gallery = { ...defaultGallery() }; // discovery is the BOOK's, never this room's
   room.inktober = true;
   room.sketchbook = { book: book.id, day: page.day, prompt: page.prompt, date: page.date };
+  if (isGuestBook(book)) {
+    // Unsaved: a plain public room. Anyone may watch, the device that started
+    // the book may draw (enforced per connection, see guestOwnsBook), and the
+    // room behaves like the shared public mural in every other way.
+    room.audience = 'kid_safe';
+    room.ownerProfileId = null;
+    room.painters = [];
+    room.inkOnly = false;
+  } else {
+    room.audience = ARTIST_AUDIENCE;
+    room.ownerProfileId = book.ownerProfileId;
+    room.painters = normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId));
+  }
+  return room;
+}
+
+// A page's room, materialized from the book (fresh server-minted code).
+function materializeSketchbookPageRoom(book, page) {
+  const room = stampSketchbookPageRoom(getRoom(page.room), book, page);
   persistRoom(page.room);
   return room;
 }
+
+// ---- saving an unsaved book --------------------------------------------------
+
+// Flip one page room from "unsaved public mural" to an ordinary artist studio
+// owned by the account, live or on disk. `keepRef` false detaches the room from
+// the book entirely (used only for a duplicate prompt day during a merge): the
+// artwork survives as an unlisted studio of the new owner.
+function flipPageRoomToStudio(book, page, keepRef = true) {
+  const code = page.room;
+  const live = rooms.get(code);
+  const painters = normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId));
+  if (!live) {
+    if (!existsSync(roomFile(code))) return;
+    try {
+      const path = roomFile(code);
+      const data = JSON.parse(readFileSync(path, 'utf8'));
+      data.audience = ARTIST_AUDIENCE;
+      data.listed = false;
+      data.ownerProfileId = book.ownerProfileId;
+      data.hostUserId = null;
+      data.painters = painters;
+      data.gallery = defaultGallery();
+      data.sketchbook = keepRef ? { book: book.id, day: page.day, prompt: page.prompt, date: page.date } : null;
+      writeFileSync(`${path}.tmp`, JSON.stringify(data));
+      renameSync(`${path}.tmp`, path);
+    } catch { /* the next mutation retries */ }
+    return;
+  }
+  live.audience = ARTIST_AUDIENCE;
+  live.listed = false;
+  live.ownerProfileId = book.ownerProfileId;
+  live.hostUserId = null;
+  live.painters = painters;
+  live.gallery = { ...defaultGallery() };
+  if (!keepRef) live.sketchbook = null;
+  // Everyone connected is re-roled at once: the account that just saved the
+  // book draws, everybody else (including the other tabs of the same device)
+  // becomes a viewer, exactly like any other artist studio.
+  live.users.forEach((member) => {
+    const before = member.canPaint !== false;
+    member.canPaint = canPaintIn(live, member);
+    if ((member.canPaint !== false) !== before) sendRoleChanged(live, member);
+  });
+  persistRoom(code);
+}
+
+// Hand the unsaved book to the account that saved it: the guest binding and its
+// token digest are dropped, the public flag (and every page's artwork) stays.
+function adoptGuestBook(book, pid) {
+  const device = book.guest ? book.guest.device : null;
+  book.ownerProfileId = String(pid);
+  book.artists = [String(pid)];
+  book.guest = null;
+  book.pages.sort((a, b) => a.day - b.day);
+  persistSketchbook(book);
+  if (device) guestBookByDevice.delete(`${device}:${book.event}`);
+  bookByOwnerEvent.set(`${book.ownerProfileId}:${book.event}`, book.id);
+  for (const page of book.pages) flipPageRoomToStudio(book, page);
+  return book;
+}
+
+// The account already had a book for the event: keep the artwork. Days the
+// account's book lacks move across as they are; a duplicate day keeps whichever
+// page has drawing and detaches the other into an unlisted studio, so nothing
+// painted is ever thrown away by saving a book.
+function mergeGuestBookInto(guest, target) {
+  const guestInfo = sketchbookPageInfo(guest);
+  const targetInfo = sketchbookPageInfo(target);
+  const targetDays = new Map(target.pages.map((p) => [p.day, p]));
+  for (const page of guest.pages) {
+    const dupe = targetDays.get(page.day);
+    if (!dupe) {
+      target.pages.push(page);
+      targetDays.set(page.day, page);
+      bookPageIndex.set(page.room, target.id);
+      flipPageRoomToStudio(target, page);
+      continue;
+    }
+    const guestOps = (guestInfo[page.room] || {}).ops || 0;
+    const dupeOps = (targetInfo[dupe.room] || {}).ops || 0;
+    if (guestOps > dupeOps) {
+      // The unsaved page has the drawing: it wins the day, and the account's
+      // empty page becomes an unlisted studio of the same owner.
+      target.pages = target.pages.filter((p) => p !== dupe);
+      bookPageIndex.delete(dupe.room);
+      flipPageRoomToStudio(target, dupe, false);
+      target.pages.push(page);
+      targetDays.set(page.day, page);
+      bookPageIndex.set(page.room, target.id);
+      flipPageRoomToStudio(target, page);
+    } else {
+      bookPageIndex.delete(page.room);
+      flipPageRoomToStudio(target, page, false);
+    }
+  }
+  target.pages.sort((a, b) => a.day - b.day);
+  persistSketchbook(target);
+  return target;
+}
+
+// Drop a book RECORD (indexes + file) without touching its page rooms: used
+// after a merge has already moved the pages to the account's book.
+function forgetBookRecord(book) {
+  sketchbooks.delete(book.id);
+  if (isGuestBook(book)) guestBookByDevice.delete(`${book.guest.device}:${book.event}`);
+  else if (book.ownerProfileId) bookByOwnerEvent.delete(`${book.ownerProfileId}:${book.event}`);
+  try { unlinkSync(sketchbookFile(book.id)); } catch { /* no file */ }
+}
+
+// Drop a book record (used by the merge above and the unsaved-book sweep).
+function dropBook(book) {
+  for (const page of book.pages) {
+    bookPageIndex.delete(page.room);
+    if (rooms.has(page.room)) closeRoom(page.room, 'unsaved sketchbook expired');
+    else {
+      try { unlinkSync(roomFile(page.room)); } catch { /* no file */ }
+      try { unlinkSync(historyFile(page.room)); } catch { /* no history base */ }
+      try { unlinkSync(opLogFile(page.room)); } catch { /* no op log */ }
+    }
+  }
+  forgetBookRecord(book);
+}
+
+// An unsaved book that never got a single stroke is not art, it is a stray
+// record: reap it (and its empty page rooms) after the documented window. A
+// book with ANY artwork is never swept here: artwork is never destroyed, and
+// the device can still save it later.
+function sweepUnsavedBooks(now = Date.now()) {
+  loadSketchbooks();
+  for (const book of [...sketchbooks.values()]) {
+    if (!isGuestBook(book)) continue;
+    const age = now - (Date.parse(book.guest.createdAt) || 0);
+    if (age < SKETCHBOOK_GUEST_MAX_EMPTY_MS) continue;
+    const info = sketchbookPageInfo(book);
+    const ops = book.pages.reduce((n, p) => n + ((info[p.room] || {}).ops || 0), 0);
+    if (ops > 0) continue;
+    try { dropBook(book); } catch { /* best effort */ }
+  }
+}
+const unsavedBookSweepTimer = setInterval(() => sweepUnsavedBooks(), 3600_000);
+if (unsavedBookSweepTimer.unref) unsavedBookSweepTimer.unref();
 
 // The book ACL is the single source of truth for every page room's painter
 // list. Applies to live rooms (with immediate account-wide role recompute +
@@ -10442,11 +10639,132 @@ app.get('/api/sketchbooks/mine', async (req, res) => {
   res.json({ book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
 });
 
+// ---- unsaved (guest) sketchbooks: draw now, save later -----------------------
+// A visitor with no account taps an Inktober prompt and lands in the drawing
+// experience straight away (accounts stay optional, as everywhere else): this
+// mints, or resumes, the DEVICE's UNSAVED public book for the event and answers
+// with the page room for the requested (or today's) prompt. The book is public
+// and appears in the Inktober sketchbook strip as soon as it holds real
+// drawing; only the device that started it may draw on its pages, and signing
+// up hands the whole book to the account (POST /api/sketchbooks/claim). The
+// save token is returned ONCE, on first creation, and only its SHA-256 persists.
+app.post('/api/sketchbooks/guest', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const body = req.body || {};
+  const device = sanitizeKey(body.device);
+  if (!device || device.length < 6) return res.status(400).json({ error: 'bad_device' });
+  const ip = clientIp(req);
+  if (blockFor([`dev:${device}`, `ip:${ip}`])) return res.status(403).json({ error: 'blocked' });
+  if (!rateOk(`skbguest:${device}`, 40, 60_000) || !rateOk(`skbguestip:${ip}`, 80, 60_000)) {
+    return res.status(429).json({ error: 'rate_limited' });
+  }
+  const state = inktoberState();
+  const event = SKETCHBOOK_EVENT;
+  const key = `${device}:${event}`;
+  let book = null;
+  let token = null;
+  const existingId = guestBookByDevice.get(key);
+  if (existingId) {
+    const candidate = sketchbooks.get(existingId);
+    // A resumed visit gets the SAME book (and the artwork already on it) —
+    // never a second one, and never somebody else's.
+    if (isGuestBook(candidate) && candidate.guest.device === device) book = candidate;
+    else guestBookByDevice.delete(key);
+  }
+  if (!book) {
+    book = {
+      id: mintBookId(), event, ownerProfileId: null, title: null, public: true,
+      moderationHidden: false, guest: null, artists: [], pages: [], invites: [],
+      createdAt: new Date().toISOString(),
+    };
+    token = mintClaimToken(); // shown ONCE: this is what saves the book later
+    book.guest = { device, claimHash: hashClaimToken(token), createdAt: book.createdAt };
+    while (sketchbooks.has(book.id) || existsSync(sketchbookFile(book.id))) book.id = mintBookId();
+    sketchbooks.set(book.id, book);
+    guestBookByDevice.set(key, book.id);
+    persistSketchbook(book);
+  }
+  let day = body.day;
+  if (day == null || day === '') {
+    if (state.phase === 'active' && state.day != null) day = state.day;
+    else return res.status(400).json({ error: 'need_day', message: 'Pick a prompt day to draw.' });
+  }
+  const entry = promptForDay(state.prompts, day);
+  if (!entry) return res.status(400).json({ error: 'bad_day', message: 'That day is not on the official Inktober prompt list.' });
+  let page = book.pages.find((p) => p.day === entry.day) || null;
+  if (!page) {
+    if (book.pages.length >= SKETCHBOOK_MAX_PAGES) {
+      return res.status(400).json({ error: 'book_full', message: `A sketchbook holds ${SKETCHBOOK_MAX_PAGES} pages, one per prompt day.` });
+    }
+    page = { room: genRoomCode(), day: entry.day, prompt: entry.prompt, date: entry.date, createdAt: new Date().toISOString() };
+    book.pages.push(page);
+    book.pages.sort((a, b) => a.day - b.day);
+    bookPageIndex.set(page.room, book.id); // reserve the code before it materializes
+    materializeSketchbookPageRoom(book, page);
+    persistSketchbook(book);
+  } else if (!rooms.has(page.room) && !existsSync(roomFile(page.room))) {
+    materializeSketchbookPageRoom(book, page); // reaped or never written: rematerialize
+  }
+  res.json({
+    ok: true, unsaved: true, public: true, resumed: !token, bookId: book.id,
+    page: { room: page.room, day: page.day, prompt: page.prompt, date: page.date },
+    room: page.room, url: `/join/${page.room}`,
+    ...(token ? { token } : {}),
+  });
+});
+
+// SAVE an unsaved book: the signed-in account adopts the book its device
+// started. The token proves the caller is the device that drew the pages; an
+// account that already has a book for the event keeps it and the unsaved pages
+// merge into it, so nothing painted is ever dropped by saving.
+app.post('/api/sketchbooks/claim', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const token = bearerToken(req);
+  const identity = token ? await verifyAccessToken(token) : null;
+  if (!ACCOUNTS_CONFIGURED || !identity || !identity.profileId) {
+    return res.status(401).json({ error: 'accounts_required' });
+  }
+  const pid = String(identity.profileId);
+  if (!rateOk(`skbclaim:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const raw = String((req.body || {}).token || '');
+  if (!/^sbkc_[A-Za-z0-9_-]{10,80}$/.test(raw)) return res.status(400).json({ error: 'bad_token' });
+  const hash = hashClaimToken(raw);
+  let book = null;
+  for (const candidate of sketchbooks.values()) {
+    if (guestBookMatchesClaim(candidate, hash)) { book = candidate; break; }
+  }
+  if (!book) {
+    return res.status(404).json({
+      error: 'claim_invalid',
+      message: 'We could not find the unsaved sketchbook for this browser.',
+    });
+  }
+  const existingId = bookByOwnerEvent.get(`${pid}:${book.event}`);
+  const target = existingId && sketchbooks.has(existingId) ? sketchbooks.get(existingId) : null;
+  let saved = book;
+  let merged = false;
+  if (target) {
+    mergeGuestBookInto(book, target); // pages move; the empty record goes
+    forgetBookRecord(book);
+    saved = target;
+    merged = true;
+  } else {
+    saved = adoptGuestBook(book, pid);
+  }
+  res.json({
+    ok: true, adopted: !merged, merged, bookId: saved.id,
+    book: bookPublicView(saved, sketchbookPageInfo(saved), { owner: true }),
+  });
+});
+
+
 // Redeem an invitation token. The token itself never touches disk (only its
 // SHA-256) and never appears in any response. Acceptance resolves to the
-// AUTHENTICATED account — never a name or a client-asserted id — and the
-// check → mutate → persist runs synchronously, so one token pasted into two
-// tabs at once cannot double-redeem or overflow the 6-artist cap.
+// AUTHENTICATED account, never a name or a client-asserted id, and the
+// check, mutate and persist steps run synchronously, so one token pasted into
+// two tabs at once cannot double-redeem or overflow the 6-artist cap.
 app.post('/api/sketchbooks/accept', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   loadSketchbooks();
@@ -10503,11 +10821,19 @@ app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
   if (!book || !page) return res.status(404).json({ error: 'not_a_page' });
   const identity = await sketchbookOptionalIdentity(req);
   const pid = identity && identity.profileId ? String(identity.profileId) : null;
+  // The caller's DEVICE key (?dk=), guarded AHEAD of the private-book gate: an
+  // UNSAVED book is public and its pages are outside any account ACL, so the
+  // only thing the device key decides is whether THIS caller is the one that
+  // started the book (and may therefore draw on it, and save it).
+  const rawDk = String(req.query.dk || '');
+  const dk = /^[a-zA-Z0-9_-]{6,64}$/.test(rawDk) ? rawDk : null;
+  const guestOwner = isGuestBook(book) && !!dk && book.guest.device === dk;
+  const unsaved = isGuestBook(book);
   // A moderation-hidden book's banner is owner-only; a PRIVATE book's banner
   // is the book team's (owner + artists). Everyone else gets the same 404 a
   // non-page room returns — no metadata leaks through the banner either.
-  if (book.moderationHidden && !isBookOwner(book, pid)) return res.status(404).json({ error: 'not_a_page' });
-  if (book.public !== true && !isBookOwner(book, pid) && !isBookArtist(book, pid)) {
+  if (book.moderationHidden && !isBookOwner(book, pid) && !guestOwner) return res.status(404).json({ error: 'not_a_page' });
+  if (book.public !== true && !isBookOwner(book, pid) && !isBookArtist(book, pid) && !guestOwner) {
     return res.status(404).json({ error: 'not_a_page' });
   }
   const index = book.pages.indexOf(page);
@@ -10518,6 +10844,11 @@ app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
     event: book.event,
     title: book.title,
     public: book.public === true,
+    // UNSAVED: started by a visitor with no account yet. isGuestOwner is true
+    // only for the device that started it (the caller that must be offered the
+    // "sign up to save" prompt, and the only one that can draw).
+    unsaved,
+    isGuestOwner: guestOwner,
     day: page.day,
     prompt: page.prompt,
     date: page.date,
@@ -10530,7 +10861,7 @@ app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
     nextRoom: next ? next.room : null,
     isOwner: isBookOwner(book, pid),
     isArtist: isBookArtist(book, pid),
-    canDraw: isBookOwner(book, pid) || isBookArtist(book, pid),
+    canDraw: isBookOwner(book, pid) || isBookArtist(book, pid) || guestOwner,
   });
 });
 
