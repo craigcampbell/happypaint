@@ -4947,6 +4947,11 @@ wss.on('connection', async (ws, req) => {
     // An Inktober-opted-in artist studio reports the same state and enforces
     // ink-only only while the event is active (see inkEnforcedFor).
     inkOnly: inkEnforcedFor(room),
+    // Sketchbook page rooms (saved or unsaved). The studio mounts the page
+    // banner for BOTH: an UNSAVED page is a kid_safe room, which the audience
+    // alone cannot tell apart from an ordinary public mural.
+    sketchbook: !!room.sketchbook,
+    sketchbookUnsaved: !!(room.sketchbook && isGuestBook(sketchbookById(room.sketchbook.book))),
     event: (room.inkOnly || (room.inktober === true && (isArtistRoom(room) || !!room.sketchbook))) ? inktoberState() : null,
     wetCanvas: !!room.wetCanvas,
     brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
