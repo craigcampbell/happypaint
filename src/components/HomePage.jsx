@@ -11,6 +11,7 @@ import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth"
 import { HYPES } from "../utils/hypes";
 import "../seasonal.css";
 import "../home-inktober.css";
+import "../sketchbook.css";
 
 const normalizeCode = (raw) => (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
@@ -120,6 +121,8 @@ export default function HomePage({ onNavigate }) {
   // wall strip below carries the section (no art is ever mislabeled).
   const [dailyPosts, setDailyPosts] = useState([]);
   const [inktoberPosts, setInktoberPosts] = useState([]);
+  // New Inktober sketchbooks (explicit public opt-in books with real drawing).
+  const [skbBooks, setSkbBooks] = useState([]);
   // The Inktober event state (phase/day/prompt) drives the seasonal banner.
   const [inktober, setInktober] = useState(null);
   // The Daily Challenge: today's prompt + a countdown tick.
@@ -329,6 +332,21 @@ export default function HomePage({ onNavigate }) {
     };
   }, []);
 
+  // New Inktober sketchbooks: explicit-opt-in books with real drawing,
+  // discoverable automatically. Silent on failure (the strip just hides).
+  useEffect(() => {
+    let active = true;
+    fetch("/api/sketchbooks?event=inktober-2026&limit=6", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active) setSkbBooks(Array.isArray(d?.books) ? d.books : []);
+      })
+      .catch(() => { /* strip just doesn't render */ });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Today's challenge. Refetched when the countdown crosses midnight (the tick
   // effect below re-runs this when daily.endsAt passes).
   useEffect(() => {
@@ -442,7 +460,16 @@ export default function HomePage({ onNavigate }) {
           </div>
           <div className="seasonal-banner-actions">
             {inktober.phase === "active" ? (
-              <a href="/join/INKTOBER" onClick={(e) => follow(e, "/join/INKTOBER")}>Draw today&rsquo;s prompt →</a>
+              <a href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>Draw it in your sketchbook →</a>
+            ) : null}
+            {inktober.phase === "active" ? (
+              <a
+                href="/join/INKTOBER"
+                className="seasonal-banner-quiet"
+                onClick={(e) => follow(e, "/join/INKTOBER")}
+              >
+                Shared Ink &amp; Pencil room →
+              </a>
             ) : null}
             <a
               href="/inktober"
@@ -483,19 +510,19 @@ export default function HomePage({ onNavigate }) {
             (() => {
               // Phase-aware card content. Only the active window claims a
               // "today" — the state above is dropped the moment a refresh past
-              // the announced rollover fails, so this is never stale. Active
-              // clicks land anonymously in the shared INKTOBER room (server
-              // field, falling back to the well-known code); the other phases
-              // lead to the event page instead.
+              // the announced rollover fails, so this is never stale. The
+              // active card's draw CTA opens the visitor's OWN sketchbook
+              // (create/resume with sign-in recovery); the shared public
+              // INKTOBER room stays one quiet link below, exactly as before.
               const phase = inktober.phase;
               const card = {
                 active: {
                   title: "Inktober\nis here!",
                   promptLabel: "Today\u2019s prompt",
                   promptText: inktober.prompt,
-                  cta: "Draw yours today!",
-                  href: `/join/${inktober.room || "INKTOBER"}`,
-                  label: `Inktober day ${inktober.day} of 31 — today\u2019s prompt is \u201C${inktober.prompt}\u201D. Join the shared Ink & Pencil room and draw yours.`,
+                  cta: "Draw it in your sketchbook!",
+                  href: "/sketchbook",
+                  label: `Inktober day ${inktober.day} of 31 — today\u2019s prompt is \u201C${inktober.prompt}\u201D. Open your own Inktober sketchbook and draw today's page.`,
                 },
                 upcoming: {
                   title: "Inktober\nis coming!",
@@ -552,6 +579,17 @@ export default function HomePage({ onNavigate }) {
             </button>
           )}
         </section>
+
+        {inktober?.phase === "active" ? (
+          <button
+            type="button"
+            className="home-together-link home-inktober-shared-link"
+            onClick={() => join("INKTOBER")}
+            aria-label="Draw together in the shared Ink and Pencil room"
+          >
+            or draw together in the shared Ink &amp; Pencil room →
+          </button>
+        ) : null}
 
         <p className="home-feature-line" aria-label="Things you can do in Drawesome">
           Open Studio <span aria-hidden="true">·</span> Coloring pages <span aria-hidden="true">·</span> Shared rooms <span aria-hidden="true">·</span> Drawing games
@@ -769,6 +807,34 @@ export default function HomePage({ onNavigate }) {
                   </span>
                 ))}
               </button>
+            </div>
+          ) : null}
+
+          {skbBooks.length > 0 ? (
+            <div className="home-prompt-wall" data-kind="inktober-sketchbooks">
+              <div className="home-prompt-wall-head">
+                <h3>📖 New Inktober sketchbooks</h3>
+                <button type="button" onClick={() => onNavigate("/sketchbook")}>Start yours →</button>
+              </div>
+              <div className="skb-card-grid">
+                {skbBooks.slice(0, 6).map((b) => (
+                  <button
+                    type="button"
+                    key={b.id}
+                    className="skb-card"
+                    onClick={() => onNavigate(`/sketchbook/${b.id}`)}
+                    aria-label={`Flip through ${b.title || "an Inktober sketchbook"}`}
+                  >
+                    <span className="skb-card-title">{b.title || "Inktober sketchbook"}</span>
+                    <span className="skb-card-days">
+                      {b.days.slice(0, 8).map((d) => <span key={d}>Day {d}</span>)}
+                    </span>
+                    <span className="skb-card-meta">
+                      {b.drawnPages} page{b.drawnPages === 1 ? "" : "s"} drawn · {b.artistCount} artist{b.artistCount === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
 

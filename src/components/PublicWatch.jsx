@@ -62,10 +62,28 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
   const [loaded, setLoaded] = useState(false);
   const [socketTitle, setSocketTitle] = useState("");
   const [ops, setOps] = useState(0); // ops the canvas has replayed (any art at all?)
+  // If this room is a sketchbook page, the book it belongs to (for the
+  // flip-through link); null = ordinary room, checked once per room.
+  const [bookLink, setBookLink] = useState(null);
 
   // Stable: LiveRoomCanvas re-runs its whole socket effect if this identity
   // changes, so a fresh arrow here would reconnect the viewer on every render.
   const onActivity = useCallback((count) => setOps(count || 0), []);
+
+  // Sketchbook page? One cheap probe — a 404 means an ordinary room.
+  useEffect(() => {
+    if (!code) return undefined;
+    let active = true;
+    setBookLink(null);
+    fetch(`/api/sketchbooks/by-room/${encodeURIComponent(code)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!active || !d?.bookId) return;
+        setBookLink({ bookId: d.bookId, day: d.day, prompt: d.prompt, pageIndex: d.pageIndex, pageCount: d.pageCount });
+      })
+      .catch(() => { /* ordinary room */ });
+    return () => { active = false; };
+  }, [code]);
 
   useEffect(() => {
     if (!code) return undefined;
@@ -188,6 +206,16 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
           <span aria-hidden="true">👀</span> You’re watching as <strong>{alias}</strong> — no sign-in, nothing saved.
           Watching is read-only: you can’t draw or chat from here.
         </p>
+
+        {bookLink ? (
+          <p style={{ margin: "0 0 14px", color: "#6b4a1f", fontWeight: 600 }}>
+            <span aria-hidden="true">📖</span> This is page {bookLink.pageIndex + 1} of an Inktober sketchbook
+            (Day {bookLink.day} — “{bookLink.prompt}”).{" "}
+            <a href={`/sketchbook/${bookLink.bookId}`} onClick={(e) => follow(e, `/sketchbook/${bookLink.bookId}`, onNavigate)}>
+              Flip through the whole book →
+            </a>
+          </p>
+        ) : null}
 
         {status === "blocked" ? (
           <section

@@ -20,6 +20,9 @@ const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const PublicWatch = lazy(() => import("./components/PublicWatch"));
 const WallPage = lazy(() => import("./components/WallPage"));
 const InktoberPage = lazy(() => import("./components/InktoberPage"));
+const SketchbookPage = lazy(() => import("./components/SketchbookPage"));
+const SketchbookStartPage = lazy(() => import("./components/SketchbookStartPage"));
+const SketchbookInvitePage = lazy(() => import("./components/SketchbookInvitePage"));
 const PlanetPage = lazy(() => import("./components/PlanetPage"));
 const ArtistGalleryRoute = lazy(() => import("./components/ArtistGalleryRoute"));
 
@@ -120,6 +123,18 @@ export default function Router() {
     page = <ArtistGalleryRoute onNavigate={navigate} />;
   } else if (path.startsWith("/wall")) {
     page = <WallPage onNavigate={navigate} initialPostId={(path.split("/")[2] || "").slice(0, 64)} />;
+  } else if (path.startsWith("/sketchbook/invite/")) {
+    // Invitation acceptance: the token rides the URL (its only client-side
+    // home besides the owner's one-time mint view).
+    const token = decodeURIComponent(path.split("/")[3] || "").slice(0, 96);
+    page = <SketchbookInvitePage token={token} onNavigate={navigate} />;
+  } else if (path.startsWith("/sketchbook/")) {
+    // The public book reader — anyone may flip through; drawing stays ACL'd.
+    const id = (path.split("/")[2] || "").replace(/[^a-z0-9_]/gi, "").slice(0, 24);
+    page = <SketchbookPage key={`skb-${id}`} bookId={id} onNavigate={navigate} />;
+  } else if (path.startsWith("/sketchbook")) {
+    // Own-sketchbook entry: create/resume with the sign-in return path.
+    page = <SketchbookStartPage onNavigate={navigate} />;
   } else if (path.startsWith("/inktober")) {
     page = <InktoberPage onNavigate={navigate} />;
   } else if (path.startsWith("/planet") || path.startsWith("/paintjar")) {

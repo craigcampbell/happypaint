@@ -96,6 +96,56 @@ export function mapPenPressure(cal, raw) {
   return Math.min(1, Math.max(0.02, mapped));
 }
 
+// ---------------------------------------------------------------------------
+// The getPoint pressure seam (App.jsx): what pressure does ONE pointer sample
+// contribute to a stroke?
+//
+// A pen sample ALWAYS resolves through the adaptive band above — even when
+// its pressure is zero (including pen-down/up boundary samples). Zero must
+// not select the mouse/finger 0.65 fallback. Physical-device pressure curves
+// require device verification; synthetic events test this routing contract.
+// Mouse and fingers report UA constants (0.5/0), so only
+// they use the velocity synthesizer (#63): slow, deliberate = heavy; fast
+// flicks = light, EMA-smoothed so width breathes instead of flickering.
+
+export function createVelocityPressure() {
+  return { lastX: 0, lastY: 0, lastT: null, ema: null, lastP: 0.65 };
+}
+
+// Velocity-pressure synthesis starts fresh on every stroke.
+export function resetVelocityPressure(vel) {
+  vel.lastT = null;
+  vel.ema = null;
+}
+
+// Resolve one sample's stroke pressure. `event` needs pointerType / pressure /
+// timeStamp; `penCal` is the adaptive calibration (mutated by mapPenPressure)
+// and `velocity` the synthesizer state from createVelocityPressure(). Returns
+// the un-quantized 0.02..1 value — callers quantize for the wire.
+export function resolvePointPressure(event, { worldX, worldY, penCal, velocity, now }) {
+  if (event.pointerType === "pen") {
+    return mapPenPressure(penCal, event.pressure);
+  }
+  const vel = velocity;
+  const t = event.timeStamp || now;
+  if (vel.lastT == null || t > vel.lastT) {
+    if (vel.lastT == null) {
+      vel.lastP = 0.65; // first point of a stroke: neutral baseline
+    } else {
+      const speed = Math.hypot(worldX - vel.lastX, worldY - vel.lastY) / Math.max(1, t - vel.lastT);
+      vel.ema = vel.ema == null ? speed : vel.ema * 0.7 + speed * 0.3;
+      vel.lastP = Math.min(0.9, Math.max(0.3, 0.9 - vel.ema * 0.055));
+    }
+    vel.lastX = worldX;
+    vel.lastY = worldY;
+    vel.lastT = t;
+  }
+  // t <= lastT: the same event seen twice (cursor relay + coalesced draw
+  // replay) or an older coalesced sibling — reuse the last synthesis rather
+  // than poisoning the EMA with zero/negative dt samples.
+  return vel.lastP;
+}
+
 // True when this pen contact came from the eraser end of the stylus.
 export function isEraserPointer(event) {
   if (!event || event.pointerType !== "pen") {

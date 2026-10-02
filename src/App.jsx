@@ -164,6 +164,7 @@ import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, norm
 import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, renderSoundtrackSlice } from "./utils/soundtrack";
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
 import ShareInviteSheet from "./components/ShareInviteSheet";
+import SketchbookRoomBanner from "./components/SketchbookRoomBanner";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
 import ColorWheelPicker from "./components/ColorWheelPicker";
@@ -172,10 +173,12 @@ import { loadInputPrefs, saveInputPrefs, pressureFlagsFor } from "./utils/inputP
 import { useMultiplayer } from "./hooks/useMultiplayer";
 import { useLayoutTier, resolveLayoutTier } from "./hooks/useLayoutTier";
 import {
+  createVelocityPressure,
   isEraserPointer,
   isSecondaryButtonPointer,
   loadPenCalibration,
-  mapPenPressure,
+  resetVelocityPressure,
+  resolvePointPressure,
   savePenCalibration,
 } from "./utils/penInput";
 import { extractCanvasPalette, resolvePreviewTheme } from "./utils/artPreview";
@@ -860,7 +863,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const remoteSweepRef = useRef(0); // idle-commit interval id (runs only while strokes are open)
   // Velocity-synthesized pressure state (#63) for devices with no real pen
   // pressure (mouse/finger). Reset at every stroke start.
-  const velocityRef = useRef({ lastX: 0, lastY: 0, lastT: null, ema: null, lastP: 0.65 });
+  const velocityRef = useRef(createVelocityPressure());
   const remoteCursorsRef = useRef(new Map()); // userId -> { x, y, name, color, drawing, ts }
   const cursorSentAtRef = useRef(0);
   const cursorSigRef = useRef(""); // last pumped-cursor signature (skip idle re-renders)
@@ -1249,6 +1252,29 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
   const [wallPostDraft, setWallPostDraft] = useState(null);
   const [showShareInvite, setShowShareInvite] = useState(false); // "Invite friends" sheet (copy / share / Instagram / X)
+  // Inktober sketchbook page rooms (docs/SKETCHBOOKS-CONTRACT.md): the banner
+  // under the room bar resolves the pinned page metadata ONCE per room/auth
+  // and hands it up, so the invite sheet pins its card to THIS page's
+  // server-stamped year/day/prompt — never the rotating daily prompt. Null =
+  // ordinary room (or unresolved/failed lookup): the sheet falls back to the
+  // live event. App remounts per room (Router keys on the room code), and the
+  // banner re-reports on auth changes, so this can never go stale.
+  const [sketchbookPageMeta, setSketchbookPageMeta] = useState(null);
+  const handleSketchbookPageChange = useCallback((meta) => {
+    setSketchbookPageMeta((prev) => {
+      const a = prev ? JSON.stringify(prev) : null;
+      const b = meta ? JSON.stringify(meta) : null;
+      return a === b ? prev : meta; // identical re-report: no re-render churn
+    });
+  }, []);
+  // The studio has no Router onNavigate prop; room/page hops are full loads
+  // (the same pattern the room switcher and Part-hops already use).
+  const navigateToPath = useCallback((path) => { window.location.href = path; }, []);
+  // Sketchbook page rooms: chat and the shared animation room mode are OFF
+  // (performance) — the server refuses them, and the client hides every
+  // entry point (chat overlay/panel/pill, quickbar chat button, floating
+  // vote card, host animation toggle). Ordinary rooms are untouched.
+  const sketchbookPage = Boolean(sketchbookPageMeta?.isSketchbook);
   const [remixSource, setRemixSource] = useState(null);
   // Wet canvas (shared paint-mixing mode). The ref mirrors state for the
   // pointer handlers: startStroke captures it INTO the op settings, so a
@@ -3607,7 +3633,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const world = screenToWorld(viewRef.current, cssX, cssY);
 
     let rawPressure;
-    if (event.pointerType === "pen" && event.pressure > 0) {
+    if (event.pointerType === "pen") {
       // Real pen pressure, stretched to the band THIS stylus actually reports
       // (utils/penInput): Apple Pencil floors near ~0.03 and rarely passes
       // ~0.75 in normal drawing; a Wacom Cintiq fills the band to 1.0. The
@@ -3615,11 +3641,21 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // heavier pressure, then sticks per device. Without the stretch a hard
       // press only reached ~3/4 of the brush's size range and felt dead; with
       // a fixed Pencil band a Wacom would max out at three-quarter pressure.
+      // Zero-pressure pen samples must stay on the pen band floor rather
+      // than falling through to the mouse/finger velocity synthesizer's
+      // 0.65 baseline. This also handles pen-down/up boundary samples; the
+      // physical device's pressure curve remains a separate concern.
       if (!penCalRef.current) {
         penCalRef.current = loadPenCalibration();
       }
       const cal = penCalRef.current;
-      rawPressure = mapPenPressure(cal, event.pressure);
+      rawPressure = resolvePointPressure(event, {
+        worldX: world.x,
+        worldY: world.y,
+        penCal: cal,
+        velocity: velocityRef.current,
+        now: performance.now(),
+      });
       if (cal.dirty && !penCalSaveRef.current) {
         penCalSaveRef.current = window.setTimeout(() => {
           penCalSaveRef.current = 0;
@@ -3631,24 +3667,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // constant too — the old hardcoded 0.62/0.72 fallbacks): synthesize it
       // from stroke speed (#63) — slow, deliberate = heavy; fast flicks =
       // light. EMA-smoothed so width breathes instead of flickering.
-      const vel = velocityRef.current;
-      const t = event.timeStamp || performance.now();
-      if (vel.lastT == null || t > vel.lastT) {
-        if (vel.lastT == null) {
-          vel.lastP = 0.65; // first point of a stroke: neutral baseline
-        } else {
-          const speed = Math.hypot(world.x - vel.lastX, world.y - vel.lastY) / Math.max(1, t - vel.lastT);
-          vel.ema = vel.ema == null ? speed : vel.ema * 0.7 + speed * 0.3;
-          vel.lastP = Math.min(0.9, Math.max(0.3, 0.9 - vel.ema * 0.055));
-        }
-        vel.lastX = world.x;
-        vel.lastY = world.y;
-        vel.lastT = t;
-      }
-      // t <= lastT: the same event seen twice (cursor relay + coalesced draw
-      // replay) or an older coalesced sibling — reuse the last synthesis
-      // rather than poisoning the EMA with zero/negative dt samples.
-      rawPressure = vel.lastP;
+      rawPressure = resolvePointPressure(event, {
+        worldX: world.x,
+        worldY: world.y,
+        penCal: penCalRef.current,
+        velocity: velocityRef.current,
+        now: performance.now(),
+      });
     }
     // Quantize to 2 decimals: plenty for brush dynamics, smaller op payloads.
     const pressure = Math.round(rawPressure * 100) / 100;
@@ -4194,8 +4219,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         return;
       }
       // Velocity-pressure synthesis (#63) starts fresh on every stroke.
-      velocityRef.current.lastT = null;
-      velocityRef.current.ema = null;
+      resetVelocityPressure(velocityRef.current);
       lastPointRef.current = getPoint(event.nativeEvent);
       // Smudge + goo edit LAYER 0 even when another layer is active — snapshot
       // the full stack in that case so undo restores the right layer's pixels.
@@ -11275,7 +11299,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             Invite friends
           </button>
 
-          {roomAudience && roomAudience !== "kid_safe" && isRoomHost && !storybook ? (
+          {roomAudience && roomAudience !== "kid_safe" && isRoomHost && !storybook && !sketchbookPage ? (
             <button
               type="button"
               className={`mp-wet-toggle mp-anim-toggle${roomAnimation ? " is-on" : ""}`}
@@ -11465,6 +11489,29 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ) : null}
           </div>
         </div>
+
+        {/* Inktober sketchbook page rooms: the pinned prompt banner lives
+            IN-FLOW between the room bar and the canvas stage, so it is
+            visible on desktop AND mobile without ever overlaying (blocking)
+            the canvas. Renders nothing for ordinary rooms. */}
+        {roomAudience === "artist_public" ? (
+          <SketchbookRoomBanner
+            roomCode={roomId}
+            session={session}
+            onNavigate={navigateToPath}
+            onPageChange={handleSketchbookPageChange}
+          />
+        ) : roomId === "INKTOBER" ? (
+          <section className="skb-banner-wrap" aria-label="Start an Inktober sketchbook">
+            <div className="skb-banner">
+              <strong>Make this prompt your own.</strong>
+              <button type="button" className="skb-banner-primary" onClick={() => navigateToPath("/sketchbook")}>
+                Draw this prompt in your own sketchbook →
+              </button>
+              <span>Choose private or public. Invite up to five artists; share your public pages with everyone.</span>
+            </div>
+          </section>
+        ) : null}
 
         <div className="canvas-stage">
           <div className={`canvas-paper${roomSymmetry.copies > 1 ? " is-symmetry" : ""}`}>
@@ -12186,9 +12233,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         ) : null}
 
         {/* Canvas Chat — Twitch × iMessage overlay (finger-paint room: none —
-            its audience can't read yet). Ambient bubbles float over the art;
+            its audience can't read yet; sketchbook pages: none — chat is off
+            for performance). Ambient bubbles float over the art;
             the open panel carries the room row, votes, and participants. */}
-        {roomFingerPaint ? null : (
+        {roomFingerPaint || sketchbookPage ? null : (
           <CanvasChat
             open={showChat}
             onOpenChange={setShowChat}
@@ -12334,7 +12382,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
         {/* A live theme vote must be visible even with the chat panel closed —
             the same card floats over the canvas until the vote resolves. */}
-        {roomVote && !showChat && !roomFingerPaint ? (
+        {roomVote && !showChat && !roomFingerPaint && !sketchbookPage ? (
           <div className="vote-card cc-vote-floating" role="group" aria-label="Theme vote">
             <div className="vote-card-head">
               <span>🗳️ Pick the next theme!</span>
@@ -13171,7 +13219,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           <span className="qb-ico" aria-hidden="true">🎨</span>
           <span className="qb-label">Tools</span>
         </button>
-        {roomFingerPaint ? null : (
+        {roomFingerPaint || sketchbookPage ? null : (
           <button
             type="button"
             className={showChat ? "qb-btn is-active" : "qb-btn"}
@@ -13425,6 +13473,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           getArt={getInviteArt}
           onClose={() => setShowShareInvite(false)}
           showToast={showToast}
+          inktoberPage={sketchbookPageMeta?.year
+            ? { year: sketchbookPageMeta.year, day: sketchbookPageMeta.day, prompt: sketchbookPageMeta.prompt }
+            : null}
         />
       ) : null}
 

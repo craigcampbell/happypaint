@@ -36,6 +36,14 @@ import {
   isArtistRoom, defaultGallery, normalizeGallery, normalizePainters,
   validateArtistFields, canPaintIn, roomProfileFor, galleryCard, galleryMatches,
 } from './server/artistRooms.js';
+import {
+  SKETCHBOOK_EVENT, SKETCHBOOK_MAX_ARTISTS, SKETCHBOOK_MAX_PAGES,
+  SKETCHBOOK_MAX_ACTIVE_INVITES, SKETCHBOOK_TITLE_MAX,
+  mintBookId, mintInviteToken, hashInviteToken,
+  normalizeSketchbookRef, normalizeBook, promptForDay,
+  isBookOwner, isBookArtist, bookHasCapacity,
+  bookPublicView, bookGalleryEligible, bookGalleryCard,
+} from './server/sketchbooks.js';
 import { questMissions, questSetFor } from './server/questDeck.js';
 import { defaultStorybook, storybookPrompt } from './server/storybookPrompts.js';
 
@@ -1170,6 +1178,20 @@ function analyticsSnapshot() {
 // joiners always replay the full mural.
 const ROOM_DIR = process.env.ROOM_DIR || join(DATA_DIR, '.rooms');
 const persistTimers = new Map();
+// Sketchbook book store (docs/SKETCHBOOKS-CONTRACT.md). The maps are declared
+// THIS early because getRoom / genRoomCode / the idle sweep consult them, and
+// getRoom already runs during module evaluation (seedFeaturedRooms) — long
+// before the sketchbook route section at the bottom of this file. Only the
+// declarations live here; the section's functions (hoisted) stay put.
+const SKETCHBOOK_DIR = join(DATA_DIR, '.sketchbooks');
+const sketchbooks = new Map(); // id -> normalized book
+let sketchbooksLoaded = false;
+const bookByOwnerEvent = new Map(); // `${profileId}:${event}` -> book id
+// Page room code -> book id: the RESERVATION record. A referenced page code
+// can never be re-minted for or squatted by a generic room — even while the
+// page's room file is (temporarily) missing, getRoom rematerializes the page
+// from this index instead of loading a blank ownable room.
+const bookPageIndex = new Map();
 function roomFile(roomId) {
   return join(ROOM_DIR, `${String(roomId).replace(/[^A-Z0-9_-]/gi, '').slice(0, 32)}.json`);
 }
@@ -1182,6 +1204,16 @@ function storedRoomAudience(roomId) {
     if (data && typeof data.audience === 'string') return data.audience;
     // Same default getRoom applies: an undecided audience is private.
     return roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends';
+  } catch {
+    return null;
+  }
+}
+// The persisted sketchbook back-reference WITHOUT materializing the room —
+// same lightweight probe as storedRoomAudience, for read-side book gates
+// (spectate/wall) that must decide BEFORE getRoom runs.
+function storedSketchbookRef(roomId) {
+  try {
+    return normalizeSketchbookRef(JSON.parse(readFileSync(roomFile(roomId), 'utf8')).sketchbook);
   } catch {
     return null;
   }
@@ -1523,6 +1555,9 @@ function loadRoom(roomId) {
       painters: normalizePainters(data.painters),
       gallery: normalizeGallery(data.gallery),
       inktober: data.inktober === true,
+      // Sketchbook page back-reference (server/sketchbooks.js): the book id +
+      // immutable server-stamped day/prompt/date for this page's room.
+      sketchbook: normalizeSketchbookRef(data.sketchbook),
       // Bookkeeping for retention + the admin console: a room loaded from disk
       // keeps its real idle clock instead of looking brand new after a restart.
       fromDisk: true,
@@ -1530,7 +1565,7 @@ function loadRoom(roomId) {
       lastSaved: roomLastSavedMs(roomId, data),
     };
   } catch {
-    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [], painters: [], gallery: defaultGallery(), inktober: false };
+    return { history, historyOnDisk: stored.onDisk, sheetId: null, ownerProfileId: null, coHosts: [], mutedProfileIds: [], locked: false, title: null, audience: null, listed: null, hiddenOpIds: [], userSeconds: 0, chat: [], wetCanvas: false, brushMode: 'realistic', customPrompt: null, frames: null, scenes: null, animation: false, game: false, phone: false, dailyDate: null, productionId: null, symmetry: null, quests: null, storybook: null, remixSource: null, soundtrack: null, mentionKeys: [], painters: [], gallery: defaultGallery(), inktober: false, sketchbook: null };
   }
 }
 // Write-behind saves: rooms currently mid-write, and rooms whose save fired
@@ -1631,6 +1666,9 @@ async function saveRoomNow(roomId) {
         painters: Array.isArray(room.painters) ? room.painters : [],
         gallery: normalizeGallery(room.gallery),
         inktober: room.inktober === true,
+        // Sketchbook page back-reference: which book this room is a page of,
+        // with the page's immutable prompt metadata.
+        sketchbook: room.sketchbook && typeof room.sketchbook === 'object' ? room.sketchbook : null,
         opCount: room.history.length, // the idle sweep sizes a room's TTL by this
         createdAt: room.createdAt || 0,
         savedAt: Date.now(),
@@ -2298,8 +2336,39 @@ function dailyPromptFor(featured) {
   return featured.prompts[day % featured.prompts.length];
 }
 
+// A sketchbook page whose room file is missing is NOT a blank canvas up for
+// grabs: the book's page list (bookPageIndex) is the reservation record, so
+// the page rematerializes with its book-stamped shape (owner, painter ACL,
+// inktober, back-reference) instead of loading as a generic, ownable room
+// under the same code. Re-entrancy-guarded: materializeSketchbookPageRoom
+// itself calls getRoom for the same code while stamping it.
+const rematerializingPages = new Set();
+function rematerializeSketchbookPage(roomId) {
+  if (rematerializingPages.has(roomId)) return false;
+  loadSketchbooks();
+  const bookId = bookPageIndex.get(roomId);
+  if (!bookId) return false;
+  const book = sketchbooks.get(bookId);
+  const page = book ? book.pages.find((p) => p.room === roomId) : null;
+  if (!page) return false;
+  rematerializingPages.add(roomId);
+  try {
+    materializeSketchbookPageRoom(book, page);
+    return true;
+  } catch {
+    return false; // best-effort — fall through to the ordinary fresh-room path
+  } finally {
+    rematerializingPages.delete(roomId);
+  }
+}
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
+    // Missing room file + a live book reference → the page rematerializes
+    // (fully stamped, already in the live map) rather than loading blank.
+    if (!existsSync(roomFile(roomId)) && rematerializeSketchbookPage(roomId)) {
+      return rooms.get(roomId);
+    }
     const saved = loadRoom(roomId);
     // Audience default: the legacy MAIN room is the public hall (kid_safe); a
     // room first reached by an invite code is private (friends). A room created
@@ -2309,7 +2378,7 @@ function getRoom(roomId) {
       && !RETIRED_ROOM_CODES.has(roomId); // retired seasonal rooms never list
     // Which frame/scene layer caps apply. Public rooms can never opt into the
     // film strip, so the animation cap only ever applies to a private room.
-    const animEnabled = ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation);
+    const animEnabled = !saved.sketchbook && (ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation));
     // Public rooms carry a lower cap than the global file cap — apply it on load
     // too, so a file written under the old cap doesn't reload oversized. Films
     // are capped at INGEST instead: a front trim would erase frame 1, so a
@@ -2403,6 +2472,7 @@ function getRoom(roomId) {
       painters: Array.isArray(saved.painters) ? saved.painters : [],
       gallery: saved.gallery && typeof saved.gallery === 'object' ? saved.gallery : defaultGallery(),
       inktober: saved.inktober === true,
+      sketchbook: saved.sketchbook && typeof saved.sketchbook === 'object' ? saved.sketchbook : null,
       paintRequests: new Map(),
       userSeconds: saved.userSeconds || 0, // cumulative engagement, for auto-close TTL
       wetCanvas: !!saved.wetCanvas, // wet-canvas mixing toggle (persisted)
@@ -2690,6 +2760,11 @@ function allowedIdleMs(room) {
   const ops = Number.isFinite(room.opCount) ? room.opCount : (Array.isArray(room.history) ? room.history.length : 0);
   const userSeconds = room.userSeconds || 0;
   const bonus = ops * AUTO_CLOSE_PER_OP_MS + userSeconds * AUTO_CLOSE_PER_USER_SEC_MS;
+  // Sketchbook page rooms are chapters of a permanent book: the book's page
+  // list references them forever, so the idle sweep must NEVER reap one
+  // (a reaped page would silently lose its artwork). The only removal path
+  // is admin delete, which drops the book's page reference first.
+  if (room.sketchbook) return Infinity;
   // Artist studios are protected from the ordinary short sweeps: the room IS
   // the artist's posted work, so it runs on the long documented retention
   // scale (bounded by creation quotas + this TTL, never unbounded).
@@ -2789,7 +2864,7 @@ function autoCloseSweep() {
       const data = JSON.parse(readFileSync(path, 'utf8'));
       if (data.productionId && getProduction(data.productionId)) continue; // only live films are exempt
       const lastSaved = roomLastSavedMs(id, data);
-      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null, audience: typeof data.audience === 'string' ? data.audience : null };
+      const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null, audience: typeof data.audience === 'string' ? data.audience : null, sketchbook: normalizeSketchbookRef(data.sketchbook) };
       if (now - lastSaved > allowedIdleMs(pseudo)) {
         unlinkSync(path);
         try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
@@ -4317,6 +4392,20 @@ wss.on('connection', async (ws, req) => {
   // discoverability, not authorization — and materialize from disk on demand.
   if (url.searchParams.get('spectate') === '1') {
     let live = rooms.get(roomId);
+    // Book access is enforced BEFORE any materialization or handshake: a
+    // PRIVATE or moderation-hidden book's pages have NO public spectator
+    // surface — spectators are anonymous and can never prove book membership
+    // (the book's owner/artists watch through ordinary member joins, gated
+    // below). Reads the persisted back-reference without getRoom.
+    const skbRef = live ? live.sketchbook : (existsSync(roomFile(roomId)) ? storedSketchbookRef(roomId) : null);
+    if (skbRef) {
+      const book = sketchbookById(skbRef.book);
+      if (!book || book.moderationHidden || book.public !== true) {
+        ws.send(JSON.stringify({ type: 'room_blocked', reason: book?.moderationHidden ? 'moderation_hidden' : 'book_private' }));
+        ws.close(1008, 'book not public');
+        return;
+      }
+    }
     if (!live && existsSync(roomFile(roomId)) && storedRoomAudience(roomId) === ARTIST_AUDIENCE) {
       // Only an artist studio materializes for a viewer — a private room file
       // is never pulled into the live map by a spectate probe.
@@ -4675,6 +4764,27 @@ wss.on('connection', async (ws, req) => {
     ws.send(JSON.stringify({ type: 'blocked', reason: blockHit.reason || null }));
     ws.close(1008, 'blocked');
     return;
+  }
+
+  // Book access gate, ahead of any handshake state: a moderation-HIDDEN or
+  // PRIVATE book's page rooms admit the book's owner + artists ONLY — guests
+  // and non-artist accounts can no longer join-and-watch. Public books keep
+  // the ordinary artist-studio model (anyone watches, the ACL draws), the
+  // book's own team is never locked out of moderation/management, and
+  // everything reopens cleanly on restore/republish.
+  if (room.sketchbook) {
+    const book = sketchbookById(room.sketchbook.book);
+    if (!book || book.moderationHidden || book.public !== true) {
+      const pid = identity && identity.profileId ? String(identity.profileId) : null;
+      const teamMember = book
+        ? isBookOwner(book, pid) || isBookArtist(book, pid)
+        : !!pid && (pid === room.ownerProfileId || (room.painters || []).includes(pid));
+      if (!teamMember) {
+        ws.send(JSON.stringify({ type: 'room_blocked', reason: book?.moderationHidden ? 'moderation_hidden' : 'book_private' }));
+        ws.close(1008, 'book not public');
+        return;
+      }
+    }
   }
 
   // Private (invite-only) rooms require a registered account when this deploy
@@ -5499,6 +5609,13 @@ wss.on('connection', async (ws, req) => {
         cancelOwnWipeRequest(room, id, user, Number(data.id));
         break;
       case 'chat': {
+        // Sketchbook page rooms are canvas-only: no chat book-wide — 31-page
+        // books stay light, and a page has nothing social to moderate. The
+        // sender is told why; nothing is buffered, audited or relayed.
+        if (room.sketchbook) {
+          if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'book_page' }));
+          break;
+        }
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
         if (user.muted) break; // a host muted this user
         // A message is text, a doodle reply, or both — never neither.
@@ -5612,6 +5729,7 @@ wss.on('connection', async (ws, req) => {
       // (so a reconnect can still un-react) but only COUNTS ever leave the
       // server — see the chat_history projection.
       case 'chat_react': {
+        if (room.sketchbook) break; // page rooms have no chat to react to
         if (room.fingerPaint) break;
         if (user.muted) break;
         const emoji = String(data.emoji || '');
@@ -6817,6 +6935,35 @@ wss.on('connection', async (ws, req) => {
         if (!user.profileId || user.profileId !== room.ownerProfileId) break;
         const target = room.users.get(String(data.targetId || ''));
         if (!target || !target.verified || !target.profileId || target.profileId === room.ownerProfileId) break;
+        // Sketchbook page rooms: the direct room approval must not bypass the
+        // BOOK's invitation model or its 6-artist cap — the grant goes through
+        // the book (and lands on every page at once) instead of this room
+        // alone. The check → mutate → persist is synchronous: two approves in
+        // flight cannot overflow the cap.
+        if (room.sketchbook) {
+          const book = sketchbookById(room.sketchbook.book);
+          // Fail CLOSED when the book record is missing: a direct-room grant
+          // here would bypass the invitation model + 6-artist cap in exactly
+          // the state that lost its enforcement data — refuse, change nothing.
+          if (!book) {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'paint_requested', status: 'book_missing' }));
+            break;
+          }
+          if (isBookArtist(book, target.profileId)) {
+            applyBookArtistsToPages(book, target.profileId, true); // self-heal drift
+            break;
+          }
+          if (!bookHasCapacity(book)) {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'paint_requested', status: 'book_full', max: SKETCHBOOK_MAX_ARTISTS }));
+            break;
+          }
+          book.artists.push(String(target.profileId));
+          persistSketchbook(book);
+          applyBookArtistsToPages(book, target.profileId, true);
+          if (room.paintRequests) room.paintRequests.delete(target.profileId);
+          sendPaintRequestsToOwner(room);
+          break;
+        }
         room.painters = normalizePainters([...(room.painters || []), target.profileId]);
         if (room.paintRequests) room.paintRequests.delete(target.profileId);
         // The ACL is account-wide, so EVERY live session of that account
@@ -6839,6 +6986,24 @@ wss.on('connection', async (ws, req) => {
         if (!user.profileId || user.profileId !== room.ownerProfileId) break;
         const target = room.users.get(String(data.targetId || ''));
         if (!target || !target.profileId) break;
+        // Sketchbook page rooms: revoking goes through the BOOK, so the artist
+        // loses access on every page at once (every connected tab notified,
+        // offline page files rewritten) and future joins find no grant.
+        if (room.sketchbook) {
+          const book = sketchbookById(room.sketchbook.book);
+          // Same fail-closed rule as approve: with the book record missing, a
+          // direct-room revoke would desynchronize the page from the book the
+          // moment the book returns — the existing grant stands untouched.
+          if (!book) break;
+          if (target.profileId !== book.ownerProfileId) {
+            book.artists = book.artists.filter((a) => a !== target.profileId);
+            persistSketchbook(book);
+            applyBookArtistsToPages(book, target.profileId, false);
+            if (room.paintRequests) room.paintRequests.delete(target.profileId);
+            sendPaintRequestsToOwner(room);
+          }
+          break;
+        }
         room.painters = (room.painters || []).filter((pid) => pid !== target.profileId);
         if (room.paintRequests) room.paintRequests.delete(target.profileId);
         // Same account-wide rule as approve: every connected session of the
@@ -7870,6 +8035,24 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       }
     }
   } catch { /* no room dir yet */ }
+  // 6b) SKETCHBOOKS: a deleted owner's books leave discovery (public=false —
+  //     the same "unpublish, never delete the art" stance as artist studios)
+  //     and the deleted account is cut from every OTHER book's artist list,
+  //     applied across all page rooms (live + persisted) at once.
+  let sketchbooksScrubbed = 0;
+  try {
+    loadSketchbooks();
+    for (const book of sketchbooks.values()) {
+      let touched = false;
+      if (book.ownerProfileId === pid && book.public) { book.public = false; touched = true; }
+      if (book.ownerProfileId !== pid && book.artists.includes(pid)) {
+        book.artists = book.artists.filter((a) => a !== pid);
+        applyBookArtistsToPages(book, pid, false);
+        touched = true;
+      }
+      if (touched) { persistSketchbook(book); sketchbooksScrubbed += 1; }
+    }
+  } catch { /* best effort */ }
   // 7) moderation evidence identity: the frozen PIXELS are the room's shared
   //    canvas (not the watcher's data), so the image itself stays — but the
   //    watcher's identity is scrubbed from every report that carries it.
@@ -7885,7 +8068,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   }
   if (evidenceScrubbed) persistReports();
   forgetProfileTokens(pid); // the account is gone — its cached sign-in must not outlive it
-  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, evidenceScrubbed });
+  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, sketchbooksScrubbed, evidenceScrubbed });
 });
 
 app.get('/api/admin/check', (req, res) => {
@@ -7985,6 +8168,9 @@ function dormantRoomMetas() {
             // persisted offline rooms exactly like live ones.
             gallery: normalizeGallery(data.gallery),
             inktober: data.inktober === true,
+            // Sketchbook page back-reference, so dormant page rooms still
+            // resolve to their book for the banner + gallery.
+            sketchbook: normalizeSketchbookRef(data.sketchbook),
             opCount: Number.isFinite(data.opCount) ? data.opCount : (Array.isArray(data.history) ? data.history.length : 0),
             userSeconds: Number(data.userSeconds) || 0,
             chats: Array.isArray(data.chat) ? data.chat.length : 0,
@@ -8607,6 +8793,17 @@ app.post('/api/admin/rooms/:id/delete', (req, res) => {
   if (FEATURED_CODES.has(id)) {
     return res.status(400).json({ error: 'cannot_delete_featured' });
   }
+  // A sketchbook page room is referenced by its (permanent) book: drop the
+  // page reference first so the deletion can't leave a dangling — and
+  // code-reserving — page pointing at a room that no longer exists.
+  loadSketchbooks();
+  const bookId = bookPageIndex.get(id);
+  const book = bookId ? sketchbooks.get(bookId) : null;
+  if (book) {
+    book.pages = book.pages.filter((p) => p.room !== id);
+    bookPageIndex.delete(id);
+    persistSketchbook(book);
+  }
   closeRoom(id, 'a moderator closed this room');
   res.json({ ok: true });
 });
@@ -9210,6 +9407,19 @@ app.post('/api/wall', async (req, res) => {
   //    post still lands, as ordinary art.
   const wallIdentity = token ? await verifyAccessToken(token).catch(() => null) : null;
   const roomName = String(body.room || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
+  // A PRIVATE sketchbook page can never be wall-posted by quoting its room
+  // code — the wall is public, the book is not. Public books post fine, and
+  // a missing book record fails closed (no exposure decision without it).
+  if (roomName) {
+    const skbRef = (rooms.get(roomName) && rooms.get(roomName).sketchbook)
+      || (existsSync(roomFile(roomName)) ? storedSketchbookRef(roomName) : null);
+    if (skbRef) {
+      const book = sketchbookById(skbRef.book);
+      if (!book || book.moderationHidden || book.public !== true) {
+        return res.status(403).json({ error: 'book_private', message: 'That sketchbook is private — its pages cannot be posted to the public wall.' });
+      }
+    }
+  }
   const inktoberPost = roomName === INKTOBER_ROOM
     || artistRoomInktoberFor(roomName, wallIdentity && wallIdentity.profileId);
   const inkState = inktoberPost ? ensureInktoberFresh() : null;
@@ -9419,6 +9629,10 @@ app.post('/api/admin/wall/:id/restore', (req, res) => {
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function genRoomCode() {
   let code;
+  // Sketchbook page codes are RESERVED while a book references them — even
+  // when the page's room file is (temporarily) missing — so a freshly minted
+  // code can never squat on a page's identity.
+  loadSketchbooks();
   do {
     code = '';
     for (let i = 0; i < 6; i += 1) {
@@ -9426,7 +9640,7 @@ function genRoomCode() {
       // every other unguessable id here, not from a predictable PRNG.
       code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
     }
-  } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)));
+  } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)) || bookPageIndex.has(code));
   return code;
 }
 
@@ -9777,6 +9991,12 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
   const { id, room } = artistRoomForApi(req.params.code);
   if (!room) return res.status(404).json({ error: 'not_found' });
   if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  // Sketchbook page rooms are BOOK-managed: discovery is the book's public
+  // visibility and pages never list individually, so a direct publish (which
+  // would also rewrite the Inktober flag) is refused loudly, changing nothing.
+  if (room.sketchbook) {
+    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page — its visibility and Inktober flag belong to the book, not the room.' });
+  }
   if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || room.audience === 'kid_safe') {
     return res.status(400).json({ error: 'not_artist_room' });
   }
@@ -9851,6 +10071,10 @@ app.post('/api/rooms/:code/unpublish', async (req, res) => {
   if (!room) return res.status(404).json({ error: 'not_found' });
   if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
   if (room.audience !== ARTIST_AUDIENCE) return res.status(400).json({ error: 'not_artist_room' });
+  // Book-managed pages never list individually — see publish above.
+  if (room.sketchbook) {
+    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page — gallery discovery belongs to the book, which never lists its pages individually.' });
+  }
   room.gallery = { ...normalizeGallery(room.gallery), listed: false };
   persistRoom(id);
   res.json(publishInfo(room, id));
@@ -9871,6 +10095,26 @@ app.post('/api/rooms/:code/painters/revoke', async (req, res) => {
   if (room.audience !== ARTIST_AUDIENCE) return res.status(400).json({ error: 'not_artist_room' });
   const targetPid = String((req.body || {}).profileId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
   if (!targetPid) return res.status(400).json({ error: 'bad_painter' });
+  // Sketchbook page rooms: the BOOK owns the painter ACL across every page.
+  // A room-local revoke would be silently re-granted by the next book ACL
+  // sync — route it through the WHOLE book instead, which is also the only
+  // semantics the UI can honestly offer here ("this account can no longer
+  // paint" must hold on every page, not just this one).
+  if (room.sketchbook) {
+    const book = sketchbookById(room.sketchbook.book);
+    if (!book) {
+      // Fail closed: without the book record a direct-room edit is the only
+      // lever left, but it would desynchronize the moment the book returns —
+      // refuse loudly, leave every ACL untouched.
+      return res.status(409).json({ error: 'book_missing', message: 'This page’s sketchbook record is missing — the room ACL was left untouched.' });
+    }
+    if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+    if (targetPid === book.ownerProfileId) return res.status(400).json({ error: 'cannot_revoke_owner' });
+    book.artists = book.artists.filter((a) => a !== targetPid);
+    persistSketchbook(book);
+    applyBookArtistsToPages(book, targetPid, false);
+    return res.json({ ok: true, book: book.id, painters: normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId)) });
+  }
   room.painters = (room.painters || []).filter((p) => p !== targetPid);
   // If that account happens to be connected, the revoke is immediate for them.
   room.users.forEach((member) => {
@@ -9975,6 +10219,536 @@ app.post('/api/admin/rooms/:code/restore', (req, res) => {
   res.json({ ok: true, moderationHidden: false });
 });
 
+// ---- Inktober sketchbooks (docs/SKETCHBOOKS-CONTRACT.md) ---------------------
+// A BOOK groups up to 31 daily-prompt pages for one event. Every page is a
+// DISTINCT ordinary artist_public room (created server-side, inktober-opted)
+// so the existing brush/replay/watch stack is reused untouched; the book owns
+// the cross-page rules: one book per owner+event, 6 distinct artist ACCOUNTS
+// max, scoped revocable invite tokens (hashed on disk), and explicit public
+// opt-in at creation. Books are discovered through this section ONLY — page
+// rooms stay unlisted in the artist gallery (listed:false), so a page never
+// double-lists and no private art is ever auto-published.
+
+// The book store maps (SKETCHBOOK_DIR, sketchbooks, sketchbooksLoaded,
+// bookByOwnerEvent, bookPageIndex) are declared next to ROOM_DIR above —
+// getRoom/genRoomCode/the idle sweep need them from early boot on.
+
+function sketchbookFile(id) {
+  return join(SKETCHBOOK_DIR, `${String(id).replace(/[^a-z0-9_]/g, '')}.json`);
+}
+
+function loadSketchbooks() {
+  if (sketchbooksLoaded) return;
+  sketchbooksLoaded = true;
+  let files = [];
+  try { files = readdirSync(SKETCHBOOK_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
+  for (const f of files) {
+    try {
+      const book = normalizeBook(JSON.parse(readFileSync(join(SKETCHBOOK_DIR, f), 'utf8')));
+      if (!book) continue;
+      sketchbooks.set(book.id, book);
+      bookByOwnerEvent.set(`${book.ownerProfileId}:${book.event}`, book.id);
+      for (const page of book.pages) bookPageIndex.set(page.room, book.id);
+    } catch { /* unreadable/mid-write — skipped, never fatal */ }
+  }
+}
+
+// Books are small (a page list + hashes) so the write is sync+atomic.
+function persistSketchbook(book) {
+  try {
+    mkdirSync(SKETCHBOOK_DIR, { recursive: true });
+    writeFileSync(`${sketchbookFile(book.id)}.tmp`, JSON.stringify(book));
+    renameSync(`${sketchbookFile(book.id)}.tmp`, sketchbookFile(book.id));
+  } catch { /* best effort — the next mutation retries */ }
+}
+
+// room code -> { ops, watching, hidden } for one book's pages, sourced from
+// live rooms AND persisted metas so dormant pages still report correctly.
+// Callers looping over MANY books (the gallery) pass one shared dormant
+// snapshot so the readdir+stat scan happens ONCE per request, not per book.
+function sketchbookPageInfo(book, sharedDormant = null) {
+  let dormant = sharedDormant;
+  const info = {};
+  for (const page of book.pages) {
+    const live = rooms.get(page.room);
+    if (live) {
+      info[page.room] = {
+        ops: live.history.length,
+        watching: live.users.size,
+        hidden: normalizeGallery(live.gallery).moderationHidden,
+      };
+      continue;
+    }
+    if (!dormant) dormant = new Map(dormantRoomMetas().map((m) => [m.id, m]));
+    const meta = dormant.get(page.room);
+    info[page.room] = {
+      ops: meta ? meta.opCount : 0,
+      watching: 0,
+      hidden: meta ? normalizeGallery(meta.gallery).moderationHidden : false,
+    };
+  }
+  return info;
+}
+
+// A page's room: a plain artist studio (publicly VIEWABLE, never publicly
+// editable), inktober-opted so ink/pencil enforcement + the server event state
+// ride the existing paths, with the immutable page metadata stamped on it.
+function materializeSketchbookPageRoom(book, page) {
+  const room = getRoom(page.room); // fresh server-minted code
+  room.audience = ARTIST_AUDIENCE;
+  room.listed = false;
+  const base = book.title ? `${book.title} — Day ${page.day}` : `Inktober sketchbook — Day ${page.day}`;
+  room.title = base.slice(0, 40);
+  room.ownerProfileId = book.ownerProfileId;
+  room.hostUserId = null; // no guest-host fallback in artist studios
+  room.painters = normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId));
+  room.gallery = { ...defaultGallery() }; // discovery is the BOOK's, never this room's
+  room.inktober = true;
+  room.sketchbook = { book: book.id, day: page.day, prompt: page.prompt, date: page.date };
+  persistRoom(page.room);
+  return room;
+}
+
+// The book ACL is the single source of truth for every page room's painter
+// list. Applies to live rooms (with immediate account-wide role recompute +
+// notification on EVERY connected session, matching the paint_approve rules)
+// and to persisted offline room files (a restart must not resurrect access).
+function applyBookArtistsToPages(book, changedPid = null, granted = null) {
+  const painters = normalizePainters(book.artists.filter((p) => p !== book.ownerProfileId));
+  for (const page of book.pages) {
+    const code = page.room;
+    const live = rooms.get(code);
+    if (live) {
+      live.painters = painters;
+      live.users.forEach((member) => {
+        if (!member.profileId) return;
+        const before = member.canPaint !== false;
+        member.canPaint = canPaintIn(live, member);
+        const after = member.canPaint !== false;
+        if (before !== after) {
+          sendRoleChanged(live, member);
+          if (changedPid && member.profileId === changedPid && granted !== null && member.ws.readyState === 1) {
+            member.ws.send(JSON.stringify({ type: 'paint_requested', status: granted ? 'approved' : 'revoked' }));
+          }
+        }
+      });
+      persistRoom(code);
+    } else if (existsSync(roomFile(code))) {
+      try {
+        const path = roomFile(code);
+        const data = JSON.parse(readFileSync(path, 'utf8'));
+        data.painters = painters;
+        writeFileSync(`${path}.tmp`, JSON.stringify(data));
+        renameSync(`${path}.tmp`, path);
+      } catch { /* the next mutation retries */ }
+    }
+  }
+}
+
+function sketchbookById(raw) {
+  loadSketchbooks();
+  const id = String(raw || '').replace(/[^a-z0-9_]/g, '').slice(0, 24);
+  return sketchbooks.get(id) || null;
+}
+
+// Optional auth for the PUBLIC read endpoints: owner/artist flags only ever
+// ADD information for the caller's own account — guests get the public view.
+async function sketchbookOptionalIdentity(req) {
+  const token = bearerToken(req);
+  return token ? verifyAccessToken(token) : null;
+}
+
+// Create OR resume the caller's book for an event. Visibility is EXPLICIT at
+// create and defaults to PRIVATE (the safe end): a book becomes publicly
+// viewable only via public:true here, or the owner flipping it later through
+// POST .../visibility. Resume NEVER changes visibility — the existing book
+// comes back exactly as it is. The resume-check → mint → index-write run
+// with no await between them, so racing tabs cannot mint two books.
+app.post('/api/sketchbooks', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const token = bearerToken(req);
+  const identity = token ? await verifyAccessToken(token) : null;
+  if (!ACCOUNTS_CONFIGURED || !identity || !identity.profileId) {
+    return res.status(401).json({ error: 'accounts_required' });
+  }
+  const pid = String(identity.profileId);
+  const body = req.body || {};
+  const event = typeof body.event === 'string' && body.event ? body.event.slice(0, 40) : SKETCHBOOK_EVENT;
+  if (event !== SKETCHBOOK_EVENT) return res.status(400).json({ error: 'bad_event' });
+  if (!rateOk(`skb:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const key = `${pid}:${event}`;
+  const existingId = bookByOwnerEvent.get(key);
+  if (existingId && sketchbooks.has(existingId)) {
+    const book = sketchbooks.get(existingId);
+    return res.json({ resumed: true, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+  }
+  let title = null;
+  if (typeof body.title === 'string' && body.title.trim()) {
+    const fields = validateArtistFields({ title: body.title, description: '', tags: [] }, scan);
+    if (!fields.ok) return res.status(400).json({ error: fields.error, message: fields.message });
+    title = (fields.title || '').slice(0, SKETCHBOOK_TITLE_MAX) || null;
+  }
+  const book = {
+    id: mintBookId(), event, ownerProfileId: pid, title,
+    public: body.public === true, moderationHidden: false,
+    artists: [pid], pages: [], invites: [],
+    createdAt: new Date().toISOString(),
+  };
+  while (sketchbooks.has(book.id) || existsSync(sketchbookFile(book.id))) book.id = mintBookId();
+  sketchbooks.set(book.id, book);
+  bookByOwnerEvent.set(key, book.id);
+  persistSketchbook(book);
+  res.json({ resumed: false, book: bookPublicView(book, {}, { owner: true }) });
+});
+
+// The public, paginated sketchbook gallery: explicit-opt-in books with REAL
+// drawing on at least one visible page. offset/limit (limit <= 60) with an
+// honest total — load-more walks the whole set, there is no silent cap.
+app.get('/api/sketchbooks', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`skbgallery:${clientIp(req)}`, 60, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  loadSketchbooks();
+  const event = String(req.query.event || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40);
+  const offset = Math.max(0, Math.min(100000, Number(req.query.offset) || 0));
+  const limit = Math.max(1, Math.min(60, Number(req.query.limit) || 12));
+  const all = [];
+  // ONE dormant-meta scan per request, shared across every candidate book
+  // (built lazily so an empty/filtered-out set costs nothing).
+  let dormantById = null;
+  for (const book of sketchbooks.values()) {
+    if (event && book.event !== event) continue;
+    if (!dormantById) dormantById = new Map(dormantRoomMetas().map((m) => [m.id, m]));
+    const info = sketchbookPageInfo(book, dormantById);
+    if (!bookGalleryEligible(book, info)) continue;
+    all.push({ book, info });
+  }
+  all.sort((a, b) => b.book.createdAt.localeCompare(a.book.createdAt) || a.book.id.localeCompare(b.book.id));
+  const total = all.length;
+  const books = all.slice(offset, offset + limit).map(({ book, info }) => bookGalleryCard(book, info));
+  res.json({ books, total });
+});
+
+// The caller's own book for an event (owner view with invite/artist admin).
+app.get('/api/sketchbooks/mine', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  const event = String(req.query.event || SKETCHBOOK_EVENT).replace(/[^a-zA-Z0-9-]/g, '').slice(0, 40);
+  const id = bookByOwnerEvent.get(`${pid}:${event}`);
+  const book = id ? sketchbooks.get(id) : null;
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  res.json({ book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+});
+
+// Redeem an invitation token. The token itself never touches disk (only its
+// SHA-256) and never appears in any response. Acceptance resolves to the
+// AUTHENTICATED account — never a name or a client-asserted id — and the
+// check → mutate → persist runs synchronously, so one token pasted into two
+// tabs at once cannot double-redeem or overflow the 6-artist cap.
+app.post('/api/sketchbooks/accept', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const token = bearerToken(req);
+  const identity = token ? await verifyAccessToken(token) : null;
+  if (!ACCOUNTS_CONFIGURED || !identity || !identity.profileId) {
+    return res.status(401).json({ error: 'accounts_required' });
+  }
+  const pid = String(identity.profileId);
+  if (!rateOk(`skbaccept:${pid}`, 10, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const raw = String((req.body || {}).token || '');
+  if (!/^sbk_[A-Za-z0-9_-]{10,80}$/.test(raw)) return res.status(400).json({ error: 'bad_token' });
+  const hash = hashInviteToken(raw);
+  let book = null;
+  let invite = null;
+  for (const candidate of sketchbooks.values()) {
+    const hit = candidate.invites.find((inv) => inv.hash === hash && !inv.revokedAt);
+    if (hit) { book = candidate; invite = hit; break; }
+  }
+  if (!book || !invite) return res.status(404).json({ error: 'invite_invalid', message: 'That invitation link is invalid or was revoked.' });
+  if (book.ownerProfileId === pid) {
+    return res.status(400).json({ error: 'own_book', message: 'This is your own sketchbook — you can already draw in it.' });
+  }
+  let joined = false;
+  if (!isBookArtist(book, pid)) {
+    if (!bookHasCapacity(book)) {
+      return res.status(403).json({ error: 'book_full', message: `This sketchbook already has its ${SKETCHBOOK_MAX_ARTISTS} artists.` });
+    }
+    book.artists.push(pid);
+    joined = true;
+  }
+  invite.uses += 1;
+  persistSketchbook(book);
+  applyBookArtistsToPages(book, pid, true);
+  res.json({
+    ok: true, joined, bookId: book.id,
+    book: bookPublicView(book, sketchbookPageInfo(book), { owner: false }),
+  });
+});
+
+// Banner data for one page room: which book it belongs to, its pinned
+// (immutable) day/prompt/date, flip neighbours, and the caller's role.
+app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`skbbyroom:${clientIp(req)}`, 60, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  loadSketchbooks();
+  const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  let book = null;
+  let page = null;
+  for (const candidate of sketchbooks.values()) {
+    const hit = candidate.pages.find((p) => p.room === code);
+    if (hit) { book = candidate; page = hit; break; }
+  }
+  if (!book || !page) return res.status(404).json({ error: 'not_a_page' });
+  const identity = await sketchbookOptionalIdentity(req);
+  const pid = identity && identity.profileId ? String(identity.profileId) : null;
+  // A moderation-hidden book's banner is owner-only; a PRIVATE book's banner
+  // is the book team's (owner + artists). Everyone else gets the same 404 a
+  // non-page room returns — no metadata leaks through the banner either.
+  if (book.moderationHidden && !isBookOwner(book, pid)) return res.status(404).json({ error: 'not_a_page' });
+  if (book.public !== true && !isBookOwner(book, pid) && !isBookArtist(book, pid)) {
+    return res.status(404).json({ error: 'not_a_page' });
+  }
+  const index = book.pages.indexOf(page);
+  const prev = index > 0 ? book.pages[index - 1] : null;
+  const next = index < book.pages.length - 1 ? book.pages[index + 1] : null;
+  res.json({
+    bookId: book.id,
+    event: book.event,
+    title: book.title,
+    public: book.public === true,
+    day: page.day,
+    prompt: page.prompt,
+    date: page.date,
+    pageIndex: index,
+    pageCount: book.pages.length,
+    maxPages: SKETCHBOOK_MAX_PAGES,
+    artistCount: book.artists.length,
+    maxArtists: SKETCHBOOK_MAX_ARTISTS,
+    prevRoom: prev ? prev.room : null,
+    nextRoom: next ? next.room : null,
+    isOwner: isBookOwner(book, pid),
+    isArtist: isBookArtist(book, pid),
+    canDraw: isBookOwner(book, pid) || isBookArtist(book, pid),
+  });
+});
+
+// The public book reader. Hidden pages are omitted for strangers; the owner
+// sees them flagged. No account ids, no invite material in the public view.
+app.get('/api/sketchbooks/:id', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`skbget:${clientIp(req)}`, 60, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  const identity = await sketchbookOptionalIdentity(req);
+  const pid = identity && identity.profileId ? String(identity.profileId) : null;
+  const owner = isBookOwner(book, pid);
+  // Hidden books are owner-only; PRIVATE books are the book team's — the
+  // public reader closes to everyone else (indistinguishable from no book).
+  if (book.moderationHidden && !owner) return res.status(404).json({ error: 'not_found' });
+  if (book.public !== true && !owner && !isBookArtist(book, pid)) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  res.json({
+    book: bookPublicView(book, sketchbookPageInfo(book), { owner }),
+    isArtist: isBookArtist(book, pid),
+  });
+});
+
+// Add a page. The day comes from the client ONLY as a selection from the
+// server's verified official prompt list — the prompt + date are stamped
+// server-side and immutable afterwards (a daily rollover never rewrites a
+// page). Omitting the day during the active event picks TODAY server-side.
+// Duplicate days resume the existing page idempotently; the check → mint runs
+// synchronously, so racing adds cannot create two rooms for one day.
+app.post('/api/sketchbooks/:id/pages', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  // Bounded but generous: filling a whole 31-page book in one sitting is a
+  // legitimate flow, and the 31-page hard cap bounds total spam anyway.
+  if (!rateOk(`skbpage:${pid}`, 40, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+  const state = inktoberState();
+  let day = (req.body || {}).day;
+  if (day == null || day === '') {
+    if (state.phase === 'active' && state.day != null) day = state.day;
+    else return res.status(400).json({ error: 'need_day', message: 'Pick a prompt day for this page.' });
+  }
+  const entry = promptForDay(state.prompts, day);
+  if (!entry) return res.status(400).json({ error: 'bad_day', message: 'That day is not on the official Inktober prompt list.' });
+  const existing = book.pages.find((p) => p.day === entry.day);
+  if (existing) {
+    return res.json({ resumed: true, page: existing, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+  }
+  if (book.pages.length >= SKETCHBOOK_MAX_PAGES) {
+    return res.status(400).json({ error: 'book_full', message: `A sketchbook holds ${SKETCHBOOK_MAX_PAGES} pages — one per prompt day.` });
+  }
+  const page = { room: genRoomCode(), day: entry.day, prompt: entry.prompt, date: entry.date, createdAt: new Date().toISOString() };
+  book.pages.push(page);
+  book.pages.sort((a, b) => a.day - b.day);
+  bookPageIndex.set(page.room, book.id); // reserve the code immediately
+  materializeSketchbookPageRoom(book, page);
+  persistSketchbook(book);
+  res.json({ resumed: false, page, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+});
+
+// Mint a scoped, revocable invitation. The raw token is returned ONCE here
+// and never stored — only its SHA-256 persists — and it never appears in any
+// list or public response.
+app.post('/api/sketchbooks/:id/invites', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  if (!rateOk(`skbinvite:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+  const active = book.invites.filter((inv) => !inv.revokedAt);
+  if (active.length >= SKETCHBOOK_MAX_ACTIVE_INVITES) {
+    return res.status(400).json({ error: 'too_many_invites', message: 'Revoke an old invitation link before minting a new one.' });
+  }
+  const token = mintInviteToken();
+  const invite = {
+    id: `inv_${randomBytes(6).toString('hex')}`,
+    hash: hashInviteToken(token),
+    createdAt: new Date().toISOString(),
+    revokedAt: null,
+    uses: 0,
+  };
+  book.invites.push(invite);
+  persistSketchbook(book);
+  res.json({
+    inviteId: invite.id,
+    token, // shown ONCE — copy it now
+    url: `/sketchbook/invite/${token}`,
+    book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }),
+  });
+});
+
+// Revoke an invitation link: future redemptions fail; artists who already
+// joined keep their access (remove them through the artists/revoke route).
+app.post('/api/sketchbooks/:id/invites/:inviteId/revoke', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+  const inviteId = String(req.params.inviteId || '').replace(/[^a-z0-9_]/g, '').slice(0, 24);
+  const invite = book.invites.find((inv) => inv.id === inviteId);
+  if (!invite) return res.status(404).json({ error: 'not_found' });
+  if (!invite.revokedAt) {
+    invite.revokedAt = new Date().toISOString();
+    persistSketchbook(book);
+  }
+  res.json({ ok: true, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+});
+
+// Remove an artist from the WHOLE book: every page room's ACL updates at once
+// (live rooms recompute + notify every connected session of that account on
+// every page; offline room files are rewritten so a restart can't resurrect
+// access) and future joins find no grant. The owner can never be removed.
+app.post('/api/sketchbooks/:id/artists/revoke', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  if (!rateOk(`skbrevoke:${pid}`, 30, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+  const target = String((req.body || {}).profileId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  if (!target) return res.status(400).json({ error: 'bad_artist' });
+  if (target === book.ownerProfileId) return res.status(400).json({ error: 'cannot_revoke_owner' });
+  if (!book.artists.includes(target)) return res.status(404).json({ error: 'not_an_artist' });
+  book.artists = book.artists.filter((a) => a !== target);
+  persistSketchbook(book);
+  applyBookArtistsToPages(book, target, false);
+  res.json({ ok: true, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+});
+
+// Owner-only visibility switch: { public: boolean } → { book } (owner view).
+// Persists the book flag (no-store, like every book endpoint). A public →
+// PRIVATE downgrade sweeps EVERY page room at once: anonymous spectators and
+// non-team members are told why and disconnected on every page, so a
+// downgrade can never leave a stranger watching a now-private page. The
+// book's owner + artists keep their sessions; private → public changes no
+// one's socket (new watchers simply pass the gates again).
+app.post('/api/sketchbooks/:id/visibility', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  loadSketchbooks();
+  const pid = await artistOwnerIdentity(req, res);
+  if (!pid) return;
+  if (!rateOk(`skbvis:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
+  const isPublic = (req.body || {}).public;
+  if (typeof isPublic !== 'boolean') return res.status(400).json({ error: 'bad_visibility' });
+  const downgrade = book.public === true && !isPublic;
+  book.public = isPublic;
+  persistSketchbook(book);
+  if (downgrade) closeUnauthorizedBookSessions(book);
+  res.json({ ok: true, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
+});
+
+// The downgrade sweep: every live page room of the book loses its anonymous
+// spectators and its non-team members (role flip first, then the close), on
+// EVERY page at once. Admin modwatch sockets are untouched.
+function closeUnauthorizedBookSessions(book) {
+  for (const page of book.pages) {
+    const live = rooms.get(page.room);
+    if (!live) continue;
+    live.users.forEach((member) => {
+      if (isBookOwner(book, member.profileId) || isBookArtist(book, member.profileId)) return;
+      member.canPaint = false;
+      sendRoleChanged(live, member);
+      try {
+        if (member.ws.readyState === 1) {
+          member.ws.send(JSON.stringify({ type: 'room_blocked', reason: 'book_private' }));
+          member.ws.close(1008, 'book is private');
+        }
+      } catch { /* ignore */ }
+    });
+    live.spectators.forEach((sock) => {
+      try {
+        if (sock.readyState === 1) {
+          sock.send(JSON.stringify({ type: 'room_blocked', reason: 'book_private' }));
+          sock.close(1008, 'book is private');
+        }
+      } catch { /* ignore */ }
+    });
+  }
+}
+
+// Admin moderation of book discovery: a DISTINCT moderationHidden flag the
+// owner cannot override. Hidden books leave the gallery immediately; their
+// pages remain covered by the existing room-level report/admin pathways.
+app.post('/api/admin/sketchbooks/:id/hide', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  book.moderationHidden = true;
+  persistSketchbook(book);
+  closeUnauthorizedBookSessions(book);
+  res.json({ ok: true, moderationHidden: true });
+});
+app.post('/api/admin/sketchbooks/:id/restore', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const book = sketchbookById(req.params.id);
+  if (!book) return res.status(404).json({ error: 'not_found' });
+  book.moderationHidden = false;
+  persistSketchbook(book);
+  res.json({ ok: true, moderationHidden: false });
+});
+
 // One segment's complete film data for the client-side production exporter:
 // scene metadata + every visible op, replayed offline through the shared op
 // interpreter. Animation rooms only. Access model matches invites: knowing
@@ -9994,7 +10768,7 @@ app.get('/api/rooms/:code/film', async (req, res) => {
     return res.status(404).json({ error: 'not_found' });
   }
   const room = getRoom(code);
-  if (!room.animationEnabled) {
+  if (room.sketchbook || !room.animationEnabled) {
     return res.status(404).json({ error: 'not_a_film' });
   }
   // The same door as the socket: a private room's complete drawing history is

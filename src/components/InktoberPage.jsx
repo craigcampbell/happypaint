@@ -17,6 +17,7 @@ import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import fallbackPrompts from "../data/inktober2026.json";
 import "../seasonal.css";
+import "../sketchbook.css";
 
 const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
 
@@ -36,6 +37,11 @@ export default function InktoberPage({ onNavigate }) {
   const [galleryStatus, setGalleryStatus] = useState("loading"); // loading | ready | error
   const [studios, setStudios] = useState([]);
   const [studiosStatus, setStudiosStatus] = useState("loading"); // loading | ready | error
+  // Sketchbooks: explicit-opt-in multi-page books, paginated with load-more.
+  const [books, setBooks] = useState([]);
+  const [booksTotal, setBooksTotal] = useState(0);
+  const [booksStatus, setBooksStatus] = useState("loading"); // loading | ready | error
+  const [booksBusy, setBooksBusy] = useState(false);
   const [day, setDay] = useState("all");
   const [toast, setToast] = useState("");
   const [showLive, setShowLive] = useState(false);
@@ -121,6 +127,28 @@ export default function InktoberPage({ onNavigate }) {
     return () => { active = false; };
   }, []);
 
+  // ---- sketchbooks (explicit-opt-in multi-page books; load-more walks ALL) --
+  const loadBooks = useCallback(async (offset, append) => {
+    setBooksBusy(true);
+    try {
+      const res = await fetch(`/api/sketchbooks?event=${EVENT_ID}&offset=${offset}&limit=12`, { cache: "no-store" });
+      if (!res.ok) throw new Error("sketchbooks failed");
+      const data = await res.json();
+      const list = Array.isArray(data?.books) ? data.books : [];
+      setBooks((cur) => (append ? [...cur, ...list.filter((b) => !cur.some((c) => c.id === b.id))] : list));
+      setBooksTotal(Number.isFinite(data?.total) ? data.total : list.length);
+      setBooksStatus("ready");
+    } catch {
+      if (!append) { setBooks([]); setBooksStatus("error"); }
+    } finally {
+      setBooksBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBooks(0, false);
+  }, [loadBooks]);
+
   // Gate the optional live-mural spectator: mounted only on explicit opt-in
   // AND while near the viewport (a gallery page shouldn't hold heavy sockets).
   useEffect(() => {
@@ -205,8 +233,15 @@ export default function InktoberPage({ onNavigate }) {
                 <strong>Day {ink.day} of 31: “{ink.prompt}”</strong>
                 <small>New prompt {ink.nextChangeAt ? `on ${utcDateLabel(ink.nextChangeAt)}` : "tomorrow"} (UTC)</small>
               </p>
-              <a className="ink-join-btn" href={`/join/${ROOM_CODE}`} onClick={(e) => follow(e, `/join/${ROOM_CODE}`)}>
-                Join the Ink &amp; Pencil room →
+              <a className="ink-join-btn" href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>
+                Draw today&rsquo;s page in your sketchbook →
+              </a>
+              <a
+                className="ink-card-link"
+                href={`/join/${ROOM_CODE}`}
+                onClick={(e) => follow(e, `/join/${ROOM_CODE}`)}
+              >
+                or draw together in the shared Ink &amp; Pencil room →
               </a>
             </div>
           ) : null}
@@ -241,6 +276,62 @@ export default function InktoberPage({ onNavigate }) {
                 </>
               )}
             </div>
+          ) : null}
+        </section>
+
+        <section className="ink-studios" aria-labelledby="ink-books-title">
+          <h2 id="ink-books-title">Inktober sketchbooks</h2>
+          <p>
+            Multi-page sketchbooks — one page per daily prompt, up to six invited artists per book.
+            Anyone can flip through; new artwork appears here automatically.
+          </p>
+          <a className="ink-join-btn" href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>
+            Start your own sketchbook →
+          </a>
+          {booksStatus === "loading" ? (
+            <p className="ink-status" role="status">Finding sketchbooks…</p>
+          ) : null}
+          {booksStatus === "error" ? (
+            <div className="ink-error" role="alert">
+              <p>We couldn&rsquo;t load the sketchbooks just now.</p>
+              <button type="button" onClick={() => loadBooks(0, false)}>Try again</button>
+            </div>
+          ) : null}
+          {booksStatus === "ready" && books.length === 0 ? (
+            <p className="ink-status">No sketchbooks have artwork yet — yours could be the first.</p>
+          ) : null}
+          {books.length > 0 ? (
+            <>
+              <div className="skb-card-grid">
+                {books.map((b) => (
+                  <button
+                    type="button"
+                    key={b.id}
+                    className="skb-card"
+                    onClick={() => onNavigate(`/sketchbook/${b.id}`)}
+                    aria-label={`Flip through ${b.title || "an Inktober sketchbook"}`}
+                  >
+                    <span className="skb-card-title">{b.title || "Inktober sketchbook"}</span>
+                    <span className="skb-card-days">
+                      {b.days.slice(0, 8).map((d) => <span key={d}>Day {d}</span>)}
+                    </span>
+                    <span className="skb-card-meta">
+                      {b.drawnPages} page{b.drawnPages === 1 ? "" : "s"} drawn · {b.artistCount} artist{b.artistCount === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {books.length < booksTotal ? (
+                <button
+                  type="button"
+                  className="ink-join-btn skb-loadmore"
+                  disabled={booksBusy}
+                  onClick={() => loadBooks(books.length, true)}
+                >
+                  {booksBusy ? "Loading…" : `Load more sketchbooks (${books.length} of ${booksTotal})`}
+                </button>
+              ) : null}
+            </>
           ) : null}
         </section>
 

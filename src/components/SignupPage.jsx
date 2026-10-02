@@ -33,7 +33,7 @@ export default function SignupPage({ onNavigate }) {
   // the family page.
   const returnPath = (() => {
     const requested = new URLSearchParams(window.location.search).get("return") || "";
-    return /^\/(family|rooms|join\/[A-Z0-9]{1,8})$/.test(requested) ? requested : "";
+    return /^\/(family|rooms|join\/[A-Z0-9]{1,8}|sketchbook(?:\/(?:invite\/[A-Za-z0-9_-]{1,96}|sb_[a-f0-9]{16}))?)$/.test(requested) ? requested : "";
   })();
   const newRoomPath = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

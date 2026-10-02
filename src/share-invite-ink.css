@@ -1,0 +1,133 @@
+/* Inktober share-sheet accents + the new share actions.
+ *
+ * Everything is scoped under `.share-invite-sheet` so the rest of the studio
+ * (and the homepage's own Inktober card in home-inktober.css) is untouched.
+ * The lettering font is bundled locally (SIL OFL 1.1, license at
+ * public/fonts/caveat/OFL.txt); inviteCard.js registers the same face for
+ * canvas rendering, so the sheet and the PNG always match.
+ */
+
+@font-face {
+  font-family: "Inktober Share Ink";
+  src: url("/fonts/caveat/Caveat-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---- Card-style toggle (Inktober / Classic) ------------------------------ */
+.share-card-theme {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.share-card-theme button {
+  padding: 7px 16px;
+  border: 2px solid rgba(23, 19, 31, 0.25);
+  border-radius: 999px;
+  background: #fff;
+  color: #3b3b46;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.share-card-theme button[aria-pressed="true"] {
+  border-color: #17131f;
+  background: #17131f;
+  color: #fbf3df;
+}
+
+/* ---- Inktober-season sheet accents --------------------------------------- */
+.share-invite-sheet[data-card-theme="inktober"] h2 {
+  font-family: "Inktober Share Ink", "Segoe Script", cursive;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #17131f;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-preview {
+  background: #fbf3df;
+  border-radius: 6px;
+  box-shadow: 8px 8px 0 rgba(23, 19, 31, 0.82);
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-preview-empty {
+  color: #655d71;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-code {
+  background: #17131f;
+}
+
+.share-invite-sheet[data-card-theme="inktober"] .share-invite-code strong {
+  font-family: "Inktober Share Ink", "Segoe Script", cursive;
+  font-size: 1.6rem;
+  letter-spacing: 0.16em;
+}
+
+/* ---- New share actions ---------------------------------------------------- */
+.share-invite-btn.share-tiktok {
+  color: #fff;
+  border-color: #010101;
+  background: #010101;
+}
+
+.share-invite-btn.share-tiktok:hover:not(:disabled) {
+  background: #262626;
+}
+
+.share-invite-btn.share-save {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.share-invite-btn.share-save:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.share-invite-btn.share-image {
+  background: #fdf2f8;
+  border-color: #fbcfe8;
+  color: #9d174d;
+}
+
+.share-invite-btn.share-image:hover:not(:disabled) {
+  background: #fce7f3;
+}
+
+a.share-invite-btn {
+  text-decoration: none;
+  color: inherit;
+}
+
+.share-invite-btn.share-sms {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+.share-invite-btn.share-sms:hover {
+  background: #d1fae5;
+}
+
+.share-invite-btn.share-email {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.share-invite-btn.share-email:hover {
+  background: #ffedd5;
+}
+
+@media (max-width: 480px) {
+  .share-invite-sheet[data-card-theme="inktober"] h2 {
+    font-size: 1.7rem;
+  }
+
+  .share-invite-btn {
+    font-size: 0.92rem;
+  }
+}
