@@ -1,5 +1,5 @@
 // Sign-up / log-in page. Accounts are optional and only unlock saving your
-// gallery across devices — drawing never requires one. Email + password is the
+// gallery across devices, drawing never requires one. Email + password is the
 // primary path; Google appears only once it's configured in PocketBase.
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
@@ -28,7 +28,7 @@ export default function SignupPage({ onNavigate }) {
   const [password, setPassword] = useState("");
   const [oauthIds, setOauthIds] = useState([]);
   // Where to go afterwards. Only our own few destinations are honored (never an
-  // arbitrary URL — that would be an open redirect): a room the person was
+  // arbitrary URL, that would be an open redirect): a room the person was
   // trying to enter (the private-room gate sends `/join/CODE`), their rooms, or
   // the family page.
   const returnPath = (() => {
@@ -43,7 +43,7 @@ export default function SignupPage({ onNavigate }) {
   };
   // A NEW account starts in its own fresh room ("keep your art forever");
   // someone logging BACK in lands on their rooms to pick up where they left off
-  // — never a random empty room, which is what made logging in feel like a loop.
+  //, never a random empty room, which is what made logging in feel like a loop.
   const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
   // A guest can't enter a private room (the door asks for an account), so the
   // guest exit goes to the open studio rather than a random private code.
@@ -72,7 +72,7 @@ export default function SignupPage({ onNavigate }) {
     setMessage(result.message);
     setBusy(false);
     if (result.ok) {
-      // Keep the attestation on-device (what was answered + when) — the only
+      // Keep the attestation on-device (what was answered + when), the only
       // record we need, and nothing personal beyond a yes/no leaves the browser.
       try {
         window.localStorage.setItem(
@@ -104,7 +104,7 @@ export default function SignupPage({ onNavigate }) {
     <div className="site-page">
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
-        <h1>{session ? "You’re signed in" : mode === "signup" ? "Sign up — keep your art forever" : "Welcome back"}</h1>
+        <h1>{session ? "You’re signed in" : mode === "signup" ? "Sign up, keep your art forever" : "Welcome back"}</h1>
         <p className="site-lead">
           You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find
           it on any device.
@@ -171,7 +171,7 @@ export default function SignupPage({ onNavigate }) {
                     </label>
                     {ageBand === "under13" ? (
                       <p className="signup-age-note">
-                        No account needed — you can draw everything as a guest! If you want art saved across
+                        No account needed, you can draw everything as a guest! If you want art saved across
                         devices, ask a parent or guardian to make the account with you. 💛
                       </p>
                     ) : null}

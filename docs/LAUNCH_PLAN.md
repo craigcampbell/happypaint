@@ -217,7 +217,7 @@ Decision thresholds for this pilot:
 **Short demo post**
 
 > I built Drawesome so friends can paint on the same canvas in a browser. Open a
-> private room, send the invite, and make a small drawing together—guests do not
+> private room, send the invite, and make a small drawing together-guests do not
 > need accounts. Try a ten-minute doodle with someone you know:
 > https://drawesome.art
 >

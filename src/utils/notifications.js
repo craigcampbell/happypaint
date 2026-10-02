@@ -18,7 +18,7 @@ function save(list) {
   try {
     window.localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX)));
   } catch {
-    // best-effort — a dropped notification is non-fatal
+    // best-effort, a dropped notification is non-fatal
   }
 }
 

@@ -1,4 +1,4 @@
-// The Daily Challenge — one fresh, kid-safe drawing prompt per UTC day.
+// The Daily Challenge, one fresh, kid-safe drawing prompt per UTC day.
 //
 // Deterministic: every server (and every restart) computes the same challenge
 // for the same date, so the homepage, the DAILY room and the wall tag all
@@ -6,7 +6,7 @@
 // prime so consecutive days feel unrelated (not an alphabetical crawl), and
 // the whole list plays out before any repeat (prime stride ⇒ full cycle).
 //
-// Curated in-repo on purpose: no user text, no runtime generation — nothing to
+// Curated in-repo on purpose: no user text, no runtime generation, nothing to
 // moderate. Keep prompts concrete + drawable in ~10 minutes, silly over subtle
 // (kids AND teens), and never scary/branded/violent.
 
@@ -106,7 +106,7 @@ const CHALLENGES = [
 // gcd(PRIME, length)=1 the full list cycles before any repeat.
 const STRIDE = 61;
 
-// UTC day number — the whole world flips to the new challenge together.
+// UTC day number, the whole world flips to the new challenge together.
 function dayNumber(date = new Date()) {
   return Math.floor(date.getTime() / 86_400_000);
 }

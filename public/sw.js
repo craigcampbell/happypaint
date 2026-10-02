@@ -57,7 +57,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // NEVER cache or intercept live endpoints — the API and websocket must always
+  // NEVER cache or intercept live endpoints, the API and websocket must always
   // hit the network (caching the API was returning stale/empty saved-art lists).
   // robots/sitemap are server-generated with their own HTTP caching; the SW's
   // forever-cache would pin them stale across deploys.
@@ -87,7 +87,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Big long-lived assets already served with far-future HTTP cache headers —
+  // Big long-lived assets already served with far-future HTTP cache headers -
   // don't double-store them in the SW cache (the worker alone is multi-MB).
   if (!url.pathname.startsWith("/assets/") && !STATIC_ASSETS.includes(url.pathname)) return;
   if (/\/(?:nsfwWatcher\.worker|mobilenet|model\.min|group1-shard|dist-)/.test(url.pathname)) return;

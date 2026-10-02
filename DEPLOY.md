@@ -1,8 +1,8 @@
-# Deploying Drawesome — DigitalOcean Droplet via the DO MCP
+# Deploying Drawesome: DigitalOcean Droplet via the DO MCP
 
 Production runs the full compose stack (app + pocketbase + cloudflared) on a
-DigitalOcean Droplet. Infrastructure actions — creating the droplet, firewall,
-SSH keys, snapshots, monitoring — are driven from this machine through
+DigitalOcean Droplet. Infrastructure actions, creating the droplet, firewall,
+SSH keys, snapshots, monitoring, are driven from this machine through
 Hermes's DigitalOcean MCP server. App releases are still the two-step
 build-then-swap procedure from RUNNING.md, executed over SSH.
 
@@ -21,7 +21,7 @@ and would deploy a site with no `/ws`, no rooms, and no persistence.
 | **Total** | **~$15.60/mo** |
 
 A 1 GB / 25 GB droplet ($6 + $1.20 weekly backups ≈ $7.20/mo) also runs the
-stack — measured idle: app 72 MB RSS, pocketbase 8 MB, cloudflared 32 MB —
+stack, measured idle: app 72 MB RSS, pocketbase 8 MB, cloudflared 32 MB -
 but 2 GB leaves room for image layers, backups, and busy public-room nights.
 
 ## One-time setup
@@ -29,7 +29,7 @@ but 2 GB leaves room for image layers, backups, and busy public-room nights.
 ### 1. DO API token (owner, once)
 
 Create a read/write token at https://cloud.digitalocean.com/account/api/tokens
-(e.g. `hermes-mcp`) and give it to Hermes as an env secret — never commit it.
+(e.g. `hermes-mcp`) and give it to Hermes as an env secret, never commit it.
 The MCP server reads `DIGITALOCEAN_API_TOKEN` from its process environment.
 
 ### 2. Connect the DigitalOcean MCP server
@@ -73,7 +73,7 @@ ssh root@<droplet-ip>
 apt-get update && apt-get install -y docker.io docker-compose-v2 rsync
 ```
 
-(The DO MCP surface has no droplet-shell/exec tool — MCP covers
+(The DO MCP surface has no droplet-shell/exec tool: MCP covers
 create/resize/snapshot/firewall; bootstrap and deploys stay SSH.)
 
 ### 5. Seed the droplet (SSH, once)
@@ -89,7 +89,7 @@ rsync -a coloring-library/ root@<ip>:/opt/drawesome/coloring-library/
 ssh root@<ip> 'cd /opt/drawesome && docker compose --profile tunnel up -d --build'
 ```
 
-The tunnel token reconnects the same Cloudflare tunnel — `drawesome.art` and
+The tunnel token reconnects the same Cloudflare tunnel, `drawesome.art` and
 `pb.drawesome.art` keep working with zero DNS changes. Google sign-in keeps
 working (config lives in `pb_data` + the Google account).
 
@@ -102,7 +102,7 @@ ssh root@<ip> 'cd /opt/drawesome && docker compose ps'   # 3 services, app healt
 
 Then the full RUNNING.md "Verify the release" checklist (anonymous draw in a
 fresh private room, second-client replay, coloring sheets, Google sign-in).
-Keep this PC's stopped stack as the cold standby — rollback of last resort is
+Keep this PC's stopped stack as the cold standby, rollback of last resort is
 starting it again.
 
 ## Routine deploys from this machine
@@ -117,7 +117,7 @@ DEPLOY_HOST=root@<droplet-ip> scripts/deploy-remote.sh
 scripts/deploy-remote.sh
 ```
 
-(Or just ask the agent: "deploy to the droplet" — it runs the script.)
+(Or just ask the agent: "deploy to the droplet", it runs the script.)
 
 ## `.deploy.json`
 

@@ -4,8 +4,8 @@
 // still nature scene (globe/NatureScene.jsx) and any SVG bits of the page.
 //
 // Everything here is decorative and deterministic (seeded, no Math.random) so the
-// picture is identical on every render and device. Nothing in it encodes data —
-// the data lives in the country fills, brushwork density and drips — and every
+// picture is identical on every render and device. Nothing in it encodes data -
+// the data lives in the country fills, brushwork density and drips, and every
 // element is aria-hidden / pointer-events:none.
 
 // ---- filters ---------------------------------------------------------------------

@@ -1,4 +1,4 @@
-// Happy Paint — realtime multiplayer + static host (single process).
+// Happy Paint, realtime multiplayer + static host (single process).
 //
 // In production this serves the built `dist/` SPA AND a WebSocket relay on the
 // same port, so a single Cloudflare tunnel route (drawesome.art -> localhost)
@@ -52,7 +52,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Minimal .env loader (no dependency) so the same repo-root .env that Vite reads
-// at build time also configures the server at runtime — e.g. SUPABASE_URL /
+// at build time also configures the server at runtime, e.g. SUPABASE_URL /
 // SUPABASE_ANON_KEY for sign-in identity. Only fills vars not already set in the
 // real process environment, so launch-env always wins.
 (function loadDotEnv() {
@@ -68,7 +68,7 @@ const __dirname = dirname(__filename);
       if (process.env[m[1]] === undefined) process.env[m[1]] = val;
     }
   } catch {
-    // No .env file — perfectly fine; the app runs fully local/anonymous.
+    // No .env file, perfectly fine; the app runs fully local/anonymous.
   }
 })();
 
@@ -81,13 +81,13 @@ const MAX_PUBLIC_HISTORY = Math.min(MAX_HISTORY, Number(process.env.MAX_PUBLIC_H
 // Per-socket draw-op token bucket. The size caps below bound how BIG an op is;
 // this bounds how MANY. A real client sends ~7 batches/s per stroke (150ms
 // flush) plus end markers, so 30/s sustained with a 120 burst never touches a
-// human — it only stops a scripted socket from filling a room's history.
+// human, it only stops a scripted socket from filling a room's history.
 const OP_RATE_PER_SEC = Number(process.env.OP_RATE_PER_SEC || 30);
 const OP_RATE_BURST = Number(process.env.OP_RATE_BURST || 120);
 // Join catch-up cache: rooms past HISTORY_CACHE_MIN_OPS keep ONE gzipped
 // history frame that every joiner shares; only the ops newer than it (the
 // "tail") are serialized per join. The frame is rebuilt once the tail passes
-// HISTORY_CACHE_TAIL_MAX — so a cap-full room costs one stringify+gzip per
+// HISTORY_CACHE_TAIL_MAX, so a cap-full room costs one stringify+gzip per
 // ~400 ops instead of one per joiner.
 const HISTORY_CACHE_MIN_OPS = Number(process.env.HISTORY_CACHE_MIN_OPS || 200);
 const HISTORY_CACHE_TAIL_MAX = Number(process.env.HISTORY_CACHE_TAIL_MAX || 400);
@@ -116,7 +116,7 @@ const CATCHUP_QUEUE_MAX_BYTES = Number(process.env.CATCHUP_QUEUE_MAX_BYTES || 16
 // Bounded OUTGOING queues (independent of the catch-up gate): a stalled or
 // slow consumer must never grow ws.bufferedAmount without bound. Once a
 // socket's send buffer passes the soft limit, DURABLE traffic (ops, history,
-// structure, chat) queues per-socket — bounded; overflow bounces the socket
+// structure, chat) queues per-socket, bounded; overflow bounces the socket
 // with 1013 so the client resyncs from durable history rather than losing
 // messages silently. EPHEMERAL traffic (cursors, presence pips, hype) may
 // simply drop under backpressure: the next one supersedes it anyway.
@@ -149,7 +149,7 @@ const KICK_BAN_MS = Number(process.env.KICK_BAN_MS || 15 * 60 * 1000); // how lo
 // the WS join gate), but that rule must NOT apply where nobody can sign in: the
 // app has to keep working fully with the cloud unset, which is the repo's golden
 // rule. The test is the SERVER's own view of PocketBase (PB_URL), not the
-// browser's VITE_PB_URL — if the server can't verify a token, requiring an
+// browser's VITE_PB_URL, if the server can't verify a token, requiring an
 // account would lock a room nobody could open.
 const ACCOUNTS_CONFIGURED = pocketbaseConfigured();
 const MAX_WATCHERS = Number(process.env.MAX_WATCHERS || 2); // elected in-browser NSFW watchers per public room
@@ -191,7 +191,7 @@ const CHECKPOINT_MIN_OPS = Number(process.env.CHECKPOINT_MIN_OPS || 600);
 const CHECKPOINT_REBUILD_TAIL = Number(process.env.CHECKPOINT_REBUILD_TAIL || 400);
 const CHECKPOINT_TAIL_MAX = Number(process.env.CHECKPOINT_TAIL_MAX || 800);
 // Bounded derived cache: per-room entries + a GLOBAL byte ceiling (LRU).
-// Memory-only by design — a restart replays full history and rebuilds lazily,
+// Memory-only by design, a restart replays full history and rebuilds lazily,
 // and no new durable account-deletion store appears.
 const CHECKPOINT_CACHE_MAX_ENTRIES = Number(process.env.CHECKPOINT_CACHE_MAX_ENTRIES || 12);
 const CHECKPOINT_CACHE_MAX_BYTES = Number(process.env.CHECKPOINT_CACHE_MAX_BYTES || 192 * 1024 * 1024);
@@ -205,7 +205,7 @@ const CHECKPOINT_JOB_TIMEOUT_MS = Number(process.env.CHECKPOINT_JOB_TIMEOUT_MS |
 const CHECKPOINT_SERVE_MAX_BYTES = Number(process.env.CHECKPOINT_SERVE_MAX_BYTES || 14 * 1024 * 1024);
 // Phase 4: per-frame animation checkpoints (PHASE4-CONTRACT.md). A scene
 // baseline may carry a SUBSET of its frames as checkpoint descriptors (every
-// other frame rides its full ops); builds are LAZY — join/scene_fetch warm
+// other frame rides its full ops); builds are LAZY, join/scene_fetch warm
 // exactly the requested frame through a small bounded priority queue, and
 // the op hot path only re-warms frames that already hold an entry. No eager
 // whole-film renders, ever.
@@ -226,14 +226,14 @@ const AUTO_CLOSE_SWEEP_MS = Number(process.env.AUTO_CLOSE_SWEEP_MS || 30 * 60 * 
 // throwaway code: now that private rooms require an account, the 12h floor
 // above would delete a signed-in kid's room overnight. Owned rooms get a
 // month of idle time (every visit resets the clock) and the same op/engagement
-// bonus on top, capped — bounded on purpose, so nobody's drawings are kept
+// bonus on top, capped, bounded on purpose, so nobody's drawings are kept
 // forever by accident. Unowned rooms (guest-era, or a deploy without accounts)
 // keep the short scale above.
 const AUTO_CLOSE_OWNED_BASE_MS = Number(process.env.AUTO_CLOSE_OWNED_BASE_MS || 30 * 24 * 60 * 60 * 1000); // 30d idle floor
 const AUTO_CLOSE_OWNED_MAX_MS = Number(process.env.AUTO_CLOSE_OWNED_MAX_MS || 90 * 24 * 60 * 60 * 1000); // 90d ceiling
 // Artist studios (audience 'artist_public') hold posted artwork that is the
 // whole point of the room, so they are protected from the ordinary short idle
-// sweeps: a long documented retention floor instead (still bounded — storage
+// sweeps: a long documented retention floor instead (still bounded, storage
 // is capped by the per-account creation quota below plus this TTL).
 const AUTO_CLOSE_ARTIST_BASE_MS = Number(process.env.AUTO_CLOSE_ARTIST_BASE_MS || 180 * 24 * 60 * 60 * 1000); // 180d floor
 const AUTO_CLOSE_ARTIST_MAX_MS = Number(process.env.AUTO_CLOSE_ARTIST_MAX_MS || 365 * 24 * 60 * 60 * 1000); // 365d ceiling
@@ -247,7 +247,7 @@ const ARTIST_REQUEST_MAX = Number(process.env.ARTIST_REQUEST_MAX || 25);
 // All durable server state (rooms, artworks, sheets, reports, admin key, metrics)
 // lives under one directory so a single Docker volume persists everything.
 //
-// Without DATA_DIR it is `.data/` inside the app dir — NOT the app dir itself.
+// Without DATA_DIR it is `.data/` inside the app dir: NOT the app dir itself.
 // Chat logs, room files and the admin key used to sit beside server.js, one
 // careless express.static(__dirname) away from being served; a dot-directory is
 // skipped by express.static even then. A checkout that ran the old default has
@@ -265,7 +265,7 @@ function resolveDataDir() {
     const from = join(__dirname, name);
     const to = join(dir, name);
     if (!existsSync(from) || existsSync(to)) continue;
-    try { renameSync(from, to); moved.push(name); } catch { /* in use — next boot */ }
+    try { renameSync(from, to); moved.push(name); } catch { /* in use, next boot */ }
   }
   if (moved.length) console.log(`Moved local data into .data/: ${moved.join(', ')}`);
   return dir;
@@ -325,7 +325,7 @@ const wss = new WebSocketServer({
   // takeover keeps per-socket memory flat; browsers negotiate this natively.
   perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true },
   // Bound inbound frames (ws defaults to 100MiB!). The biggest legitimate
-  // message is an image op's dataURL — comfortably under this.
+  // message is an image op's dataURL, comfortably under this.
   maxPayload: 16 * 1024 * 1024,
 });
 
@@ -334,7 +334,7 @@ const wss = new WebSocketServer({
 const rooms = new Map();
 
 // ---- Health instrumentation -----------------------------------------------
-// Event-loop delay (how late the loop is firing — the best "is the server
+// Event-loop delay (how late the loop is firing, the best "is the server
 // straining?" signal), CPU%, and an all-time peak-concurrent-users counter.
 const ELD_RESOLUTION_MS = 20;
 const eld = monitorEventLoopDelay({ resolution: ELD_RESOLUTION_MS });
@@ -411,7 +411,7 @@ function blankAnalytics() {
     timezones: {},
     gallerySaves: [],
     sessions: [],
-    // Hourly activity buckets (trend graphs) and server-side page traffic —
+    // Hourly activity buckets (trend graphs) and server-side page traffic -
     // see seriesBump / recordPageView below.
     series: { rooms: {}, site: {} },
     traffic: {},
@@ -539,7 +539,7 @@ function seriesSnapshot() {
 
 // ---- Server-side traffic (page views + unique visitors per day) -----------
 // Counts every HTML shell this origin serves to a non-bot user agent. It is
-// what Google Analytics would see if every visitor ran the GA script — which
+// what Google Analytics would see if every visitor ran the GA script, which
 // they don't (content blockers, Safari ITP, consent), so this is the number to
 // reconcile GA against. Uniques are a per-day set of sha1(ip|ua|day) kept in
 // memory only (never written); a restart continues the stored day count and
@@ -680,7 +680,7 @@ function cleanCountry(value) {
 // This deployment sits behind the Cloudflare tunnel ONLY: cf-ipcountry is set
 // by Cloudflare's edge from the connecting IP and a client cannot spoof it.
 // Every other platform header (x-vercel-ip-country, x-country-code,
-// cloudfront-viewer-country) is NOT stripped or rewritten by Cloudflare — the
+// cloudfront-viewer-country) is NOT stripped or rewritten by Cloudflare, the
 // client can send them verbatim, so trusting them lets anyone forge a
 // location. One trusted header, nothing else; approximate by design.
 function countryFromReq(req) {
@@ -1181,7 +1181,7 @@ const ROOM_DIR = process.env.ROOM_DIR || join(DATA_DIR, '.rooms');
 const persistTimers = new Map();
 // Sketchbook book store (docs/SKETCHBOOKS-CONTRACT.md). The maps are declared
 // THIS early because getRoom / genRoomCode / the idle sweep consult them, and
-// getRoom already runs during module evaluation (seedFeaturedRooms) — long
+// getRoom already runs during module evaluation (seedFeaturedRooms), long
 // before the sketchbook route section at the bottom of this file. Only the
 // declarations live here; the section's functions (hoisted) stay put.
 const SKETCHBOOK_DIR = join(DATA_DIR, '.sketchbooks');
@@ -1193,7 +1193,7 @@ const bookByOwnerEvent = new Map(); // `${profileId}:${event}` -> book id
 // prompt gets the SAME book back on the next tap (art intact) until saved.
 const guestBookByDevice = new Map(); // `${device}:${event}` -> book id
 // Page room code -> book id: the RESERVATION record. A referenced page code
-// can never be re-minted for or squatted by a generic room — even while the
+// can never be re-minted for or squatted by a generic room, even while the
 // page's room file is (temporarily) missing, getRoom rematerializes the page
 // from this index instead of loading a blank ownable room.
 const bookPageIndex = new Map();
@@ -1213,7 +1213,7 @@ function storedRoomAudience(roomId) {
     return null;
   }
 }
-// The persisted sketchbook back-reference WITHOUT materializing the room —
+// The persisted sketchbook back-reference WITHOUT materializing the room -
 // same lightweight probe as storedRoomAudience, for read-side book gates
 // (spectate/wall) that must decide BEFORE getRoom runs.
 function storedSketchbookRef(roomId) {
@@ -1241,7 +1241,7 @@ function historyCapFor(room) {
 // `room.history` is reassigned wholesale by clears, wipes, restores, frame
 // deletes and moderation removes, and mutated in place ONLY by the op push and
 // the front trim. Turning it into an accessor gives every reassignment a
-// generation bump for free — the join cache and the append-only persistence
+// generation bump for free, the join cache and the append-only persistence
 // both key on it, so neither can ever serve or save a stale mural.
 function trackHistory(room) {
   let history = room.history;
@@ -1302,7 +1302,7 @@ function loadRoomHistory(roomId, inline, cap) {
 }
 
 // ---- Rendered-snapshot catch-up -------------------------------------------
-// A client-rendered PNG of the mural, stored beside the room file (NOT in it —
+// A client-rendered PNG of the mural, stored beside the room file (NOT in it -
 // a multi-MB dataURL inside the room JSON would bloat the 30MB histories even
 // further). The sidecar is {opId, dataUrl}; the opId is the last op baked into
 // the pixels, so a joiner only needs the ops after it.
@@ -1317,7 +1317,7 @@ function loadRoomSnapshot(roomId) {
       return { opId: parsed.opId, dataUrl: parsed.dataUrl };
     }
   } catch {
-    // No snapshot / corrupt — fall back to full-history replay.
+    // No snapshot / corrupt, fall back to full-history replay.
   }
   return null;
 }
@@ -1346,12 +1346,12 @@ function saveRoomSnapshot(roomId, snapshot) {
     writeFileSync(tmp, JSON.stringify({ opId: snapshot.opId, dataUrl: snapshot.dataUrl }));
     renameSync(tmp, file);
   } catch {
-    // Best-effort — a lost snapshot just means full-history replay next join.
+    // Best-effort, a lost snapshot just means full-history replay next join.
   }
 }
 // ---- Room thumbnails (the admin's at-a-glance view) -------------------------
 // The server never rasterises ops, so a small JPEG of the live mural is baked
-// by a connected member on request — the catch-up snapshot mechanism, but tiny
+// by a connected member on request, the catch-up snapshot mechanism, but tiny
 // and on a timer: every THUMB_SWEEP_MS a room that has drawn since its last
 // thumbnail asks a ROTATING member for a fresh one (so in a busy room no single
 // client gets to decide what the admin sees). Rooms keep their last thumbnail
@@ -1435,17 +1435,17 @@ function roomHasLayers(room) {
 
 // ---- Chat persistence -----------------------------------------------------
 // Two stores, by purpose:
-//  1) room.chat — a capped in-memory buffer (persisted in the room file) used to
+//  1) room.chat, a capped in-memory buffer (persisted in the room file) used to
 //     give late joiners context + recent context for reports.
-//  2) An append-only per-room audit log (.chatlog/<CODE>.jsonl) — the durable
+//  2) An append-only per-room audit log (.chatlog/<CODE>.jsonl), the durable
 //     moderation/audit trail. Bounded per room so disk can't grow forever.
 // Both store the display name + message + the opaque profileId (when signed in)
 // so a future account-deletion scrub can redact by id.
 const CHAT_BUFFER_MAX = 200; // messages kept in memory + the room file
-// Tapback emoji a chat bubble can carry (iMessage-style) — server allowlist;
+// Tapback emoji a chat bubble can carry (iMessage-style), server allowlist;
 // the client tray mirrors this. Keep small + universally readable.
 const CHAT_TAPBACKS = ['❤️', '😂', '🔥', '👍', '😮', '🎨'];
-// Big animated "hype" reactions — curated KINDS, rendered client-side as pure
+// Big animated "hype" reactions, curated KINDS, rendered client-side as pure
 // CSS celebrations (never external media; this is the kid-safe Giphy stand-in).
 const HYPE_KINDS = ['confetti', 'fire', 'laugh', 'heart', 'clap', 'rainbow', 'star', 'mind', 'unicorn', 'hundred'];
 const CHAT_LOG_DIR = process.env.CHAT_LOG_DIR || join(DATA_DIR, '.chatlog');
@@ -1466,13 +1466,13 @@ function appendChatAudit(roomId, entry) {
       writeFileSync(file, `${lines.slice(Math.floor(lines.length / 2)).join('\n')}\n`);
     }
   } catch {
-    // Best-effort — never let audit logging break a chat message.
+    // Best-effort, never let audit logging break a chat message.
   }
 }
 
 // Retention sweep: chat audit logs exist for moderation context and deletion
 // scrubs, not forever. Guests can't be scrubbed by profileId (they have none),
-// so time is the only eraser — drop any room log untouched for 90 days.
+// so time is the only eraser, drop any room log untouched for 90 days.
 // Defense-in-depth on top of the per-account scrub endpoint.
 const CHAT_LOG_TTL_MS = Number(process.env.CHAT_LOG_TTL_DAYS || 90) * 86_400_000;
 async function sweepChatLogs() {
@@ -1485,7 +1485,7 @@ async function sweepChatLogs() {
       const st = await fsp.stat(p);
       if (st.mtimeMs < cutoff) await fsp.unlink(p);
     } catch {
-      // Best-effort — a locked/vanished file just waits for the next sweep.
+      // Best-effort, a locked/vanished file just waits for the next sweep.
     }
   }
 }
@@ -1501,7 +1501,7 @@ function loadRoom(roomId) {
   // Same audience default + multi-frame test getRoom applies, so a big film
   // (animation, or frames preserved with the toggle off) is never front-trimmed:
   // films are capped at INGEST (per-frame caps + the anim op budget), so a
-  // persisted history that exceeds a REDUCED budget/config still loads whole —
+  // persisted history that exceeds a REDUCED budget/config still loads whole -
   // a front trim would silently erase the first frames' artwork. Single-canvas
   // rooms keep the rolling mural cap.
   const loadAudience = (data && data.audience) || (roomId === DEFAULT_PUBLIC_ROOM ? 'kid_safe' : 'friends');
@@ -1516,7 +1516,7 @@ function loadRoom(roomId) {
       history,
       historyOnDisk: stored.onDisk, // false → first save migrates it into .history.json
       sheetId: data.sheetId || null,
-      // Only the opaque profile id is persisted — never a human-readable name —
+      // Only the opaque profile id is persisted, never a human-readable name -
       // so a deleted account leaves no identifying data on disk. Display names
       // come live from the connected roster.
       ownerProfileId: data.ownerProfileId || null,
@@ -1525,7 +1525,7 @@ function loadRoom(roomId) {
       locked: !!data.locked,
       title: typeof data.title === 'string' ? data.title : null,
       // Audience gate + discovery flag + moderation-hidden op ids. Null audience
-      // means "not yet decided" — getRoom applies a per-room default.
+      // means "not yet decided", getRoom applies a per-room default.
       audience: typeof data.audience === 'string' ? data.audience : null,
       listed: typeof data.listed === 'boolean' ? data.listed : null,
       hiddenOpIds: Array.isArray(data.hiddenOpIds) ? data.hiddenOpIds : [],
@@ -1555,7 +1555,7 @@ function loadRoom(roomId) {
       // Server-side capability secrets for cross-room @mention watching.
       mentionKeys: Array.isArray(data.mentionKeys) ? data.mentionKeys : [],
       // Artist studios (audience 'artist_public'): the approved-painter ACL
-      // (opaque verified account ids only — never names/emails), the gallery
+      // (opaque verified account ids only, never names/emails), the gallery
       // publication block, and the Inktober opt-in all survive restarts.
       painters: normalizePainters(data.painters),
       gallery: normalizeGallery(data.gallery),
@@ -1581,7 +1581,7 @@ const persistInFlight = new Set();
 const persistDirty = new Set();
 async function saveRoomNow(roomId) {
   if (persistInFlight.has(roomId)) {
-    persistDirty.add(roomId); // a write is already on the wire — re-queue
+    persistDirty.add(roomId); // a write is already on the wire, re-queue
     return;
   }
   const room = rooms.get(roomId);
@@ -1592,13 +1592,13 @@ async function saveRoomNow(roomId) {
   try {
     mkdirSync(ROOM_DIR, { recursive: true });
     // Three files per room, split by how often each changes and how big it is:
-    //  - <CODE>.ops.jsonl     draw ops appended since the history base — a few
+    //  - <CODE>.ops.jsonl     draw ops appended since the history base, a few
     //                         KB per save; the common case while people draw.
-    //  - <CODE>.history.json  the history base — rewritten only when the history
+    //  - <CODE>.history.json  the history base, rewritten only when the history
     //                         was REASSIGNED (clear/wipe/restore/moderation) or
     //                         the log passed OPLOG_COMPACT_OPS (compaction).
     //  - <CODE>.json          everything else (owner, title, chat buffer, frames,
-    //                         …) — small, rewritten on any meta change.
+    //                         …), small, rewritten on any meta change.
     // Before the split a chat line, a join (mention key) or a leave (engagement
     // seconds) re-stringified and rewrote the whole multi-MB mural.
     const pending = room.pendingOps || [];
@@ -1623,13 +1623,13 @@ async function saveRoomNow(roomId) {
         await fsp.appendFile(opLogFile(roomId), lines);
         room.opLogCount = (room.opLogCount || 0) + pending.length;
       } catch (err) {
-        room.historyBaseOk = false; // the ops are still in room.history — next save rewrites the base
+        room.historyBaseOk = false; // the ops are still in room.history, next save rewrites the base
         throw err;
       }
     }
     if (needsMeta) {
       room.baseDirty = false;
-      // Note: room.lastCleared is intentionally in-memory only — never persisted.
+      // Note: room.lastCleared is intentionally in-memory only, never persisted.
       await writeAtomic(roomFile(roomId), JSON.stringify({
         sheetId: room.sheetId || null,
         ownerProfileId: room.ownerProfileId || null,
@@ -1680,7 +1680,7 @@ async function saveRoomNow(roomId) {
       }));
     }
   } catch {
-    // Non-fatal — persistence is best-effort. Whatever failed, the next attempt
+    // Non-fatal, persistence is best-effort. Whatever failed, the next attempt
     // re-evaluates every file so disk can never lag memory by more than one save.
     room.baseDirty = true;
     if (shuttingDown) shutdownPersistenceFailed = true;
@@ -1723,14 +1723,14 @@ const DEFAULT_PUBLIC_ROOM = 'MAIN';
 // the lobby feels fresh. Codes MUST be <=8 uppercase-alnum chars (the /join path
 // normalizer uppercases + strips + slices to 8).
 const FEATURED_ROOMS = [
-  { code: 'MAIN', title: 'Open Studio', emoji: '🎨', prompts: ['Draw anything you like!', 'Free draw — make something awesome', 'Your canvas, your rules'] },
-  // Ink & Pencil: the Inktober room (independent participation — no official
+  { code: 'MAIN', title: 'Open Studio', emoji: '🎨', prompts: ['Draw anything you like!', 'Free draw, make something awesome', 'Your canvas, your rules'] },
+  // Ink & Pencil: the Inktober room (independent participation, no official
   // affiliation or endorsement). One shared mural across the whole event: the
   // daily prompt rotates (server/inktober.js), the art is NEVER wiped. Ink and
   // pencil ops only, enforced at ingest. Seasonal: also off the 3-day refresh.
   { code: 'INKTOBER', title: 'Ink & Pencil', emoji: '🖋️', inktober: true, prompts: ['(inktober prompt)'] },
   { code: 'DOODLE', title: 'Doodle Jam', emoji: '✏️', prompts: ['Fill the page with doodles', 'Squiggles, swirls & shapes', 'One big group scribble'] },
-  // Friendly Halloween room — replaces DINOS in public discovery for the
+  // Friendly Halloween room, replaces DINOS in public discovery for the
   // season. DINOS itself is retired (RETIRED_ROOM_CODES): files preserved,
   // still joinable by code, just no longer listed.
   { code: 'SPOOKY', title: 'Spooky Cute', emoji: '🎃', prompts: ['Draw a friendly ghost', 'A pumpkin with the biggest smile', 'A witch’s cat stirring soup', 'Not-scary monster parade'] },
@@ -1741,23 +1741,23 @@ const FEATURED_ROOMS = [
   { code: 'CASTLE', title: 'Castles & Dragons', emoji: '🏰', prompts: ['Knights, castles & dragons', 'A magic kingdom', 'Build the tallest tower'] },
   { code: 'MEMEWALL', title: 'Meme Wall', emoji: '🎭', prompts: ['Redraw a meme from memory', 'Draw a meme-worthy face', 'Your pet as a meme', 'Invent a brand-new meme'] },
   { code: 'VIBES', title: 'Aesthetic Board', emoji: '✨', prompts: ['Draw your current vibe', 'A moodboard in one color', 'Cozy things only', 'Sunset gradient anything'] },
-  { code: 'OCCORNER', title: 'OC Corner', emoji: '🐲', prompts: ['Draw your OC — friends add theirs', 'Your OC in a new outfit', 'Two OCs team up', 'Give your OC a sidekick'] },
-  { code: 'GRAFFITI', title: 'Graffiti Wall', emoji: '🧱', prompts: ['Tag the wall — keep it kind', 'Bubble-letter your name', 'Sticker-style doodles', 'Paint a mini mural piece'] },
+  { code: 'OCCORNER', title: 'OC Corner', emoji: '🐲', prompts: ['Draw your OC, friends add theirs', 'Your OC in a new outfit', 'Two OCs team up', 'Give your OC a sidekick'] },
+  { code: 'GRAFFITI', title: 'Graffiti Wall', emoji: '🧱', prompts: ['Tag the wall, keep it kind', 'Bubble-letter your name', 'Sticker-style doodles', 'Paint a mini mural piece'] },
   // The ONE public animation room. Everywhere else, the film strip is a
-  // private-room setting (set_animation) — never on in public drawing rooms.
+  // private-room setting (set_animation), never on in public drawing rooms.
   { code: 'FLIPBOOK', title: 'Animation Studio', emoji: '🎬', animation: true, prompts: ['Animate a bouncing ball', 'Make a flower bloom frame by frame', 'A stick figure does a trick', 'Loop some rain falling'] },
   // The little-kids room: finger painting only. Wet canvas is always on,
   // smudging is the whole point, and there is NO chat (pre-readers).
   { code: 'FINGERS', title: 'Finger Paints', emoji: '🖐️', fingerPaint: true, prompts: ['Squish some colors together!', 'Paint with all ten fingers', 'Make the biggest rainbow smudge', 'Squishy squishy paint!'] },
   // Draw & Guess: one player draws a secret word, everyone else races to guess
   // it in chat. Always-on public game room; private rooms can flip it on too.
-  { code: 'GUESS', title: 'Draw & Guess', emoji: '🎮', game: true, prompts: ['Guess what everyone is drawing!', 'Draw your word — no letters or numbers!', 'Race to guess it first'] },
+  { code: 'GUESS', title: 'Draw & Guess', emoji: '🎮', game: true, prompts: ['Guess what everyone is drawing!', 'Draw your word, no letters or numbers!', 'Race to guess it first'] },
   // Draw Phone: the telephone game. Everyone draws a secret prompt at once, then
-  // passes it on — the next player guesses, the next draws the guess, and so on
+  // passes it on, the next player guesses, the next draws the guess, and so on
   // until the whole silly chain reveals. Always-on public room; private rooms opt in.
-  { code: 'PHONE', title: 'Draw Phone', emoji: '📞', phone: true, prompts: ['Draw the prompt, then pass it on!', 'Guess the drawing — then watch it drift', 'Telephone, but with doodles'] },
+  { code: 'PHONE', title: 'Draw Phone', emoji: '📞', phone: true, prompts: ['Draw the prompt, then pass it on!', 'Guess the drawing, then watch it drift', 'Telephone, but with doodles'] },
   // The Daily Challenge room: its prompt IS the day's challenge (see
-  // server/dailyChallenges.js) and its canvas wipes fresh at UTC midnight —
+  // server/dailyChallenges.js) and its canvas wipes fresh at UTC midnight -
   // the homepage's "come back tomorrow" loop. Wall posts made from this room
   // are auto-tagged into today's gallery.
   { code: 'DAILY', title: "Today's Challenge", emoji: '🗓️', daily: true, prompts: ['(daily challenge)'] },
@@ -1768,17 +1768,17 @@ const FEATURED_ROOMS = [
 const FEATURED_CODES = new Set(FEATURED_ROOMS.map((r) => r.code));
 const FEATURED_INDEX = new Map(FEATURED_ROOMS.map((r, i) => [r.code, i]));
 // Retired seasonal rooms: excluded from public discovery (forced unlisted) but
-// their files are PROTECTED — the idle sweep must never delete the old mural,
+// their files are PROTECTED, the idle sweep must never delete the old mural,
 // and the room stays joinable by its code. Also off the 3-day wipe cycle.
 const RETIRED_ROOM_CODES = new Set(['DINOS']);
 
 // ---- Flag rooms (the painted planet) ---------------------------------------
 // /planet lets anyone click a country and color its flag together. Each flag
 // is a public, kid-safe room whose code is FLAG + the ISO-3166 alpha-2 code
-// (FLAGUS, FLAGMX — 6 chars, inside the 8-char code rule) and whose coloring
+// (FLAGUS, FLAGMX: 6 chars, inside the 8-char code rule) and whose coloring
 // sheet is PINNED to that flag's line-art (`flag:XX`, served from
 // dist/flags-lineart). Nobody can swap or drop the sheet: the flag IS the room.
-// They materialise on first visit (no boot seeding — 250 empty rooms would bury
+// They materialise on first visit (no boot seeding: 250 empty rooms would bury
 // the lobby), survive the idle sweep like the featured rooms, and still take
 // the ordinary 3-day public refresh so the flag comes back blank for the next
 // class. The valid set is whatever line-art shipped in the build.
@@ -1811,7 +1811,7 @@ function flagEmoji(code) {
   return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
 function flagRoomTitle(code) { return `${flagEmoji(code)} ${flagName(code)} flag`; }
-function flagRoomPrompt(code) { return `${flagEmoji(code)} Color in the flag of ${flagName(code)} — together!`; }
+function flagRoomPrompt(code) { return `${flagEmoji(code)} Color in the flag of ${flagName(code)}, together!`; }
 // Re-assert the invariants a flag room can never lose (boot, wipe, sheet ops).
 function pinFlagRoom(room, roomId) {
   const code = flagCodeOf(roomId);
@@ -1884,19 +1884,19 @@ function storybookPayload(room) {
 // mural. Caps REJECT at ingest (frame_full) rather than FIFO-trim, which would
 // silently rot the earliest frames of an animation.
 // Frame caps used to be a MEMORY budget (every client held a ~40MB full-res
-// canvas per frame, so 8 frames). Every server-synced animation room — the
-// public FLIPBOOK included — now keeps only the active frame (+ neighbors) as
+// canvas per frame, so 8 frames). Every server-synced animation room, the
+// public FLIPBOOK included, now keeps only the active frame (+ neighbors) as
 // live canvases and the rest as ops + a ~100KB WebP raster
 // (src/utils/frameRasters.js), so the ceiling is the OP budget below instead.
-// Public: 240 frames ≈ 30s at the default 120ms (~8fps), 24s at 10fps — a real
+// Public: 240 frames ≈ 30s at the default 120ms (~8fps), 24s at 10fps, a real
 // short film. FLIPBOOK is hostless, so it is one scene: this IS its length.
 const MAX_ANIM_FRAMES_PUBLIC = Number(process.env.MAX_ANIM_FRAMES_PUBLIC || 240);
 // Private rooms: 60 frames a scene (5s at 12fps), minutes with scenes, holds
-// and loops. (A fork of a longer FLIPBOOK film copies whole — this caps adding.
+// and loops. (A fork of a longer FLIPBOOK film copies whole, this caps adding.
 // Per-scene length for private rooms is a pricing-tier lever: see
 // docs/pricing-tiers.md before raising it.)
 const MAX_ANIM_FRAMES_PRIVATE = Number(process.env.MAX_ANIM_FRAMES_PRIVATE || 60);
-// Bound a single op's serialized weight (image ops embed dataURLs — a photo
+// Bound a single op's serialized weight (image ops embed dataURLs, a photo
 // import is a few MB; nothing legitimate approaches this).
 const MAX_OP_DATAURL_CHARS = Number(process.env.MAX_OP_DATAURL_CHARS || 8_000_000);
 const JOIN_MISS_PER_MIN = Number(process.env.JOIN_MISS_PER_MIN || 40);
@@ -1906,9 +1906,9 @@ const MAX_DRAW_POINTS_PER_OP = Number(process.env.MAX_DRAW_POINTS_PER_OP || 2048
 const FRAME_OP_CAP = Number(process.env.FRAME_OP_CAP || 1500);
 // Scenes break the per-room frame ceiling without breaking the memory budget:
 // an animation room is one SEGMENT of up to MAX_SCENES scenes (each capped by
-// MAX_ANIM_FRAMES_*) — but clients only ever HYDRATE one scene's frames (and
+// MAX_ANIM_FRAMES_*), but clients only ever HYDRATE one scene's frames (and
 // only the active few as canvases), so RAM stays small. Scene creation is
-// host-only — which also means the public FLIPBOOK playground (hostless by
+// host-only, which also means the public FLIPBOOK playground (hostless by
 // design) stays single-scene. Multi-segment "productions" (several linked
 // rooms stitched into one film) build on top of this: see
 // docs/animation-rooms-spec.md.
@@ -1933,14 +1933,14 @@ function historyCeiling(audience, multiFrame) {
   return audience === 'kid_safe' ? MAX_PUBLIC_HISTORY : MAX_HISTORY;
 }
 // Film timing (mirrors src/utils/filmPlan.js): a frame can HOLD up to 10s, a
-// scene can LOOP up to 20x and carry a camera move — minutes of film without
+// scene can LOOP up to 20x and carry a camera move, minutes of film without
 // minutes of frames.
 const MAX_FRAME_HOLD_MS = 10000;
 const MAX_SCENE_LOOPS = 20;
 const CAMERA_PRESETS = new Set(['none', 'pan-right', 'pan-left', 'pan-down', 'pan-up', 'zoom-in', 'zoom-out']);
 // Phase-4 timing handshake (PHASE4-CONTRACT.md): the public FLIPBOOK room
-// holds each frame 1–3 SECONDS (default 1s); every other room — public,
-// private animation, local — keeps the ordinary 40..10000ms range with the
+// holds each frame 1–3 SECONDS (default 1s); every other room, public,
+// private animation, local, keeps the ordinary 40..10000ms range with the
 // 120ms default. The server ENFORCES the FLIPBOOK band on new/duplicate
 // frames, frame_duration and persisted loads; clients filter their hold
 // steps inside it. Never 30s a frame.
@@ -1976,7 +1976,7 @@ function sceneRuntimeMs(room, scene) {
 // is what makes a reload, a rejoin and a collaborator all agree on the stack.
 //
 // Each layer is a full-size canvas in EVERY client, so the cap is a memory
-// contract as much as a moderation one — animation frames multiply frames x
+// contract as much as a moderation one, animation frames multiply frames x
 // layers, hence the smaller animation cap (matches the client's MAX_LAYERS /
 // ANIM_MAX_LAYERS in src/App.jsx).
 const MAX_ROOM_LAYERS = Number(process.env.MAX_ROOM_LAYERS || 6);
@@ -2017,8 +2017,8 @@ function sanitizeLayers(list, cap = MAX_ROOM_LAYERS) {
   return layers.length ? layers : null;
 }
 
-// Every frame always owns at least one layer, so "no layer list" — every room
-// written before shared layers existed — is not a special case anywhere
+// Every frame always owns at least one layer, so "no layer list", every room
+// written before shared layers existed, is not a special case anywhere
 // downstream: its ops are untagged and land on layers[0], exactly where they
 // went before.
 function defaultLayers() {
@@ -2066,7 +2066,7 @@ function layerFor(frame, layerId) {
   return frame.layers.find((l) => l.id === layerId) || null;
 }
 
-// An op is a host? No — but a layer is: drop drawing on a locked layer unless
+// An op is a host? No, but a layer is: drop drawing on a locked layer unless
 // the sender is a host. Belt to the client's braces (the canvas is disabled too).
 function canDrawOnLayer(room, user, frame, layer) {
   if (!layer) return false;
@@ -2082,7 +2082,7 @@ function canDrawOnLayer(room, user, frame, layer) {
 //
 // Caveat worth knowing: a re-tagged eraser op now cuts the target layer's ink
 // too, which is exactly why merge-down refuses a layer that has erased strokes
-// (see the layer_merge case) — fun mode accepts it, because its contract is one
+// (see the layer_merge case), fun mode accepts it, because its contract is one
 // layer and there is no eraser UI there.
 function collapseFrameLayers(room, frame, intoId) {
   const into = frame.layers.find((l) => l.id === intoId);
@@ -2093,7 +2093,7 @@ function collapseFrameLayers(room, frame, intoId) {
   for (const op of room.history) {
     if (gone.has(op.layerId) && opFrameId(room, op) === frame.id) op.layerId = intoId;
   }
-  // A wipe's undo buffer holds ops that are not in history — re-tag them too or
+  // A wipe's undo buffer holds ops that are not in history, re-tag them too or
   // "bring it back" would resurrect a layer that no longer exists.
   if (Array.isArray(room.lastCleared)) {
     for (const op of room.lastCleared) {
@@ -2156,7 +2156,7 @@ function scenesMeta(room) {
 }
 
 // ---- Productions: several segment rooms tied into one film -----------------
-// A production is a tiny manifest — { id, title, segments: [roomCode…] } —
+// A production is a tiny manifest, { id, title, segments: [roomCode…] } -
 // stored under DATA_DIR/.productions. Segment rooms are ordinary private
 // animation rooms (all moderation/host machinery untouched); the storyboard
 // UI pages between them and the film export walks them client-side. Access
@@ -2194,7 +2194,7 @@ function saveProduction(production) {
     mkdirSync(PRODUCTIONS_DIR, { recursive: true });
     writeFileSync(productionFile(production.id), JSON.stringify(production));
   } catch {
-    // best-effort — the in-memory manifest keeps the session working
+    // best-effort, the in-memory manifest keeps the session working
   }
 }
 
@@ -2206,7 +2206,7 @@ function productionSummary(production) {
     title: production.title,
     maxSegments: MAX_PRODUCTION_SEGMENTS,
     segments: production.segments.map((code, index) => {
-      // LIVE rooms only — never getRoom() here, or every idle sibling segment
+      // LIVE rooms only, never getRoom() here, or every idle sibling segment
       // gets parsed off disk and pinned in the `rooms` map (the productionId
       // auto-close exemption then never evicts it). Dead segments report
       // disk-free defaults; their real title/frames restore when someone joins.
@@ -2216,7 +2216,7 @@ function productionSummary(production) {
         index,
         title: (room && room.title) || `Part ${index + 1}`,
         users: room ? room.users.size : 0,
-        // Live crew chips for the storyboard — LIVE rooms only (never getRoom
+        // Live crew chips for the storyboard: LIVE rooms only (never getRoom
         // an idle segment). Just the already-public {name,color}, capped.
         crew: room ? Array.from(room.users.values()).slice(0, 6).map((u) => ({ name: u.name, color: u.color })) : [],
         frames: room ? room.frames.length : 0,
@@ -2238,7 +2238,7 @@ function broadcastProduction(production) {
 }
 
 // One scene's shareable state: its frame list + the visible ops that live on
-// those frames. This is what joins, scene switches, and resyncs deliver —
+// those frames. This is what joins, scene switches, and resyncs deliver -
 // never the whole movie, so client memory stays at one scene's worth.
 function sceneHistoryMsg(room, sceneId) {
   const frames = framesOfScene(room, sceneId);
@@ -2253,7 +2253,7 @@ function sceneHistoryMsg(room, sceneId) {
 }
 
 // Rebuild the per-frame op counts (after bulk history mutations: moderation
-// removes, undo_clear restores, room load). O(history) — moderation-frequency.
+// removes, undo_clear restores, room load). O(history), moderation-frequency.
 function recountFrameOps(room) {
   const counts = new Map(room.frames.map((f) => [f.id, 0]));
   for (const op of room.history) {
@@ -2315,7 +2315,7 @@ function trimHistoryFront(room) {
   // A baked snapshot stays valid only while every op past its opId still
   // survives in history. If this trim cut into the tail (ops newer than the
   // snapshot were dropped), the snapshot no longer represents "everything
-  // before the tail" — drop it so joins fall back to full-history replay.
+  // before the tail", drop it so joins fall back to full-history replay.
   if (room.snapshotOpId > 0 && history.length && (history[0].opId || 0) > room.snapshotOpId + 1) {
     invalidateRoomSnapshot(room);
   }
@@ -2324,14 +2324,14 @@ function trimHistoryFront(room) {
 // The prompt shown today for a featured room (deterministic daily rotation, UTC).
 function dailyPromptFor(featured) {
   if (!featured || !featured.prompts || !featured.prompts.length) return null;
-  // The DAILY room's prompt is the day's challenge itself. Evaluated ONCE — a
+  // The DAILY room's prompt is the day's challenge itself. Evaluated ONCE, a
   // call pair straddling midnight would pair one day's emoji with another's prompt.
   if (featured.daily) {
     const c = dailyChallenge();
     return `${c.emoji} ${c.prompt}`;
   }
   // The Ink & Pencil room's prompt IS the Inktober event state (warm-up before
-  // October, the official prompt of the UTC day during it) — derived, so the
+  // October, the official prompt of the UTC day during it), derived, so the
   // lobby card, the handshake and /api/inktober always agree.
   if (featured.inktober) {
     const s = inktoberState();
@@ -2361,7 +2361,7 @@ function rematerializeSketchbookPage(roomId) {
     materializeSketchbookPageRoom(book, page);
     return true;
   } catch {
-    return false; // best-effort — fall through to the ordinary fresh-room path
+    return false; // best-effort, fall through to the ordinary fresh-room path
   } finally {
     rematerializingPages.delete(roomId);
   }
@@ -2384,7 +2384,7 @@ function getRoom(roomId) {
     // Which frame/scene layer caps apply. Public rooms can never opt into the
     // film strip, so the animation cap only ever applies to a private room.
     const animEnabled = !saved.sketchbook && (ANIMATION_ROOM_CODES.has(roomId) || (audience !== 'kid_safe' && !!saved.animation));
-    // Public rooms carry a lower cap than the global file cap — apply it on load
+    // Public rooms carry a lower cap than the global file cap, apply it on load
     // too, so a file written under the old cap doesn't reload oversized. Films
     // are capped at INGEST instead: a front trim would erase frame 1, so a
     // persisted film that exceeds a REDUCED budget/config loads whole.
@@ -2399,7 +2399,7 @@ function getRoom(roomId) {
     }
     // Frame AND scene ids mint from the SAME counter (`f<opSeq>` / `s<opSeq>`)
     // and can outlive the highest history opId (blank frames, per-frame
-    // clears) — scan them too or a restart could mint a duplicate id.
+    // clears), scan them too or a restart could mint a duplicate id.
     for (const f of Array.isArray(saved.frames) ? saved.frames : []) {
       const m = /^f(\d+)$/.exec((f && f.id) || '');
       if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
@@ -2409,7 +2409,7 @@ function getRoom(roomId) {
       if (m && Number(m[1]) > opSeq) opSeq = Number(m[1]);
     }
     // Layer ids mint from the same counter (`L<opSeq>`) and outlive ops the same
-    // way — a restart must not hand out an id a live frame already uses.
+    // way, a restart must not hand out an id a live frame already uses.
     for (const f of Array.isArray(saved.frames) ? saved.frames : []) {
       for (const l of Array.isArray(f && f.layers) ? f.layers : []) {
         const m = /^L(\d+)$/.exec((l && l.id) || '');
@@ -2437,7 +2437,7 @@ function getRoom(roomId) {
       sheetId: saved.sheetId,
       // Featured anchor rooms (MAIN, DOODLE, …) are communal and must never be
       // owned. An older build let the first signed-in visitor claim them, which
-      // host-gated Clear and let the mural stack up un-wipeable — strip any stale
+      // host-gated Clear and let the mural stack up un-wipeable, strip any stale
       // owner/co-hosts on load so they self-heal on the next deploy.
       ownerProfileId: FEATURED_CODES.has(roomId) ? null : saved.ownerProfileId,
       coHosts: FEATURED_CODES.has(roomId) ? [] : saved.coHosts,
@@ -2497,7 +2497,7 @@ function getRoom(roomId) {
       // Shared-animation state. Every room carries a frames list (legacy
       // untagged ops live on frames[0]) grouped into scenes; only
       // animation-enabled rooms may grow either. Public rooms can NEVER opt
-      // in — only FLIPBOOK ships the strip. Every frame also carries its own
+      // in, only FLIPBOOK ships the strip. Every frame also carries its own
       // shared layer stack; a room written before shared layers materializes
       // the single layer its ops already lived on.
       frames: sanitizeFrames(saved.frames, animEnabled ? MAX_ROOM_LAYERS_ANIM : MAX_ROOM_LAYERS, roomId)
@@ -2595,14 +2595,14 @@ function seedFeaturedRooms() {
     room.orchestraEnabled = !!f.orchestra;
     room.quests = f.quests ? (room.quests || normalizeQuestState(null, f.code)) : null;
     if (room.fingerPaint) {
-      room.wetCanvas = true; // finger paints are ALWAYS wet — that's the toy
+      room.wetCanvas = true; // finger paints are ALWAYS wet, that's the toy
       room.brushMode = 'fun'; // ...and the toddler palette is always fun mode
     }
   }
 }
 seedFeaturedRooms();
 
-// The op history minus moderation-hidden ops — what late joiners and post-hide
+// The op history minus moderation-hidden ops, what late joiners and post-hide
 // rebuilds actually receive. Cheap no-op when nothing is hidden (the common case).
 function visibleHistory(room) {
   if (!room.hiddenOpIds || room.hiddenOpIds.size === 0) return room.history;
@@ -2612,7 +2612,7 @@ function visibleHistory(room) {
 // ---- Join catch-up cache ----------------------------------------------------
 // Joining a big room used to cost one full JSON.stringify (~37ms at the cap)
 // plus one per-message deflate (~55ms) of the whole history PER JOINER, on the
-// single event-loop thread — a reconnect wave stalled every room on the box.
+// single event-loop thread, a reconnect wave stalled every room on the box.
 // Now each room keeps one gzipped history frame per variant (full / spectator)
 // and joiners that opted in (`?gz=1`) get that buffer as a binary frame plus the
 // few ops newer than it as ordinary text `op` messages (the client already
@@ -2663,7 +2663,7 @@ function historyTailAfter(room, variant, lastOpId) {
 function historyCacheUsable(room, entry) {
   // The spectator exemption used to skip the framesKey check, but spectator
   // op SELECTION depends on frame structure (animation rooms filter to
-  // frames[0]; untagged ops bind to it) — a frame move/add mid-build would
+  // frames[0]; untagged ops bind to it), a frame move/add mid-build would
   // otherwise serve ops filtered for a frame that is no longer first.
   return !!entry && entry.gen === room.historyGen && entry.hiddenGen === (room.hiddenGen || 0)
     && entry.framesKey === framesKeyOf(room);
@@ -2676,7 +2676,7 @@ function buildHistoryCache(room, variant) {
   // Sliced async stringify + threadpool gzip (server/historyFrame.js): the
   // frame bytes are identical to JSON.stringify(msg) but a cold rebuild of a
   // cap-full room no longer stalls the event loop. The ops array is
-  // snapshotted inside the builder — ops appended (or a front-trim splice)
+  // snapshotted inside the builder, ops appended (or a front-trim splice)
   // DURING the async build can't leak past the lastOpId watermark (which would
   // double-deliver them via the tail) or corrupt the frame.
   return buildGzippedHistoryFrame({ variant, gen, hiddenGen, framesKey, msg, budgetMs: HISTORY_CACHE_BUILD_BUDGET_MS });
@@ -2684,7 +2684,7 @@ function buildHistoryCache(room, variant) {
 // Proactive refresh: once the tail past a cached frame crosses
 // HISTORY_CACHE_PREBUILD_TAIL, rebuild in the background so the NEXT joiner
 // finds a warm frame instead of triggering (and awaiting) a cold rebuild.
-// O(1) guard on the per-op hot path; correctness never depends on this — a
+// O(1) guard on the per-op hot path; correctness never depends on this, a
 // stale or absent cache just falls back to the lazy join-time build.
 function maybePrebuildHistoryCache(room) {
   if (!HISTORY_CACHE_PREBUILD_TAIL || room.animationEnabled) return;
@@ -2696,7 +2696,7 @@ function maybePrebuildHistoryCache(room) {
     if (cache[`${variant}Building`]) continue;
     if ((room.opSeq || 0) - entry.lastOpId < HISTORY_CACHE_PREBUILD_TAIL) continue;
     const key = `${variant}Building`;
-    // The promise must resolve to the ENTRY — joiners landing mid-build await
+    // The promise must resolve to the ENTRY, joiners landing mid-build await
     // the same slot in the gated catch-up (server/catchup.js).
     cache[key] = buildHistoryCache(room, variant)
       .then((built) => {
@@ -2709,7 +2709,7 @@ function maybePrebuildHistoryCache(room) {
 }
 // Atomic catch-up delivery (server/catchup.js): while a join/scene-fetch
 // baseline is being prepared, canvas/structure broadcasts to that socket are
-// gated into a bounded queue and flushed in order AFTER the baseline lands —
+// gated into a bounded queue and flushed in order AFTER the baseline lands -
 // no live op can precede the history frame or repeat inside the tail.
 // sendRoomCatchUp covers full/spectator joins; sendSceneCatchUp covers
 // animation joins, scene_fetch and modwatch scene pushes.
@@ -2757,7 +2757,7 @@ const checkpoints = createCheckpointService({
 });
 
 // Allowed idle time before an EMPTY room is auto-closed. Scales with complexity
-// (op count) and engagement (cumulative user-seconds), capped — so a rich, busy
+// (op count) and engagement (cumulative user-seconds), capped, so a rich, busy
 // mural lingers much longer than a quick scribble. Works on a live room or a
 // plain {history,userSeconds,ownerProfileId} read from disk. An account-owned
 // room runs on the longer owned scale (see AUTO_CLOSE_OWNED_BASE_MS).
@@ -2847,7 +2847,7 @@ function autoCloseSweep() {
   rooms.forEach((room, id) => {
     if (FEATURED_CODES.has(id) || isFlagRoom(id) || room.users.size > 0) return;
     if (room.mods && room.mods.size > 0) return; // a moderator is looking at it right now
-    // Production segments are chapters of someone's FILM — an idle Part 3
+    // Production segments are chapters of someone's FILM, an idle Part 3
     // getting reaped would put a hole in the movie. They outlive the sweep,
     // but only while the film still exists: an orphaned segment (manifest lost)
     // ages out normally instead of leaking forever.
@@ -2912,7 +2912,7 @@ if (phantomTimer.unref) phantomTimer.unref();
 // ---- Daily Challenge rollover ----------------------------------------------
 // The DAILY room's canvas belongs to ONE challenge date, stamped on the room
 // and persisted (room.dailyDate). Whenever the stamp disagrees with today the
-// canvas is wiped and the fresh prompt pushed — DERIVED from the date exactly
+// canvas is wiped and the fresh prompt pushed: DERIVED from the date exactly
 // like the prompt itself, so a restart or downtime spanning midnight can never
 // leave yesterday's mural under today's challenge (deploys restart this
 // server!). Idempotent + cheap (one string compare), so it runs at boot, on
@@ -2933,14 +2933,14 @@ function ensureDailyFresh() {
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
   room.lastClearedChat = null;
-  // Yesterday's ops are gone — stale moderation state on them is pure liability
+  // Yesterday's ops are gone, stale moderation state on them is pure liability
   // (recycled opIds would silently hide innocent new-day strokes).
   room.hiddenOpIds.clear(); room.hiddenGen = (room.hiddenGen || 0) + 1;
   room.flaggedOps.clear();
   broadcast('DAILY', { type: 'clear', userId: 'system', name: 'Daily Challenge', gameRound: true });
   broadcast('DAILY', { type: 'sheet', sheetId: null });
   // vote_result is the client's existing "here's the new prompt" path (toast +
-  // un-hidden chip) — reuse it rather than inventing a new message type.
+  // un-hidden chip), reuse it rather than inventing a new message type.
   broadcast('DAILY', { type: 'vote_result', prompt: `${fresh.emoji} ${fresh.prompt}`, counts: [0, 0, 0] });
   persistRoom('DAILY');
 }
@@ -2949,7 +2949,7 @@ const dailyRolloverTimer = setInterval(ensureDailyFresh, 60_000);
 if (dailyRolloverTimer.unref) dailyRolloverTimer.unref();
 
 // ---- Inktober rollover -------------------------------------------------------
-// The INKTOBER mural is ONE shared canvas across the whole event — a phase or
+// The INKTOBER mural is ONE shared canvas across the whole event, a phase or
 // day flip NEVER wipes it; only the prompt rotates. Derived from the UTC date
 // (server/inktober.js), exactly like the daily challenge, so a restart can
 // never lag the calendar. Connected members (and spectators) get the new
@@ -3002,19 +3002,19 @@ function inkEnforcedFor(room) {
 // fork the art into their own private room and keep going there.
 //
 // Like the daily wipe, the deadline is DERIVED from a persisted timestamp
-// (room.wipeAt) rather than an in-memory timer — a deploy or crash must not
+// (room.wipeAt) rather than an in-memory timer, a deploy or crash must not
 // silently skip or double-fire a wipe.
 const ROOM_WIPE_MS = 3 * 24 * 3600_000;
 const KEEP_VOTES_NEEDED = 2; // one person alone can't hold the commons open
 // However many times a room votes to keep, the canvas can never be held more
-// than this far ahead — otherwise repeat votes push the refresh out by months
+// than this far ahead, otherwise repeat votes push the refresh out by months
 // and the commons silts up exactly as before.
 const MAX_WIPE_HORIZON_MS = 2 * ROOM_WIPE_MS;
 // Forking copies the whole history into a new room + writes a room file, so
-// cap it far below MAX_HISTORY (20k) — this is a rescue, not a bulk export.
+// cap it far below MAX_HISTORY (20k), this is a rescue, not a bulk export.
 const FORK_MAX_OPS = 6000;
 
-// Both wipe-panel buttons used to fail SILENTLY on every guard — the kid just
+// Both wipe-panel buttons used to fail SILENTLY on every guard, the kid just
 // saw nothing happen. Reply with a reason so the client can say why.
 function denyWipe(user, reason) {
   if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'wipe_denied', reason }));
@@ -3070,7 +3070,7 @@ function ensureRoomFresh(roomId) {
   const room = rooms.get(roomId);
   if (!wipesOnCycle(room, roomId)) return;
   if (!room.wipeAt) {
-    // First sight of an eligible room — start its clock.
+    // First sight of an eligible room, start its clock.
     room.wipeAt = Date.now() + ROOM_WIPE_MS;
     persistRoom(roomId);
     return;
@@ -3080,7 +3080,7 @@ function ensureRoomFresh(roomId) {
   cancelWipeRequest(room, 'cleared'); // the refresh beat the countdown to it
   room.history = [];
   invalidateRoomSnapshot(room);
-  // An uploaded trace photo belongs to the mural being retired — free the image
+  // An uploaded trace photo belongs to the mural being retired, free the image
   // instead of orphaning it in memory (same contract as clear/replace/close).
   dropRoomTracePhoto(room);
   // A flipbook's frames/scenes are part of the artwork: leaving 8 empty frames
@@ -3093,7 +3093,7 @@ function ensureRoomFresh(roomId) {
   recountFrameOps(room);
   room.sheetId = null;
   pinFlagRoom(room, roomId); // a flag room refreshes to a blank FLAG, not a blank page
-  room.lastCleared = null; // the refresh is not undoable — it IS the reset
+  room.lastCleared = null; // the refresh is not undoable, it IS the reset
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
   room.lastClearedChat = null;
@@ -3106,11 +3106,11 @@ function ensureRoomFresh(roomId) {
 
   // gameRound:true suppresses the "someone cleared it" blame banner (nobody
   // did this), and wipeRefresh lets the client explain what actually happened
-  // — including in FINGERS, which has no chat to read.
+  //, including in FINGERS, which has no chat to read.
   broadcast(roomId, { type: 'clear', userId: 'system', name: 'Fresh canvas', gameRound: true, wipeRefresh: true });
   broadcast(roomId, { type: 'sheet', sheetId: room.sheetId || null });
   if (!room.fingerPaint) {
-    pushSystemChat(room, roomId, 'Fresh canvas! This room refreshes every 3 days — pin art to the Fridge Wall to keep it forever. 🧽');
+    pushSystemChat(room, roomId, 'Fresh canvas! This room refreshes every 3 days, pin art to the Fridge Wall to keep it forever. 🧽');
   }
   broadcastWipeState(roomId);
   persistRoom(roomId);
@@ -3129,17 +3129,17 @@ if (roomWipeTimer.unref) roomWipeTimer.unref();
 // Wiping the shared mural is the most destructive thing a member can do, so a
 // member's Clear is a REQUEST, never an instant wipe:
 //   alone          -> a 10s countdown
-//   two people     -> a 30s countdown (no vote — the pair just get warned)
+//   two people     -> a 30s countdown (no vote, the pair just get warned)
 //   three or more  -> a 30s room vote; it wipes only if MORE THAN HALF of the
 //                     people in the room say yes. Not voting is not a yes: the
 //                     kids busy drawing are exactly who this protects.
 // The asker can cancel until the last WIPE_CANCEL_LOCK_MS. The countdown IS the
 // undo window, so members can't "Bring it back" afterwards (one kid could
-// overturn the room's vote); a moderator's Undo still can. The chat stays —
+// overturn the room's vote); a moderator's Undo still can. The chat stays -
 // only a moderator's reset (moderateResetRoom) starts a room over completely.
 //
 // A host's Clear (host panel) and the Draw & Guess drawer scrapping their own
-// turn stay instant — see the `clear` case. In-memory only on purpose: a
+// turn stay instant, see the `clear` case. In-memory only on purpose: a
 // restart mid-countdown drops the request, which fails safe (nothing wiped).
 const WIPE_SOLO_MS = 10_000;
 const WIPE_COUNTDOWN_MS = 30_000;
@@ -3148,7 +3148,7 @@ const WIPE_VOTE_MIN_PEOPLE = 3;
 const WIPE_VOTE_COOLDOWN_MS = 30_000; // a room that just said no isn't re-asked at once
 
 // A person, not a tab: two tabs of one browser (or one account) are one head
-// and one vote. Falls back to the socket — never the IP, which would fold a
+// and one vote. Falls back to the socket, never the IP, which would fold a
 // whole classroom behind one NAT into a single "person".
 function wipePersonKey(user) {
   if (user.profileId) return `pb_${user.profileId}`;
@@ -3162,7 +3162,7 @@ function wipePeople(room) {
   return keys;
 }
 
-// Only people still in the room count — a voter who leaves takes their vote
+// Only people still in the room count, a voter who leaves takes their vote
 // with them, and a joiner raises the bar (and gets a vote).
 function wipeTally(room) {
   const req = room.wipeReq;
@@ -3179,7 +3179,7 @@ function wipeTally(room) {
 // flipbook that started meanwhile is never wiped by a stale request.
 function wipeRequestBlock(room, user) {
   // Protected murals: the shared INKTOBER event canvas and retired seasonal
-  // rooms (DINOS) are never on a member wipe countdown — the whole point is
+  // rooms (DINOS) are never on a member wipe countdown, the whole point is
   // that the art accumulates across the event and beyond, so one visitor
   // (solo countdowns included) must not be able to erase everyone else's
   // mural. Moderation wipes stay available through the admin surface
@@ -3225,7 +3225,7 @@ function wipeReqPayload(room, user) {
 }
 
 // One send per member (not a broadcast) because each copy carries that
-// member's own vote. Members only — homepage spectators never see it.
+// member's own vote. Members only, homepage spectators never see it.
 function sendWipeReq(room, ended = null) {
   room.users.forEach((u) => {
     if (u.ws.readyState !== 1) return;
@@ -3295,7 +3295,7 @@ function failWipeVote(room, tally) {
 // Settle a vote early once its outcome is fixed: yes can no longer reach a
 // majority (fail now), or EVERYONE has voted and it passed (skip to the final
 // locked seconds rather than make the room sit out the clock). A plain
-// majority with people still undecided waits — the countdown is their warning.
+// majority with people still undecided waits, the countdown is their warning.
 function settleWipeVote(room) {
   const req = room.wipeReq;
   if (!req || req.mode !== 'vote') return;
@@ -3348,7 +3348,7 @@ function resolveWipeRequest(roomId, reqId) {
   }
   clearTimeout(req.timer);
   room.wipeReq = null;
-  // Everyone gets the clear, the asker included — their canvas waited for the room.
+  // Everyone gets the clear, the asker included, their canvas waited for the room.
   wipeMural(room, memberActor(req.byId, asker), {
     undoable: false,
     message: { final: true, wipeMode: req.mode },
@@ -3359,7 +3359,7 @@ function resolveWipeRequest(roomId, reqId) {
   sendWipeReq(room, { id: req.id, outcome: 'wiped', byId: req.byId, byName: req.byName, mode: req.mode });
 }
 
-// Op ids in the (sinceOpId, toOpId] window — the "delta that turned the canvas
+// Op ids in the (sinceOpId, toOpId] window, the "delta that turned the canvas
 // lewd" that an image flag implicates.
 function opIdsInRange(room, sinceOpId, toOpId) {
   const ids = [];
@@ -3371,10 +3371,10 @@ function opIdsInRange(room, sinceOpId, toOpId) {
 
 // Elect up to MAX_WATCHERS capable clients to run the in-browser NSFW watcher in
 // a public room (prefer signed-in, then earliest joined). Only the elected few
-// scan, so the cost never multiplies across everyone painting. Idempotent — only
+// scan, so the cost never multiplies across everyone painting. Idempotent, only
 // emits watcher_role when a client's status actually changes.
 // TRUST LEVEL: capability is SELF-DECLARED (watcher_ack) and guests are
-// eligible — election is a resource/abuse-control decision (who spends CPU
+// eligible, election is a resource/abuse-control decision (who spends CPU
 // scanning, who may deposit quota-bounded evidence), never an identity or
 // integrity guarantee. Everything an elected watcher can do is validated and
 // quota-bounded server-side on that basis.
@@ -3443,7 +3443,7 @@ function pick(list) {
 
 // Fun "Adjective Animal" guest names ("Neon Fox", "Snazzy Bunny"). Retries a few
 // times to dodge anyone already in the room, then falls back to a digit suffix.
-// Longest combo is 13 chars — comfortably inside the 20-char rename cap.
+// Longest combo is 13 chars, comfortably inside the 20-char rename cap.
 function guestNameFor(room) {
   const taken = new Set(Array.from(room.users.values()).map((u) => u.name));
   for (let i = 0; i < 10; i += 1) {
@@ -3466,7 +3466,7 @@ function isHost(room, user) {
 
 // ---- Artist-studio paint access (docs/ARTIST-ROOMS-CONTRACT.md) ------------
 // Requests are session-targeted (the owner approves a LIVE verified account by
-// its session user id), bounded per room, and expire — a stale queue entry can
+// its session user id), bounded per room, and expire, a stale queue entry can
 // never become a standing invitation. Approvals land in the persisted
 // room.painters ACL (opaque account ids only); the owner manages offline
 // entries through the owner-only REST ACL (see /api/rooms/:code/artist).
@@ -3507,7 +3507,7 @@ function userListOf(room) {
 // The recent-chat catch-up sent to anyone joining (or spectating) a room, so
 // they see who's been talking. Capped to the last 50. Projection rules:
 // profileId stays server-side, and tapback membership lists (gameKeys) reduce
-// to COUNTS — who reacted is never exposed, only how many.
+// to COUNTS, who reacted is never exposed, only how many.
 function chatHistoryMsg(room) {
   return {
     type: 'chat_history',
@@ -3537,7 +3537,7 @@ function flushOutbox(ws) {
   outbox.timer = null;
   if (ws.readyState !== 1) { ws.outbox = null; return; }
   // Below the soft limit, drain freely. Above it, keep draining only while the
-  // socket makes PROGRESS (bufferedAmount shrinks between ticks — a recovering
+  // socket makes PROGRESS (bufferedAmount shrinks between ticks, a recovering
   // consumer), in bounded 256KB bursts; a still-stalled socket gets nothing
   // more, so recovery never costs one message per tick and a dead consumer
   // never grows memory past the (bounded) queue.
@@ -3560,10 +3560,10 @@ function flushOutbox(ws) {
 }
 // Bounded reliable send. Below the soft buffer limit (and with nothing
 // queued) this is a plain ws.send. Above it, DURABLE traffic queues in order
-// (bounded — overflow bounces the socket with 1013 so the client resyncs from
+// (bounded, overflow bounces the socket with 1013 so the client resyncs from
 // durable history instead of silently losing messages); EPHEMERAL traffic
 // drops. Returns false when the message was NOT put on the wire now (dropped,
-// queued, or socket gone) — callers that only care about delivery don't need
+// queued, or socket gone), callers that only care about delivery don't need
 // the distinction.
 function sendReliable(ws, data, { binary = false, compress, durable = true } = {}) {
   if (ws.readyState !== 1) return false;
@@ -3598,7 +3598,7 @@ function broadcast(roomId, message, exceptId = null) {
   room.users.forEach((u) => {
     if (u.id !== exceptId && u.ws.readyState === 1) {
       // A socket mid-catch-up gets canvas/structure traffic queued (flushed in
-      // order after its baseline) — never ahead of it, never duplicated.
+      // order after its baseline), never ahead of it, never duplicated.
       // Ungated sends still respect the bounded outgoing queue: durable
       // traffic queues (overflow = 1013 resync), ephemeral may drop.
       if (!catchup.routeGatedBroadcast(u.ws, room, message, data)) {
@@ -3608,7 +3608,7 @@ function broadcast(roomId, message, exceptId = null) {
   });
   // Read-only homepage viewers see the live mural too, but never draw/count.
   // ALLOWLIST, not blocklist: spectators get the mural (ops, clears, sheet
-  // swaps), moderation history rebuilds, AND the room's live conversation —
+  // swaps), moderation history rebuilds, AND the room's live conversation -
   // chat, tapback counts, hype. The talk IS the show (Twitch model): a visitor
   // watching the homepage viewport reads the banter and taps in to join it.
   // Display names in chat are pseudonymous and moderated; the ROSTER stays
@@ -3616,16 +3616,16 @@ function broadcast(roomId, message, exceptId = null) {
   // type stays inside the room by default. [Owner-approved stance change from
   // the earlier no-social-to-spectators rule.]
   // Animation rooms: spectators watch the FIRST frame only (mirrors the join
-  // filter) — ops/clears for other frames would smear onto their one canvas.
+  // filter), ops/clears for other frames would smear onto their one canvas.
   if (room.spectators && room.spectators.size) {
     const t = message.type;
-    // (chat_history rides only a moderator's reset/undo — the same projection
+    // (chat_history rides only a moderator's reset/undo, the same projection
     // a spectator already gets on join.)
     if (t !== 'op' && t !== 'clear' && t !== 'sheet' && t !== 'history'
       && t !== 'chat' && t !== 'chat_history' && t !== 'chat_react' && t !== 'hype' && t !== 'chat_doodle_removed'
       && t !== 'seasonal_prompt') return; // seasonal_prompt: server-authored, safe for previews
     if (room.animationEnabled) {
-      // A history rebuild carries every frame's ops — a spectator's single
+      // A history rebuild carries every frame's ops, a spectator's single
       // canvas would smear them together. Skip it; the tile catches up on hop.
       if (t === 'history') return;
       const firstId = room.frames[0] && room.frames[0].id;
@@ -3639,7 +3639,7 @@ function broadcast(roomId, message, exceptId = null) {
     });
   }
   // Moderator watchers ("glass room") are the operator's eyes: they get everything
-  // a member would — roster, chat, alerts, the mural — because seeing it is the
+  // a member would, roster, chat, alerts, the mural, because seeing it is the
   // job. The only cut is the one-canvas rule: an animation room pages by scene,
   // so a watcher follows the FIRST SCENE and is handed that scene back after a
   // history/resync rebuild it could not receive whole.
@@ -3666,7 +3666,7 @@ function broadcast(roomId, message, exceptId = null) {
     if (room.animationEnabled && (t === 'history' || t === 'resync')) {
       const sceneId = room.scenes[0] && room.scenes[0].id;
       // The watcher follows the first scene: hand it back through the gated
-      // scene cache (shared build — a moderation refetch wave of watchers
+      // scene cache (shared build, a moderation refetch wave of watchers
       // costs one build, not one stringify per watcher on the hot path).
       if (sceneId) {
         room.mods.forEach((mws) => {
@@ -3697,13 +3697,13 @@ function refreshFamilyRoomEntitlement(profileId) {
 
 // ---- Draw & Guess game engine ---------------------------------------------
 // One drawer per round gets a secret word; everyone else races to type it in
-// chat. The WORD is the only secret — draw ops relay as normal ops, so replay
+// chat. The WORD is the only secret, draw ops relay as normal ops, so replay
 // stays deterministic. All live state is on room.game (ephemeral, NEVER
-// persisted — like room.vote); timers on room.gameTimers.
+// persisted, like room.vote); timers on room.gameTimers.
 const GAME_ROUND_MS = 75_000; // drawing time per round
 const GAME_INTERMISSION_MS = 6_000; // reveal + scoreboard pause between rounds
 const GAME_MIN_PLAYERS = 2;
-const GAME_MATCH_ROUNDS = 5; // rounds per match — then the podium + score reset
+const GAME_MATCH_ROUNDS = 5; // rounds per match, then the podium + score reset
 const GAME_PODIUM_MS = 11_000; // podium celebration pause before the next match
 
 function normalizeGuess(s) {
@@ -3732,7 +3732,7 @@ function clearGameTimers(room) {
 function maskWord(word, revealed) {
   return word.split('').map((ch, i) => (ch === ' ' ? '  ' : revealed.has(i) ? ch : '_')).join(' ');
 }
-// The PUBLIC snapshot — never carries the word for guessers.
+// The PUBLIC snapshot, never carries the word for guessers.
 function publicGame(room) {
   const g = room.game;
   if (!g) return null;
@@ -3842,7 +3842,7 @@ function endGameRound(roomId, reason) {
   // Every MATCH_ROUNDS rounds the match ends on a podium: top three by
   // cumulative score get their moment (confetti client-side), then scores
   // reset and a fresh match begins. Turns an endless round-carousel into
-  // something you can WIN — and a reason to stay for "one more match".
+  // something you can WIN, and a reason to stay for "one more match".
   const matchOver = g.roundNo >= GAME_MATCH_ROUNDS;
   let pauseMs = GAME_INTERMISSION_MS;
   if (matchOver) {
@@ -3852,7 +3852,7 @@ function endGameRound(roomId, reason) {
       .slice(0, 3);
     if (standings.length && standings[0].score > 0) {
       broadcast(roomId, { type: 'game_podium', standings, rounds: g.roundNo });
-      pushGameChat(room, roomId, `🏆 Match over — ${standings[0].name} takes the crown with ${standings[0].score} points!`, '#b45309');
+      pushGameChat(room, roomId, `🏆 Match over, ${standings[0].name} takes the crown with ${standings[0].score} points!`, '#b45309');
       pauseMs = GAME_PODIUM_MS;
     }
     g.roundNo = 0;
@@ -3940,7 +3940,7 @@ function handleGuess(room, roomId, user, rawMessage) {
 // Everyone gets a secret prompt "book". Each round the books rotate one seat
 // around the circle, alternating DRAW (draw the text at the top of your held
 // book) and GUESS (describe the drawing at the top). After N rounds the books
-// reveal, showing the drift. Unlike Draw & Guess this uses NO shared canvas —
+// reveal, showing the drift. Unlike Draw & Guess this uses NO shared canvas -
 // each player draws PRIVATELY on their own local canvas and submits a finished
 // PNG page, so draw ops are suppressed while a game runs (see the `op` case).
 // All live state is on room.phone (ephemeral, NEVER persisted); the round timer
@@ -3978,7 +3978,7 @@ function phoneUniquePresent(room) {
 function phoneBookForSeat(seat, round, n) {
   return ((seat - round) % n + n) % n;
 }
-// PUBLIC snapshot — no page contents, no raw keys (names only).
+// PUBLIC snapshot, no page contents, no raw keys (names only).
 function publicPhone(room) {
   const p = room.phone;
   if (!p) return null;
@@ -3989,7 +3989,7 @@ function publicPhone(room) {
     deadline: p.deadline || 0,
     players: p.players.map((k) => p.names[k] || 'Someone'),
     submittedCount: p.submitted ? p.submitted.size : 0,
-    // While waiting/revealing there's no frozen roster yet — show how many are
+    // While waiting/revealing there's no frozen roster yet, show how many are
     // actually in the room (that's the "need 3 to start" count).
     presentCount: (p.phase === 'waiting' || p.phase === 'reveal')
       ? phoneUniquePresent(room)
@@ -4041,7 +4041,7 @@ function startPhoneGame(roomId) {
   });
   room.phone = { phase: 'starting', round: 0, totalRounds, players, names, books, deadline: 0, submitted: new Set() };
   cancelWipeRequest(room, 'blocked'); // the game owns the canvas now
-  // The shared canvas is off for the whole game — clear its server state so any
+  // The shared canvas is off for the whole game, clear its server state so any
   // pre-game doodles don't resurrect for a late joiner (ops are dropped while
   // the game runs; see the `op` case).
   room.history = [];
@@ -4051,7 +4051,7 @@ function startPhoneGame(roomId) {
   room.lastCleared = null;
   room.lastClearedFrameId = null;
   room.lastClearedSheet = null;
-  pushPhoneChat(room, roomId, `Draw Phone! ${players.length} playing — draw your secret prompt, then pass it on. 📞`);
+  pushPhoneChat(room, roomId, `Draw Phone! ${players.length} playing, draw your secret prompt, then pass it on. 📞`);
   startPhoneRound(roomId);
 }
 
@@ -4074,7 +4074,7 @@ function startPhoneRound(roomId) {
   // Hand each present player their PRIVATE task: the top page of their held book.
   for (const u of room.users.values()) {
     const seat = p.players.indexOf(gameKey(u));
-    if (seat < 0) continue; // spectator / late joiner — watches, no task
+    if (seat < 0) continue; // spectator / late joiner, watches, no task
     const book = p.books[phoneBookForSeat(seat, p.round, n)];
     const top = book.pages[book.pages.length - 1];
     const task = p.phase === 'drawing'
@@ -4089,7 +4089,7 @@ function startPhoneRound(roomId) {
 }
 
 // End of round: any book missing this round's page (holder absent or idle) gets
-// a placeholder, then advance — to the next round or the reveal.
+// a placeholder, then advance, to the next round or the reveal.
 function fillMissingAndAdvance(roomId) {
   const room = rooms.get(roomId);
   const p = room && room.phone;
@@ -4194,7 +4194,7 @@ function nameMentioned(lower, name) {
 
 // Cross-room @mention notifications are CAPABILITY-gated: joining a room hands
 // the client a per-(room,name) secret (`mentionKey` in the connected payload).
-// The notify socket must present that key to subscribe — so the channel can't
+// The notify socket must present that key to subscribe, so the channel can't
 // be probed by guessing room codes, and the mention body is never sent (only
 // "you were mentioned in <room>"). The key is bound to the display NAME, not a
 // person, so it proves "was present under this name" rather than identity; the
@@ -4242,7 +4242,7 @@ function notifyMentions(room, roomId, senderName, message, ts) {
     if (bucket.length >= 6) continue;
     bucket.push(now);
     if (ws.readyState === 1) {
-      // NOTE: message text is deliberately NOT included — the notify channel is
+      // NOTE: message text is deliberately NOT included, the notify channel is
       // cross-room, so leaking chat content (esp. from private rooms) would be
       // a privacy hole. Recipients get "you were mentioned in <room>", never
       // the message body.
@@ -4259,7 +4259,7 @@ function notifyMentions(room, roomId, senderName, message, ts) {
 
 // ---- Theme voting (mad-libs prompts, 3 options, room votes) -----------------
 // buildTopicOptions() rolls three distinct "Draw a {adj} {subject}" strings,
-// each with a 50% chance of a " — {twist}" tail. Rooms vote for 45s; the
+// each with a 50% chance of a ", {twist}" tail. Rooms vote for 45s; the
 // winner becomes room.customPrompt (persisted, beats the daily rotation).
 const TOPIC_ADJ = [
   'sleepy', 'giant', 'tiny', 'neon', 'grumpy', 'dancing', 'robot', 'magical',
@@ -4290,7 +4290,7 @@ function buildTopicOptions() {
     const adj = pick(TOPIC_ADJ);
     const article = /^[aeiou]/i.test(adj) ? 'an' : 'a';
     let option = `Draw ${article} ${adj} ${pick(TOPIC_SUBJECT)}`;
-    if (Math.random() < 0.5) option += ` — ${pick(TOPIC_TWIST)}`;
+    if (Math.random() < 0.5) option += `, ${pick(TOPIC_TWIST)}`;
     if (!options.includes(option)) options.push(option);
   }
   return options;
@@ -4305,7 +4305,7 @@ function voteCounts(vote) {
 }
 
 // Close a room's vote: winner (tie -> lowest index) becomes the room prompt.
-// Guarded per room — the timeout may outlive the room or a superseded vote.
+// Guarded per room, the timeout may outlive the room or a superseded vote.
 function finishVote(roomId) {
   const room = rooms.get(roomId);
   if (!room || !room.vote) return;
@@ -4326,7 +4326,7 @@ wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   // Canonical room id: same alphabet the persistence layer enforces
   // (roomFile strips anything outside [A-Z0-9_-]). Without this, `A..B` and
-  // `AB` resolve to the SAME file but DIFFERENT in-memory map keys — alias
+  // `AB` resolve to the SAME file but DIFFERENT in-memory map keys, alias
   // forks of one room with diverging state. Invalid-only input has no
   // canonical id, so the socket is refused rather than aliased.
   const roomId = (url.searchParams.get('room') || 'MAIN').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
@@ -4335,20 +4335,20 @@ wss.on('connection', async (ws, req) => {
     return;
   }
   // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
-  // everything else — old builds, the test harness by default — gets text.
+  // everything else, old builds, the test harness by default, gets text.
   ws.acceptsGzip = url.searchParams.get('gz') === '1';
   // Trusted-checkpoint capability: the client's compile-time renderer
   // fingerprint (Vite define). Anything but a 64-hex string is no capability
-  // at all — legacy clients and garbage params take the ordinary path.
+  // at all, legacy clients and garbage params take the ordinary path.
   const cpParam = url.searchParams.get('cp') || '';
   ws.checkpointVersion = /^[a-f0-9]{64}$/.test(cpParam) ? cpParam : null;
   ws.checkpointsDisabled = false; // per-connection, set by checkpoint_nack
 
   // Notify mode: a lightweight cross-room mention watcher. It joins NO room for
-  // drawing/presence — it just subscribes to a set of rooms' chat and receives
+  // drawing/presence, it just subscribes to a set of rooms' chat and receives
   // 'mention' events when the given name is @mentioned there. The client sends
   // {type:'watch', rooms:[{code, name, key}]} to (re)subscribe, where `key` is
-  // the mentionKey the room's join handshake issued for that name — a watch
+  // the mentionKey the room's join handshake issued for that name, a watch
   // subscription without a valid capability key is silently dropped, so this
   // channel cannot be used to probe rooms or impersonate names.
   if (url.searchParams.get('notify') === '1') {
@@ -4397,13 +4397,13 @@ wss.on('connection', async (ws, req) => {
   // PUBLIC-room privilege: private rooms are never watchable (a friends-room
   // code is an invite to draw, not a window for silent strangers), a spectate
   // probe never lazily creates a room, and viewers are capped per room.
-  // Artist studios (artist_public) ARE watchable by code — the gallery is
-  // discoverability, not authorization — and materialize from disk on demand.
+  // Artist studios (artist_public) ARE watchable by code, the gallery is
+  // discoverability, not authorization, and materialize from disk on demand.
   if (url.searchParams.get('spectate') === '1') {
     let live = rooms.get(roomId);
     // Book access is enforced BEFORE any materialization or handshake: a
     // PRIVATE or moderation-hidden book's pages have NO public spectator
-    // surface — spectators are anonymous and can never prove book membership
+    // surface, spectators are anonymous and can never prove book membership
     // (the book's owner/artists watch through ordinary member joins, gated
     // below). Reads the persisted back-reference without getRoom.
     const skbRef = live ? live.sketchbook : (existsSync(roomFile(roomId)) ? storedSketchbookRef(roomId) : null);
@@ -4424,7 +4424,7 @@ wss.on('connection', async (ws, req) => {
       && (storedRoomAudience(roomId) === ARTIST_AUDIENCE
         || (storedRoomAudience(roomId) === 'kid_safe' && watchableBook && watchableBook.public === true))) {
       // Only an artist studio or a public sketchbook page materializes for a
-      // viewer — a private room file is never pulled into the live map by a
+      // viewer, a private room file is never pulled into the live map by a
       // spectate probe.
       live = getRoom(roomId); // audience already confirmed server-persisted
     }
@@ -4463,28 +4463,28 @@ wss.on('connection', async (ws, req) => {
       watched: live.watchers.size > 0,
       frameTiming: frameTimingFor(roomId),
     }));
-    // Spectators (homepage viewers) get a headcount only — never painter names,
+    // Spectators (homepage viewers) get a headcount only, never painter names,
     // so a leaked/guessed room code can't be used to harvest who's in a room.
     // (broadcast() enforces the same rule afterwards with an allowlist.)
     ws.send(JSON.stringify({ type: 'userList', count: live.users.size }));
     // Always send history (even empty) so the spectator view resets cleanly when
     // it hops rooms in the homepage carousel. Capped to the newest 1500 visible
-    // ops — plenty for a homepage preview, a fraction of a big room's payload.
+    // ops, plenty for a homepage preview, a fraction of a big room's payload.
     // Animation rooms: spectators watch the FIRST frame only (their single
     // canvas would otherwise overdraw the whole flipbook into one smear).
-    // (Chat catch-up rides along below — the banter is part of the show.)
+    // (Chat catch-up rides along below, the banter is part of the show.)
     void catchup.sendRoomCatchUp(ws, live, 'spectator');
     // Don't point a spectator at a trace-photo id whose in-memory image is gone
-    // (e.g. after a restart) — same guard as the member join path.
+    // (e.g. after a restart), same guard as the member join path.
     if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
     }
-    // The room's recent banter — the conversation is the draw (Twitch model).
+    // The room's recent banter, the conversation is the draw (Twitch model).
     // Same projection members get: counts, never reaction membership.
     if (live.chat.length && !live.fingerPaint) {
       ws.send(JSON.stringify(chatHistoryMsg(live)));
     }
-    ws.on('message', () => { /* spectators are read-only — ignore anything they send */ });
+    ws.on('message', () => { /* spectators are read-only, ignore anything they send */ });
     const dropSpectator = () => live.spectators.delete(ws);
     ws.on('close', dropSpectator);
     ws.on('error', dropSpectator);
@@ -4492,13 +4492,13 @@ wss.on('connection', async (ws, req) => {
   }
 
   // Moderator watch ("glass room"): the owner inspects a room WITHOUT being seen.
-  // This socket is neither a member nor a homepage spectator — it never enters
+  // This socket is neither a member nor a homepage spectator, it never enters
   // room.users, so it is absent from the roster, presence, headcount, colors,
   // analytics and every broadcast the room's own members receive. It is the ONE
   // watcher allowed into private rooms, which is exactly where abuse hides.
   //
   // The admin key arrives in the FIRST FRAME, never in the URL: a WS query string
-  // lands in proxy/CDN access logs and browser history — the same leak class the
+  // lands in proxy/CDN access logs and browser history, the same leak class the
   // HTTP admin guard avoids by taking a header.
   if (url.searchParams.get('modwatch') === '1') {
     let watched = null; // the live room, once the key has checked out
@@ -4528,7 +4528,7 @@ wss.on('connection', async (ws, req) => {
         if (typeof data.key !== 'string' || !adminKeyMatches(data.key)) return deny('bad_key');
         // Watch rooms that EXIST: a probe must never lazily materialize one. The
         // key has already checked out here, so a DORMANT room (saved on disk, not
-        // in memory — every private room after a restart) is loaded for the
+        // in memory, every private room after a restart) is loaded for the
         // moderator: what was drawn in an empty private room is exactly what
         // /admin's private-room list exists to inspect. Loading keeps the room's
         // real idle clock (getRoom), so looking never extends its life.
@@ -4541,7 +4541,7 @@ wss.on('connection', async (ws, req) => {
         // history catch-up is async and must stay atomically ordered.
         catchup.beginGate(ws);
         live.mods.add(ws);
-        // Handshake — the same facts a member gets, minus an identity of our own.
+        // Handshake, the same facts a member gets, minus an identity of our own.
         ws.send(JSON.stringify({
           type: 'connected',
           moderator: true,
@@ -4559,7 +4559,7 @@ wss.on('connection', async (ws, req) => {
           animation: !!live.animationEnabled,
           frameTiming: frameTimingFor(roomId),
         }));
-        // The full roster — names included. This is the moderation job, and the
+        // The full roster, names included. This is the moderation job, and the
         // socket is authenticated as the owner; the count-only rule that protects
         // homepage spectators exists to stop strangers harvesting a room.
         ws.send(JSON.stringify({ type: 'userList', users: userListOf(live) }));
@@ -4581,11 +4581,11 @@ wss.on('connection', async (ws, req) => {
       // An attached watcher may MODERATE, never CREATE. The allowlist is the
       // enforcement: op / chat / cursor / rename / vote / game messages are
       // dropped right here, so an observer socket can't paint, talk or
-      // impersonate anyone — the client hides those tools too, but this is the
+      // impersonate anyone, the client hides those tools too, but this is the
       // boundary that counts.
       switch (data.type) {
         case 'clear':
-          // A moderator's Wipe resets the room — mural AND chat, as if new.
+          // A moderator's Wipe resets the room, mural AND chat, as if new.
           // The Draw Phone engine owns the canvas mid-game; don't fight it.
           if (!phoneActive(watched)) moderateResetRoom(watched, MOD_ACTOR);
           break;
@@ -4635,7 +4635,7 @@ wss.on('connection', async (ws, req) => {
 
   // Code guessing. A join to a code that is neither live nor on disk is either a
   // brand-new private room (clients mint their own codes) or a guess at someone
-  // else's — and a guesser makes thousands of them. Nobody makes 40 new rooms a
+  // else's, and a guesser makes thousands of them. Nobody makes 40 new rooms a
   // minute, not even a classroom behind one address.
   if (!rooms.has(roomId) && !FEATURED_CODES.has(roomId) && !existsSync(roomFile(roomId))
     && !rateOk(`joinmiss:${rawClientIp(req)}`, JOIN_MISS_PER_MIN, 60_000)) {
@@ -4646,13 +4646,13 @@ wss.on('connection', async (ws, req) => {
 
   const room = getRoom(roomId);
 
-  // DAILY: flip the day on first contact, not the next 60s tick — otherwise a
+  // DAILY: flip the day on first contact, not the next 60s tick, otherwise a
   // just-past-midnight joiner would see yesterday's mural under today's prompt
   // and then lose their first strokes to the delayed wipe.
   if (roomId === 'DAILY') ensureDailyFresh();
   // INKTOBER: same contact-settle for the seasonal prompt (never wipes art).
   if (roomId === INKTOBER_ROOM) ensureInktoberFresh();
-  // Public rooms refresh on a 3-day cycle — settle it on contact, not on the
+  // Public rooms refresh on a 3-day cycle, settle it on contact, not on the
   // next sweep tick, so a joiner never lands on a canvas that is already due.
   ensureRoomFresh(roomId);
   if (roomId === 'QUEST') {
@@ -4687,7 +4687,7 @@ wss.on('connection', async (ws, req) => {
 
   // Optional identity. A signed-in user proves who they are with their access
   // token; we validate it with the public anon key (no secrets) and learn their
-  // profile. Anonymous users stay anonymous — sign-in only unlocks ownership/
+  // profile. Anonymous users stay anonymous, sign-in only unlocks ownership/
   // host powers, never the ability to draw.
   //
   // Transport (task #40): the web client's FIRST frame is {type:'auth', token}
@@ -4698,12 +4698,12 @@ wss.on('connection', async (ws, req) => {
   // The real message handler is only attached once the join completes, after
   // the awaits below. The client sends {type:'auth'} and then client_info
   // back-to-back; when both land in one TCP chunk, `ws` emits the second
-  // 'message' synchronously — before any awaiting continuation runs — so a
+  // 'message' synchronously, before any awaiting continuation runs, so a
   // one-shot first-frame listener would leave it with NO listener and it was
   // silently dropped (user.deviceKey stayed null and per-person identity fell
   // back to IP). So one early listener owns the socket for the whole pre-join
   // window: it hands the first frame to the auth wait and queues the rest, in
-  // order, for replay through the real handler. Small and bounded — a client
+  // order, for replay through the real handler. Small and bounded, a client
   // has no business sending more than a hello before it is joined.
   //
   // The query-string token is no longer read at all: a JWT in a URL is a JWT in
@@ -4751,7 +4751,7 @@ wss.on('connection', async (ws, req) => {
         // is optional so older clients keep working (they just fall back to IP).
         if (typeof hello.userKey === 'string' && hello.userKey) deviceKey = sanitizeKey(hello.userKey);
       } else if (earlyFrames) {
-        // Legacy client_info etc. — process after join, ahead of anything that
+        // Legacy client_info etc., process after join, ahead of anything that
         // queued up behind it. It was already accepted as the first frame, so
         // it sits outside the queue's frame/byte budget.
         earlyFrames.unshift(first);
@@ -4762,7 +4762,7 @@ wss.on('connection', async (ws, req) => {
   if (ws.readyState !== 1) return; // user disconnected during validation
   // The room object was fetched BEFORE the awaits above. If it was reaped in
   // between (sweepPhantomRooms / auto-close), joining the stale object would
-  // build a room nobody else can reach — bounce; the client reconnects.
+  // build a room nobody else can reach, bounce; the client reconnects.
   if (rooms.get(roomId) !== room) {
     ws.close(1013, 'try again');
     return;
@@ -4784,7 +4784,7 @@ wss.on('connection', async (ws, req) => {
   }
 
   // Book access gate, ahead of any handshake state: a moderation-HIDDEN or
-  // PRIVATE book's page rooms admit the book's owner + artists ONLY — guests
+  // PRIVATE book's page rooms admit the book's owner + artists ONLY, guests
   // and non-artist accounts can no longer join-and-watch. Public books keep
   // the ordinary artist-studio model (anyone watches, the ACL draws), the
   // book's own team is never locked out of moderation/management, and
@@ -4816,7 +4816,7 @@ wss.on('connection', async (ws, req) => {
     // tokenRejected: a token WAS sent but didn't check out (expired, revoked,
     // or PocketBase unreachable). The browser still believes it's signed in,
     // so without this it sent the person to /signup, which said "signed in",
-    // which sent them back here — the sign-in loop.
+    // which sent them back here, the sign-in loop.
     ws.send(JSON.stringify({ type: 'signin_required', reason: 'private_room', audience: room.audience, tokenRejected: !!token }));
     ws.close(1008, 'signin required');
     return;
@@ -4858,7 +4858,7 @@ wss.on('connection', async (ws, req) => {
     muted: identity ? room.mutedProfileIds.has(identity.profileId) : false,
     connectedAt: Date.now(),
     lastActivity: Date.now(),
-    // Survives reload/extra tabs, unlike the per-socket id — used where a
+    // Survives reload/extra tabs, unlike the per-socket id, used where a
     // limit or a vote must not be resettable by reconnecting.
     ip: rawClientIp(req),
     // Sent in the auth frame by the client; the handle a moderation block uses
@@ -4913,7 +4913,7 @@ wss.on('connection', async (ws, req) => {
     persistRoom(roomId);
   }
   // Private rooms don't require a signed-in owner, but SOMEONE must be able to
-  // moderate — the first person in an ownerless, non-public room becomes its
+  // moderate, the first person in an ownerless, non-public room becomes its
   // (session-scoped) guest host; reassigned to a present user if the host left.
   // Artist studios never get a guest/first-arrival host, even orphaned ones:
   // moderation there belongs to the verified owner (and admin), nobody else.
@@ -4997,17 +4997,17 @@ wss.on('connection', async (ws, req) => {
   if (isArtistRoom(room) && user.profileId && user.profileId === room.ownerProfileId) {
     ws.send(JSON.stringify(paintRequestsMsg(room)));
   }
-  // ALWAYS send a history frame on join — even an empty one. The client treats it
+  // ALWAYS send a history frame on join, even an empty one. The client treats it
   // as the authoritative shared state and clears its canvas before applying it, so
   // joining an empty room reliably shows a blank canvas instead of whatever the
   // client had locally. `frames` makes the flipbook part of that same catch-up:
   // leave, come back, and you see everything your friends did (Google-Docs model).
-  // Animation rooms deliver ONE scene at a time (the first, on join) — clients
+  // Animation rooms deliver ONE scene at a time (the first, on join), clients
   // page between scenes with scene_fetch, keeping memory at a scene's worth.
   if (room.animationEnabled) {
     // Trusted checkpoints: a capable joiner gets the first scene's history
     // with per-frame checkpoint assets for the frames that have them (plus
-    // full ops for the rest); everyone else — and every failure mode — takes
+    // full ops for the rest); everyone else, and every failure mode, takes
     // the ordinary scene catch-up inside the same gate.
     void checkpoints.sendSceneCatchUp(ws, room, room.scenes[0].id);
     // Catch the joiner up on WHERE everyone already is (presence is otherwise
@@ -5035,7 +5035,7 @@ wss.on('connection', async (ws, req) => {
         ops: visibleHistory(room).filter((op) => (op.opId || 0) > room.snapshotOpId),
         frames: room.frames,
       }));
-      // Synchronous complete baseline — close the join gate with a fresh outcome.
+      // Synchronous complete baseline, close the join gate with a fresh outcome.
       catchup.finishSyncCatchUp(ws, room);
     } else {
       void catchup.sendRoomCatchUp(ws, room, 'full');
@@ -5043,7 +5043,7 @@ wss.on('connection', async (ws, req) => {
     // Elect one connected member to refresh the snapshot if it's due (the room
     // crossed the min-op threshold, or enough new ops landed since the last one).
     if (snapshotDue(room) && Date.now() - (room.snapshotRequestedAt || 0) > SNAPSHOT_REQUEST_COOLDOWN_MS) {
-      // Elect an ESTABLISHED member (never the just-joined socket — its mural
+      // Elect an ESTABLISHED member (never the just-joined socket, its mural
       // is still replaying, so it would bake a half-empty snapshot).
       let candidate = null;
       room.users.forEach((u) => {
@@ -5063,11 +5063,11 @@ wss.on('connection', async (ws, req) => {
   } else {
     // Trusted checkpoints: a capable joiner (cp=<renderer fingerprint>) with a
     // ready cached frame gets history.checkpoint + the exact tail; everyone
-    // else — and any failure mode — takes the ordinary full catch-up inside.
+    // else, and any failure mode, takes the ordinary full catch-up inside.
     void checkpoints.sendJoinCatchUp(ws, room);
   }
   // A persisted trace-photo id whose in-memory image is gone (server restart)
-  // resolves to nothing — drop it rather than pointing joiners at a 404.
+  // resolves to nothing, drop it rather than pointing joiners at a 404.
   if (room.sheetId && room.sheetId.startsWith('trace_') && !tracePhotos.has(room.sheetId)) {
     room.sheetId = null;
   }
@@ -5110,7 +5110,7 @@ wss.on('connection', async (ws, req) => {
     }
     // A seated player who refreshed / dropped mid-round re-enters with no task
     // (the client clears it on 'connected'). Re-deliver their private task so
-    // they can still submit — otherwise they're locked out AND their un-submitted
+    // they can still submit, otherwise they're locked out AND their un-submitted
     // seat stalls the whole round to the deadline. If they already submitted,
     // the public phone_state alone renders the "waiting" HUD (no task needed).
     if (phoneActive(room)) {
@@ -5125,7 +5125,7 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify(task));
       }
     }
-    // Only kick off from idle/waiting — never cut a live game or a reveal short.
+    // Only kick off from idle/waiting, never cut a live game or a reveal short.
     if (!room.phone || room.phone.phase === 'waiting') maybePhoneStart(roomId);
   }
 
@@ -5145,7 +5145,7 @@ wss.on('connection', async (ws, req) => {
     // checkpoint_nack is read-only (it only re-requests THIS socket's full
     // baseline) and must stay open to read-only roles, so it is handled before
     // the artist-viewer allowlist gate below. It disables checkpoints for this
-    // connection only — no retry loop — and resends the ordinary full history.
+    // connection only, no retry loop, and resends the ordinary full history.
     if (data.type === 'checkpoint_nack') {
       checkpoints.handleNack(ws, room);
       return;
@@ -5153,11 +5153,11 @@ wss.on('connection', async (ws, req) => {
 
     // Artist studios, broad defense: a member without canPaint (guests,
     // strangers, revoked painters) may ONLY use the explicit read/social/
-    // request allowlist — every mutation message (ops, clears, sheets,
+    // request allowlist, every mutation message (ops, clears, sheets,
     // imports, layers, frames, scenes, animation, votes, helper setters,
     // moderation, room management) is dropped BEFORE the switch, so no
     // bypass exists through any of those paths. Painters then pass through
-    // the ordinary host/layer/frame/lock guards below — EXCEPT room
+    // the ordinary host/layer/frame/lock guards below: EXCEPT room
     // management: approval grants drawing, not the studio's controls, so
     // set_wet / set_brush_mode / set_symmetry / vote_start and their peers
     // stay host-only even for an approved painter.
@@ -5167,7 +5167,7 @@ wss.on('connection', async (ws, req) => {
     } else if (room.sketchbook && user.canPaint === false && !ARTIST_VIEWER_ALLOWLIST.has(data.type)) {
       // UNSAVED sketchbook page: the same read/social/request allowlist decides
       // for the watchers of a public mural whose drawing right belongs to the
-      // device that started the book — mutations are dropped BEFORE the switch,
+      // device that started the book, mutations are dropped BEFORE the switch,
       // so no draw/clear/sheet/import bypass exists on the page either.
       return;
     }
@@ -5176,7 +5176,7 @@ wss.on('connection', async (ws, req) => {
       case 'client_info':
         // Browser-local id (localStorage): survives reload, differs between two
         // kids on one school network. Spoofable, so it only ever gates
-        // low-stakes per-person actions like the keep-vote — never moderation.
+        // low-stakes per-person actions like the keep-vote, never moderation.
         if (typeof data.deviceKey === 'string' && /^[a-z0-9_]{6,48}$/i.test(data.deviceKey)) {
           user.deviceKey = data.deviceKey;
         }
@@ -5189,17 +5189,17 @@ wss.on('connection', async (ws, req) => {
         // every other rejected op (a human never gets near this bucket).
         if (!opRateOk(user)) break;
         // When a host locks the room, only hosts may keep drawing. This is the
-        // real boundary — clients also disable the canvas, but this enforces it.
+        // real boundary, clients also disable the canvas, but this enforces it.
         if (room.locked && !isHost(room, user)) break;
-        // Draw Phone: while a game is running the shared canvas is OFF — every
+        // Draw Phone: while a game is running the shared canvas is OFF, every
         // player draws their own PRIVATE page. Drop (never relay) draw ops so
         // pages can't collide or leak before their guess round. This is the
         // authoritative boundary; the client also suppresses sending.
         if (room.phone && (room.phone.phase === 'starting' || room.phone.phase === 'drawing' || room.phone.phase === 'guessing')) break;
-        // Drawn-text moderation: SEVERE text is blocked in EVERY room — same
+        // Drawn-text moderation: SEVERE text is blocked in EVERY room, same
         // contract as chat (a private room is no reason to relay slurs painted
         // as text ops). Imagery is handled by the watcher/flag path. O(small),
-        // synchronous — adds no latency to the normal draw-op relay below.
+        // synchronous, adds no latency to the normal draw-op relay below.
         if (data.op.kind === 'text' && typeof data.op.text === 'string') {
           const verdict = scan(data.op.text);
           if (verdict.severity === 'severe') {
@@ -5208,7 +5208,7 @@ wss.on('connection', async (ws, req) => {
           }
         }
         // Smudge + goo are private-room brushes: never let their ops land in a
-        // public room — EXCEPT the finger-paint room, where smearing is the toy.
+        // public room: EXCEPT the finger-paint room, where smearing is the toy.
         if (room.audience === 'kid_safe' && !room.fingerPaint && data.op.kind === 'draw' && data.op.settings && (data.op.settings.brush === 'smudge' || data.op.settings.brush === 'goo')) break;
         // Imported stamp tips are arbitrary user media. Keep public kid-safe
         // rooms on reviewed catalog brushes until brush assets have moderation.
@@ -5229,7 +5229,7 @@ wss.on('connection', async (ws, req) => {
             };
           }
         }
-        // Ink & Pencil room (INKTOBER): ink/pencil ops ONLY — the server is the
+        // Ink & Pencil room (INKTOBER): ink/pencil ops ONLY, the server is the
         // boundary, so a patched client cannot self-attest its way around the
         // room's rules. Draw ops must be ink, pencil, or the eraser; a v3
         // inline dab must describe the DECLARED brush's native dab (forged
@@ -5244,7 +5244,7 @@ wss.on('connection', async (ws, req) => {
             if (room.inkStrokes.size > 400) room.inkStrokes.clear();
           } else {
             // Settings-less continuation batch (older client): only allowed as
-            // part of a stroke this member already opened with ink/pencil —
+            // part of a stroke this member already opened with ink/pencil -
             // same author + strokeId, mirroring the server's repair contract.
             if (!INK_BRUSHES.has(room.inkStrokes.get(strokeKey))) break;
           }
@@ -5256,7 +5256,7 @@ wss.on('connection', async (ws, req) => {
         // …and whatever an op carries that a browser will load as an image must
         // BE an image, inline. `dataUrl` (image ops) and `stampDataUrl` (imported
         // brush tips) both end up in `new Image().src` on every current and
-        // future member of the room — see rasterDataUrlOk for why a URL is fatal.
+        // future member of the room, see rasterDataUrlOk for why a URL is fatal.
         if (data.op.dataUrl != null && !rasterDataUrlOk(data.op.dataUrl, MAX_OP_DATAURL_CHARS)) break;
         if (data.op.kind === 'image' && data.op.dataUrl == null) break;
         {
@@ -5266,7 +5266,7 @@ wss.on('connection', async (ws, req) => {
         }
         // Animation frames: an op may target a specific shared frame. Validate
         // the frame exists (stale clients race frame deletes) and enforce the
-        // per-frame cap by REJECTING — FIFO-trimming would rot early frames.
+        // per-frame cap by REJECTING: FIFO-trimming would rot early frames.
         let frameId = null;
         if (data.op.frameId != null) {
           frameId = String(data.op.frameId).slice(0, 24);
@@ -5293,7 +5293,7 @@ wss.on('connection', async (ws, req) => {
           data.op = { ...data.op, layerId: layer.id };
         }
         // Multi-frame rooms (animation on, or a preserved flipbook with the
-        // toggle off) live under per-frame caps — the global FIFO trim would
+        // toggle off) live under per-frame caps, the global FIFO trim would
         // silently rot early frames, so it only applies to single-frame rooms.
         const multiFrame = room.animationEnabled || room.frames.length > 1;
         const countKey = frameId || room.frames[0].id;
@@ -5301,7 +5301,7 @@ wss.on('connection', async (ws, req) => {
         if (multiFrame && (frameCount >= FRAME_OP_CAP || room.history.length >= animOpBudget(room.audience))) {
           if (data.op.kind === 'draw' && data.op.end) {
             // Relay the end marker so peers close their stroke buffers, but
-            // don't grow history/counts — the cap is a hard ceiling for EVERY
+            // don't grow history/counts, the cap is a hard ceiling for EVERY
             // op kind (shape/text/image included), or history is unbounded.
             broadcast(roomId, { type: 'op', op: { ...data.op, userId: id } }, id);
           } else {
@@ -5365,7 +5365,7 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'cursor':
-        // Draw Phone: cursors are private too — don't telegraph where a player
+        // Draw Phone: cursors are private too, don't telegraph where a player
         // is drawing their secret page.
         if (phoneActive(room)) break;
         broadcast(roomId, {
@@ -5374,7 +5374,7 @@ wss.on('connection', async (ws, req) => {
         }, id);
         break;
       case 'set_sheet': {
-        // The Ink & Pencil room takes no coloring sheet — ink and pencil on a
+        // The Ink & Pencil room takes no coloring sheet, ink and pencil on a
         // blank shared page is the whole event; a sheet underlay is a bypass.
         // Same for an Inktober-opted-in artist studio while the event is live.
         if (inkEnforcedFor(room)) break;
@@ -5387,7 +5387,7 @@ wss.on('connection', async (ws, req) => {
         const nextSheet = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
         // Trace photos and Draw Phone pages can ONLY be set by their own minting
         // handlers (each binds an id to this room). Rejecting trace_/pp_ ids here
-        // stops re-broadcasting another room's — or another player's — private image.
+        // stops re-broadcasting another room's, or another player's, private image.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
         dropRoomTracePhoto(room); // replacing/clearing frees the old photo
         room.sheetId = nextSheet;
@@ -5398,12 +5398,12 @@ wss.on('connection', async (ws, req) => {
       }
       // Upload a user PHOTO as the room's traced underlay for everyone. SAFETY
       // GATE: a photo shows on every screen instantly, so it needs an
-      // accountable uploader — allowed only in PRIVATE rooms (a known friend
+      // accountable uploader, allowed only in PRIVATE rooms (a known friend
       // group) or when the sender is the HOST of an owned public room; the
       // hostless public drawing rooms can NEVER accept one. The client also
       // runs an NSFW pre-check, but the gate is the real control.
       // Film soundtrack (one per animation room). Same accountability gate as
-      // a trace photo: private rooms — any member; public rooms — the host of
+      // a trace photo: private rooms, any member; public rooms, the host of
       // an OWNED room only; never muted members, nor non-hosts in a locked room.
       // `audio: null` removes it. The server can't listen, so the name goes
       // through the text filter and the bytes through a magic-byte sniff.
@@ -5510,7 +5510,7 @@ wss.on('connection', async (ws, req) => {
       }
       case 'reaction': {
         // Ephemeral emoji reactions floated over the canvas. Never persisted, never
-        // in history — just relayed so friends can cheer each other on.
+        // in history, just relayed so friends can cheer each other on.
         const REACTS = ['👍', '🔥', '❤️', '😂', '🎨', '⭐', '👏', '🌈'];
         if (!REACTS.includes(data.emoji)) break;
         if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) break;
@@ -5523,7 +5523,7 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       // ---- Crew presence: who's painting which cel (animation rooms) --------
-      // COLD path only — the client fires this on frame-select / scene-switch /
+      // COLD path only, the client fires this on frame-select / scene-switch /
       // join, never per stroke or cursor-move. Purely ephemeral: relayed +
       // remembered in room.presence, never touches history or the draw path.
       case 'frame_presence': {
@@ -5536,13 +5536,13 @@ wss.on('connection', async (ws, req) => {
         const nowP = Date.now();
         const pt = user.presenceTimes || (user.presenceTimes = []);
         while (pt.length && nowP - pt[0] > 1000) pt.shift();
-        if (pt.length >= 5) break; // ~5/sec per user — cold path, generous
+        if (pt.length >= 5) break; // ~5/sec per user, cold path, generous
         pt.push(nowP);
         room.presence.set(id, { sceneId: pSceneId, frameId: pFrameId, ts: nowP });
         broadcast(roomId, { type: 'frame_presence', userId: id, name: user.name, color: user.color, sceneId: pSceneId, frameId: pFrameId }, id);
         break;
       }
-      // "Come look at my frame!" — a location beacon (room+scene+frame), never
+      // "Come look at my frame!", a location beacon (room+scene+frame), never
       // free text. Peers get a tap-to-jump toast; honoring it is opt-in.
       case 'beacon': {
         if (!room.animationEnabled) break;
@@ -5552,7 +5552,7 @@ wss.on('connection', async (ws, req) => {
         const nowB = Date.now();
         const bt = user.beaconTimes || (user.beaconTimes = []);
         while (bt.length && nowB - bt[0] > 3000) bt.shift();
-        if (bt.length >= 1) break; // 1 per 3s — a summon, not a spam toy
+        if (bt.length >= 1) break; // 1 per 3s, a summon, not a spam toy
         bt.push(nowB);
         // roomCode = the SENDER's room, so peers in other Parts hop via /join
         // while same-room peers land locally.
@@ -5560,7 +5560,7 @@ wss.on('connection', async (ws, req) => {
         const beaconProd = room.productionId && getProduction(room.productionId);
         if (beaconProd) {
           // Summon the WHOLE crew across every Part of the film, not just this
-          // room — "come see my frame in Part 3" is the point.
+          // room: "come see my frame in Part 3" is the point.
           for (const code of beaconProd.segments) {
             if (rooms.has(code)) broadcast(code, beaconMsg, code === roomId ? id : null);
           }
@@ -5569,7 +5569,7 @@ wss.on('connection', async (ws, req) => {
         }
         break;
       }
-      // Confetti cheer on a specific frame — pure celebration. Curated emoji
+      // Confetti cheer on a specific frame, pure celebration. Curated emoji
       // only (no text), ephemeral, echoed to the cheerer too so they see it pop.
       case 'cheer': {
         if (!room.animationEnabled) break;
@@ -5586,17 +5586,17 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       case 'clear': {
-        // Draw Phone: each player's page is private and independent — a shared
+        // Draw Phone: each player's page is private and independent, a shared
         // clear would wipe everyone's in-progress drawing. Only the engine blanks.
         if (phoneActive(room)) break;
         const host = isHost(room, user);
-        // Artist studios: clearing the artist's work is a moderation action —
+        // Artist studios: clearing the artist's work is a moderation action -
         // hosts only. A painter's clear must NOT degrade into a wipe request
         // (paint-only approval grants no clear-other-art power, and there is
         // no commons countdown in a studio).
         if (room.audience === ARTIST_AUDIENCE && !host) break;
         const clearFrameId = data.frameId != null ? String(data.frameId).slice(0, 24) : null;
-        // One shared FRAME of a flipbook: instant, as ever — it's one cel, not
+        // One shared FRAME of a flipbook: instant, as ever, it's one cel, not
         // the room. In an owned room only a host may clear it.
         if (clearFrameId && room.animationEnabled && room.frames.some((f) => f.id === clearFrameId)) {
           if (room.ownerProfileId && !host) break;
@@ -5606,8 +5606,8 @@ wss.on('connection', async (ws, req) => {
         }
         // The whole mural. A host's Clear is a moderation action and stays
         // instant (and undoable); so does the Draw & Guess drawer scrapping
-        // their own turn's drawing. Anyone else's Clear — including an older
-        // client still sending this bare message — becomes a wipe REQUEST, so
+        // their own turn's drawing. Anyone else's Clear, including an older
+        // client still sending this bare message, becomes a wipe REQUEST, so
         // the countdown/vote can't be skipped by speaking the old protocol.
         const drawerScrap = room.gameEnabled && room.game && room.game.phase === 'playing' && room.game.drawerId === id;
         if (host || drawerScrap) {
@@ -5620,14 +5620,14 @@ wss.on('connection', async (ws, req) => {
       case 'undo_clear':
         if (room.ownerProfileId && !isHost(room, user)) break;
         if (phoneActive(room)) break; // no resurrecting the pre-game canvas mid-game
-        // A countdown/vote wipe or a moderator's reset is final for members —
+        // A countdown/vote wipe or a moderator's reset is final for members -
         // the countdown was the undo window (see startWipeRequest).
         if (room.clearUndoable === false) break;
         moderateUndoClear(room, memberActor(id, user));
         break;
       // ---- Member wipes: ask / vote / call it off (see startWipeRequest) ----
       case 'wipe_request': {
-        // Artist studios have no commons wipe cycle — a non-host wipe request
+        // Artist studios have no commons wipe cycle, a non-host wipe request
         // would put the artist's posted work on a countdown.
         if (room.audience === ARTIST_AUDIENCE && !isHost(room, user)) break;
         const nextSheet = typeof data.sheetId === 'string' && data.sheetId ? data.sheetId.slice(0, 200) : null;
@@ -5649,7 +5649,7 @@ wss.on('connection', async (ws, req) => {
         cancelOwnWipeRequest(room, id, user, Number(data.id));
         break;
       case 'chat': {
-        // Sketchbook page rooms are canvas-only: no chat book-wide — 31-page
+        // Sketchbook page rooms are canvas-only: no chat book-wide: 31-page
         // books stay light, and a page has nothing social to moderate. The
         // sender is told why; nothing is buffered, audited or relayed.
         if (room.sketchbook) {
@@ -5658,7 +5658,7 @@ wss.on('connection', async (ws, req) => {
         }
         if (room.fingerPaint) break; // no chat in the toddler room (pre-readers)
         if (user.muted) break; // a host muted this user
-        // A message is text, a doodle reply, or both — never neither.
+        // A message is text, a doodle reply, or both, never neither.
         const rawText = typeof data.message === 'string' ? data.message : '';
         const wantsDoodle = typeof data.doodle === 'string' && data.doodle.length > 0;
         if (!rawText.trim() && !wantsDoodle) break;
@@ -5678,12 +5678,12 @@ wss.on('connection', async (ws, req) => {
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'doodle' }));
             break;
           }
-          // Quota is consumed at STORE time (below) — a message the moderation
+          // Quota is consumed at STORE time (below), a message the moderation
           // or guess gates reject shouldn't burn a kid's doodle allowance.
         }
         let message = String(rawText).slice(0, 300);
         // Chat moderation. SEVERE content is blocked in EVERY room (public AND
-        // private) — a private room being "for friends" is no reason to relay
+        // private), a private room being "for friends" is no reason to relay
         // slurs/explicit terms. The softer MILD masking stays public-only so
         // private rooms aren't over-filtered on ordinary words.
         {
@@ -5700,23 +5700,23 @@ wss.on('connection', async (ws, req) => {
           if (verdict.hit && (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE)) message = maskMessage(message);
         }
         // Draw & Guess: a message that is (or contains) the secret word is a
-        // guess — score it and SUPPRESS the raw text so the word never leaks to
+        // guess, score it and SUPPRESS the raw text so the word never leaks to
         // the room. Non-matching chat falls through and shows normally.
         if (room.gameEnabled && room.game && room.game.phase === 'playing') {
           const outcome = handleGuess(room, roomId, user, message);
           if (outcome === 'correct') break; // scored + announced; don't echo the word
           if (outcome === 'spoiler') {
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'game_spoiler' }));
-            break; // drawer / already-correct typed the word — swallow it
+            break; // drawer / already-correct typed the word, swallow it
           }
-          // A doodle can DRAW the secret word where typing it is swallowed —
+          // A doodle can DRAW the secret word where typing it is swallowed -
           // block doodles from anyone who knows it (the drawer + solved guessers).
           if (cleanDoodle && (id === room.game.drawerId || room.game.guessed.has(gameKey(user)))) {
             if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'game_spoiler' }));
             break;
           }
         }
-        // Flood guard — AFTER the guess intercept, so a correct guess is never
+        // Flood guard: AFTER the guess intercept, so a correct guess is never
         // throttled. Wrong guesses still echo as chat, so the cap loosens
         // during a live round (machine-gun guessing IS the game). Feedback on drop.
         {
@@ -5767,7 +5767,7 @@ wss.on('connection', async (ws, req) => {
       // iMessage-style tapback on one chat bubble: toggles the sender's emoji
       // on/off. Allowlisted emoji only; membership stored by stable gameKey
       // (so a reconnect can still un-react) but only COUNTS ever leave the
-      // server — see the chat_history projection.
+      // server, see the chat_history projection.
       case 'chat_react': {
         if (room.sketchbook) break; // page rooms have no chat to react to
         if (room.fingerPaint) break;
@@ -5794,7 +5794,7 @@ wss.on('connection', async (ws, req) => {
         }
         if (list.length) line.reactions[emoji] = list;
         else delete line.reactions[emoji];
-        // The room learns COUNTS only — never who reacted. The reactor alone
+        // The room learns COUNTS only, never who reacted. The reactor alone
         // gets a private ack so their own chip can highlight.
         broadcast(roomId, { type: 'chat_react', msgId, emoji, count: list.length });
         if (user.ws.readyState === 1) user.ws.send(JSON.stringify({ type: 'chat_react_self', msgId, emoji, on: at < 0 }));
@@ -5803,7 +5803,7 @@ wss.on('connection', async (ws, req) => {
       }
 
       // Big animated "hype" reaction over the canvas (the Twitch-alert moment).
-      // Curated kinds only — the client renders each as a pure-CSS celebration,
+      // Curated kinds only, the client renders each as a pure-CSS celebration,
       // so no external content ever reaches a kid-safe room. Ephemeral.
       case 'hype': {
         if (room.fingerPaint) break;
@@ -5833,7 +5833,7 @@ wss.on('connection', async (ws, req) => {
       // ---- Brush mode (realistic | fun) toggle ------------------------------
       case 'set_brush_mode': {
         // Same power model as set_wet: host-only in public rooms, any member
-        // in private. A pure palette + wetness affordance — the mode is NOT in
+        // in private. A pure palette + wetness affordance, the mode is NOT in
         // any op, so toggling it never repaints history.
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
         room.brushMode = data.brushMode === 'fun' ? 'fun' : 'realistic';
@@ -5949,7 +5949,7 @@ wss.on('connection', async (ws, req) => {
       // (including the sender) so all clients apply them in server order.
       case 'set_animation': {
         // The film strip is a PRIVATE-room setting (host flips it). Public
-        // rooms can never opt in — FLIPBOOK is the one public animation room.
+        // rooms can never opt in: FLIPBOOK is the one public animation room.
         // Artist studios are public-viewable too: no film strip there either.
         if (room.audience === 'kid_safe' || room.audience === ARTIST_AUDIENCE) break;
         if (inkEnforcedFor(room)) break; // no animation bypass in the Ink & Pencil room
@@ -5965,7 +5965,7 @@ wss.on('connection', async (ws, req) => {
           stopGame(roomId, 'animation_on');
           broadcast(roomId, { type: 'room_game', enabled: false });
         }
-        // Draw Phone likewise blanks the canvas per round — same exclusivity.
+        // Draw Phone likewise blanks the canvas per round, same exclusivity.
         if (room.animationEnabled && room.phoneEnabled) {
           room.phoneEnabled = false;
           stopPhone(roomId, 'animation_on');
@@ -6022,7 +6022,7 @@ wss.on('connection', async (ws, req) => {
         if (!rateOk(`keep:${user.ip}`, 10, 60_000)) { denyWipe(user, 'slow_down'); break; }
         if (!room.keepVotes) room.keepVotes = new Set();
         // Identity must survive a reload and two tabs, or one kid alone clears
-        // the "2 distinct people" bar — but it must NOT merge a whole classroom
+        // the "2 distinct people" bar, but it must NOT merge a whole classroom
         // behind one NAT, or a school could never reach two votes at all.
         // Account > device key (localStorage, shared by a browser's tabs) > IP.
         // The device key is spoofable; the horizon cap above is what actually
@@ -6043,14 +6043,14 @@ wss.on('connection', async (ws, req) => {
         room.keepVotes.add(voteKey);
         if (room.keepVotes.size >= KEEP_VOTES_NEEDED) {
           // Extend from NOW (not from a deadline that may already be in the
-          // past), so a late rescue still buys a full cycle — but never past
+          // past), so a late rescue still buys a full cycle, but never past
           // the horizon.
           room.wipeAt = Math.min(
             Date.now() + MAX_WIPE_HORIZON_MS,
             Math.max(room.wipeAt || 0, Date.now()) + ROOM_WIPE_MS,
           );
           room.keepVotes.clear();
-          pushSystemChat(room, roomId, 'The room voted to keep this canvas — 3 more days! 🎉');
+          pushSystemChat(room, roomId, 'The room voted to keep this canvas: 3 more days! 🎉');
           persistRoom(roomId);
         }
         broadcastWipeState(roomId);
@@ -6060,7 +6060,7 @@ wss.on('connection', async (ws, req) => {
       // room the asker owns, so a refresh never destroys work someone still
       // wants. The public room is left exactly as it was.
       case 'fork_private': {
-        // This is the escape hatch for the PUBLIC refresh — not a universal
+        // This is the escape hatch for the PUBLIC refresh, not a universal
         // "copy any room I can see" button. Without this gate it would let a
         // member duplicate a locked private room's canvas into a room they own.
         if (!wipesOnCycle(room, roomId)) { denyFork(user, 'not_forkable'); break; }
@@ -6072,7 +6072,7 @@ wss.on('connection', async (ws, req) => {
         if (!rateOk(`fork:${user.ip}`, 3, 10 * 60_000)) { denyFork(user, 'slow_down'); break; }
         const source = visibleHistory(room);
         if (!source.length) { denyFork(user, 'empty'); break; }
-        // A public FILM may run to its whole budget — rescuing a 30-second
+        // A public FILM may run to its whole budget, rescuing a 30-second
         // FLIPBOOK short before the 3-day refresh is exactly what this is for.
         if (source.length > (room.animationEnabled ? MAX_PUBLIC_ANIM_OPS : FORK_MAX_OPS)) { denyFork(user, 'too_big'); break; }
         const forkCode = genRoomCode();
@@ -6089,7 +6089,7 @@ wss.on('connection', async (ws, req) => {
         // forked FLIPBOOK keeps all 8 frames but renders no film strip, so the
         // rescue silently strands every frame after the first.
         fork.animationEnabled = !!room.animationEnabled;
-        // Continue the sequence past every copied id — opIds AND the numeric
+        // Continue the sequence past every copied id, opIds AND the numeric
         // suffixes of copied f<n>/s<n> ids, which share the same counter
         // (mirrors the same recovery getRoom does on load).
         let seq = 0;
@@ -6140,7 +6140,7 @@ wss.on('connection', async (ws, req) => {
       }
       // A host kicks off / restarts a Draw Phone game (private rooms). The
       // hostless featured PHONE room auto-runs via maybePhoneStart + the
-      // intermission timer, so it needs no client start — and isHost is false
+      // intermission timer, so it needs no client start, and isHost is false
       // there, which is exactly what blocks a stranger from driving it.
       case 'phone_start': {
         if (!room.phoneEnabled) break;
@@ -6212,7 +6212,7 @@ wss.on('connection', async (ws, req) => {
         // paging, resync refetches and whole-film export bursts fit the window.
         // Never drop SILENTLY: the client holds a scene waiter per fetch, so a
         // quiet discard wedges a scene switch (or an export) until its 30s
-        // timeout. Answer with `resync` — the existing client handler refetches
+        // timeout. Answer with `resync`, the existing client handler refetches
         // its pending/active scene; retryAfterMs lets it back off bounded
         // instead of looping at RTT pace until the token window has room.
         if (!rateOk(`scenefetch:${user.id}`, SCENE_FETCH_MAX, SCENE_FETCH_WINDOW_MS)) {
@@ -6224,10 +6224,10 @@ wss.on('connection', async (ws, req) => {
           break;
         }
         // Optional preferred frame: its checkpoint build jumps the worker
-        // queue (PHASE4-CONTRACT.md). Old clients without frameId are valid —
+        // queue (PHASE4-CONTRACT.md). Old clients without frameId are valid -
         // the scene's first frame takes priority instead. Trusted-checkpoint
         // capable fetches get per-frame assets + tails; everyone else the
-        // ordinary scene gzip path — both gated + superseding, so ops/
+        // ordinary scene gzip path, both gated + superseding, so ops/
         // structure queue behind the new baseline and a newer fetch cancels
         // delivery of an in-flight older one.
         let fetchFrameId = null;
@@ -6285,7 +6285,7 @@ wss.on('connection', async (ws, req) => {
           room.history.filter((op) => doomedFrames.has(opFrameId(room, op))).map((op) => op.opId),
         );
         // If this scene owns the CURRENT first frame, pin any untagged ops in
-        // the full-mural undo backup to it now — restoring later must not
+        // the full-mural undo backup to it now, restoring later must not
         // re-bind them to whichever frame becomes first (same guard as
         // frame_move).
         if (room.lastCleared && !room.lastClearedFrameId && room.frames[0] && doomedFrames.has(room.frames[0].id)) {
@@ -6321,7 +6321,7 @@ wss.on('connection', async (ws, req) => {
         const dupId = data.duplicateOf != null ? String(data.duplicateOf).slice(0, 24) : null;
         const dupFrame = dupId ? room.frames.find((f) => f.id === dupId) : null;
         // Which scene does the new frame join? Its anchor's scene, else the
-        // requested scene, else the first — and caps apply PER SCENE now.
+        // requested scene, else the first, and caps apply PER SCENE now.
         const requestedScene = data.sceneId != null ? String(data.sceneId).slice(0, 24) : null;
         const sceneId =
           (afterFrame && afterFrame.sceneId) ||
@@ -6329,22 +6329,22 @@ wss.on('connection', async (ws, req) => {
           (requestedScene && room.scenes.some((s) => s.id === requestedScene) ? requestedScene : room.scenes[0].id);
         const maxFrames = room.audience === 'kid_safe' ? MAX_ANIM_FRAMES_PUBLIC : MAX_ANIM_FRAMES_PRIVATE;
         if (framesOfScene(room, sceneId).length >= maxFrames) {
-          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Scenes are capped at ${maxFrames} frames — add a new scene!` }));
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Scenes are capped at ${maxFrames} frames, add a new scene!` }));
           break;
         }
         const frame = { id: `f${(room.opSeq = (room.opSeq || 0) + 1)}`, durationMs: clampHoldFor(roomId, null), sceneId, layers: dupFrame ? dupFrame.layers.map((l) => ({ ...l })) : defaultLayers() };
         // Duplicate: copy the source frame's visible ops under fresh opIds so
-        // rejoiners replay the copy identically (the engine is deterministic —
+        // rejoiners replay the copy identically (the engine is deterministic -
         // same ops, same seeds, same pixels). Clients clone pixels locally.
         if (dupFrame) {
           const copies = visibleHistory(room)
             .filter((op) => opFrameId(room, op) === dupId)
             .map((op) => ({ ...op, frameId: frame.id, opId: (room.opSeq = (room.opSeq || 0) + 1) }));
-          // Duplicates count against the room's op budget too — otherwise
+          // Duplicates count against the room's op budget too, otherwise
           // repeated Duplicate taps grow history past the ceiling ordinary
           // draws are already being rejected at.
           if (room.history.length + copies.length > animOpBudget(room.audience)) {
-            ws.send(JSON.stringify({ type: 'frame_denied', reason: 'This segment is out of drawing space — start a new one!' }));
+            ws.send(JSON.stringify({ type: 'frame_denied', reason: 'This segment is out of drawing space, start a new one!' }));
             break;
           }
           room.history = room.history.concat(copies);
@@ -6381,7 +6381,7 @@ wss.on('connection', async (ws, req) => {
         if (delIndex < 0) break;
         // Every scene keeps at least one frame (delete the SCENE to drop it).
         if (framesOfScene(room, room.frames[delIndex].sceneId).length <= 1) break;
-        // Resolve which ops belong to this frame BEFORE the splice — untagged
+        // Resolve which ops belong to this frame BEFORE the splice, untagged
         // legacy ops resolve to the CURRENT first frame, and mutating the list
         // first would silently migrate them to whichever frame becomes first.
         const removeOpIds = new Set(
@@ -6421,7 +6421,7 @@ wss.on('connection', async (ws, req) => {
         if (sceneFrom === sceneTo) break;
         const fromIndex = room.frames.indexOf(movedFrame);
         const toIndex = room.frames.indexOf(sceneFrames[sceneTo]);
-        // Untagged legacy ops resolve to "whichever frame is first" — if this
+        // Untagged legacy ops resolve to "whichever frame is first", if this
         // move changes frames[0], pin them to the frame they belong to NOW or
         // they'd silently migrate onto the new first frame.
         if (fromIndex === 0 || toIndex === 0) {
@@ -6456,7 +6456,7 @@ wss.on('connection', async (ws, req) => {
 
       // ---- Shared layer stack -----------------------------------------------
       // Layer STRUCTURE is room state (order, name, visibility, opacity, lock);
-      // the pixels never travel — every client rebuilds a layer by replaying the
+      // the pixels never travel, every client rebuilds a layer by replaying the
       // ops tagged with its id (see case 'op'). The server mints the ids and
       // echoes the CANONICAL list to everyone including the sender, so every
       // client converges in server order exactly like the frame_* mutations
@@ -6574,7 +6574,7 @@ wss.on('connection', async (ws, req) => {
         const src = target.layers[srcIndex];
         const copy = { id: mintLayerId(room), name: `${src.name} copy`.slice(0, LAYER_NAME_MAX), visible: src.visible, opacity: src.opacity, locked: false };
         // Duplicate the CONTENT the way a duplicated frame does: the source
-        // layer's visible ops are copied under fresh opIds (deterministic — same
+        // layer's visible ops are copied under fresh opIds (deterministic, same
         // ops, same seeds, same pixels) and tagged with the new layer, so a
         // rejoin replays the copy. Live clients clone the canvas locally.
         const copies = visibleHistory(room)
@@ -6613,7 +6613,7 @@ wss.on('connection', async (ws, req) => {
         const upOps = room.history.filter((op) => op.layerId === upId && opFrameId(room, op) === target.id);
         const hasEraser = upOps.some((op) => op.kind === 'draw' && op.settings && op.settings.brush === 'eraser');
         if (hasEraser) {
-          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'That layer has erased strokes — merging can’t be shared safely' }));
+          ws.send(JSON.stringify({ type: 'layer_denied', reason: 'That layer has erased strokes, merging can’t be shared safely' }));
           break;
         }
         if (upper.opacity !== 1 || lower.opacity !== 1 || !upper.visible || !lower.visible) {
@@ -6682,7 +6682,7 @@ wss.on('connection', async (ws, req) => {
         const production = getProduction(room.productionId);
         if (!production) break;
         if (production.segments.length >= MAX_PRODUCTION_SEGMENTS) {
-          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_PRODUCTION_SEGMENTS} parts — that's a feature-length kid flick!` }));
+          ws.send(JSON.stringify({ type: 'frame_denied', reason: `Films are capped at ${MAX_PRODUCTION_SEGMENTS} parts, that's a feature-length kid flick!` }));
           break;
         }
         if (!rateOk(`prod:${user.profileId || id}`)) break; // reuse the room-creation limiter
@@ -6720,16 +6720,16 @@ wss.on('connection', async (ws, req) => {
       case 'vote_start': {
         // Same power model as set_wet: host-only in public rooms, open in private.
         if (room.audience === 'kid_safe' && !isHost(room, user)) break;
-        // The DAILY room's theme IS the daily challenge — no voting it away.
+        // The DAILY room's theme IS the daily challenge, no voting it away.
         if (roomId === 'DAILY') {
-          ws.send(JSON.stringify({ type: 'vote_denied', reason: "Today's Challenge is the theme — new one tomorrow!" }));
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: "Today's Challenge is the theme, new one tomorrow!" }));
           break;
         }
-        // The INKTOBER room's theme is the official event prompt — a vote must
+        // The INKTOBER room's theme is the official event prompt, a vote must
         // not spoof it in the handshake or the lobby card. Same for an
         // Inktober-opted-in artist studio (any phase).
         if (room.inkOnly || (isArtistRoom(room) && room.inktober)) {
-          ws.send(JSON.stringify({ type: 'vote_denied', reason: 'The Inktober prompt is the theme — new one each day of October!' }));
+          ws.send(JSON.stringify({ type: 'vote_denied', reason: 'The Inktober prompt is the theme, new one each day of October!' }));
           break;
         }
         const now = Date.now();
@@ -6830,7 +6830,7 @@ wss.on('connection', async (ws, req) => {
       }
       case 'flag': {
         // A watcher (or any client) flags a region as possibly lewd. Acted on in
-        // every room — private rooms elect watchers too, and a flag there alerts
+        // every room, private rooms elect watchers too, and a flag there alerts
         // the room's host instead of vanishing. Conservative ladder: a lone flag
         // is Tier-1 (alert the hosts, destroy nothing); corroboration is required
         // before the reversible auto-hide; a kick is NEVER automatic.
@@ -6854,7 +6854,7 @@ wss.on('connection', async (ws, req) => {
         const roomLastOpId = room.history.length ? room.history[room.history.length - 1].opId : 0;
         const toOpIdEff = Math.min(toOpId, roomLastOpId);
         // A watermark entirely beyond the room's history clamps to an
-        // empty/inverted range — reject it outright instead of recording a
+        // empty/inverted range, reject it outright instead of recording a
         // non-range that would still count toward Tier-2 corroboration.
         if (toOpIdEff <= sinceOpId) break;
         room.flags = room.flags.filter((f) => now - f.ts < FLAG_WINDOW_MS);
@@ -6870,14 +6870,14 @@ wss.on('connection', async (ws, req) => {
         implicated.forEach((opId) => room.flaggedOps.add(opId));
         if (firstAlert) {
           const report = autoModerate(room, offender, `possible lewd image (score ${score.toFixed(2)})`, implicated);
-          // Name the implicated ops on the report itself — before this, an
+          // Name the implicated ops on the report itself, before this, an
           // image-flag report couldn't even say which ops it concerned.
           report.opIds = implicated.slice(0, 200);
           // Frozen classifier pixels ride the flag frame as `evidence`. They
           // are accepted ONLY bound to this real moderation event, ONLY from a
           // server-elected watcher, and ONLY as a validated small PNG/JPEG.
           // TRUST LEVEL, stated plainly: watcher election is a capability
-          // election, not an identity check — the election input is the
+          // election, not an identity check, the election input is the
           // client's own watcher_ack, any guest is eligible, and MAX_WATCHERS
           // prefers signed-in then earliest-joined, so a tampered client that
           // joins early CAN be elected and CAN deposit forged (validated)
@@ -6896,7 +6896,7 @@ wss.on('connection', async (ws, req) => {
                 try {
                   attachEvidence(report, decoded, data.evidence, {
                     score, sinceOpId, toOpId: toOpIdEff,
-                    // Keyed identity — never a raw IP, and (since SEC-1) never
+                    // Keyed identity, never a raw IP, and (since SEC-1) never
                     // a reversible unsalted hash either. See watcherIpIdentity.
                     watcher: user.profileId
                       ? `profile:${user.profileId}`
@@ -6969,14 +6969,14 @@ wss.on('connection', async (ws, req) => {
         break;
       }
       // The owner grants paint access to a LIVE verified account, resolved by
-      // its session id — never by a client-supplied name, email or profile id.
+      // its session id, never by a client-supplied name, email or profile id.
       case 'paint_approve': {
         if (!isArtistRoom(room)) break;
         if (!user.profileId || user.profileId !== room.ownerProfileId) break;
         const target = room.users.get(String(data.targetId || ''));
         if (!target || !target.verified || !target.profileId || target.profileId === room.ownerProfileId) break;
         // Sketchbook page rooms: the direct room approval must not bypass the
-        // BOOK's invitation model or its 6-artist cap — the grant goes through
+        // BOOK's invitation model or its 6-artist cap, the grant goes through
         // the book (and lands on every page at once) instead of this room
         // alone. The check → mutate → persist is synchronous: two approves in
         // flight cannot overflow the cap.
@@ -6984,7 +6984,7 @@ wss.on('connection', async (ws, req) => {
           const book = sketchbookById(room.sketchbook.book);
           // Fail CLOSED when the book record is missing: a direct-room grant
           // here would bypass the invitation model + 6-artist cap in exactly
-          // the state that lost its enforcement data — refuse, change nothing.
+          // the state that lost its enforcement data, refuse, change nothing.
           if (!book) {
             if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'paint_requested', status: 'book_missing' }));
             break;
@@ -7007,7 +7007,7 @@ wss.on('connection', async (ws, req) => {
         room.painters = normalizePainters([...(room.painters || []), target.profileId]);
         if (room.paintRequests) room.paintRequests.delete(target.profileId);
         // The ACL is account-wide, so EVERY live session of that account
-        // flips — a second tab must not sit on a stale canPaint/role while its
+        // flips, a second tab must not sit on a stale canPaint/role while its
         // sibling gets the grant.
         room.users.forEach((member) => {
           if (member.profileId !== target.profileId) return;
@@ -7033,7 +7033,7 @@ wss.on('connection', async (ws, req) => {
           const book = sketchbookById(room.sketchbook.book);
           // Same fail-closed rule as approve: with the book record missing, a
           // direct-room revoke would desynchronize the page from the book the
-          // moment the book returns — the existing grant stands untouched.
+          // moment the book returns, the existing grant stands untouched.
           if (!book) break;
           if (target.profileId !== book.ownerProfileId) {
             book.artists = book.artists.filter((a) => a !== target.profileId);
@@ -7047,7 +7047,7 @@ wss.on('connection', async (ws, req) => {
         room.painters = (room.painters || []).filter((pid) => pid !== target.profileId);
         if (room.paintRequests) room.paintRequests.delete(target.profileId);
         // Same account-wide rule as approve: every connected session of the
-        // revoked account is recomputed and told — a second tab keeping a
+        // revoked account is recomputed and told, a second tab keeping a
         // stale canPaint would keep drawing after the revoke.
         room.users.forEach((member) => {
           if (member.profileId !== target.profileId) return;
@@ -7069,7 +7069,7 @@ wss.on('connection', async (ws, req) => {
   });
 
   // Frames that arrived during the pre-join window (a legacy client's non-auth
-  // first frame, or the client_info sent right behind the auth frame) — replay
+  // first frame, or the client_info sent right behind the auth frame), replay
   // them in order through the real handler now that it's attached. Everything
   // from the join's last await to here is synchronous, so no live frame can
   // slip in ahead of the replayed ones.
@@ -7081,7 +7081,7 @@ wss.on('connection', async (ws, req) => {
   }
 
   ws.on('close', () => {
-    // Accrue this user's time in the room — engagement extends the auto-close TTL.
+    // Accrue this user's time in the room, engagement extends the auto-close TTL.
     room.userSeconds = (room.userSeconds || 0) + Math.max(0, (Date.now() - user.connectedAt) / 1000);
     analyticsEndSession(user);
     room.users.delete(id);
@@ -7112,7 +7112,7 @@ wss.on('connection', async (ws, req) => {
         room.game.drawerId = null;
         broadcastGame(roomId);
       } else if (room.game.phase === 'playing') {
-        // A guesser left — if the remaining guessers have all solved it, the
+        // A guesser left, if the remaining guessers have all solved it, the
         // round is done (their departure completed the "everyone guessed"
         // condition, which is otherwise only checked on a guess).
         checkAllGuessed(roomId);
@@ -7125,7 +7125,7 @@ wss.on('connection', async (ws, req) => {
     if (room.phoneEnabled && room.phone) {
       const phase = room.phone.phase;
       if (phase === 'drawing' || phase === 'guessing') {
-        // Count SEATED players still present, not spectators — else a room with
+        // Count SEATED players still present, not spectators, else a room with
         // a couple of watchers grinds every remaining round out to its deadline.
         if (phonePresentKeys(room).length < 2) startPhoneReveal(roomId);
         else { broadcastPhone(roomId); checkPhoneRoundComplete(roomId); }
@@ -7133,7 +7133,7 @@ wss.on('connection', async (ws, req) => {
         broadcastPhone(roomId);
       }
     }
-    // A film's storyboard shows live crew chips per Part — refresh so this
+    // A film's storyboard shows live crew chips per Part, refresh so this
     // painter's chip vanishes from the board the moment they leave.
     if (room.productionId) {
       const production = getProduction(room.productionId);
@@ -7145,7 +7145,7 @@ wss.on('connection', async (ws, req) => {
       room.watchers.delete(id);
       electWatchers(room);
     }
-    // Never leave a room locked with no host present — otherwise an owner who
+    // Never leave a room locked with no host present, otherwise an owner who
     // leaves (or deletes their account) could brick the canvas for everyone.
     if (room.locked && !Array.from(room.users.values()).some((u) => isHost(room, u))) {
       room.locked = false;
@@ -7161,7 +7161,7 @@ wss.on('connection', async (ws, req) => {
 // ---- Saved artwork (per device key; account-ready) ------------------------
 // Each device gets an anonymous user key (stored client-side). Artworks are
 // persisted on disk keyed by that key, capped per user. This is the storage the
-// future sign-in will adopt — swap the key for an authenticated user id.
+// future sign-in will adopt, swap the key for an authenticated user id.
 const ARTWORK_DIR = process.env.ARTWORK_DIR || join(DATA_DIR, '.artworks');
 const MAX_SAVES = Number(process.env.MAX_SAVES || 12);
 
@@ -7247,7 +7247,7 @@ app.get('/api/artworks/:id', async (req, res) => {
 // fences, outermost last: a per-visitor rate (a class behind one school NAT all
 // saving at the bell still fits), real image bytes only (it used to take any
 // "data:image…" prefix, SVG included), and a ceiling on the whole directory so
-// the worst a flood can do is fill the GALLERY — never the volume that room
+// the worst a flood can do is fill the GALLERY, never the volume that room
 // persistence and billing writes share.
 const ARTWORK_DIR_MAX_BYTES = Number(process.env.ARTWORK_DIR_MAX_BYTES || 4 * 1024 * 1024 * 1024);
 const ART_IMAGE_MAX_CHARS = 16 * 1024 * 1024;
@@ -7322,7 +7322,7 @@ app.delete('/api/artworks/:id', async (req, res) => {
 // ---- Admin + moderation ---------------------------------------------------
 // Admin key: prefer ADMIN_KEY from the environment; otherwise a persisted random
 // key in a 0600 file. It is NEVER printed to logs (stdout ends up in shared
-// deploy/CI logs) and never ships in the client bundle — read it from the file
+// deploy/CI logs) and never ships in the client bundle, read it from the file
 // on this machine if you need it. The parent enters it once at /admin.
 const ADMIN_KEY_FILE = join(DATA_DIR, '.admin-key');
 let ADMIN_KEY = process.env.ADMIN_KEY || '';
@@ -7346,7 +7346,7 @@ try {
   reports = [];
 }
 function persistReports() {
-  // Atomic via tmp+rename: a crash mid-write must never truncate the store —
+  // Atomic via tmp+rename: a crash mid-write must never truncate the store -
   // a corrupted .reports.json would orphan EVERY evidence file at once.
   try {
     writeFileSync(`${REPORTS_FILE}.tmp`, JSON.stringify(reports.slice(0, REPORTS_MAX)));
@@ -7355,13 +7355,13 @@ function persistReports() {
 }
 
 // Watcher identity for unsigned-in (guest) watchers is an HMAC of the client
-// IP keyed by a PERSISTED server secret — never a bare sha256: the ~2^32 IPv4
+// IP keyed by a PERSISTED server secret, never a bare sha256: the ~2^32 IPv4
 // space is trivially brute-forceable against an unsalted hash, so the old
 // `ip-sha256:` identity was pseudonymous-but-reversible for anyone who could
 // read the reports store. The key lives only in a 0600 file next to the
 // reports (env-overridable for deploys that manage secrets themselves), is
 // never logged and never shipped to clients. Being keyed, the identity is
-// irreversible without the server secret — and it carries no account link,
+// irreversible without the server secret, and it carries no account link,
 // so the account-deletion scrub has nothing further to erase for guests.
 const EVIDENCE_KEY_FILE = join(DATA_DIR, '.evidence-key');
 let EVIDENCE_HMAC_KEY = process.env.EVIDENCE_HMAC_KEY || '';
@@ -7378,12 +7378,12 @@ function watcherIpIdentity(ip) {
 
 // ---- Immutable moderation evidence -----------------------------------------
 // When an elected watcher's NSFW scan crosses the flag threshold, the client
-// encodes the EXACT downscaled bitmap the classifier read (PNG — lossless, so
+// encodes the EXACT downscaled bitmap the classifier read (PNG, lossless, so
 // the stored pixels are bit-identical to the analyzed ones) and attaches it to
 // the flag frame. The server binds those bytes to the resulting auto-report,
 // frozen: a later repaint changes the live room and its rotating thumbnail,
 // but never this snapshot. Trust posture: the pixels are CLIENT-SUPPLIED
-// corroboration, never proof — a tampered client can forge them (recorded as
+// corroboration, never proof, a tampered client can forge them (recorded as
 // trust:'client-captured'). The hard boundary here is abuse control: only an
 // elected watcher may deposit evidence, it must decode to a real small
 // PNG/JPEG whose bytes match their claimed type and declared dimensions, and
@@ -7440,7 +7440,7 @@ function decodeEvidenceImage(ev) {
   return { bytes, mime: sniffed, w: dims.w, h: dims.h };
 }
 
-// Evict the oldest evidence past quota. The flag/report was already accepted —
+// Evict the oldest evidence past quota. The flag/report was already accepted -
 // quota costs the image, never the moderation event; the report keeps the
 // metadata with dropped:'quota' where the file reference was.
 function enforceEvidenceQuotas(roomCode) {
@@ -7500,7 +7500,7 @@ sweepEvidence();
 // files). Delete leftover `.tmp` staging files (crash between write and
 // rename) and any minted evidence file no loaded report references (crash
 // between the file write and persistReports, or a reports store that failed
-// to load). Only minted filename shapes are touched — anything else in the
+// to load). Only minted filename shapes are touched, anything else in the
 // dir is left alone.
 function reconcileEvidenceDir() {
   let names;
@@ -7517,7 +7517,7 @@ function reconcileEvidenceDir() {
 reconcileEvidenceDir();
 
 // Bind a validated evidence frame to its moderation report: write the bytes
-// (tmp + rename), hash them, and record the metadata sidecar IN the report —
+// (tmp + rename), hash them, and record the metadata sidecar IN the report -
 // never burned into the pixels. `receivedAt` is the authoritative server
 // timestamp; capturedAt is the watcher's claim.
 function attachEvidence(report, decoded, ev, { score, sinceOpId, toOpId, watcher }) {
@@ -7551,7 +7551,7 @@ function fileReport({ room, reason, reporterName, source }) {
   // the report (last 20 lines; names + text, no profile ids on the wire).
   const liveRoom = rooms.get(roomCode);
   // Doodle-bearing lines carry BOTH the id (admin takedown handle) and an
-  // image snapshot — the report must stay reviewable even after the in-memory
+  // image snapshot, the report must stay reviewable even after the in-memory
   // doodle store evicts or the server restarts.
   const chatContext = liveRoom
     ? (liveRoom.chat || []).slice(-20).map((c) => ({
@@ -7576,7 +7576,7 @@ function fileReport({ room, reason, reporterName, source }) {
   const haystack = `${report.reason} ${chatContext.map((c) => c.message).join(' ')}`.toLowerCase();
   report.urgent = /\b(sexual|nude|naked|nsfw|porn|meet\s?up|meet me|address|phone|snap(chat)?|kik|discord|instagram|insta|tiktok|kill|suicide|self.?harm|groom)\b/.test(haystack)
     // A report whose context contains image content (doodles) is triaged as
-    // urgent — text keywords can't see inside a picture.
+    // urgent, text keywords can't see inside a picture.
     || chatContext.some((c) => c.doodle);
   if (report.urgent) {
     reports.unshift(report); // already newest-first; keep it at the top explicitly
@@ -7587,7 +7587,7 @@ function fileReport({ room, reason, reporterName, source }) {
   reports.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || b.ts - a.ts);
   if (reports.length > REPORTS_MAX) {
     const evicted = reports.splice(REPORTS_MAX);
-    // An evicted report's evidence image goes with it — never orphan files.
+    // An evicted report's evidence image goes with it, never orphan files.
     for (const r of evicted) {
       if (r.evidence && r.evidence.file) dropEvidenceFile(r.evidence.file);
     }
@@ -7596,7 +7596,7 @@ function fileReport({ room, reason, reporterName, source }) {
   return report;
 }
 
-// Notify just the room's hosts (and nobody else) about a moderation event — a
+// Notify just the room's hosts (and nobody else) about a moderation event, a
 // host/admin decides whether to hide/restore/remove. Never broadcast to kids.
 function alertHosts(room, payload) {
   room.users.forEach((u) => {
@@ -7627,7 +7627,7 @@ function maskMessage(message) {
 
 // ---- Room moderation actions, shared by hosts and admin watchers ------------
 // One implementation per action so a host's Clear and an admin's Wipe can never
-// drift apart. `actor` is a member ({ id, name, user }) or MOD_ACTOR — the
+// drift apart. `actor` is a member ({ id, name, user }) or MOD_ACTOR, the
 // room-facing identity a watching admin acts under. A watcher never appears as
 // themselves: the room sees "a moderator", which is what it is.
 const MOD_ACTOR = { id: 'admin', name: 'a moderator', user: null };
@@ -7649,7 +7649,7 @@ function noteMod(room, action, actor, detail) {
   if (room.modLog.length > 100) room.modLog.length = 100;
 }
 
-// Wipe the shared mural — or ONE frame in an animation room. Keeps a backup so
+// Wipe the shared mural, or ONE frame in an animation room. Keeps a backup so
 // the room can undo, drops the coloring sheet on a full wipe, and re-broadcasts
 // the blank canvas to members (and watchers).
 function moderateClear(room, actor, frameId = null) {
@@ -7672,8 +7672,8 @@ function moderateClear(room, actor, frameId = null) {
   return wipeMural(room, actor, { except });
 }
 
-// The full-mural wipe every path shares — a host's Clear, a room's countdown
-// or vote, a moderator's reset — so they can never drift apart. Keeps a backup
+// The full-mural wipe every path shares, a host's Clear, a room's countdown
+// or vote, a moderator's reset, so they can never drift apart. Keeps a backup
 // for undo; `undoable` says whether MEMBERS may "Bring it back" (a moderator's
 // Undo always can). `resetChat` also empties the room's chat for everyone (the
 // durable .chatlog audit trail is never touched).
@@ -7690,7 +7690,7 @@ function wipeMural(room, actor, { except = null, undoable = true, resetChat = fa
   recountFrameOps(room);
   analyticsRecordClear(roomId, actor.user || null, actor.user ? 'user' : 'admin');
   broadcast(roomId, { type: 'clear', userId: actor.id, name: actor.name, ...message }, except);
-  // A full clear blanks the canvas completely — drop the coloring sheet too
+  // A full clear blanks the canvas completely, drop the coloring sheet too
   // (it would otherwise reload for everyone on every visit), unless the wipe
   // was for a fresh sheet. Echoed to the clearer as well, hence no sender
   // exclusion.
@@ -7710,8 +7710,8 @@ function wipeMural(room, actor, { except = null, undoable = true, resetChat = fa
   return true;
 }
 
-// A moderator's Wipe is a RESET: the room comes back as if brand new — no
-// mural, no sheet, no chat, a fresh 3-day clock — and nobody in the room can
+// A moderator's Wipe is a RESET: the room comes back as if brand new, no
+// mural, no sheet, no chat, a fresh 3-day clock, and nobody in the room can
 // "Bring it back". Only the moderator's own Undo (RoomWatch) restores it.
 function moderateResetRoom(room, actor = MOD_ACTOR) {
   const roomId = room.code;
@@ -7752,7 +7752,7 @@ function moderateUndoClear(room, actor) {
     recountFrameOps(room);
     invalidateRoomSnapshot(room); // restored content ≠ the baked snapshot
     if (room.animationEnabled) {
-      // Scene-paged clients can't take a whole-movie history frame — each
+      // Scene-paged clients can't take a whole-movie history frame, each
       // refetches its own active scene instead.
       broadcast(roomId, { type: 'resync', restored: true });
     } else {
@@ -7801,7 +7801,7 @@ function moderateRestoreOps(room, actor, opIds) {
   return ids.length;
 }
 
-// Permanent removal — the op leaves history entirely.
+// Permanent removal, the op leaves history entirely.
 function moderateRemoveOps(room, actor, opIds) {
   const ids = new Set(normalizeOpIds(opIds));
   if (!ids.size) return 0;
@@ -7870,7 +7870,7 @@ function adminKeyMatches(key) {
 }
 
 function isAdmin(req) {
-  // Header only — never a query param, which would land the key in proxy/CDN
+  // Header only, never a query param, which would land the key in proxy/CDN
   // access logs and browser history (same leak class as tokens in WS URLs).
   return adminKeyMatches(req.get('x-admin-key'));
 }
@@ -7883,7 +7883,7 @@ function adminGuard(req, res) {
   return true;
 }
 
-// Anyone can file a report (no auth) — that's the point. But the queue is a
+// Anyone can file a report (no auth), that's the point. But the queue is a
 // bounded store, so rate-limit per IP so a flooder can't push real reports out
 // the end of it. The cap is loose enough for a kid legitimately reporting a
 // pile-on (12 per 10 minutes).
@@ -7902,8 +7902,8 @@ app.post('/api/report', (req, res) => {
 
 // Erasure: scrub a user's chat from the durable audit logs (COPPA/GDPR "delete
 // my data"). Called by the client during account deletion while the token is
-// still valid. Redacts by the opaque profileId — the only stable identifier the
-// audit log keeps — replacing name + message with '[deleted]'.
+// still valid. Redacts by the opaque profileId, the only stable identifier the
+// audit log keeps, replacing name + message with '[deleted]'.
 app.post('/api/account/scrub-chat', async (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -7912,7 +7912,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   const pid = identity.profileId;
   // This is a once-per-account action that synchronously rereads and rewrites
   // EVERY chat log and sweeps every live room and wall post. Unthrottled, one
-  // free account in a loop stalls the event loop — i.e. every live canvas.
+  // free account in a loop stalls the event loop, i.e. every live canvas.
   if (!rateOk(`scrub:${pid}`, 3, 60 * 60_000) || !rateOk(`scrub-ip:${clientIp(req)}`, 6, 60 * 60_000)) {
     return res.status(429).json({ error: 'slow_down' });
   }
@@ -7947,7 +7947,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     const sessionIds = new Set(
       Array.from(room.users.values()).filter((u) => u.profileId === pid).map((u) => u.id),
     );
-    // Tapback membership keys are pb_<profileId> — erase them in EVERY room,
+    // Tapback membership keys are pb_<profileId>, erase them in EVERY room,
     // whether or not this profile has a live session there.
     const reactKey = `pb_${pid}`;
     let roomTouched = false;
@@ -7969,7 +7969,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
         if (c.user && sessionIds.has(c.user.id)) {
           c.user.name = '[deleted]';
           c.message = '[deleted]';
-          // Their doodle images are content too — delete the stored image and
+          // Their doodle images are content too, delete the stored image and
           // the bubble's reference, not just the text.
           if (c.doodle) {
             chatDoodles.delete(c.doodle);
@@ -7979,7 +7979,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
           roomTouched = true;
         }
       }
-      // Replies embed a VALUE COPY of the quoted name + snippet — redact those
+      // Replies embed a VALUE COPY of the quoted name + snippet, redact those
       // copies too, or the deleted child's words keep shipping to every joiner
       // inside other kids' reply lines.
       for (const c of room.chat || []) {
@@ -7991,14 +7991,14 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     }
     if (roomTouched) persistRoom(room.code);
   }
-  // Doodle images are stamped with their sender's profileId at store time —
+  // Doodle images are stamped with their sender's profileId at store time -
   // sweep the whole store so a child's drawings vanish even when their chat
   // line already rolled out of every buffer or they're long disconnected.
   for (const [did, dd] of [...chatDoodles]) {
     if (dd.profileId === pid) chatDoodles.delete(did);
   }
   const analyticsScrubbed = analyticsScrubProfile(pid);
-  // 3) the account's SAVED ARTWORK — a deleted child's drawings must not linger
+  // 3) the account's SAVED ARTWORK, a deleted child's drawings must not linger
   //    on disk (COPPA erasure). Their gallery is one file keyed by the account.
   let artScrubbed = 0;
   try {
@@ -8016,7 +8016,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   // that revokes entitlement and retains only the ids needed to cancel later.
   const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
   // 5) ARTIST STUDIOS: unpublish every studio this account owns and cut the
-  //    account from every painter/co-host ACL — INCLUDING persisted OFFLINE
+  //    account from every painter/co-host ACL: INCLUDING persisted OFFLINE
   //    room files (a restart must not resurrect access). Ownership itself is
   //    NEVER released: ownerProfileId stays stamped with the deleted id, so
   //    no first-arrival or sign-in can take an orphaned studio over.
@@ -8075,7 +8075,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       }
     }
   } catch { /* no room dir yet */ }
-  // 6b) SKETCHBOOKS: a deleted owner's books leave discovery (public=false —
+  // 6b) SKETCHBOOKS: a deleted owner's books leave discovery (public=false -
   //     the same "unpublish, never delete the art" stance as artist studios)
   //     and the deleted account is cut from every OTHER book's artist list,
   //     applied across all page rooms (live + persisted) at once.
@@ -8094,7 +8094,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     }
   } catch { /* best effort */ }
   // 7) moderation evidence identity: the frozen PIXELS are the room's shared
-  //    canvas (not the watcher's data), so the image itself stays — but the
+  //    canvas (not the watcher's data), so the image itself stays, but the
   //    watcher's identity is scrubbed from every report that carries it.
   //    Guest (`ip-hmac:`) identities need no scrub: they are keyed-HMAC
   //    pseudonyms with no account link and are irreversible without the
@@ -8107,7 +8107,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     }
   }
   if (evidenceScrubbed) persistReports();
-  forgetProfileTokens(pid); // the account is gone — its cached sign-in must not outlive it
+  forgetProfileTokens(pid); // the account is gone, its cached sign-in must not outlive it
   res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, sketchbooksScrubbed, evidenceScrubbed });
 });
 
@@ -8152,7 +8152,7 @@ app.get('/api/admin/rooms', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Moderation console ("Room Radar") — the data layer for the admin pages.
+// Moderation console ("Room Radar"), the data layer for the admin pages.
 // ---------------------------------------------------------------------------
 // Why one payload instead of a request per room: at 300+ rooms a moderator must
 // sort/filter the whole estate (activity, recency, reports, chat concerns)
@@ -8169,7 +8169,7 @@ const RADAR_ROOM_CAP = 1200; // sanity bound; a real estate is far smaller
 
 // Who owns a room, in the same vocabulary the Users page uses: the analytics /
 // block key (pb:<profileId>) plus the label that page shows for the account.
-// Never a name or an email — the server does not hold those.
+// Never a name or an email, the server does not hold those.
 function roomOwnerInfo(ownerProfileId) {
   if (!ownerProfileId) return { ownerKey: null, ownerLabel: null };
   const pid = String(ownerProfileId);
@@ -8178,7 +8178,7 @@ function roomOwnerInfo(ownerProfileId) {
 
 // Rooms saved on disk but not in memory. After a restart that is EVERY private
 // room nobody has re-entered yet, so an admin view built on `rooms` alone shows
-// almost none of them. One small meta read per room, cached by mtime — a poll
+// almost none of them. One small meta read per room, cached by mtime, a poll
 // costs a readdir plus a stat per dormant room.
 const dormantMetaCache = new Map(); // id -> { mtimeMs, meta }
 function dormantRoomMetas() {
@@ -8224,7 +8224,7 @@ function dormantRoomMetas() {
         dormantMetaCache.set(id, hit);
       }
       out.push({ id, ...hit.meta });
-    } catch { /* unreadable / mid-write — it shows up on the next poll */ }
+    } catch { /* unreadable / mid-write, it shows up on the next poll */ }
   }
   for (const id of [...dormantMetaCache.keys()]) if (!seen.has(id)) dormantMetaCache.delete(id);
   return out;
@@ -8343,7 +8343,7 @@ app.get('/api/admin/radar', (req, res) => {
 });
 
 // One room's chat, summarized for a moderator: the digest plus the actual
-// flagged lines. `llm` stays null unless MOD_SYNOPSIS_URL is configured — see
+// flagged lines. `llm` stays null unless MOD_SYNOPSIS_URL is configured, see
 // chatSynopsis() for why the deterministic layer ships first.
 app.get('/api/admin/rooms/:id/chat/summary', async (req, res) => {
   if (!adminGuard(req, res)) return;
@@ -8394,7 +8394,7 @@ async function chatSynopsis(roomId, digest) {
         ...(process.env.MOD_SYNOPSIS_KEY ? { Authorization: `Bearer ${process.env.MOD_SYNOPSIS_KEY}` } : {}),
       },
       // Only the flag data and the already-clipped flagged lines leave the
-      // building — never the whole room log.
+      // building, never the whole room log.
       body: JSON.stringify({
         room: roomId,
         messages: digest.lines,
@@ -8418,7 +8418,7 @@ async function chatSynopsis(roomId, digest) {
 
 
 // ---------------------------------------------------------------------------
-// Global block list — one defacer, every room.
+// Global block list, one defacer, every room.
 // ---------------------------------------------------------------------------
 // A host kick (room.kickedProfiles) is per-room and in-memory: it stops someone
 // in THAT room for 15 minutes. A person touring every room to draw penises
@@ -8427,7 +8427,7 @@ async function chatSynopsis(roomId, digest) {
 // enforcement path can never disagree about who someone is:
 //   pb:<profileId>  signed-in account (reliable)
 //   <deviceKey>     anonymous device key, when the client sends one in auth
-//   ip:<address>    last resort — coarse, can catch a shared school NAT
+//   ip:<address>    last resort, coarse, can catch a shared school NAT
 const BLOCKED_FILE = join(DATA_DIR, '.blocked.json');
 const blockedKeys = new Map();
 try {
@@ -8466,7 +8466,7 @@ app.get('/api/admin/users-index', (req, res) => {
   }
   // Every private room that still exists (live or dormant on disk), so each
   // person's row can answer "which invite-only rooms is this account behind?"
-  // — the rooms no public lobby, spectator or auto-moderator ever sees.
+  //, the rooms no public lobby, spectator or auto-moderator ever sees.
   const privateIndex = new Map(); // roomId -> { title, ownerProfileId, dormant, users, strokes, lastActivity, expiresInMs }
   const nowTs = Date.now();
   rooms.forEach((room, id) => {
@@ -8625,7 +8625,7 @@ app.post('/api/admin/users/:key/unblock', (req, res) => {
 
 // Every identity key a connection can be matched by. Signed-in users match
 // their account; anonymous ones match their device key (if the client sent one)
-// and their IP — which is why the console shows which key a block landed on.
+// and their IP, which is why the console shows which key a block landed on.
 function userBlockKeys(user) {
   const keys = [];
   if (user && user.profileId) keys.push(`pb:${sanitizeKey(user.profileId)}`);
@@ -8634,8 +8634,8 @@ function userBlockKeys(user) {
   return keys.filter(Boolean);
 }
 
-// Block keys are prefixed (pb:/dev:/ip:), so the generic sanitizeKey — which
-// strips ':' — would silently rewrite `dev:abc` into `devabc` and the block
+// Block keys are prefixed (pb:/dev:/ip:), so the generic sanitizeKey, which
+// strips ':', would silently rewrite `dev:abc` into `devabc` and the block
 // would match nothing. Keys are therefore normalized with their prefix intact.
 function sanitizeBlockKey(raw) {
   const str = String(raw || '');
@@ -8834,8 +8834,8 @@ app.post('/api/admin/rooms/:id/delete', (req, res) => {
     return res.status(400).json({ error: 'cannot_delete_featured' });
   }
   // A sketchbook page room is referenced by its (permanent) book: drop the
-  // page reference first so the deletion can't leave a dangling — and
-  // code-reserving — page pointing at a room that no longer exists.
+  // page reference first so the deletion can't leave a dangling, and
+  // code-reserving, page pointing at a room that no longer exists.
   loadSketchbooks();
   const bookId = bookPageIndex.get(id);
   const book = bookId ? sketchbooks.get(bookId) : null;
@@ -8850,7 +8850,7 @@ app.post('/api/admin/rooms/:id/delete', (req, res) => {
 
 // A moderator's flag while watching a room: the takedown itself goes over the
 // watch socket (mod_hide/mod_remove), but the record has to outlive the session,
-// so it lands in the same reports queue /admin already works from — with the
+// so it lands in the same reports queue /admin already works from, with the
 // implicated op ids in the reason, and the room's chat context attached.
 app.post('/api/admin/rooms/:id/flag', (req, res) => {
   if (!adminGuard(req, res)) return;
@@ -8861,7 +8861,7 @@ app.post('/api/admin/rooms/:id/flag', (req, res) => {
     : [];
   const report = fileReport({
     room: id,
-    reason: `${reason || 'flagged while watching'}${opIds.length ? ` — ops ${opIds.join(', ')}` : ''}`,
+    reason: `${reason || 'flagged while watching'}${opIds.length ? `, ops ${opIds.join(', ')}` : ''}`,
     reporterName: 'moderator',
     source: 'admin',
   });
@@ -8875,7 +8875,7 @@ app.get('/api/admin/reports', (req, res) => {
 
 // The frozen classifier snapshot bound to a report (see case 'flag'). Admin
 // key required, no-store (adminGuard), bytes re-sniffed and served with the
-// SNIFFED type — never the upload's claimed type — plus nosniff so the image
+// SNIFFED type, never the upload's claimed type, plus nosniff so the image
 // can never be reinterpreted as anything else. The report id and stored
 // filename are both validated against their minted shapes before either
 // touches the filesystem, so a crafted :reportId cannot traverse out of
@@ -8911,7 +8911,7 @@ app.post('/api/admin/reports/:id/resolve', (req, res) => {
 // ---- The Fridge Wall: community gallery ------------------------------------
 // Kids pin finished drawings to a public wall: title + tags (profanity-gated),
 // hearts (one per person, toggle), search, and animated posts (up to 8 frame
-// PNGs the client captured — the wall cycles them). Metadata and frames are
+// PNGs the client captured, the wall cycles them). Metadata and frames are
 // stored in SEPARATE files so a vote never rewrites hundreds of KB of images.
 const WALL_DIR = process.env.WALL_DIR || join(DATA_DIR, '.wall');
 const MAX_WALL_POSTS = Number(process.env.MAX_WALL_POSTS || 500);
@@ -8925,7 +8925,7 @@ const WALL_MAX_VOTES = 100_000; // cap distinct hearts stored per post (disk bou
 // value here is a fixed, safe Content-Type we control (never echoed from input).
 const WALL_IMAGE_MIME = { png: 'image/png', jpeg: 'image/jpeg', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
-// Sniff the decoded bytes — the data-URL's claimed MIME is not trusted. Returns
+// Sniff the decoded bytes, the data-URL's claimed MIME is not trusted. Returns
 // a safe Content-Type from the allowlist, or null (reject / 404).
 function sniffWallImage(buffer) {
   if (!buffer || buffer.length < 12) return null;
@@ -8940,9 +8940,9 @@ function sniffWallImage(buffer) {
 // The gate for client-supplied rasters that are RELAYED or STORED as a string
 // (canvas image ops, stamp-brush tips, gallery saves) rather than re-served as
 // bytes: an allowlisted data:image type, strict base64 to the end, and a real
-// image header in the decoded bytes. Anything else — above all an http(s) URL,
+// image header in the decoded bytes. Anything else, above all an http(s) URL,
 // which every joiner's browser would fetch (leaking kids' IPs to a stranger and
-// tainting the shared canvas so no one can save or pin it again) — is refused.
+// tainting the shared canvas so no one can save or pin it again), is refused.
 // Only the header is decoded, so an 8MB import costs a regex pass, not a copy.
 const RASTER_DATA_URL_RE = /^data:image\/(png|jpe?g|gif|webp);base64,([a-z0-9+/]+={0,2})$/i;
 function rasterDataUrlOk(dataUrl, maxChars) {
@@ -9023,15 +9023,15 @@ function deleteWallPost(id) {
 }
 
 // The app sits behind a Cloudflare tunnel, so req.ip is the tunnel's (constant)
-// address — using it as an identity would collapse every anonymous visitor into
+// address, using it as an identity would collapse every anonymous visitor into
 // ONE. Cloudflare puts the real client IP in CF-Connecting-IP (it overwrites any
 // client-sent value, so it can't be spoofed through the tunnel); fall back to
 // req.ip for local/dev where that header is absent.
 // cf-connecting-ip is only as trustworthy as whoever handed it to us. Through
 // the Cloudflare tunnel it is the visitor's real address; from any OTHER peer
 // (the origin reached directly by IP, another container, a future proxy) it is
-// attacker-chosen text, and every IP-keyed control — rate limits, wall votes and
-// the 3-report auto-hide, IP blocks, mod-auth throttles — would follow it. So
+// attacker-chosen text, and every IP-keyed control, rate limits, wall votes and
+// the 3-report auto-hide, IP blocks, mod-auth throttles, would follow it. So
 // the header is honored only when the TCP peer is the tunnel:
 //   TRUSTED_PROXY_HOSTS=cloudflared   (compose sets this) → only the address(es)
 //       that name resolves to. Re-resolved on a timer, because a restarted
@@ -9079,7 +9079,7 @@ function peerIsTrustedProxy(peer) {
   if (TRUSTED_PROXY_HOSTS.length && trustedProxyIps.size) {
     if (trustedProxyIps.has(peer)) return true;
     // An unknown peer claiming to be the tunnel: it may have just restarted on
-    // a new address — look again soon rather than waiting out the timer.
+    // a new address, look again soon rather than waiting out the timer.
     if (Date.now() - trustedProxyCheckedAt > 2000) refreshTrustedProxies();
     return false;
   }
@@ -9097,12 +9097,12 @@ function clientIp(req) {
 }
 
 // Same rule for the RAW upgrade request in the WS handler (an
-// http.IncomingMessage — no Express .get()).
+// http.IncomingMessage, no Express .get()).
 function rawClientIp(req) {
   return forwardedClientIp(req.headers && req.headers['cf-connecting-ip'], req.socket && req.socket.remoteAddress);
 }
 
-// Voter identity on a post is a salted hash — the meta file never stores raw
+// Voter identity on a post is a salted hash, the meta file never stores raw
 // device/account keys where a leak would link art to identities.
 function wallVoterHash(key) {
   return createHash('sha256').update(`wall-vote:${key}`).digest('hex').slice(0, 16);
@@ -9128,7 +9128,7 @@ function publicWallPost(meta, viewerHash) {
     frames: meta.frameCount,
     durationMs: meta.durationMs,
     createdAt: meta.createdAt,
-    // Server-assigned seasonal event metadata (never client-trusted — see the
+    // Server-assigned seasonal event metadata (never client-trusted, see the
     // POST path): preserved on reads so event galleries can group/filter.
     event: meta.event || null,
     eventDay: meta.eventDay != null ? meta.eventDay : null,
@@ -9171,7 +9171,7 @@ app.get('/api/daily', (_req, res) => {
 });
 
 // ---- Inktober (seasonal) ---------------------------------------------------
-// The derived event state — identical to the WS handshake `event` and the
+// The derived event state, identical to the WS handshake `event` and the
 // seasonal_prompt broadcast. UTC rollover keeps the shared room prompt
 // consistent worldwide; before October this is a warm-up (no false day stamp).
 app.get('/api/inktober', (_req, res) => {
@@ -9180,16 +9180,16 @@ app.get('/api/inktober', (_req, res) => {
 });
 
 // ---- The Paint Jar -----------------------------------------------------------
-// Public aggregate activity counters. Aggregate recorded activity ONLY — never
+// Public aggregate activity counters. Aggregate recorded activity ONLY, never
 // unique people, sessions lists, user ids or private room metadata. Country
 // counts come exclusively from the Cloudflare edge header (countryFromReq at
-// session start — this deploy is behind the CF tunnel); a client can never
+// session start, this deploy is behind the CF tunnel); a client can never
 // supply or override a location, and country groups under 5 are suppressed.
 // The paper equivalent is illustrative (1,000 recorded stroke batches ≈ a
 // sheet), not a measured resource saving.
 const PAINTJAR_MIN_COUNTRY_COUNT = 5;
 // The painted planet: the same aggregate country groups as /api/paintjar plus,
-// per country, whether its flag room exists and is live right now — so the map
+// per country, whether its flag room exists and is live right now, so the map
 // can show "3 coloring the Brazil flag" without the client opening a socket
 // per country. Only headcounts, never names. `flags` is the list of countries
 // that HAVE a line-art sheet (i.e. can be clicked into a room).
@@ -9218,7 +9218,7 @@ app.get('/api/planet', (_req, res) => {
     // The nature scene on /planet grows from these: illustrative milestones,
     // NOT measured savings (see /api/paintjar).
     milestones: { strokesPerSheet: 1000, sheets: Math.floor(strokes / 1000) },
-    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The growing scene is an illustrative picture of how much drawing happens here — not a measured saving of paper, trees, water or carbon. Country groups under 5 are omitted.',
+    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The growing scene is an illustrative picture of how much drawing happens here, not a measured saving of paper, trees, water or carbon. Country groups under 5 are omitted.',
   });
 });
 app.get('/api/paintjar', (_req, res) => {
@@ -9236,21 +9236,21 @@ app.get('/api/paintjar', (_req, res) => {
     sessions,
     countries,
     paperEquivalent: { sheets: Math.floor(strokes / 1000), strokesPerSheet: 1000 },
-    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The paper equivalent is illustrative — about 1,000 recorded stroke batches per sheet — not a measured resource saving. Country groups under 5 are omitted.',
+    disclaimer: 'Counts are aggregate recorded drawing activity, not unique people. The paper equivalent is illustrative, about 1,000 recorded stroke batches per sheet, not a measured resource saving. Country groups under 5 are omitted.',
   });
 });
 
 // ---- Weekly event nights ---------------------------------------------------
 // Derived purely from the date (like the daily challenge): no state, no cron,
 // and every client agrees on the schedule. An "event" is a coordination beacon
-// into an always-open featured room — the room doesn't gate anything, the
+// into an always-open featured room, the room doesn't gate anything, the
 // calendar just gives everyone a reason to show up at the same place on the
 // same day. UTC day-of-week keeps it deterministic worldwide.
 const WEEKLY_EVENTS = [
   { dow: 0, room: 'VIBES', emoji: '🌈', title: 'Cozy Sunday', blurb: 'Slow doodles, soft colors, zero pressure.' },
-  { dow: 1, room: 'MEMEWALL', emoji: '🎭', title: 'Meme Monday', blurb: 'Redraw a meme from memory — chaos welcome.' },
+  { dow: 1, room: 'MEMEWALL', emoji: '🎭', title: 'Meme Monday', blurb: 'Redraw a meme from memory, chaos welcome.' },
   { dow: 2, room: 'OCCORNER', emoji: '🐲', title: 'OC Tuesday', blurb: 'Bring your character. Draw them into each other’s scenes.' },
-  { dow: 3, room: 'FLIPBOOK', emoji: '🎬', title: 'Wiggle Wednesday', blurb: 'Group animation night — one loop, many hands.' },
+  { dow: 3, room: 'FLIPBOOK', emoji: '🎬', title: 'Wiggle Wednesday', blurb: 'Group animation night, one loop, many hands.' },
   { dow: 4, room: 'GUESS', emoji: '🎮', title: 'Guess-a-thon Thursday', blurb: 'Draw & Guess marathon. Fastest scribbles win.' },
   { dow: 5, room: 'PHONE', emoji: '📞', title: 'Draw Phone Friday', blurb: 'Telephone with doodles. The drift is the fun.' },
   { dow: 6, room: 'GRAFFITI', emoji: '🧱', title: 'Saturday Mural', blurb: 'One giant wall. Paint your piece of it.' },
@@ -9292,7 +9292,7 @@ app.get('/api/wall', async (req, res) => {
   const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 40));
   // Daily Challenge gallery: filter to posts stamped with one challenge date.
   const challenge = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.challenge || '')) ? String(req.query.challenge) : null;
-  // Seasonal event gallery: filter by the SERVER-ASSIGNED event fields — never
+  // Seasonal event gallery: filter by the SERVER-ASSIGNED event fields, never
   // by the tag, which any client could forge onto a non-event post.
   const event = /^[a-z0-9][a-z0-9-]{0,40}$/.test(String(req.query.event || '')) ? String(req.query.event) : null;
   const eventDay = /^\d{1,2}$/.test(String(req.query.day || '')) ? Number(req.query.day) : null;
@@ -9328,7 +9328,7 @@ app.get('/api/wall', async (req, res) => {
   res.json({ posts, total, topTags });
 });
 
-// Frames are immutable once posted — serve decoded bytes with long caching.
+// Frames are immutable once posted, serve decoded bytes with long caching.
 app.get('/api/wall/:id/frame/:n', (req, res) => {
   const meta = wallPosts.get(req.params.id);
   const n = Number(req.params.n);
@@ -9355,7 +9355,7 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
   res.send(decoded.buffer);
 });
 
-// One post, by id — powers the /wall/:id deep link (share a drawing with a
+// One post, by id, powers the /wall/:id deep link (share a drawing with a
 // friend and it opens on exactly that card, with its own OG preview).
 app.get('/api/wall/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -9394,7 +9394,7 @@ app.post('/api/wall/:id/remix-room', (req, res) => {
 
 // Is this profileId the verified owner or an approved painter of an
 // Inktober-opted-in artist studio? Live rooms first, then the persisted file
-// — an offline studio's wall posts still stamp, but ONLY for its people.
+//, an offline studio's wall posts still stamp, but ONLY for its people.
 function artistRoomInktoberFor(code, profileId) {
   if (!code || !profileId) return false;
   const pid = String(profileId);
@@ -9430,12 +9430,12 @@ app.post('/api/wall', async (req, res) => {
   const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
   const tags = [...new Set(rawTags.map(sanitizeWallTag).filter(Boolean))];
   // Posts made from the Daily Challenge room join today's gallery: stamp the
-  // challenge date + a browsable tag. Client-declared room — "spoofing" it just
+  // challenge date + a browsable tag. Client-declared room: "spoofing" it just
   // means opting your art into today's gallery, which is harmless by design.
   const challengeDate = String(body.room || '').toUpperCase() === 'DAILY' ? dailyChallenge().date : null;
   if (challengeDate && !tags.includes('daily challenge')) tags.push('daily challenge');
   // Inktober event attribution. What the stamp MEANS: the art was submitted
-  // as that day's PROMPT PARTICIPATION from a room opted into the event — it
+  // as that day's PROMPT PARTICIPATION from a room opted into the event, it
   // is NOT proof the medium was ink (any brush may have made it; tool
   // enforcement is a per-room canvas rule, not a wall claim). Given that:
   //  - The shared INKTOBER room self-submits: anyone drawing there is in the
@@ -9443,12 +9443,12 @@ app.post('/api/wall', async (req, res) => {
   //  - An artist STUDIO stamp attributes the work to that studio's event
   //    participation, so the poster must BE the studio's verified owner or an
   //    approved painter (server-validated identity, live ACL or the persisted
-  //    offline file). A stranger quoting the room code gets NO event — the
+  //    offline file). A stranger quoting the room code gets NO event, the
   //    post still lands, as ordinary art.
   const wallIdentity = token ? await verifyAccessToken(token).catch(() => null) : null;
   const roomName = String(body.room || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
   // A PRIVATE sketchbook page can never be wall-posted by quoting its room
-  // code — the wall is public, the book is not. Public books post fine, and
+  // code, the wall is public, the book is not. Public books post fine, and
   // a missing book record fails closed (no exposure decision without it).
   if (roomName) {
     const skbRef = (rooms.get(roomName) && rooms.get(roomName).sketchbook)
@@ -9456,7 +9456,7 @@ app.post('/api/wall', async (req, res) => {
     if (skbRef) {
       const book = sketchbookById(skbRef.book);
       if (!book || book.moderationHidden || book.public !== true) {
-        return res.status(403).json({ error: 'book_private', message: 'That sketchbook is private — its pages cannot be posted to the public wall.' });
+        return res.status(403).json({ error: 'book_private', message: 'That sketchbook is private, its pages cannot be posted to the public wall.' });
       }
     }
   }
@@ -9474,7 +9474,7 @@ app.post('/api/wall', async (req, res) => {
     return res.status(400).json({ error: 'bad_frames' });
   }
 
-  // The wall is for every kid — any flagged word in the text fields rejects
+  // The wall is for every kid, any flagged word in the text fields rejects
   // the post (mild included), and severe terms auto-file a report so the
   // admin sees who is probing the filter.
   let artist = wallIdentity?.displayName || '';
@@ -9542,7 +9542,7 @@ app.post('/api/wall', async (req, res) => {
 });
 
 // The voter identity is SERVER-DERIVED: a signed-in account, else the request
-// IP. It is NOT the client-supplied device key — that is attacker-rotatable, so
+// IP. It is NOT the client-supplied device key, that is attacker-rotatable, so
 // keying votes/throttle on it let one caller forge unlimited hearts and grow
 // votedBy without bound. Both a per-identity and a per-IP cap apply.
 async function wallVoterIdentity(req) {
@@ -9591,7 +9591,7 @@ app.post('/api/wall/:id/report', (req, res) => {
   if (!meta) {
     return res.status(404).json({ error: 'not found' });
   }
-  // Auto-hide counts DISTINCT reporters (hashed IP), not raw clicks — otherwise
+  // Auto-hide counts DISTINCT reporters (hashed IP), not raw clicks, otherwise
   // one person could bury any drawing by tapping report three times. Repeat
   // reports from the same IP are ignored for both the counter and the queue.
   meta.reportedBy = meta.reportedBy || {};
@@ -9607,7 +9607,7 @@ app.post('/api/wall/:id/report', (req, res) => {
   persistWallMeta(meta);
   fileReport({
     room: 'WALL',
-    reason: `[wall:${meta.id}] "${meta.title}" — ${String(req.body?.reason || 'reported').slice(0, 200)}`,
+    reason: `[wall:${meta.id}] "${meta.title}", ${String(req.body?.reason || 'reported').slice(0, 200)}`,
     reporterName: String(req.body?.reporterName || 'Anonymous').slice(0, 40),
     source: 'user',
   });
@@ -9638,7 +9638,7 @@ app.get('/api/admin/wall', (req, res) => {
 
 app.post('/api/admin/wall/:id/delete', (req, res) => {
   if (!adminGuard(req, res)) return;
-  // Only delete a post we actually know about — never let a crafted :id reach
+  // Only delete a post we actually know about, never let a crafted :id reach
   // the filesystem (deleteWallPost also validates the id shape as defense in
   // depth).
   if (!wallPosts.has(req.params.id)) {
@@ -9654,7 +9654,7 @@ app.post('/api/admin/wall/:id/restore', (req, res) => {
   if (meta) {
     meta.hidden = false;
     meta.reports = 0;
-    // Clear the distinct-reporter set too — otherwise reports is recomputed from
+    // Clear the distinct-reporter set too, otherwise reports is recomputed from
     // it and a single new report instantly re-buries an admin-approved post.
     meta.reportedBy = {};
     persistWallMeta(meta);
@@ -9669,14 +9669,14 @@ app.post('/api/admin/wall/:id/restore', (req, res) => {
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function genRoomCode() {
   let code;
-  // Sketchbook page codes are RESERVED while a book references them — even
-  // when the page's room file is (temporarily) missing — so a freshly minted
+  // Sketchbook page codes are RESERVED while a book references them, even
+  // when the page's room file is (temporarily) missing, so a freshly minted
   // code can never squat on a page's identity.
   loadSketchbooks();
   do {
     code = '';
     for (let i = 0; i < 6; i += 1) {
-      // A private room's code is its only secret from non-members — mint it like
+      // A private room's code is its only secret from non-members, mint it like
       // every other unguessable id here, not from a predictable PRNG.
       code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
     }
@@ -9699,7 +9699,7 @@ function rateOk(key, max = 8, windowMs = 60_000) {
   createHits.set(key, arr);
   return true;
 }
-// How long until a rate-limited key has a token again — lets a client back
+// How long until a rate-limited key has a token again, lets a client back
 // off bounded instead of refetching in an RTT-paced retry storm (phase-2
 // resync-loop finding; the server MAY include this, clients may ignore it).
 function rateRetryAfterMs(key, max = 8, windowMs = 60_000) {
@@ -9733,7 +9733,7 @@ function bearerToken(req) {
 // invite code lazily creates a private room on connect).
 // ---- "My rooms": a signed-in person's own rooms ------------------------------
 // The explorer behind /rooms and the studio's Rooms modal: rooms this account
-// OWNS (or co-hosts), plus rooms it has been in, newest first — each with its
+// OWNS (or co-hosts), plus rooms it has been in, newest first, each with its
 // liveness, size, and the person's OWN last chat line there (never anyone
 // else's words: a private room's conversation stays in the room). Private room
 // codes are passwords, so a room only ever appears here if this account owns
@@ -9749,7 +9749,7 @@ async function myRoomsIdentity(req, res) {
   return String(identity.profileId);
 }
 // A card grid asks for the list and then a dozen thumbnails, each re-checking
-// membership — so remember one account's answer briefly (a stat per dormant
+// membership, so remember one account's answer briefly (a stat per dormant
 // room adds up across a grid).
 const myRoomsCache = new Map(); // pid -> { at, rooms }
 function myRoomsFor(pid) {
@@ -9810,7 +9810,7 @@ function computeMyRooms(pid) {
   const out = [];
   for (const code of codes) {
     const facts = info.get(code);
-    if (!facts) continue; // expired / deleted — nothing to continue
+    if (!facts) continue; // expired / deleted, nothing to continue
     // The person's own most recent line here (the durable log carries the
     // profileId; the tail cache keeps this to a stat per room).
     let myLastChat = null;
@@ -9852,7 +9852,7 @@ app.get('/api/me/rooms', async (req, res) => {
   if (!pid) return;
   res.json({ rooms: myRoomsFor(pid) });
 });
-// A room's card picture — only for a room that is in this person's own list
+// A room's card picture, only for a room that is in this person's own list
 // (the same gate as the list itself; admin thumbnails stay admin-only).
 app.get('/api/me/rooms/:code/thumb', async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
@@ -9888,12 +9888,12 @@ app.post('/api/rooms', async (req, res) => {
   const identity = token ? await verifyAccessToken(token) : null;
   // Artist studios require a VERIFIED account, fail closed: when cloud auth is
   // unconfigured (or the token doesn't check out) the answer is
-  // accounts_required — identities are never faked (the anonymous commons is
+  // accounts_required, identities are never faked (the anonymous commons is
   // unaffected, below).
   if (audience === ARTIST_AUDIENCE && (!ACCOUNTS_CONFIGURED || !identity)) {
     return res.status(401).json({ error: 'accounts_required' });
   }
-  // A public room needs a grown-up owner who can moderate it — but only where
+  // A public room needs a grown-up owner who can moderate it, but only where
   // accounts exist at all (see ACCOUNTS_CONFIGURED): a self-hosted instance with
   // no PocketBase must still let someone make a public room anonymously, or the
   // golden rule is broken and the 401 is unanswerable.
@@ -9932,7 +9932,7 @@ app.post('/api/rooms', async (req, res) => {
   if (identity) room.ownerProfileId = identity.profileId;
   if (audience === ARTIST_AUDIENCE) {
     room.title = artistFields.title;
-    // Creating a studio does NOT list it — publishing is a separate explicit
+    // Creating a studio does NOT list it, publishing is a separate explicit
     // action. The description/tags ride along as the pre-filled draft.
     room.painters = [];
     room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags };
@@ -9949,7 +9949,7 @@ app.post('/api/rooms', async (req, res) => {
 
 // ---- Artist studios: settings / publishing / gallery / ACL ----------------
 // (docs/ARTIST-ROOMS-CONTRACT.md). Publishing is ALWAYS an explicit owner
-// action — nothing here runs on GET or join — and moderation-hidden is a
+// action, nothing here runs on GET or join, and moderation-hidden is a
 // separate admin-owned flag the owner can never override.
 
 // Live or materialized-from-disk room for the owner/admin APIs. The audience
@@ -9964,7 +9964,7 @@ function artistRoomForApi(code) {
 
 // The publish-info shape shared by the settings GET and the publish/unpublish
 // responses (what ArtistRoomSettings' loadPublishInfo/publish/unpublish
-// callbacks consume). `painters` holds opaque account ids — exposed ONLY to
+// callbacks consume). `painters` holds opaque account ids, exposed ONLY to
 // the owner through these owner-only endpoints, never anywhere else.
 function publishInfo(room, code) {
   const gallery = normalizeGallery(room.gallery);
@@ -10025,7 +10025,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
   const pid = await artistOwnerIdentity(req, res);
   if (!pid) return;
   // Bounded per-owner: publishing toggles listing + rewrites the room file, so
-  // it gets a throttle like every other write — generous enough that no real
+  // it gets a throttle like every other write, generous enough that no real
   // owner ever notices (12/min).
   if (!rateOk(`artistpub:${pid}`, 12, 60_000)) return res.status(429).json({ error: 'rate_limited' });
   const { id, room } = artistRoomForApi(req.params.code);
@@ -10035,7 +10035,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
   // visibility and pages never list individually, so a direct publish (which
   // would also rewrite the Inktober flag) is refused loudly, changing nothing.
   if (room.sketchbook) {
-    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page — its visibility and Inktober flag belong to the book, not the room.' });
+    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page, its visibility and Inktober flag belong to the book, not the room.' });
   }
   if (FEATURED_CODES.has(id) || RETIRED_ROOM_CODES.has(id) || room.audience === 'kid_safe') {
     return res.status(400).json({ error: 'not_artist_room' });
@@ -10056,7 +10056,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
   if (room.audience === 'friends') {
     // A studio is a plain shared canvas. Converting a room mid-game, mid-film
     // or mid-story would either DESTROY that state (the studio model can't
-    // hold it) or surface a blank studio preview — so the conversion is
+    // hold it) or surface a blank studio preview, so the conversion is
     // refused with a clear conflict instead, and the private room is left
     // exactly as it was. Turn the mode off, then publish.
     const conflicts = [];
@@ -10068,10 +10068,10 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
       return res.status(409).json({
         error: 'incompatible_state',
         conflicts,
-        message: 'This room has an active game, film or story mode. Turn it off before publishing as a studio — nothing was changed.',
+        message: 'This room has an active game, film or story mode. Turn it off before publishing as a studio, nothing was changed.',
       });
     }
-    // The explicit conversion: public viewing by link, NO inherited access —
+    // The explicit conversion: public viewing by link, NO inherited access -
     // friends who were drawing keep watching but must be approved to paint.
     room.audience = ARTIST_AUDIENCE;
     room.listed = false; // the kid-safe lobby flag never applies to studios
@@ -10100,7 +10100,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
 });
 
 // Explicit unpublish: removes gallery discovery ONLY. The room link keeps
-// working (artist_public stays publicly viewable) — never a silent flip back
+// working (artist_public stays publicly viewable), never a silent flip back
 // to a private room.
 app.post('/api/rooms/:code/unpublish', async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -10111,9 +10111,9 @@ app.post('/api/rooms/:code/unpublish', async (req, res) => {
   if (!room) return res.status(404).json({ error: 'not_found' });
   if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
   if (room.audience !== ARTIST_AUDIENCE) return res.status(400).json({ error: 'not_artist_room' });
-  // Book-managed pages never list individually — see publish above.
+  // Book-managed pages never list individually, see publish above.
   if (room.sketchbook) {
-    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page — gallery discovery belongs to the book, which never lists its pages individually.' });
+    return res.status(409).json({ error: 'book_managed', message: 'This room is a sketchbook page, gallery discovery belongs to the book, which never lists its pages individually.' });
   }
   room.gallery = { ...normalizeGallery(room.gallery), listed: false };
   persistRoom(id);
@@ -10127,7 +10127,7 @@ app.post('/api/rooms/:code/painters/revoke', async (req, res) => {
   const pid = await artistOwnerIdentity(req, res);
   if (!pid) return;
   // ACL edits are cheap but each one rewrites the room file and re-broadcasts
-  // roles — bounded per owner (30/min), far above any real cleanup session.
+  // roles, bounded per owner (30/min), far above any real cleanup session.
   if (!rateOk(`artistrevoke:${pid}`, 30, 60_000)) return res.status(429).json({ error: 'rate_limited' });
   const { id, room } = artistRoomForApi(req.params.code);
   if (!room) return res.status(404).json({ error: 'not_found' });
@@ -10137,16 +10137,16 @@ app.post('/api/rooms/:code/painters/revoke', async (req, res) => {
   if (!targetPid) return res.status(400).json({ error: 'bad_painter' });
   // Sketchbook page rooms: the BOOK owns the painter ACL across every page.
   // A room-local revoke would be silently re-granted by the next book ACL
-  // sync — route it through the WHOLE book instead, which is also the only
+  // sync, route it through the WHOLE book instead, which is also the only
   // semantics the UI can honestly offer here ("this account can no longer
   // paint" must hold on every page, not just this one).
   if (room.sketchbook) {
     const book = sketchbookById(room.sketchbook.book);
     if (!book) {
       // Fail closed: without the book record a direct-room edit is the only
-      // lever left, but it would desynchronize the moment the book returns —
+      // lever left, but it would desynchronize the moment the book returns -
       // refuse loudly, leave every ACL untouched.
-      return res.status(409).json({ error: 'book_missing', message: 'This page’s sketchbook record is missing — the room ACL was left untouched.' });
+      return res.status(409).json({ error: 'book_missing', message: 'This page’s sketchbook record is missing, the room ACL was left untouched.' });
     }
     if (!isBookOwner(book, pid)) return res.status(403).json({ error: 'not_owner' });
     if (targetPid === book.ownerProfileId) return res.status(400).json({ error: 'cannot_revoke_owner' });
@@ -10169,7 +10169,7 @@ app.post('/api/rooms/:code/painters/revoke', async (req, res) => {
 });
 
 // All listed, non-moderation-hidden artist studios, from BOTH live rooms and
-// persisted offline ones — a restart must not empty the public gallery.
+// persisted offline ones, a restart must not empty the public gallery.
 function artistGalleryEntries() {
   const out = new Map();
   rooms.forEach((room, code) => {
@@ -10206,7 +10206,7 @@ function artistGalleryEntries() {
 }
 
 // The public, searchable gallery index. Sanitized: no account ids, no names,
-// no emails, no location — exactly the contracted card keys.
+// no emails, no location, exactly the contracted card keys.
 app.get('/api/rooms/gallery', (req, res) => {
   res.set('Cache-Control', 'no-store');
   if (!rateOk(`gallery:${clientIp(req)}`, 60, 60_000)) {
@@ -10265,12 +10265,12 @@ app.post('/api/admin/rooms/:code/restore', (req, res) => {
 // so the existing brush/replay/watch stack is reused untouched; the book owns
 // the cross-page rules: one book per owner+event, 6 distinct artist ACCOUNTS
 // max, scoped revocable invite tokens (hashed on disk), and explicit public
-// opt-in at creation. Books are discovered through this section ONLY — page
+// opt-in at creation. Books are discovered through this section ONLY, page
 // rooms stay unlisted in the artist gallery (listed:false), so a page never
 // double-lists and no private art is ever auto-published.
 
 // The book store maps (SKETCHBOOK_DIR, sketchbooks, sketchbooksLoaded,
-// bookByOwnerEvent, bookPageIndex) are declared next to ROOM_DIR above —
+// bookByOwnerEvent, bookPageIndex) are declared next to ROOM_DIR above -
 // getRoom/genRoomCode/the idle sweep need them from early boot on.
 
 function sketchbookFile(id) {
@@ -10292,7 +10292,7 @@ function loadSketchbooks() {
       if (isGuestBook(book)) guestBookByDevice.set(`${book.guest.device}:${book.event}`, book.id);
       else bookByOwnerEvent.set(`${book.ownerProfileId}:${book.event}`, book.id);
       for (const page of book.pages) bookPageIndex.set(page.room, book.id);
-    } catch { /* unreadable/mid-write — skipped, never fatal */ }
+    } catch { /* unreadable/mid-write, skipped, never fatal */ }
   }
 }
 
@@ -10302,7 +10302,7 @@ function persistSketchbook(book) {
     mkdirSync(SKETCHBOOK_DIR, { recursive: true });
     writeFileSync(`${sketchbookFile(book.id)}.tmp`, JSON.stringify(book));
     renameSync(`${sketchbookFile(book.id)}.tmp`, sketchbookFile(book.id));
-  } catch { /* best effort — the next mutation retries */ }
+  } catch { /* best effort, the next mutation retries */ }
 }
 
 // room code -> { ops, watching, hidden } for one book's pages, sourced from
@@ -10554,7 +10554,7 @@ function sketchbookById(raw) {
 }
 
 // Optional auth for the PUBLIC read endpoints: owner/artist flags only ever
-// ADD information for the caller's own account — guests get the public view.
+// ADD information for the caller's own account, guests get the public view.
 async function sketchbookOptionalIdentity(req) {
   const token = bearerToken(req);
   return token ? verifyAccessToken(token) : null;
@@ -10563,7 +10563,7 @@ async function sketchbookOptionalIdentity(req) {
 // Create OR resume the caller's book for an event. Visibility is EXPLICIT at
 // create and defaults to PRIVATE (the safe end): a book becomes publicly
 // viewable only via public:true here, or the owner flipping it later through
-// POST .../visibility. Resume NEVER changes visibility — the existing book
+// POST .../visibility. Resume NEVER changes visibility, the existing book
 // comes back exactly as it is. The resume-check → mint → index-write run
 // with no await between them, so racing tabs cannot mint two books.
 app.post('/api/sketchbooks', async (req, res) => {
@@ -10606,7 +10606,7 @@ app.post('/api/sketchbooks', async (req, res) => {
 
 // The public, paginated sketchbook gallery: explicit-opt-in books with REAL
 // drawing on at least one visible page. offset/limit (limit <= 60) with an
-// honest total — load-more walks the whole set, there is no silent cap.
+// honest total, load-more walks the whole set, there is no silent cap.
 app.get('/api/sketchbooks', (req, res) => {
   res.set('Cache-Control', 'no-store');
   if (!rateOk(`skbgallery:${clientIp(req)}`, 60, 60_000)) return res.status(429).json({ error: 'rate_limited' });
@@ -10672,7 +10672,7 @@ app.post('/api/sketchbooks/guest', async (req, res) => {
   const existingId = guestBookByDevice.get(key);
   if (existingId) {
     const candidate = sketchbooks.get(existingId);
-    // A resumed visit gets the SAME book (and the artwork already on it) —
+    // A resumed visit gets the SAME book (and the artwork already on it) -
     // never a second one, and never somebody else's.
     if (isGuestBook(candidate) && candidate.guest.device === device) book = candidate;
     else guestBookByDevice.delete(key);
@@ -10791,7 +10791,7 @@ app.post('/api/sketchbooks/accept', async (req, res) => {
   }
   if (!book || !invite) return res.status(404).json({ error: 'invite_invalid', message: 'That invitation link is invalid or was revoked.' });
   if (book.ownerProfileId === pid) {
-    return res.status(400).json({ error: 'own_book', message: 'This is your own sketchbook — you can already draw in it.' });
+    return res.status(400).json({ error: 'own_book', message: 'This is your own sketchbook, you can already draw in it.' });
   }
   let joined = false;
   if (!isBookArtist(book, pid)) {
@@ -10836,7 +10836,7 @@ app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
   const unsaved = isGuestBook(book);
   // A moderation-hidden book's banner is owner-only; a PRIVATE book's banner
   // is the book team's (owner + artists). Everyone else gets the same 404 a
-  // non-page room returns — no metadata leaks through the banner either.
+  // non-page room returns, no metadata leaks through the banner either.
   if (book.moderationHidden && !isBookOwner(book, pid) && !guestOwner) return res.status(404).json({ error: 'not_a_page' });
   if (book.public !== true && !isBookOwner(book, pid) && !isBookArtist(book, pid) && !guestOwner) {
     return res.status(404).json({ error: 'not_a_page' });
@@ -10880,7 +10880,7 @@ app.get('/api/sketchbooks/:id', async (req, res) => {
   const identity = await sketchbookOptionalIdentity(req);
   const pid = identity && identity.profileId ? String(identity.profileId) : null;
   const owner = isBookOwner(book, pid);
-  // Hidden books are owner-only; PRIVATE books are the book team's — the
+  // Hidden books are owner-only; PRIVATE books are the book team's, the
   // public reader closes to everyone else (indistinguishable from no book).
   if (book.moderationHidden && !owner) return res.status(404).json({ error: 'not_found' });
   if (book.public !== true && !owner && !isBookArtist(book, pid)) {
@@ -10893,7 +10893,7 @@ app.get('/api/sketchbooks/:id', async (req, res) => {
 });
 
 // Add a page. The day comes from the client ONLY as a selection from the
-// server's verified official prompt list — the prompt + date are stamped
+// server's verified official prompt list, the prompt + date are stamped
 // server-side and immutable afterwards (a daily rollover never rewrites a
 // page). Omitting the day during the active event picks TODAY server-side.
 // Duplicate days resume the existing page idempotently; the check → mint runs
@@ -10922,7 +10922,7 @@ app.post('/api/sketchbooks/:id/pages', async (req, res) => {
     return res.json({ resumed: true, page: existing, book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }) });
   }
   if (book.pages.length >= SKETCHBOOK_MAX_PAGES) {
-    return res.status(400).json({ error: 'book_full', message: `A sketchbook holds ${SKETCHBOOK_MAX_PAGES} pages — one per prompt day.` });
+    return res.status(400).json({ error: 'book_full', message: `A sketchbook holds ${SKETCHBOOK_MAX_PAGES} pages, one per prompt day.` });
   }
   const page = { room: genRoomCode(), day: entry.day, prompt: entry.prompt, date: entry.date, createdAt: new Date().toISOString() };
   book.pages.push(page);
@@ -10934,7 +10934,7 @@ app.post('/api/sketchbooks/:id/pages', async (req, res) => {
 });
 
 // Mint a scoped, revocable invitation. The raw token is returned ONCE here
-// and never stored — only its SHA-256 persists — and it never appears in any
+// and never stored, only its SHA-256 persists, and it never appears in any
 // list or public response.
 app.post('/api/sketchbooks/:id/invites', async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -10961,7 +10961,7 @@ app.post('/api/sketchbooks/:id/invites', async (req, res) => {
   persistSketchbook(book);
   res.json({
     inviteId: invite.id,
-    token, // shown ONCE — copy it now
+    token, // shown ONCE, copy it now
     url: `/sketchbook/invite/${token}`,
     book: bookPublicView(book, sketchbookPageInfo(book), { owner: true }),
   });
@@ -11120,7 +11120,7 @@ app.get('/api/rooms/:code/film', async (req, res) => {
   res.json({ code, title: room.title || null, scenes: scenesMeta(room), soundtrack: room.soundtrack || null, ops: visibleHistory(room) });
 });
 
-// The discovery lobby source: live, listed, kid_safe rooms only. Sanitized —
+// The discovery lobby source: live, listed, kid_safe rooms only. Sanitized -
 // never participant names, chat, raw strokes, owner ids, or private rooms.
 app.get('/api/rooms/public', (_req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -11136,7 +11136,7 @@ app.get('/api/rooms/public', (_req, res) => {
       code,
       title: room.title || (f ? f.title : null),
       users,
-      ops: room.history.length, // "things done" — drawn ops, for the join modal
+      ops: room.history.length, // "things done", drawn ops, for the join modal
       // NEVER leak a trace-photo id here: the id is the access token, so an
       // unauthenticated lobby scrape must not expose a room's uploaded photo.
       sheetId: room.sheetId && !room.sheetId.startsWith('trace_') && !room.sheetId.startsWith('pp_') ? room.sheetId : null,
@@ -11150,7 +11150,7 @@ app.get('/api/rooms/public', (_req, res) => {
     });
   });
   // Featured prompt rooms first (in their defined order), then live ad-hoc rooms
-  // by headcount — so the lobby always leads with the curated, always-open rooms.
+  // by headcount, so the lobby always leads with the curated, always-open rooms.
   list.sort((a, b) => {
     const ai = a.featured ? FEATURED_INDEX.get(a.code) : 999;
     const bi = b.featured ? FEATURED_INDEX.get(b.code) : 999;
@@ -11188,14 +11188,14 @@ app.get('/api/sheets/:id', (req, res) => {
     if (!photo) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Trace photo', image: photo.image });
   }
-  // Draw Phone pages ride the same route (id "pp_…") — the id is an unguessable
+  // Draw Phone pages ride the same route (id "pp_…"), the id is an unguessable
   // token handed only to the next guesser (and, at reveal, the whole room).
   if (req.params.id.startsWith('pp_')) {
     const page = phonePages.get(req.params.id);
     if (!page) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Draw Phone page', image: page.image });
   }
-  // Chat doodles too (id "cd_…") — handed out only inside the room's chat.
+  // Chat doodles too (id "cd_…"), handed out only inside the room's chat.
   if (req.params.id.startsWith('cd_')) {
     const doodle = chatDoodles.get(req.params.id);
     if (!doodle) return res.status(404).json({ error: 'not found' });
@@ -11251,7 +11251,7 @@ app.post('/api/admin/doodle/:id/remove', (req, res) => {
     }
     if (touched) {
       // Everyone with the image on screen (members AND homepage spectators)
-      // drops it immediately — a takedown that only affects future joins isn't
+      // drops it immediately, a takedown that only affects future joins isn't
       // a takedown.
       broadcast(code, { type: 'chat_doodle_removed', doodle: id });
       persistRoom(code);
@@ -11301,7 +11301,7 @@ try {
     if (m && AUDIO_MIME_BY_EXT[m[2]]) soundtracks.set(m[1], { file: join(AUDIO_DIR, f), mime: AUDIO_MIME_BY_EXT[m[2]] });
   }
 } catch { /* no audio dir yet */ }
-// Magic-byte sniff — the declared mime is untrusted. Anything else is refused.
+// Magic-byte sniff, the declared mime is untrusted. Anything else is refused.
 function sniffAudio(bytes) {
   if (bytes.length < 12) return null;
   const head = bytes.subarray(0, 12).toString('latin1');
@@ -11394,12 +11394,12 @@ function validateTracePhoto(dataUrl) {
 }
 
 function storeTracePhoto(roomId, dataUrl) {
-  // A long RANDOM id — the id IS the access token (only room members ever
+  // A long RANDOM id, the id IS the access token (only room members ever
   // receive it via the sheet broadcast), so it must be unguessable and never
   // leaked in the public lobby (see the /api/rooms/public sanitize).
   const id = 'trace_' + randomBytes(12).toString('hex');
   tracePhotos.set(id, { image: dataUrl, roomId, ts: Date.now() });
-  // Cap so a busy server can't accumulate photos forever — but NEVER evict a
+  // Cap so a busy server can't accumulate photos forever, but NEVER evict a
   // photo that is some live room's active underlay.
   if (tracePhotos.size > TRACE_MAX) {
     const active = new Set();
@@ -11424,7 +11424,7 @@ function dropRoomTracePhoto(room) {
 // A player's drawn page (a downscaled PNG/JPEG) is held in memory, keyed by an
 // unguessable id, and served through the SAME /api/sheets path (id "pp_…") so
 // the client just loads it like a sheet. Pages are validated exactly like trace
-// photos (real raster only — never SVG/scripts) and freed when the game ends or
+// photos (real raster only, never SVG/scripts) and freed when the game ends or
 // the room closes; ids are never leaked in the public lobby (room.sheetId is
 // null during a game). One image only ever reaches its next guesser until the
 // reveal, when the whole room sees the books.
@@ -11441,7 +11441,7 @@ function validatePhonePage(dataUrl) {
   return sniffWallImage(buf) ? dataUrl : null;
 }
 
-// The set of page ids belonging to any room's LIVE game — never evicted.
+// The set of page ids belonging to any room's LIVE game, never evicted.
 function livePhonePageIds() {
   const active = new Set();
   for (const r of rooms.values()) {
@@ -11454,7 +11454,7 @@ function livePhonePageIds() {
 }
 
 function storePhonePage(roomId, dataUrl) {
-  const id = 'pp_' + randomBytes(12).toString('hex'); // unguessable — the id is the token
+  const id = 'pp_' + randomBytes(12).toString('hex'); // unguessable, the id is the token
   phonePages.set(id, { image: dataUrl, roomId, ts: Date.now() });
   if (phonePages.size > PHONE_PAGE_MAX) {
     const active = livePhonePageIds();
@@ -11475,20 +11475,20 @@ function dropRoomPhonePages(room) {
 }
 
 // ---- Chat doodles ----------------------------------------------------------
-// A "doodle reply": a tiny drawing sent as a chat bubble — memes in the app's
+// A "doodle reply": a tiny drawing sent as a chat bubble, memes in the app's
 // native medium instead of external GIFs. Same posture as Draw Phone pages:
 // raster-only (magic-byte sniffed, never SVG), tightly size-capped, held in
 // memory under unguessable ids, served via the /api/sheets fallback. In-memory
-// on purpose — embedding dataURLs in room.chat would balloon every room file
+// on purpose, embedding dataURLs in room.chat would balloon every room file
 // (200 lines × ~80KB); after a restart an old doodle bubble just shows a
 // gentle "doodle faded" placeholder client-side.
 const chatDoodles = new Map(); // id -> { image, roomId, ts }
 const CHAT_DOODLE_MAX = 400; // FIFO cap across all rooms
-const CHAT_DOODLE_MAX_CHARS = 160_000; // ~120KB decoded — a small sketch, not a photo
+const CHAT_DOODLE_MAX_CHARS = 160_000; // ~120KB decoded, a small sketch, not a photo
 
 // Read pixel dimensions from a PNG IHDR or JPEG SOF header. A ~120KB payload
 // can legally encode a 5500x5500 PNG (deflate) that costs hundreds of MB of
-// RGBA to decode — and doodles auto-render in EVERY member's browser, so the
+// RGBA to decode, and doodles auto-render in EVERY member's browser, so the
 // server must bound dimensions, not just bytes.
 function rasterDimensions(buf) {
   // PNG: IHDR width/height at fixed offsets 16..23.
@@ -11512,12 +11512,12 @@ function rasterDimensions(buf) {
   return null;
 }
 
-const CHAT_DOODLE_MAX_DIM = 1200; // the pad emits 520x360 — anything huge is an attack
+const CHAT_DOODLE_MAX_DIM = 1200; // the pad emits 520x360, anything huge is an attack
 
 function validateChatDoodle(dataUrl) {
   if (typeof dataUrl !== 'string' || dataUrl.length > CHAT_DOODLE_MAX_CHARS) return null;
   const m = /^data:image\/([a-z+]+);base64,([a-z0-9+/=]+)$/i.exec(dataUrl);
-  // PNG/JPEG ONLY — tighter than the wall list on purpose: no animated
+  // PNG/JPEG ONLY, tighter than the wall list on purpose: no animated
   // GIF/WEBP smuggling, and the pad itself emits JPEG.
   const mime = m && m[1].toLowerCase();
   if (!m || (mime !== 'png' && mime !== 'jpeg' && mime !== 'jpg')) return null;
@@ -11529,7 +11529,7 @@ function validateChatDoodle(dataUrl) {
   return dataUrl;
 }
 
-const CHAT_DOODLE_HARD_MAX = 600; // absolute memory ceiling — referenced or not
+const CHAT_DOODLE_HARD_MAX = 600; // absolute memory ceiling, referenced or not
 
 function storeChatDoodle(roomId, dataUrl, profileId) {
   const id = 'cd_' + randomBytes(12).toString('hex');
@@ -11547,7 +11547,7 @@ function storeChatDoodle(roomId, dataUrl, profileId) {
       if (key !== id && !active.has(key)) chatDoodles.delete(key);
     }
     // Hard ceiling: if everything is "referenced" (an attacker can mint
-    // references), evict oldest anyway — bubbles degrade to the same
+    // references), evict oldest anyway, bubbles degrade to the same
     // "doodle faded" placeholder a restart produces. Memory stays bounded.
     for (const key of chatDoodles.keys()) {
       if (chatDoodles.size <= CHAT_DOODLE_HARD_MAX) break;
@@ -11594,7 +11594,7 @@ app.get('/api/admin/metrics', (req, res) => {
   lastCpuAt = now;
 
   // Event-loop lag since the previous poll (the clearest "server straining"
-  // signal — high lag = laggy drawing for everyone). We subtract the learned OS
+  // signal, high lag = laggy drawing for everyone). We subtract the learned OS
   // timer floor so this reads ~0 when healthy. Reset so each poll is fresh.
   const rawMinMs = eld.min / 1e6;
   if (Number.isFinite(rawMinMs) && rawMinMs >= 0.1 && rawMinMs < 5000) {
@@ -11744,7 +11744,7 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 // chat-app preview bots are marked with data-seo attributes (see index.html).
 // Instead of SSR, we treat the shell as an object file and relink its head per
 // route at serve time: per-room invite cards, per-post wall art cards, real
-// titles on every page. Costs a few string replaces per HTML request — zero
+// titles on every page. Costs a few string replaces per HTML request, zero
 // impact on the drawing hot path.
 const SITE_ORIGIN = process.env.PUBLIC_ORIGIN || 'https://drawesome.art';
 
@@ -11799,46 +11799,46 @@ function renderShell(shell, over = {}) {
 // instead of eight copies of the homepage.
 const PAGE_META = {
   '/studio': {
-    title: 'Open studio — Drawesome',
-    description: 'Jump straight into the studio and start drawing — brushes, layers, coloring sheets, and live rooms. Free, no account needed.',
+    title: 'Open studio: Drawesome',
+    description: 'Jump straight into the studio and start drawing, brushes, layers, coloring sheets, and live rooms. Free, no account needed.',
   },
   '/rooms': {
-    title: 'Live drawing rooms — Drawesome',
+    title: 'Live drawing rooms: Drawesome',
     description: "See what everyone is drawing right now and join a live room: open studio, Draw Phone, animation, daily challenge, and more.",
   },
   '/wall': {
-    title: 'The Fridge Wall — Drawesome gallery',
+    title: 'The Fridge Wall: Drawesome gallery',
     description: 'A community gallery of drawings by Drawesome artists. Heart your favorites, watch animated posts, and remix the ones you love.',
   },
   '/inktober': {
-    title: 'Inktober on Drawesome — one shared ink & pencil mural',
-    description: 'Draw the official Inktober prompt of the day in ink and pencil on one big shared mural — a fresh prompt every day of October. Free, no account needed. Independent fan participation; not affiliated with or endorsed by Inktober.',
+    title: 'Inktober on Drawesome, one shared ink & pencil mural',
+    description: 'Draw the official Inktober prompt of the day in ink and pencil on one big shared mural, a fresh prompt every day of October. Free, no account needed. Independent fan participation; not affiliated with or endorsed by Inktober.',
   },
   '/planet': {
-    title: 'The Painted Planet — color the world’s flags together on Drawesome',
+    title: 'The Painted Planet, color the world’s flags together on Drawesome',
     description: 'A world map painted by the Drawesome community: hover a country to see how much it has drawn, click it to color that country’s flag together, and watch the shared nature scene grow with every stroke.',
   },
   '/paintjar': {
-    title: 'The Painted Planet — Drawesome community impact',
+    title: 'The Painted Planet: Drawesome community impact',
     description: 'See what the Drawesome community has painted together: a world map of painters, every country’s flag as a shared coloring room, and a scene that grows with every recorded stroke.',
   },
   '/gallery': {
-    title: 'Artist studios gallery — Drawesome',
+    title: 'Artist studios gallery: Drawesome',
     description: 'Browse public artist studios: watch verified artists paint live, search by title, description and tags, and open a studio to watch. Anyone can view; only approved painters draw.',
   },
   '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
-  '/family': { title: 'Drawesome Family — ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly.' },
+  '/family': { title: 'Drawesome Family, ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly.' },
   '/faq': {
-    title: 'Safety & FAQ — Drawesome',
-    description: 'How moderation works, what data we store, how to report, and house rules — written to match how the app actually works.',
+    title: 'Safety & FAQ: Drawesome',
+    description: 'How moderation works, what data we store, how to report, and house rules, written to match how the app actually works.',
   },
-  '/safety': { title: 'Safety — Drawesome', description: 'Understand room controls, public sharing, reporting, and the limits of automated moderation. Younger artists should draw with an adult and people they know.' },
+  '/safety': { title: 'Safety: Drawesome', description: 'Understand room controls, public sharing, reporting, and the limits of automated moderation. Younger artists should draw with an adult and people they know.' },
   '/parents': {
-    title: 'Free Drawing Activities for Families & Classrooms — Drawesome',
+    title: 'Free Drawing Activities for Families & Classrooms: Drawesome',
     description: 'Try three free drawing activities for families and classrooms. Create a private invite room, draw together without student accounts, and learn how adult supervision and sharing work.',
   },
-  '/privacy': { title: 'Privacy — Drawesome', description: 'What stays in your browser, what reaches our servers even when drawing as a guest, what others can see, and the scope and limits of deletion options.' },
-  '/signup': { title: 'Save your art — Drawesome', description: 'An optional free account adds gallery sync across devices where accounts are available. You can keep drawing as a guest.' },
+  '/privacy': { title: 'Privacy: Drawesome', description: 'What stays in your browser, what reaches our servers even when drawing as a guest, what others can see, and the scope and limits of deletion options.' },
+  '/signup': { title: 'Save your art: Drawesome', description: 'An optional free account adds gallery sync across devices where accounts are available. You can keep drawing as a guest.' },
 };
 
 const FAQ_JSON_LD = {
@@ -11867,7 +11867,7 @@ const FAQ_JSON_LD = {
     },
     {
       '@type': 'Question',
-      name: 'What information do you collect — and can I delete it?',
+      name: 'What information do you collect, and can I delete it?',
       acceptedAnswer: { '@type': 'Answer', text: 'Settings and drafts can live on your device. Shared-room drawings and chat, server-saved art, and public Wall posts also use server storage, including when you are signed out. The Account panel offers deletion options. See the Privacy page for storage and deletion details.' },
     },
   ],
@@ -11881,7 +11881,7 @@ function seoOverridesFor(reqPath) {
   // (and stops the room's code leaking into a canonical tag).
   if (/^\/watch\/[A-Za-z0-9]{1,16}$/.test(path)) {
     return {
-      title: 'Room watch — Drawesome',
+      title: 'Room watch: Drawesome',
       description: 'Moderator view of a live room.',
       url: `${SITE_ORIGIN}${path}`,
     };
@@ -11897,8 +11897,8 @@ function seoOverridesFor(reqPath) {
     if (post && !post.hidden) {
       const hearts = Object.keys(post.votedBy || {}).length;
       return {
-        title: `“${post.title}” by ${post.artist} — the Fridge Wall`,
-        description: `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ' — it moves!' : ''}. See it, heart it, or remix it live.`,
+        title: `“${post.title}” by ${post.artist}, the Fridge Wall`,
+        description: `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ', it moves!' : ''}. See it, heart it, or remix it live.`,
         url: `${SITE_ORIGIN}/wall/${post.id}`,
         image: `${SITE_ORIGIN}/api/wall/${post.id}/frame/0`,
         type: 'article',
@@ -11917,8 +11917,8 @@ function seoOverridesFor(reqPath) {
     if (flag) {
       const painting = room && room.users ? room.users.size : 0;
       return {
-        title: `Color the ${flagName(flag)} flag together ${flagEmoji(flag)} — Drawesome`,
-        description: `${painting > 0 ? `${painting} coloring right now — ` : ''}a shared coloring page of the flag of ${flagName(flag)}. Free, no account needed.`,
+        title: `Color the ${flagName(flag)} flag together ${flagEmoji(flag)}: Drawesome`,
+        description: `${painting > 0 ? `${painting} coloring right now, ` : ''}a shared coloring page of the flag of ${flagName(flag)}. Free, no account needed.`,
         url: `${SITE_ORIGIN}/join/${code}`,
       };
     }
@@ -11926,13 +11926,13 @@ function seoOverridesFor(reqPath) {
       const painting = room.users ? room.users.size : 0;
       return {
         title: `Join “${room.title || code}” on Drawesome 🎨`,
-        description: `${painting > 0 ? `${painting} drawing right now — ` : ''}jump into this live drawing room. Free, no account needed.`,
+        description: `${painting > 0 ? `${painting} drawing right now, ` : ''}jump into this live drawing room. Free, no account needed.`,
         url: `${SITE_ORIGIN}/join/${code}`,
       };
     }
     return {
       title: "You're invited to draw on Drawesome 🎨",
-      description: 'A friend wants to draw with you, live. Tap to join their room — free, no account needed.',
+      description: 'A friend wants to draw with you, live. Tap to join their room, free, no account needed.',
       url: `${SITE_ORIGIN}/join/${code}`,
     };
   }
@@ -11946,7 +11946,7 @@ app.get('/robots.txt', (_req, res) => {
 });
 
 // ads.txt: authorized digital seller for Google Ad Manager. Env-driven so the
-// anonymous-first rule holds — unset GAM_ADS_TXT_PUBLISHER_ID means we serve a
+// anonymous-first rule holds, unset GAM_ADS_TXT_PUBLISHER_ID means we serve a
 // 404 and no ad inventory is claimed on the domain.
 const GAM_ADS_TXT_PUBLISHER_ID = String(process.env.GAM_ADS_TXT_PUBLISHER_ID || '').trim();
 app.get('/ads.txt', (_req, res) => {
@@ -11955,7 +11955,7 @@ app.get('/ads.txt', (_req, res) => {
 });
 
 // Sitemap: the static pages plus the wall's newest posts (each has its own OG
-// card, so they're real landing pages). /join/ links are deliberately absent —
+// card, so they're real landing pages). /join/ links are deliberately absent -
 // robots.txt disallows them so a leaked private invite never gets indexed.
 app.get('/sitemap.xml', (_req, res) => {
   const urls = [];
@@ -11993,7 +11993,7 @@ if (existsSync(distPath)) {
     },
   }));
   // SPA fallback (Express 5: use middleware, not an app.get('*') route). Every
-  // unmatched GET returns the shell — with its head relinked for the route —
+  // unmatched GET returns the shell, with its head relinked for the route -
   // so /studio, /join/CODE and /wall/POST work on direct load AND unfurl as
   // themselves in iMessage/Discord/WhatsApp.
   app.use((req, res) => {
@@ -12001,7 +12001,7 @@ if (existsSync(distPath)) {
       res.status(404).end();
       return;
     }
-    // Don't serve the SPA shell for missing API / asset requests — 404 instead,
+    // Don't serve the SPA shell for missing API / asset requests: 404 instead,
     // so a broken image is a 404, not an HTML page with a 200.
     if (req.path.startsWith('/api/') || req.path.startsWith('/coloring-sheets/') || req.path.startsWith('/assets/') || /\.(?:m?js|css|map|json|webmanifest|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf|wasm|mp[34]|webm|wav)$/i.test(req.path)) {
       res.status(404).json({ error: 'not found' });

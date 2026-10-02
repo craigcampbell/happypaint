@@ -1,4 +1,4 @@
-# Room-loading checkpoint release — 2026-09-29 (CDT)
+# Room-loading checkpoint release: 2026-09-29 (CDT)
 
 ## Source and merge
 
@@ -62,6 +62,6 @@ Using only base Compose for this rollback also removes the checkpoint opt-in env
 
 ## Evidence and remaining limits
 
-Evidence directory: `/home/craig/Projects/happypaint-evidence/release-room-loading-20260929` — `predeploy.json`, `release-files.json`, `image-verified.json`, `live-http-verification.json`, `public-cold-to-warm.json`, `public-runtime-verification.json`, `public-heavy-room-mobile.png`, build/swap/test logs and source backup.
+Evidence directory: `/home/craig/Projects/happypaint-evidence/release-room-loading-20260929`, `predeploy.json`, `release-files.json`, `image-verified.json`, `live-http-verification.json`, `public-cold-to-warm.json`, `public-runtime-verification.json`, `public-heavy-room-mobile.png`, build/swap/test logs and source backup.
 
 Prior implementation evidence remains under `room-loading-implementation-2026-09-29/REPORT.md`: same-host MAIN warm-load improvement, actual 150/300-frame exports, remaining slow cold-film preview, cross-device limitations, and the retained long-soak module-loading failure whose focused comparisons subsequently passed. This deployment does not claim those remaining limitations are solved.

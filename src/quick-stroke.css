@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Quick stroke controls — the Size pill + Color dot on the bottom bar (and
+   Quick stroke controls, the Size pill + Color dot on the bottom bar (and
    on the desktop zoom cluster), their popovers (the brush quick menu and the
    studio's own HSB color picker), and the Hand & pen preferences section.
 
@@ -9,7 +9,7 @@
 /* ---- The pills ------------------------------------------------------------ */
 .qs-size,
 .qs-color {
-  touch-action: none; /* the pill IS a drag surface — never scroll / zoom the page */
+  touch-action: none; /* the pill IS a drag surface, never scroll / zoom the page */
   -webkit-user-select: none;
   user-select: none;
 }
@@ -464,7 +464,7 @@ input.cw-range-plain {
   margin: 6px 0 0;
 }
 
-/* The phone tier's tools are a bottom sheet — there is no side to flip. */
+/* The phone tier's tools are a bottom sheet, there is no side to flip. */
 .studio-shell[data-layout="phone"] .input-prefs .pref-hand {
   display: none;
 }
@@ -472,7 +472,7 @@ input.cw-range-plain {
 /* ---- Narrow phones: eight items must fit the bar ---------------------------- */
 /* (paint · eraser · size · color · pan · tools · chat │ undo)
    Undo made this eight, and stepped breakpoints kept missing a phone between
-   them — 375px clipped the last button clean off the bar. The width is fluid
+   them: 375px clipped the last button clean off the bar. The width is fluid
    instead: 44px where there is room, otherwise an even share of the bar's own
    96vw ceiling minus its chrome (4px padding each side, 2px × 8 gaps, and the
    ~5px hairline before undo ≈ 32px). Every phone fits by construction. */

@@ -1,4 +1,4 @@
-// The curated "hype" reaction set — big animated celebrations over the canvas.
+// The curated "hype" reaction set, big animated celebrations over the canvas.
 // Kinds mirror the server's HYPE_KINDS allowlist (server.js); each renders as a
 // pure-CSS burst (see .hype-* in App.css). No external media, ever.
 export const HYPES = [

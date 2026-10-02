@@ -1,9 +1,9 @@
-// /sketchbook/invite/:token — accept a sketchbook invitation
+// /sketchbook/invite/:token, accept a sketchbook invitation
 // (docs/SKETCHBOOKS-CONTRACT.md).
 //
 // The token arrives in the URL (the only place it ever appears client-side
 // besides the owner's one-time mint panel) and is POSTed to
-// /api/sketchbooks/accept under the visitor's REAL PocketBase session — the
+// /api/sketchbooks/accept under the visitor's REAL PocketBase session, the
 // server resolves the authenticated account, enforces the 6-artist cap and
 // revocations, and grants drawing across every page. Guests get the honest
 // sign-in card; this page proceeds automatically once a session appears.
@@ -17,8 +17,8 @@ import "../sketchbook.css";
 
 const ERROR_COPY = {
   invite_invalid: "That invitation link is invalid or was revoked. Ask the sketchbook owner for a fresh one.",
-  book_full: "This sketchbook already has its six artists — the invitation is still kind, but the book is full.",
-  own_book: "This is your own sketchbook — you can already draw in it!",
+  book_full: "This sketchbook already has its six artists, the invitation is still kind, but the book is full.",
+  own_book: "This is your own sketchbook, you can already draw in it!",
   bad_token: "That invitation link looks incomplete. Copy the whole link and try again.",
 };
 
@@ -30,7 +30,7 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
   const [bookPublic, setBookPublic] = useState(null); // visibility of the joined book
   const triedRef = useRef(false);
   // Sign-in sends the visitor straight back to THIS exact invitation link.
-  // The token stays in the URL only — never logged, never stored elsewhere.
+  // The token stays in the URL only, never logged, never stored elsewhere.
   const returnTo = encodeURIComponent(`/sketchbook/invite/${token}`);
 
   useEffect(() => {
@@ -55,12 +55,12 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
           return;
         }
         setState("error");
-        setMessage(ERROR_COPY[r.error] || r.json?.message || "Couldn't accept that invitation — try again.");
+        setMessage(ERROR_COPY[r.error] || r.json?.message || "Couldn't accept that invitation, try again.");
       })
       .catch(() => {
         if (!active) return;
         setState("error");
-        setMessage("Couldn't accept that invitation — try again.");
+        setMessage("Couldn't accept that invitation, try again.");
       });
     return () => { active = false; };
   }, [session, token]);
@@ -84,7 +84,7 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
               <>
                 <p className="skb-start-sub">
                   An invitation is for a specific artist, so accepting it needs a quick sign-in.
-                  Come straight back to this link afterwards — it will pick up where you left off.
+                  Come straight back to this link afterwards, it will pick up where you left off.
                 </p>
                 <button
                   type="button"
@@ -106,7 +106,7 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
             <p className="skb-start-sub">You&rsquo;re in! You can draw on every page of this sketchbook.</p>
             {bookPublic === false ? (
               <p className="skb-status-line">
-                This is a <strong>private</strong> sketchbook — only the owner and invited artists like you can open it.
+                This is a <strong>private</strong> sketchbook, only the owner and invited artists like you can open it.
               </p>
             ) : null}
             <button type="button" className="primary-action" onClick={() => onNavigate(`/sketchbook/${bookId}`)}>

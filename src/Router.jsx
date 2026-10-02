@@ -79,12 +79,12 @@ export default function Router() {
     page = <StudioApp key={`room-${code}`} initialJoinCode={code} />;
   } else if (path.startsWith("/watch")) {
     // The admin glass-room. Not a drawing route: no studio bundle, no canvas
-    // tools — the watch view is read-only by construction.
+    // tools, the watch view is read-only by construction.
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
     page = <RoomWatch key={`watch-${code}`} roomCode={code} onNavigate={navigate} />;
   } else if (path.startsWith("/live")) {
     // The public read-only watch page: a shareable window into one public room's
-    // mural. Not a drawing route either — it renders the spectator socket client
+    // mural. Not a drawing route either, it renders the spectator socket client
     // and nothing that can send, so no studio bundle is pulled in.
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "MAIN";
     page = <PublicWatch key={`live-${code}`} roomCode={code} onNavigate={navigate} />;
@@ -129,7 +129,7 @@ export default function Router() {
     const token = decodeURIComponent(path.split("/")[3] || "").slice(0, 96);
     page = <SketchbookInvitePage token={token} onNavigate={navigate} />;
   } else if (path.startsWith("/sketchbook/")) {
-    // The public book reader — anyone may flip through; drawing stays ACL'd.
+    // The public book reader, anyone may flip through; drawing stays ACL'd.
     const id = (path.split("/")[2] || "").replace(/[^a-z0-9_]/gi, "").slice(0, 24);
     page = <SketchbookPage key={`skb-${id}`} bookId={id} onNavigate={navigate} />;
   } else if (path.startsWith("/sketchbook")) {

@@ -3,7 +3,7 @@
 // Minutes-long films come from TIME, not just from more frames: a frame can
 // HOLD for up to 10s, a scene can LOOP up to 20 times (a walk cycle, rain,
 // a flickering candle), and a scene can carry a CAMERA move (a slow pan or
-// zoom over a still) — none of which costs a single extra canvas.
+// zoom over a still), none of which costs a single extra canvas.
 //
 // A "plan" is the flat list of shots the film shows in order. Every consumer
 // (studio playback, exportVideo, exportProduction) walks the same plan so what
@@ -129,7 +129,7 @@ export function cameraWindow(camera, t) {
 }
 
 // Set `ctx`'s transform so drawing the whole picture at (0,0,width,height)
-// shows only the camera's window — lets a layer stack composite straight
+// shows only the camera's window, lets a layer stack composite straight
 // through the camera with no scratch canvas. Reset with ctx.setTransform(1,0,0,1,0,0).
 export function applyCameraTransform(ctx, camera, t, width, height) {
   const win = cameraWindow(camera, t);

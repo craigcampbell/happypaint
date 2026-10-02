@@ -1,5 +1,5 @@
 // The spinning painterly globe: a true orthographic sphere painted on a 2D
-// canvas — washed ocean, per-country paint coats with brush glazes that rotate
+// canvas, washed ocean, per-country paint coats with brush glazes that rotate
 // WITH the land, wet-edge rims, limb shade and paper grain, paint drips
 // hanging off the busiest countries onto the paper below.
 //
@@ -489,7 +489,7 @@ function PainterlyGlobe({ countries, flags, live, total, reduced, onOpen }) {
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return null;
     // isPointInPath interprets (x, y) in the CURRENT transform, and the ctx
-    // keeps the DPR scale from draw() — CSS pointer coords would land dpr×
+    // keeps the DPR scale from draw(): CSS pointer coords would land dpr×
     // off. Reset to identity so CSS-pixel path coords match CSS-pointer coords.
     ctx.save();
     ctx.resetTransform();
@@ -598,7 +598,7 @@ function PainterlyGlobe({ countries, flags, live, total, reduced, onOpen }) {
     if (!code) { setPinned(null); return; }
     const item = prep.items.get(code) || prep.dots.find((d) => d.code === code);
     if (!item) {
-      // Flag room with no map geometry (EU, UN, ...): never a silent no-op —
+      // Flag room with no map geometry (EU, UN, ...): never a silent no-op -
       // pin an actionable card over the centroid of the visible land instead.
       const rot = rotRef.current;
       let sx = 0;
@@ -645,7 +645,7 @@ function PainterlyGlobe({ countries, flags, live, total, reduced, onOpen }) {
         className={`planet-card globe-card${pinnedCard ? " globe-card-pinned" : ""}`}
         style={{ left, top: Math.max(8, y + 14) }}
         role={pinnedCard ? "group" : "status"}
-        aria-label={pinnedCard ? `${nameOf(code)} — selected country` : undefined}
+        aria-label={pinnedCard ? `${nameOf(code)}, selected country` : undefined}
       >
         <div className="planet-card-title">
           {flagEmoji(code)} {nameOf(code)}
@@ -654,7 +654,7 @@ function PainterlyGlobe({ countries, flags, live, total, reduced, onOpen }) {
         {count > 0 ? (
           <div className="planet-card-stat"><strong>{fmt(count)}</strong> recorded painting sessions{share ? ` · ${share}% of all sessions` : ""}</div>
         ) : (
-          <div className="planet-card-stat planet-card-muted">Not painted yet — be the first from here!</div>
+          <div className="planet-card-stat planet-card-muted">Not painted yet, be the first from here!</div>
         )}
         {l && l.painting > 0 ? <div className="planet-card-live">🟢 {l.painting} coloring the flag right now</div> : null}
         {flagSet.has(code) ? (
@@ -683,7 +683,7 @@ function PainterlyGlobe({ countries, flags, live, total, reduced, onOpen }) {
             {options.painted.length > 0 ? (
               <optgroup label="Painted countries">
                 {options.painted.map((c) => (
-                  <option key={c.code} value={c.code}>{flagEmoji(c.code)} {nameOf(c.code)} — {fmt(c.count)} sessions</option>
+                  <option key={c.code} value={c.code}>{flagEmoji(c.code)} {nameOf(c.code)}, {fmt(c.count)} sessions</option>
                 ))}
               </optgroup>
             ) : null}

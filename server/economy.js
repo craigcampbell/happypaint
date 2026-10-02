@@ -1,4 +1,4 @@
-// Drawesome economy — SERVER-AUTHORITATIVE wallet + append-only ledger.
+// Drawesome economy: SERVER-AUTHORITATIVE wallet + append-only ledger.
 //
 // Why this file exists
 // -------------------
@@ -9,7 +9,7 @@
 // purchases and any future payout must be backed by a balance the user cannot
 // edit, so the authoritative copy lives here and the client becomes a view of it.
 //
-// Balances are a PROJECTION of an append-only ledger, never a mutable number —
+// Balances are a PROJECTION of an append-only ledger, never a mutable number -
 // the same invariant the documented backend schema uses
 // (backend/supabase/schema.sql:1121 "Balances are cached projections of the
 // append-only ledger. No user-to-user currency transfer.").
@@ -19,8 +19,8 @@
 // Drops are fungible inside the wallet, but a payout may only ever be funded by
 // money that actually arrived. Drops are therefore earned two ways:
 //
-//   * BOUGHT  — a verified Stripe payment (source "drop_purchase", paid: true)
-//   * EARNED  — painting (1 Drop per completed stroke, throttled to one per 4s)
+//   * BOUGHT, a verified Stripe payment (source "drop_purchase", paid: true)
+//   * EARNED, painting (1 Drop per completed stroke, throttled to one per 4s)
 //               and quest missions (source "paint_earn" / "quest_earn", paid: false)
 //
 // `paidDrops` is projected separately from `drops` and is the ONLY balance a
@@ -52,7 +52,7 @@ import {
 } from 'node:fs';
 
 const ECONOMY_VERSION = 1;
-// Must match server/billing.js — one Stripe SDK version across the process.
+// Must match server/billing.js, one Stripe SDK version across the process.
 const STRIPE_API_VERSION = '2026-08-26.dahlia';
 
 // ---- Catalog (must mirror src/utils/economy.js REAL_DROP_PRODUCTS) ---------
@@ -84,7 +84,7 @@ export const TIP_PRESETS = [10, 25, 50, 100];
 const PAYOUT_CENTS_PER_100_DROPS = Number(process.env.ECONOMY_PAYOUT_CENTS_PER_100_DROPS || 65);
 const PAYOUT_MIN_DROPS = Number(process.env.ECONOMY_PAYOUT_MIN_DROPS || 5000); // ~$32.50
 // Annual earnings above this need a 1099 (US). Payouts are held past it until tax
-// info is on file — enforced by the (disabled) payout path.
+// info is on file, enforced by the (disabled) payout path.
 const TAX_REPORTING_CENTS = Number(process.env.ECONOMY_TAX_REPORTING_CENTS || 60000);
 
 // Every ledger entry is one of these. Kept as a closed set so a typo cannot
@@ -164,7 +164,7 @@ export function createEconomy({
 
   // Owner keys are client-supplied (anonymous device keys) or token-derived, so a
   // key like "__proto__" must never reach a bracket assignment on a plain object
-  // — that would set the prototype rather than a wallet.
+  //, that would set the prototype rather than a wallet.
   const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
   function walletFor(ownerKey, create = true) {
     if (typeof ownerKey !== 'string' || !ownerKey || DANGEROUS_KEYS.has(ownerKey)) return null;
@@ -180,7 +180,7 @@ export function createEconomy({
     return wallet;
   }
 
-  // Balances are derived, never stored — the ledger is the only truth, so a
+  // Balances are derived, never stored, the ledger is the only truth, so a
   // partial write can never leave a balance that disagrees with its history.
   function project(wallet) {
     const b = { drops: 0, paidDrops: 0, kudos: 0, creator: 0, locked: 0 };
@@ -201,7 +201,7 @@ export function createEconomy({
     }
     // payoutableDrops is bounded by BOTH the creator balance received and the
     // paid Drops that funded it. A tip paid with paint-earned Drops adds creator
-    // balance but no payoutable value — that asymmetry is the anti-farming rule.
+    // balance but no payoutable value, that asymmetry is the anti-farming rule.
     b.payoutableDrops = Math.max(0, Math.min(b.creator, wallet.payoutableDrops || 0));
     b.payoutableCents = Math.floor((b.payoutableDrops * PAYOUT_CENTS_PER_100_DROPS) / 100);
     return b;
@@ -320,7 +320,7 @@ export function createEconomy({
 
   // Tip a creator. The sender's Drops are debited and the receiver's creator
   // balance credited. Payoutable value is added ONLY in proportion to how much of
-  // the spend was funded by paid Drops — see the anti-farming note in project().
+  // the spend was funded by paid Drops, see the anti-farming note in project().
   function sendTip(fromOwner, toOwner, amount, sourceId = null) {
     const amt = Math.round(Number(amount) || 0);
     if (!TIP_PRESETS.includes(amt)) return { ok: false, reason: 'bad_amount' };
@@ -377,7 +377,7 @@ export function createEconomy({
   // signature against these exact raw bytes, and express.json() would consume
   // them first (body-parser sets req._body, so a later express.raw() no-ops and
   // req.body would be a parsed object, not the Buffer the SDK needs). Mirrors
-  // server/billing.js registerWebhook — that ordering is why the two are split.
+  // server/billing.js registerWebhook, that ordering is why the two are split.
   function registerWebhook(app) {
     app.post('/api/economy/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
       if (!stripe || !webhookSecret) return res.status(503).json({ error: 'not_configured' });
@@ -469,7 +469,7 @@ export function createEconomy({
 
     // Buy Drops with real money. price_cents comes from the server catalog, so a
     // tampered client cannot choose its own price. price_data is used inline so
-    // enabling purchases needs only a secret key — no pre-created Stripe prices.
+    // enabling purchases needs only a secret key, no pre-created Stripe prices.
     app.post('/api/economy/drops/checkout', async (req, res) => {
       if (!purchasesEnabled || !secretKey || !stripe) {
         return res.status(503).json({ error: 'purchases_disabled' });

@@ -22,7 +22,7 @@ npm run lint           # eslint, zero-warnings policy
 Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
 `docker compose up -d` = app + pocketbase only (no tunnel/token needed) for local.
 
-### How to verify a change (do this — don't hand it to the user)
+### How to verify a change (do this, don't hand it to the user)
 - **Build must pass** (`npm run build`) and `node --check server.js` for server edits.
 - **Realtime / server logic**: write a throwaway Node WS script (`ws` is a dep)
   that spins up `server.js` with test env + a mock auth HTTP endpoint, connects
@@ -31,7 +31,7 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
   `{record:{id}}` at `POST /api/collections/users/auth-refresh`.
 - **UI**: use the Preview MCP (`.claude/launch.json` runs `node server.js`,
   autoPort). Navigate via `history.pushState` + `popstate`. Snapshot / eval to
-  confirm, screenshot for proof. The viewport is mobile (375px) — that's the
+  confirm, screenshot for proof. The viewport is mobile (375px), that's the
   primary audience.
 - Always check the **anonymous path** still works after account-related changes.
 
@@ -53,17 +53,17 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
   host-only actions with `isHost`), and handle the server→client message in
   App.jsx's `handleMpMessage`. Persisted room fields go in `loadRoom`/`persistRoom`/
   `getRoom` together.
-- **Server data paths** all derive from `DATA_DIR` — keep it that way so one
+- **Server data paths** all derive from `DATA_DIR`, keep it that way so one
   Docker volume captures everything.
 - **Account deletion is App-Review load-bearing**: any new durable client store
   (localStorage/IDB key) MUST be added to the wipe lists in `accountDeletion.js`,
   and server-side rows must cascade. Don't silently leave data behind.
 - **No secrets in the client bundle** (only `VITE_*` public values). The server
-  validates PocketBase tokens with the public anon endpoint — never the
+  validates PocketBase tokens with the public anon endpoint, never the
   service-role key.
 - **Commits**: `main` is the only long-lived branch (consolidated 2026-09-18; older
   lines are kept as `archive/*` tags). Do short-lived work on a branch off `main`
-  and merge it back — don't let parallel feature branches pile up again.
+  and merge it back, don't let parallel feature branches pile up again.
   For multi-line messages, write a temp `.commitmsg.txt`, `git add` the *specific*
   files (not `-A`), `git commit -F`, then delete it (it's git-ignored). End
   messages with the `Co-Authored-By:` trailer. The user pushes; don't push for them.
@@ -80,7 +80,7 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
 - **Do not** wire up the real-money economy (in-app purchases, payouts, cashable
   tips). Play-money only. Real money + minors = legal/app-store/COPPA territory.
 - **Do not** enter the user's credentials anywhere, or mutate their Cloudflare
-  account (DNS/tunnel) on their behalf — guide them; they execute.
+  account (DNS/tunnel) on their behalf, guide them; they execute.
 - **Do not** host third-party/copyrighted content publicly without confirmed
   rights. (The 6,294 coloring sheets are the owner's; the watermark swap is a
   tracked task, not a "strip someone else's mark" job.)

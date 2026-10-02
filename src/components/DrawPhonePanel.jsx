@@ -33,7 +33,7 @@ async function shareBook(book) {
   const seed = book.pages[0]?.content || "";
   const finalGuess = [...book.pages].reverse().find((p) => p.type === "guess")?.content;
   // The join link rides inside the text (not only the `url` field) because
-  // several share targets drop `url` when a file is attached — the image must
+  // several share targets drop `url` when a file is attached, the image must
   // still carry a way back to the site.
   const joinUrl = `${window.location.origin}/join/PHONE`;
   const text = finalGuess
@@ -56,7 +56,7 @@ async function shareBook(book) {
       return;
     }
     if (navigator.share) await navigator.share({ text, title: "Draw Phone", url: joinUrl });
-  } catch { /* user dismissed or share unsupported — no-op */ }
+  } catch { /* user dismissed or share unsupported, no-op */ }
 }
 
 function BookPages({ book }) {
@@ -145,7 +145,7 @@ export default function DrawPhonePanel({
       <div className="phone-banner phone-waiting">
         <span className="phone-badge">📞 Draw Phone</span>
         <span className="phone-waiting-msg">
-          Need {need} players to start — {phone.presentCount} here. Invite a friend!
+          Need {need} players to start, {phone.presentCount} here. Invite a friend!
         </span>
         {phone.hostControlled && isHost ? (
           <button type="button" className="phone-start-btn" onClick={onStart} disabled={phone.presentCount < need}>

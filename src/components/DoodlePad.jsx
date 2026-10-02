@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-// DoodlePad — the 10-second meme machine. A tiny canvas that opens from the
+// DoodlePad, the 10-second meme machine. A tiny canvas that opens from the
 // chat composer; the sketch sends as a chat bubble (a "doodle reply"). Kept
 // deliberately simple: a few fat pens, an eraser, clear, send. Pointer events
 // only (mouse/touch/pen all work), drawn at 2x for crisp bubbles.
@@ -54,7 +54,7 @@ export default function DoodlePad({ onSend, onClose }) {
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
     lastRef.current = p;
-    // Erasing paints white-on-white — it can never make a blank canvas
+    // Erasing paints white-on-white, it can never make a blank canvas
     // sendable, so only real pen strokes flip the dirty flag.
     if (!erasing) dirtyRef.current = true;
   };
@@ -87,7 +87,7 @@ export default function DoodlePad({ onSend, onClose }) {
         width={PAD_W * SCALE}
         height={PAD_H * SCALE}
         /* Sized by CSS (width:100% + aspect-ratio) so the pad SHRINKS to fit
-           the mobile bottom sheet — a fixed pixel height clipped the Send
+           the mobile bottom sheet, a fixed pixel height clipped the Send
            button off-screen on phones. point() normalizes by the rendered
            rect, so drawing coordinates stay correct at any size. */
         style={{ touchAction: "none" }}

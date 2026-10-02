@@ -1,9 +1,9 @@
-# Drawesome roadmap — from the July 2026 full audit
+# Drawesome roadmap, from the July 2026 full audit
 
 Full machine-readable findings (51, all file:line-cited): `docs/audit-2026-07.json`.
 Goal: best-in-class paint-together for kids **and teens**; drawing performance is paramount.
 
-## Sprint 1 — SHIPPED (quick wins)
+## Sprint 1: SHIPPED (quick wins)
 - Server: WS perMessageDeflate (16.5MB join → ~2MB), immutable caching for hashed assets,
   async room persistence (no more event-loop stalls), spectator history capped at 1500 ops
   (+ no chat for spectators), room prompt in the join handshake, fun unique guest names
@@ -33,7 +33,7 @@ full-size canvas).
   Trap: PRNG/spacing state must be batch-boundary-independent; add a replay-equivalence
   image-diff test.
 - **Stage 3:** oil/acrylic/watercolor (bristle sub-dabs, streaks, wet-edge, grain,
-  impasto — all one-time bbox-buffer passes at commit) + smudge (always samples layer 0;
+  impasto, all one-time bbox-buffer passes at commit) + smudge (always samples layer 0;
   live-view divergence is bounded + self-heals on history frames).
 
 ### 2. Structural join fix: history snapshot + tail
@@ -49,11 +49,11 @@ canvas, tiled flood fill, onion-skin cache.
 ### 4. Discord pack part 2
 Per-room OG embeds (server /join/:code HTML route, ~40 lines) + client-posted room
 snapshot for og:image + host-gated webhook relay (POST /api/share/discord,
-DISCORD_WEBHOOK_URL in .env). Blocker note: spectate has no audience gate — decide
+DISCORD_WEBHOOK_URL in .env). Blocker note: spectate has no audience gate, decide
 before shipping any public /watch overlay (audit lens 5, last finding).
 
 ### 5. Social juice
-Ephemeral emotes (non-persisted WS overlay — no op-history/perf impact), "Share GIF"
+Ephemeral emotes (non-persisted WS overlay, no op-history/perf impact), "Share GIF"
 via navigator.share, surface Replay/timelapse in the top action row, session recap.
 
 ### 6. Later
@@ -64,4 +64,4 @@ Discord Activity (v1 anonymous, embedded-app-sdk, instanceId→room), Twitch OAu
 - Discord OAuth: create app at discord.com/developers → OAuth2 redirect
   `https://pb.drawesome.art/api/oauth2-redirect` → enable Discord provider in PB Admin
   (users collection → OAuth2) with client id/secret. Button appears automatically.
-- Note: Discord ToS is 13+ — sign-in is optional and guests are unaffected.
+- Note: Discord ToS is 13+, sign-in is optional and guests are unaffected.

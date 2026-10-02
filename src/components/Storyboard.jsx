@@ -1,5 +1,5 @@
-// The production storyboard — a film's call sheet. One card per segment room
-// ("Part"), each with a LIVE preview (spectator canvas — the same tech as the
+// The production storyboard, a film's call sheet. One card per segment room
+// ("Part"), each with a LIVE preview (spectator canvas, the same tech as the
 // homepage carousel), live crew count, frame count and runtime. Tap a part to
 // hop into its room; the host adds parts and renames the film. Pure
 // presentation: StudioApp owns all production state + actions.
@@ -82,7 +82,7 @@ export default function Storyboard({
         {!production ? (
           <div className="sb-pitch">
             <p>
-              Link up to <strong>6 rooms</strong> into ONE film — each part holds ~30 seconds of animation.
+              Link up to <strong>6 rooms</strong> into ONE film, each part holds ~30 seconds of animation.
               Friends can work on different parts at the same time, and “Export film” stitches every part
               into a single movie up to <strong>2+ minutes</strong> long.
             </p>
@@ -91,7 +91,7 @@ export default function Storyboard({
                 🎬 Start a Production
               </button>
             ) : (
-              <p className="sb-hint">Ask your room&apos;s host to start the production — then everyone gets a part to paint!</p>
+              <p className="sb-hint">Ask your room&apos;s host to start the production, then everyone gets a part to paint!</p>
             )}
           </div>
         ) : (

@@ -27,7 +27,7 @@
 // backing stores go away immediately (rebuilt on next use).
 //
 // This module must stay import-free from brushes.js (brushes.js imports THIS
-// module in Stage 2, so a back-edge would be a cycle) — mulberry32 is copied
+// module in Stage 2, so a back-edge would be a cycle), mulberry32 is copied
 // below instead. It is also safe to import in Node: nothing touches the DOM
 // until a canvas is actually requested.
 
@@ -79,7 +79,7 @@ export function spriteFamilyIndex(family) {
 const PAPER_SEED = (0x9e3779b9 ^ 0x5bd1e995) >>> 0;
 
 // ---------------------------------------------------------------------------
-// Math primitives. All integer / polynomial / sqrt — see the header.
+// Math primitives. All integer / polynomial / sqrt, see the header.
 
 // Standard mulberry32, copied from brushes.js (no import: cycle avoidance).
 function mulberry32(seed) {
@@ -180,7 +180,7 @@ function noiseField(dst, px, cells, seed, ox, oy, wrap) {
 
 // ---------------------------------------------------------------------------
 // Shared per-pixel geometry for a 128^2 cell: unit-radius rho and the cell
-// edge guard. Built once (module lifetime, 256 KB) — build-time only.
+// edge guard. Built once (module lifetime, 256 KB), build-time only.
 
 let RHO = null; // distance from the cell center in unit radii
 let GUARD = null; // 1 inside, fading to 0 on the outermost pixel ring
@@ -212,7 +212,7 @@ function geometry() {
 // the small per-variant tables below, then ONE shared kernel (runKernel)
 // evaluates the family's per-pixel formula into ALPHA and blitVariant writes
 // the bytes. One kernel on purpose: V8 tiers a loop up once, so the first
-// variant of every family runs optimized instead of interpreted — that alone
+// variant of every family runs optimized instead of interpreted, that alone
 // halves the cold prebuild (separate per-family loops cost ~40 ms cold).
 
 const fieldA = new Float64Array(CELL);
@@ -345,7 +345,7 @@ function runKernel(kind, rows = SPRITE_PX) {
 // One-time JIT warm-up before the first build: every kernel / profile case
 // runs on two rows so the optimizer sees all switch arms at once. Without
 // this each family's first variant deoptimizes the kernel on its unseen arm
-// and re-tiers (~3 ms per family — most of the difference between a 43 ms
+// and re-tiers (~3 ms per family, most of the difference between a 43 ms
 // cold and a 17 ms warm build). Pure scratch: everything it writes is
 // overwritten by the real build. Pixel output is unaffected.
 let warmed = false;
@@ -366,7 +366,7 @@ function warmUp() {
 
 // Screen a soft round fleck into ALPHA: a' = a + f (1 - a) with
 // f = alpha (1 - S(0.4, 1, dist / radius)). Only the fleck's bounding box is
-// touched — outside it f is exactly 0, so the result equals a full-cell pass.
+// touched, outside it f is exactly 0, so the result equals a full-cell pass.
 function screenFleck(fx, fy, radius, alpha) {
   const x0 = Math.max(0, Math.floor(fx - radius));
   const x1 = Math.min(SPRITE_PX - 1, Math.ceil(fx + radius));
@@ -403,7 +403,7 @@ function blitVariant(data, rowWidth, variant) {
 }
 
 // ---------------------------------------------------------------------------
-// Family formulas. IMMUTABLE once shipped — see the header. Notation: rho =
+// Family formulas. IMMUTABLE once shipped, see the header. Notation: rho =
 // distance / SPRITE_UNIT; n_k = value noise with k lattice cells across the
 // cell (each octave has its own lattice, phase-shifted per variant); S =
 // smoothstep; x/y are the pixel's offset from the cell center in px (x = the
@@ -411,17 +411,17 @@ function blitVariant(data, rowWidth, variant) {
 // per-pixel code lives in runKernel above; the setup below rolls the
 // variant's parameters and octaves in the documented order.
 
-// wash (seed 0x57a7e12c, 8 variants): an irregular watercolor blotch — a
+// wash (seed 0x57a7e12c, 8 variants): an irregular watercolor blotch, a
 // pale core, a pigment ring present only in ARCS around the rim, a feather,
-// a two-octave wobbling outline — and ANISOTROPIC: soft along the x axis
+// a two-octave wobbling outline, and ANISOTROPIC: soft along the x axis
 // (the stroke tangent once Stage 2 rotates the dab), firm with a pooled rim
 // across it. Tuned against the brush lab's stroke tiles, not the lone sprite:
 // a stroke stacks ~7 dabs per pixel, and every dab's fore/aft outline lands
-// INSIDE the stroke, where anything that survives the stacking — a ring
+// INSIDE the stroke, where anything that survives the stacking, a ring
 // (0.45 -> 1.0 tiled the interior with cells, 0.6 -> 0.85 still drew thin
 // arcs), a hard-ish feather (20% left every outline visible as "bubble
 // wrap"), an outline swelling past the cell guard's circular clip (1.13
-// radii) — reads as circles; while every dab's LATERAL rim lands ON the
+// radii), reads as circles; while every dab's LATERAL rim lands ON the
 // stroke boundary, where consecutive rims reinforce into one dense,
 // irregular edge (the mask arcs + scatter + size jitter keep it ragged). So
 // the fore/aft profile is a 38% feather with an almost-flat ring and the
@@ -462,7 +462,7 @@ function buildWash(data, rowWidth, family, from, to) {
   }
 }
 
-// graphite (seed 0x1d2b8e01, 6 variants): pencil tooth — a disc with a
+// graphite (seed 0x1d2b8e01, 6 variants): pencil tooth, a disc with a
 // firm-ish edge whose coverage is broken by paper grain at two scales plus
 // per-pixel speckle.
 //   phase = roll k0 (2 rolls); salt = latticeSeed(seed, v, 3)
@@ -471,7 +471,7 @@ function buildWash(data, rowWidth, family, from, to) {
 // The spec's n3 alone reads as three soft blobs; the n12 octave is what makes
 // it read as paper tooth at stamp scale. The 0.3 floor (spec 0.55) and the
 // 34% edge (spec 45%) keep the stroke grainy after ~6 dabs accumulate per
-// pixel — a 55% feather read as airbrush, not graphite, in a stroke.
+// pixel, a 55% feather read as airbrush, not graphite, in a stroke.
 function buildGraphite(data, rowWidth, family, from, to) {
   fillProfile(KIND_GRAPHITE);
   for (let v = from; v < to; v += 1) {
@@ -486,7 +486,7 @@ function buildGraphite(data, rowWidth, family, from, to) {
   }
 }
 
-// wax (seed 0x7f4a7c15, 8 variants): crayon — a hard-rimmed disc whose
+// wax (seed 0x7f4a7c15, 8 variants): crayon, a hard-rimmed disc whose
 // coverage breaks into crisp waxy islands with paper specks, plus two crumbs
 // baked outside the rim.
 //   phase = roll k0 (2 rolls), then per fleck: (u, v) rolls until
@@ -609,7 +609,7 @@ function buildMatte(data, rowWidth, family, from, to) {
   }
 }
 
-// loaded (seed 0x3a9c51d7, 6 variants): the oil/acrylic base — an elongated
+// loaded (seed 0x3a9c51d7, 6 variants): the oil/acrylic base, an elongated
 // body (2:1 baked: SPRITE_UNIT px along x, SPRITE_UNIT / 2 along y) streaked
 // with bristle lanes along x. Solid coverage: the lane floor is 0.6.
 //   phase = roll k0 (2 rolls); laneCount = 6 + floor(roll * 4); lanes =
@@ -678,7 +678,7 @@ const BUILDERS = {
 // alpha = the sprite). DOM-free, so Node tests can hash it directly. `data`
 // may be supplied (an ImageData's buffer) to skip a copy. `from` / `to`
 // pick a variant range (default: the whole row) so the idle prebuild can
-// land one variant per piece — every variant is built from its own seed
+// land one variant per piece, every variant is built from its own seed
 // and scratch fills, so a row assembled variant by variant is byte-identical
 // to one built in a single call (the sprite lab's paced scenario proves it).
 export function buildFamilyImage(family, data, from = 0, to = -1) {
@@ -784,7 +784,7 @@ export function getSoftMask() {
 // the cell corners. Drawn with destination-out it multiplies a canvas by
 // the feather exactly as destination-in with the mask would (dst x (1 - (1
 // - m)) = dst x m; the bytes are 255 - the mask's, so the factor is the
-// same 8-bit value) — but as a BOUNDED draw: destination-in is canvas-wide
+// same 8-bit value), but as a BOUNDED draw: destination-in is canvas-wide
 // (it must clear everything outside the source), which on a 256^2 scratch
 // is two full-canvas passes per dab, the smudge's biggest software cost.
 // Built from the mask atlas by an opaque fill + one destination-out draw:
@@ -807,7 +807,7 @@ export function getSoftMaskInverse() {
 
 // Module-singleton 256^2 scratches for the Stage-4 blend brush: the sampled
 // patch (smudgeScratch) and the color the finger carries (carryScratch).
-// Cleared by the caller at stroke start — never allocated per stroke.
+// Cleared by the caller at stroke start, never allocated per stroke.
 export function getSmudgeScratch() {
   if (!HAS_DOM) {
     return null;
@@ -837,16 +837,16 @@ export function getCarryScratch() {
 // rainbow of wet-pickup colors maps onto <= 32K keys and stays in the ring
 // instead of re-tinting per dab. The exact key is for a DRY stroke, whose
 // color never changes: it must land the raw settings color on the paper
-// (spec P4 — a 5-bit bucket would shift a picked palette color by up to
+// (spec P4, a 5-bit bucket would shift a picked palette color by up to
 // 4/255), and one key per stroke costs the ring nothing. Both namespaces
 // share the same slots; keys stay exact in a double, so the ring's key
 // table is a Float64Array. On a miss the round-robin next slot is re-tinted
 // IN PLACE: 'copy' drawImage of the white variant, then 'source-in' fillRect
-// — no canvas allocation ever happens on the dab path.
+//, no canvas allocation ever happens on the dab path.
 //
 // PARITY: the tint color is the key's canonical color (expand5(q5(c)) for a
 // bucket key, the clamped integer rgb for an exact key), NEVER the caller's
-// unrounded rgb — two callers whose colors share a key must get
+// unrounded rgb, two callers whose colors share a key must get
 // byte-identical pixels regardless of who tinted the slot first, or cache
 // order would leak into strokes.
 
@@ -890,7 +890,7 @@ export function packRgb5(r, g, b) {
   return (q5(r) << 10) | (q5(g) << 5) | q5(b);
 }
 
-// A 128^2 canvas holding `variant` of `family` tinted (r, g, b) — draw it
+// A 128^2 canvas holding `variant` of `family` tinted (r, g, b), draw it
 // IMMEDIATELY: the returned canvas is a ring slot that a later call may
 // re-tint for another color. `exact` keys the slot on the full 24-bit color
 // (dry strokes); otherwise on the 5-bit bucket (per-dab varying colors).
@@ -948,12 +948,12 @@ export function getTintedSprite(family, variant, r, g, b, exact = false) {
 
 // Build every atlas + the paper tile and allocate the tint ring, so the first
 // sprite stroke pays nothing. Called bare it builds everything synchronously
-// (~25 ms cold on a desktop). Handed an IdleDeadline — i.e. used directly as
-// the requestIdleCallback callback — it paces itself through PIECES (one
+// (~25 ms cold on a desktop). Handed an IdleDeadline, i.e. used directly as
+// the requestIdleCallback callback, it paces itself through PIECES (one
 // atlas VARIANT each, then the paper tile, then the ring: no piece is more
 // than a few ms even cold, where a whole wash row was 12+), building while
 // at least IDLE_STEP_MS of the slot remain and re-scheduling itself for the
-// rest. A slot that arrived by TIMEOUT (the page was never idle for 2 s —
+// rest. A slot that arrived by TIMEOUT (the page was never idle for 2 s -
 // someone is drawing) builds exactly ONE piece and re-schedules: it used to
 // build everything left in that slot, 30+ ms (2-3x on a phone) inside a
 // stroke. `isBusy` (App: a pointer is down) defers a slice without building
@@ -963,7 +963,7 @@ export function getTintedSprite(family, variant, r, g, b, exact = false) {
 // A family's row is assembled variant by variant into ONE ImageData and put
 // once when complete (never registered half-built): getAtlas() mid-way sees
 // no atlas and builds the whole row itself, and the pending partial is then
-// dropped at the next piece. Pixels are identical either way — each variant
+// dropped at the next piece. Pixels are identical either way, each variant
 // is a pure function of its seed (sprite-lab: paced hash == cold hash).
 const IDLE_STEP_MS = 16;
 const IDLE_TIMEOUT_MS = 2000;
@@ -975,7 +975,7 @@ const TIMER_STEP_MS = 16; // one piece per tick on the timer path
 const TIMER_BUSY_MS = 250; // re-check after a pen-down on the timer path
 // Bumped by release: a continuation scheduled before a release must not run
 // after it (it would rebuild what was just freed from piece 0), even when
-// its handle was overwritten by a second scheduler — App re-scheduling
+// its handle was overwritten by a second scheduler: App re-scheduling
 // while a module continuation was still pending.
 let buildGeneration = 0;
 // The prebuild's work list, in order: every (family, variant), the paper
@@ -983,7 +983,7 @@ let buildGeneration = 0;
 // (reset by release, which frees everything).
 let PIECES = null;
 let pieceCursor = 0;
-let partial = null; // { index, canvas, ctx, image, done } — the row being assembled
+let partial = null; // { index, canvas, ctx, image, done }, the row being assembled
 function pieceList() {
   if (!PIECES) {
     PIECES = [];
@@ -1059,8 +1059,8 @@ export function prebuildBrushSprites(deadline, isBusy) {
     return; // complete (a later call is a no-op until release resets the cursor)
   }
   const hasIdle = typeof requestIdleCallback === "function";
-  // No requestIdleCallback (Safari / iPad): self-pace with a timer instead —
-  // ONE piece per tick, ~16 ms apart — never the whole build in one go.
+  // No requestIdleCallback (Safari / iPad): self-pace with a timer instead -
+  // ONE piece per tick, ~16 ms apart, never the whole build in one go.
   // (With requestIdleCallback present, a call without a deadline is an
   // explicit synchronous build, e.g. the sprite-lab's reference build.)
   const slice = hasIdle ? deadline : TIMER_DEADLINE;

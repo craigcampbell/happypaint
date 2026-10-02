@@ -3,16 +3,16 @@
 //
 // One component, three faces (the studio mounts the one that matches):
 //
-//   OWNER  — the "Studio" panel: the live paint-request queue (approve by
+//   OWNER, the "Studio" panel: the live paint-request queue (approve by
 //            session target id, dismiss), the approved-painter ACL (opaque
 //            ids from the owner-only REST settings endpoint, revoke works for
 //            online AND offline painters), and the publishing form (the
 //            existing ArtistRoomSettings, wired to the real bearer API).
-//   VIEWER — a banner over the canvas: guests get "Sign in to request
+//   VIEWER, a banner over the canvas: guests get "Sign in to request
 //            access" (the existing auth UX, preserving the room); signed-in
 //            viewers get a "Request paint access" button and the server's
 //            pending/revoked answers.
-//   PAINTER — an approved non-owner: a small "you can paint" chip.
+//   PAINTER, an approved non-owner: a small "you can paint" chip.
 //
 // This component never fetches directly and never stores the token: every
 // network call is an injected async callback (the parent wires them to
@@ -23,25 +23,25 @@
 // Props:
 //   roomCode: string (required)
 //   roomTitle?: string | null
-//   isOwner: boolean (required) — owner face vs viewer/painter face
-//   canPaint: boolean (required) — server-authoritative (handshake/role_changed)
-//   session: null | { access_token } — null = guest (sign-in CTA)
-//   roomProfile?: null | { description, tags, event } — public studio profile
-//   paintRequests?: [{ userId, name, ts }] — owner-only live queue
+//   isOwner: boolean (required), owner face vs viewer/painter face
+//   canPaint: boolean (required), server-authoritative (handshake/role_changed)
+//   session: null | { access_token }, null = guest (sign-in CTA)
+//   roomProfile?: null | { description, tags, event }, public studio profile
+//   paintRequests?: [{ userId, name, ts }], owner-only live queue
 //   paintStatus?: null | "pending" | "approved" | "revoked" | "already"
 //   // Owner callbacks:
-//   loadPublishInfo / publish / unpublish — ArtistRoomSettings' contract
-//   onApprove(userId), onDismiss(userId) — live WS decisions by session id
-//   onRevokePainter(profileId) — REST ACL revoke (online + offline)
+//   loadPublishInfo / publish / unpublish: ArtistRoomSettings' contract
+//   onApprove(userId), onDismiss(userId), live WS decisions by session id
+//   onRevokePainter(profileId): REST ACL revoke (online + offline)
 //   // Viewer callbacks:
-//   onRequestAccess() — send paint_request
-//   onSignIn() — navigate to the existing sign-in UX preserving this room
+//   onRequestAccess(), send paint_request
+//   onSignIn(), navigate to the existing sign-in UX preserving this room
 import { useCallback, useEffect, useRef, useState } from "react";
 import ArtistRoomSettings from "./ArtistRoomSettings";
 import "./artist-access.css";
 
 // Short, non-identifying label for an opaque painter id (owner's own ACL
-// management — the id itself is meaningless to anyone else).
+// management, the id itself is meaningless to anyone else).
 const shortId = (pid) => (pid.length <= 10 ? pid : `${pid.slice(0, 6)}…${pid.slice(-4)}`);
 
 export default function ArtistAccessPanel({
@@ -141,7 +141,7 @@ export default function ArtistAccessPanel({
         <section className="aap-section" aria-labelledby="aap-painters-title">
           <h3 id="aap-painters-title">Approved painters</h3>
           <p className="aap-note">
-            Approved painters can draw in this studio — they never get host or moderation powers.
+            Approved painters can draw in this studio, they never get host or moderation powers.
             Revoking works whether they&apos;re here now or offline.
           </p>
           {paintersError ? (
@@ -150,7 +150,7 @@ export default function ArtistAccessPanel({
           {painters === null ? (
             <p className="aap-note" role="status">Loading painters…</p>
           ) : painters.length === 0 ? (
-            <p className="aap-note">Nobody approved yet — you&apos;re the only brush in here.</p>
+            <p className="aap-note">Nobody approved yet, you&apos;re the only brush in here.</p>
           ) : (
             <ul className="aap-painter-list">
               {painters.map((pid) => (
@@ -185,7 +185,7 @@ export default function ArtistAccessPanel({
   if (canPaint) {
     return (
       <div className="aap-chip aap-chip-painter" role="note">
-        🖌 You can paint in {roomTitle ? `“${roomTitle}”` : "this studio"} — the artist approved you.
+        🖌 You can paint in {roomTitle ? `“${roomTitle}”` : "this studio"}, the artist approved you.
       </div>
     );
   }
@@ -207,10 +207,10 @@ export default function ArtistAccessPanel({
             🔑 Sign in to request access
           </button>
         ) : paintStatus === "pending" ? (
-          <span className="aap-status-pill" role="status">⏳ Request sent — the artist will see it in their Studio panel</span>
+          <span className="aap-status-pill" role="status">⏳ Request sent, the artist will see it in their Studio panel</span>
         ) : paintStatus === "revoked" ? (
           <>
-            <span className="aap-status-pill" role="status">The artist hasn&apos;t approved painting right now — enjoy the show!</span>
+            <span className="aap-status-pill" role="status">The artist hasn&apos;t approved painting right now, enjoy the show!</span>
             <button type="button" className="aap-secondary" onClick={onRequestAccess}>
               Ask again
             </button>

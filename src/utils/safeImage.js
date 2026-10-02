@@ -1,6 +1,6 @@
 // Ops arrive from other people. Two of their fields end up in `new Image().src`
-// on every member's machine — an image op's `dataUrl` and a stamp brush's
-// `stampDataUrl` — so whatever they hold, the browser loads.
+// on every member's machine, an image op's `dataUrl` and a stamp brush's
+// `stampDataUrl`, so whatever they hold, the browser loads.
 //
 // If that were ever an http(s) URL, every current and future joiner would fetch
 // a stranger's server (handing over a child's IP address), and drawing the
@@ -17,7 +17,7 @@ export function isInlineRaster(url) {
 }
 
 // An <img> for replaying a remote op. Returns null for anything that is not an
-// inline raster — callers skip the op. `crossOrigin` is belt-and-braces: a data:
+// inline raster, callers skip the op. `crossOrigin` is belt-and-braces: a data:
 // URL ignores it, and anything that somehow is not one can no longer taint.
 export function remoteOpImage(url) {
   if (!isInlineRaster(url)) return null;

@@ -1,11 +1,11 @@
-// Skeuomorphic bottom film strip — the animation timeline. Pure presentation:
+// Skeuomorphic bottom film strip, the animation timeline. Pure presentation:
 // StudioApp owns every frame/canvas mutation; this renders the reel (sprocket
 // holes, cel thumbnails, projector-glow active cel), the transport controls,
 // a scrub rail with a grabbable playhead, and a per-cel eyeball that hides a
-// frame LOCALLY (session-only preview mute — never shared, never exported out).
+// frame LOCALLY (session-only preview mute, never shared, never exported out).
 //
 // Shown only in animation rooms (the FLIPBOOK studio, or a private room whose
-// host enabled it) — there, every frame is shared state like a document.
+// host enabled it), there, every frame is shared state like a document.
 
 import { useEffect, useRef, useState } from "react";
 import { CAMERA_PRESETS, MAX_SCENE_LOOPS, formatHold, formatRuntime, normalizeCamera, normalizeLoops, sceneRuntimeMs } from "../utils/filmPlan";
@@ -54,7 +54,7 @@ export default function FilmStrip({
 }) {
   const railRef = useRef(null);
   const reelRef = useRef(null);
-  // Keep the cel you are working on — and the + pinned beside it — in view. The
+  // Keep the cel you are working on, and the + pinned beside it, in view. The
   // reel scrolls horizontally; without this the newest cel lands off-screen and
   // a child who just tapped + sees nothing happen (reported from the studio).
   useEffect(() => {
@@ -145,7 +145,7 @@ export default function FilmStrip({
             className="fs-onion"
             onClick={onToggleOnion}
             aria-pressed={onionSkin}
-            title="Onion skin — see neighbor frames faintly"
+            title="Onion skin, see neighbor frames faintly"
           >
             🧅
           </button>
@@ -178,7 +178,7 @@ export default function FilmStrip({
                 className="fs-cheer-toggle"
                 onClick={() => setCheerOpen((o) => !o)}
                 aria-label="Cheer this frame"
-                title="Cheer this frame — everyone sees it pop!"
+                title="Cheer this frame, everyone sees it pop!"
               >
                 🎉
               </button>
@@ -283,7 +283,7 @@ export default function FilmStrip({
               type="button"
               className={`fs-storyboard${inProduction ? " is-on" : ""}`}
               onClick={onOpenStoryboard}
-              title={inProduction ? "Open the storyboard — your film's parts" : "Storyboard — link rooms into one film"}
+              title={inProduction ? "Open the storyboard, your film's parts" : "Storyboard, link rooms into one film"}
               aria-label="Storyboard"
             >
               📋
@@ -431,7 +431,7 @@ export default function FilmStrip({
           type="button"
           className={`fs-add${frames.length >= maxFrames ? " is-full" : ""}`}
           // Never DISABLE the + (and not aria-disabled either): a disabled or
-          // aria-disabled control gives a child no feedback at all — no toast, no
+          // aria-disabled control gives a child no feedback at all, no toast, no
           // tooltip on a tablet tap, and assistive tech announces it as simply
           // unavailable. Instead the tap stays live and explains the ceiling
           // (onFrameCap), and the label carries the same information for a
@@ -439,11 +439,11 @@ export default function FilmStrip({
           onClick={() => (frames.length >= maxFrames ? onFrameCap?.() : onAddFrame())}
           title={frames.length >= maxFrames
             ? (canManageScenes
-              ? `This scene is full (${maxFrames} cels) — start a new scene for the rest`
+              ? `This scene is full (${maxFrames} cels), start a new scene for the rest`
               : `This scene is full (${maxFrames} cels)`)
             : `Add blank frame (${frames.length}/${maxFrames})`}
           aria-label={frames.length >= maxFrames
-            ? `Add frame — this scene is full at ${maxFrames} cels`
+            ? `Add frame, this scene is full at ${maxFrames} cels`
             : `Add frame (${frames.length} of ${maxFrames} used)`}
         >
           +

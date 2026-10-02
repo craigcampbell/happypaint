@@ -68,7 +68,7 @@ export const discoverTags = [
 ];
 
 // These were placeholder/mock rooms, events, and gallery pieces used to dress up
-// the marketing surface. Removed — the only real rooms come from the live
+// the marketing surface. Removed, the only real rooms come from the live
 // multiplayer server, so we don't show invented ones.
 export const discoverableRooms = [];
 

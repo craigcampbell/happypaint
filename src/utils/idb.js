@@ -5,7 +5,7 @@
 // surface an honest "couldn't save" status instead of silently losing artwork.
 //
 // Request errors REJECT (via the `fail` callback runTransaction hands to the
-// work function) — they must never `throw`. A request's onerror fires long
+// work function), they must never `throw`. A request's onerror fires long
 // after runTransaction's try/catch has returned, so a throw there escapes as an
 // uncaught page error even though the promise itself is handled. WebKit hits
 // this on every draft autosave it can't serialize ("Error preparing Blob/File
@@ -51,7 +51,7 @@ function openDb() {
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
-      // Added in v2 — adding a new store leaves the existing drafts store intact.
+      // Added in v2, adding a new store leaves the existing drafts store intact.
       if (!db.objectStoreNames.contains(KV_STORE_NAME)) {
         db.createObjectStore(KV_STORE_NAME);
       }
@@ -139,7 +139,7 @@ export function idbDelete(key) {
 }
 
 // Clear the ENTIRE drafts store. Drafts are now keyed per room (draft:v4:<ROOM>),
-// so account deletion clears the whole store rather than a single key — otherwise
+// so account deletion clears the whole store rather than a single key, otherwise
 // per-room autosaves would survive a "delete my data" request.
 export function idbClearDrafts() {
   return runTransaction("readwrite", (store, setResult, fail) => {

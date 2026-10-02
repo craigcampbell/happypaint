@@ -1,4 +1,4 @@
-// /gallery route wrapper — the one place the artist gallery meets the app's
+// /gallery route wrapper, the one place the artist gallery meets the app's
 // auth layer.
 //
 // ArtistGalleryPage is deliberately standalone (session arrives via props, no
@@ -8,7 +8,7 @@
 // section without a reload.
 //
 // While the session is resolving we render a status page instead of passing
-// session=null — a guest flash would wrongly tell a signed-in artist they
+// session=null, a guest flash would wrongly tell a signed-in artist they
 // need an account to create a studio.
 
 import { useEffect, useState } from "react";

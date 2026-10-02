@@ -26,12 +26,12 @@ browser against a scratch server (Playwright + Chromium), not by reading code:
 1. **A room history replay flattens the artist's own layer stack.** The panel
    keeps showing N layers, but every pixel is on layer 0 and layers 1..N-1 are
    blank. Triggered by join, reload, reconnect, any moderation action, and scene
-   paging — not just reloads.
+   paging, not just reloads.
 2. **The local autosave then persists the flattened stack**, so the layer split
    is gone from the draft as well (2 layers saved, pixels in one).
 3. **A full reload** rebuilds ONE layer ("Canvas") with all the art on it. The
    art survives; the layering does not.
-4. **A joiner mid-session gets one layer**, not the artist's stack — there is
+4. **A joiner mid-session gets one layer**, not the artist's stack, there is
    nothing for them to "help on".
 5. **A joiner's stroke lands on layer 0 of the layered artist's canvas**, i.e.
    underneath the artist's upper-layer work. Measured: the artist's canvas did
@@ -40,7 +40,7 @@ browser against a scratch server (Playwright + Chromium), not by reading code:
    revealed the visitor's stroke (2893).
 6. **A replay is not a 1:1 redraw.** The artist erased on layer 0 while an upper
    layer covered the hole, so the screen did not change (2893 → 2891). After the
-   room rebuilt the drawing the region was 0 — the erase had eaten the upper
+   room rebuilt the drawing the region was 0, the erase had eaten the upper
    layer's ink too, because both strokes were replayed onto layer 0 in op order.
    Content the artist never touched disappeared. Z-order, hidden layers, layer
    opacity and layer-scoped erases all resolve differently on replay.
@@ -52,27 +52,27 @@ Raw evidence: section 10 (appendix) has today's script output, which is the
 
 | # | Where | What |
 |---|---|---|
-| 1 | `src/App.jsx:3199-3217` (`relayStroke`) | The wire op is `{kind, strokeId, points, settings, frameId?, end?}` — **no layer field**. |
+| 1 | `src/App.jsx:3199-3217` (`relayStroke`) | The wire op is `{kind, strokeId, points, settings, frameId?, end?}`, **no layer field**. |
 | 2 | `src/App.jsx:3185` | Outside animation rooms only frame 0 is shared, and layer identity never travels at all. |
 | 3 | `server.js:3790-3835` (`case 'op'`) | The server relays ops **opaquely** (it only rewrites `settings.symmetry` and validates size/points/frameId), so a `layerId` field would ride through untouched. The server has no layer concept anywhere. |
 | 4 | `src/App.jsx:7247-7249` (`case "history"`) | On every history frame the client **clears every layer of every frame**, then replays. |
-| 5 | `src/App.jsx:6718-6725` (`frameBaseCtx`), `6799-6813` (`applyRemoteOp`) | Remote and replayed ops commit to `frame.layers[0]` — always. |
+| 5 | `src/App.jsx:6718-6725` (`frameBaseCtx`), `6799-6813` (`applyRemoteOp`) | Remote and replayed ops commit to `frame.layers[0]`, always. |
 | 6 | `src/App.jsx:2375-2409` (`saveDraft`) | The autosave writes the live stack, so a flattened stack becomes the local draft. |
 | 7 | `src/App.jsx:4589-4607` (`handleAddLayer`), `4630+` | Layer structure mutations are local-only: nothing is sent. |
-| 8 | `ARCHITECTURE.md:69` | "everyone draws onto the same layer" is called *the defining design choice* — this plan changes that sentence. |
-| 9 | `ARCHITECTURE.md:222-225` | Already lists "ops carry no layer" as a *known divergence* — as a render-fidelity note. It does not mention the local flattening, the durable draft damage, or the collaboration breakage. |
+| 8 | `ARCHITECTURE.md:69` | "everyone draws onto the same layer" is called *the defining design choice*, this plan changes that sentence. |
+| 9 | `ARCHITECTURE.md:222-225` | Already lists "ops carry no layer" as a *known divergence*, as a render-fidelity note. It does not mention the local flattening, the durable draft damage, or the collaboration breakage. |
 
 ## 3. What to build
 
 Layer **structure** (per frame: ordered `{id, name, visible, opacity, locked}`)
 becomes shared room state, and each op records which layer it was drawn on. Pixels
 are still never uploaded: a joiner rebuilds every layer by replaying the room's op
-stream into the right canvas. Back-compat must be total — an existing room has no
+stream into the right canvas. Back-compat must be total, an existing room has no
 layer list and no `layerId` on its ops, and must replay exactly as it does today.
 
 **Decisions taken (defaults; proceed unless the user says otherwise):**
 
-1. **Who may change layers** — any member in a private room, host-only in public
+1. **Who may change layers**, any member in a private room, host-only in public
    (`kid_safe`) rooms. Mirror the existing `set_wet` / `set_symmetry` permission
    model (`server.js`, and `sendSetWet` in `useMultiplayer.js:286`).
 2. **Deleting a layer purges that layer's ops** from the room history (reuse the
@@ -82,7 +82,7 @@ layer list and no `layerId` on its ops, and must replay exactly as it does today
    PNG is baked flat and cannot restore layer membership. Extend the existing gate
    (`snapshotDue` / `roomCanSnapshot`, `server.js:1157-1167`, which already
    refuses multi-frame animation rooms). Cost: big multi-layer rooms replay the
-   full op stream on join — slower first paint, already covered by the join
+   full op stream on join, slower first paint, already covered by the join
    curtain. (Alternative, not chosen: upload one PNG per layer = N× bytes.)
 4. **Wet / smudge / goo stay layer-0-only.** `mixMap` mirrors layer 0 only at 8px
    granularity; sampling it for an upper layer would read the wrong pixels. Block
@@ -92,7 +92,7 @@ layer list and no `layerId` on its ops, and must replay exactly as it does today
 **Caps unchanged** (keep the existing client caps and enforce them server-side):
 6 layers per frame, 3 in animation rooms (`src/App.jsx:169,174`, `MAX_LAYERS` /
 `ANIM_MAX_LAYERS`). Each layer is a full 4000×2500 canvas **per client**, so a
-6-layer room is ~240MB of canvas in the browser — this is the main perf risk and
+6-layer room is ~240MB of canvas in the browser, this is the main perf risk and
 the reason for the caps.
 
 ## 4. Wire protocol
@@ -112,8 +112,8 @@ existing `frame_add` / `frame_del` / `frame_move` / `frame_duration` cases):
 Ops gain `layerId` (string, ≤24 chars, like frame ids). Absent = layer 0 (legacy).
 
 The `history` frame (`server.js:1699` `sceneHistoryMsg`, and the join/`resync`
-paths) must carry the frame layer lists — `frames` already rides along, so a
-per-frame `layers` array is enough — so a joiner can materialise the stack
+paths) must carry the frame layer lists, `frames` already rides along, so a
+per-frame `layers` array is enough, so a joiner can materialise the stack
 **before** replaying. `connected` should also advertise the layer caps.
 
 ## 5. Implementation tasks (order matters)
@@ -124,7 +124,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
    `layers: sanitizeLayers(f.layers)`); write `sanitizeLayers`: array, ≤ cap,
    `id` string 1-24 chars + unique, `name` ≤ 40 chars, `visible` bool,
    `opacity` clamped 0..1, `locked` bool. Cap: 6 (3 when the room is an animation
-   room) — read the cap the same way `frame_add` does for frames.
+   room), read the cap the same way `frame_add` does for frames.
 2. Persistence: `room.frames` is already written in the room JSON
    (`server.js:1360`) and read back through `sanitizeFrames` on load
    (`server.js:1895`), so per-frame layers persist for free **once step 1 lands**.
@@ -138,13 +138,13 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
    `mod_remove`), rebuilds `room.frameOpCounts`, and returns the removed opIds so
    clients can drop them.
 5. In `case 'op'` (`:3790-3835`): accept and validate `data.op.layerId` (string,
-   ≤24, must exist in the target frame's layer list else drop the op — same
+   ≤24, must exist in the target frame's layer list else drop the op, same
    treatment as a bad `frameId`); if the target layer is `locked` and the sender
    isn't a host, drop the op. Also make sure the op cap path and `opFrameId`
    (`:1594`) keep working for untagged ops.
 6. Snapshot gate: `snapshotDue` + `roomCanSnapshot` (`:1157-1167`) return false
    when the room's frames have more than one layer in total.
-7. Room hop / `fork_private` / `remixSource` / productions: no changes needed —
+7. Room hop / `fork_private` / `remixSource` / productions: no changes needed -
    they copy frames+ops wholesale, and the layer list rides in the frames.
 
 **Transport (`src/hooks/useMultiplayer.js`)**
@@ -153,7 +153,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
    the `frame_*` senders (`:293-307`) and export them from the hook's return
    (`:366`). `sendOp` (`:236`) needs no change (the op is built in App.jsx).
 
-**Client (`src/App.jsx`)** — this is the bulk of the work
+**Client (`src/App.jsx`)**, this is the bulk of the work
 
 9. `relayStroke` (`:3199`): tag the op with the authoring layer id
    (`layersRef.current` active layer, or the frame's active layer for animation).
@@ -164,7 +164,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
     and `touchFrame`.
 11. `case "history"` (`:7222-7356`): replace the blanket "clear every layer" with:
     (a) reconcile the frame layer lists from `data.frames[].layers` the same way
-    `reconcileFrames` (`:1287-1326`) reconciles frames — keep pixels for surviving
+    `reconcileFrames` (`:1287-1326`) reconciles frames, keep pixels for surviving
     ids, blank canvases for new ids, drop deleted ids; (b) clear only the layers
     being rebuilt; (c) replay each op to its own layer. The snapshot bake
     (`:7281-7300`) stays layer-0-only and only runs in snapshot-capable (therefore
@@ -175,7 +175,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
     `syncLayerState()`.
 13. `handleAddLayer` / delete / duplicate / move / rename / visibility / opacity /
     lock (`:4589-4780`): stop mutating locally and instead send the message and
-    let the echo apply it (the `frame_*` model — everyone applies in server order).
+    let the echo apply it (the `frame_*` model, everyone applies in server order).
     Keep the local cap checks so the UI can explain a refusal.
 14. Drawing guards: a locked layer can't be drawn on (mirror the existing
     room-locked canvas guard), and wet/mix brushes on layer ≥ 1 are blocked per
@@ -189,7 +189,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
     `frameRasters.js:72` (proxies/thumbnails → flat composite is fine).
 17. Cache/thumbnail/film paths that assume `layers[0]` for the wet mirror
     (`mixMapRef`, `markMixDirty`, `invalidateMixPrefetch`, `:1406-1450`) stay
-    layer-0-scoped — they are correct as long as decision 4 holds.
+    layer-0-scoped, they are correct as long as decision 4 holds.
 18. Fold layer names/visibility/opacity into the frame proxy/thumbnail composite
     (`compositeLayers` already walks the whole stack, so this is mostly checking
     that thumbnails use the composite, not layer 0).
@@ -205,7 +205,7 @@ per-frame `layers` array is enough — so a joiner can materialise the stack
     (`AGENTS.md` calls this App-Review load-bearing). Prefer no new client store:
     the draft already stores per-layer pixels and the server owns the layer list.
 
-## 6. Verification (do this — don't hand it to the user)
+## 6. Verification (do this, don't hand it to the user)
 
 The two scripts already exist and already fail the right way (they pin today's
 behavior). **Flip their assertions to the intended behavior** and keep them as
@@ -237,16 +237,16 @@ regression tests:
 Then, all of:
   - `node --check server.js`
   - `npm run lint` (zero-warning policy)
-  - `npm run build` (redirect to a file and read `$?` — piping through `tail`
+  - `npm run build` (redirect to a file and read `$?`, piping through `tail`
     hides the exit code)
-  - `node scripts/modwatch-verify.mjs` (28 checks) — the moderation hide/restore
+  - `node scripts/modwatch-verify.mjs` (28 checks), the moderation hide/restore
     path is exactly what triggers replays here
-  - `node scripts/draft-roundtrip-verify.mjs` — the draft is the local recovery path
+  - `node scripts/draft-roundtrip-verify.mjs`, the draft is the local recovery path
   - `node scripts/animation-sync-verify.mjs` and `node scripts/filmstrip-verify.mjs`
-    — frames × layers is the memory-heavy corner
-  - `node scripts/film-timing-verify.mjs` / the export path — `replayFrameOnto`
+, frames × layers is the memory-heavy corner
+  - `node scripts/film-timing-verify.mjs` / the export path, `replayFrameOnto`
     signature change
-  - `node test/harness/run.mjs` and `node scripts/safety-verify.mjs` — these have
+  - `node test/harness/run.mjs` and `node scripts/safety-verify.mjs`, these have
     pre-existing failures on a clean checkout (3/6 and 18/21 as of this writing);
     stash your changes (`git stash push -- server.js src/`), re-run, compare
     counts, then `git stash pop`. Report pre-existing failures as pre-existing.
@@ -259,7 +259,7 @@ Then, all of:
 
 Scratch-server pattern (from `happypaint-feature-verification`): spawn
 `server.js` with `PORT=89xx` and a throwaway `DATA_DIR` (`os.tmpdir()`), poll
-`/healthz`, never touch port 8787 or the repo-root `DATA_DIR` — 8787 is the local
+`/healthz`, never touch port 8787 or the repo-root `DATA_DIR`: 8787 is the local
 Docker stack that serves production drawesome.art.
 
 ## 7. Risks / gotchas
@@ -268,13 +268,13 @@ Docker stack that serves production drawesome.art.
   animation rooms multiply frames × layers. Keep the caps, and keep cooling/
   rastering cold frames (a multi-layer frame's cold proxy stays flat).
 - **Snapshot behavior changes** (slower joins for multi-layer rooms). If joins
-  feel slow, the follow-up is per-layer snapshot bundles — deliberately not in
+  feel slow, the follow-up is per-layer snapshot bundles, deliberately not in
   this plan.
 - **Moderation**: hidden/removed ops are addressed by opId and unaffected, but a
-  layer delete now also removes ops — make sure that path notifies clients
+  layer delete now also removes ops, make sure that path notifies clients
   (the `layer_del` echo carries the purged opIds) and that `resync` still lands.
 - **Public rooms**: host-only layer mutations, plus the locked-layer op drop, are
-  the anti-grief boundary. Kids' rooms are the audience — do not let any member
+  the anti-grief boundary. Kids' rooms are the audience, do not let any member
   delete someone else's layer in a `kid_safe` room.
 - **Wet/mix brushes** must not be allowed to sample a non-layer-0 stack (decision
   4), or colors will smear across the wrong pixels.
@@ -288,7 +288,7 @@ Docker stack that serves production drawesome.art.
 Work on `codex/youth-design-refresh` (this is where the current work sits).
 `AGENTS.md`: `git add` the specific files (never `-A`), multi-line messages via a
 temp `.commitmsg.txt` + `git commit -F`, end messages with the `Co-Authored-By:`
-trailer, and **the user pushes** — don't push for them. Suggested split:
+trailer, and **the user pushes**, don't push for them. Suggested split:
 (1) server protocol + sanitizers + persistence, (2) client routing/replay +
 handlers, (3) verification scripts + doc updates.
 
@@ -299,7 +299,7 @@ handlers, (3) verification scripts + doc updates.
 - Untracked and new: `scripts/layer-room-reload-verify.mjs`,
   `scripts/layer-room-collab-verify.mjs` (the two suites above).
 - Pre-existing untracked: `.audio/`, `docs/SOCIAL_COPY.md`, `docs/SOCIAL_PUSH.md`,
-  `output/` — not mine, leave them.
+  `output/`, not mine, leave them.
 - `dist/` was rebuilt during this analysis (`npm run build`, exit 0). It is
   gitignored and the Docker image builds its own copy, so production was never
   reachable from these tests.
@@ -324,7 +324,7 @@ assertions / `draft-roundtrip-verify` ALL PASS / lint 0 warnings / build OK.
 
 ## 10. Appendix## 10. Appendix: the "before" baseline (today's script output)
 
-`node scripts/layer-room-reload-verify.mjs` — ALL PASS (13 checks), i.e. these
+`node scripts/layer-room-reload-verify.mjs`: ALL PASS (13 checks), i.e. these
 pass today *because* the behavior is broken:
 
 ```
@@ -342,7 +342,7 @@ PASS  R10 the art itself is intact after the reload
 PASS  R11 Restore last draft → 2 layers, every pixel on one of them
 ```
 
-`node scripts/layer-room-collab-verify.mjs` — ALL PASS (8 checks):
+`node scripts/layer-room-collab-verify.mjs`: ALL PASS (8 checks):
 
 ```
 PASS  C0 the artist's 2-layer stack is intact locally, block of ink on the upper one (U=18144)

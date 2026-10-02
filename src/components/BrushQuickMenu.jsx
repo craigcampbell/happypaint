@@ -2,7 +2,7 @@ import BrushPreview from "./BrushPreview";
 
 // The quick brush menu that pops up from the Size pill on the bottom bar: a
 // size slider (precision, for when a drag is too coarse) and the brush grid.
-// `items` is prepared by the studio — [{ id, name, locked, gated }] — with the
+// `items` is prepared by the studio: [{ id, name, locked, gated }], with the
 // same room gating the tool rail applies (finger-paint rooms, private-only
 // smudge, Studio-tier brushes), so both pickers always agree.
 

@@ -42,7 +42,7 @@ function strokeLabel(kind) {
 
 const DENY_TEXT = {
   bad_key: "That admin key was rejected. Check it and try again.",
-  no_room: "That room isn't live right now — nobody is in it.",
+  no_room: "That room isn't live right now, nobody is in it.",
   room_closed: "This room was closed while you were watching.",
   too_many: "Too many watchers are already on this room (max 4).",
   rate_limited: "Too many failed attempts from this network. Wait a minute.",
@@ -50,7 +50,7 @@ const DENY_TEXT = {
 };
 
 // The viewer opens from the admin console's "Watch" button. Nothing here draws:
-// there is no canvas tool, no chat box, no cursor — and the socket behind it is
+// there is no canvas tool, no chat box, no cursor, and the socket behind it is
 // refused everything but a moderation action, so this is not the boundary, only
 // the honest UI in front of it.
 export default function RoomWatch({ roomCode = "", onNavigate }) {
@@ -167,7 +167,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
       setAlerts((prev) => [{
         id: `a${a.ts || Date.now()}-${prev.length}`,
         level: a.level === "warn" ? "warn" : "info",
-        text: `${a.source === "auto" ? "Auto-mod" : "Flag"}: ${a.reason || "content flagged"}${a.author ? ` — ${a.author}` : ""}`,
+        text: `${a.source === "auto" ? "Auto-mod" : "Flag"}: ${a.reason || "content flagged"}${a.author ? `, ${a.author}` : ""}`,
         opIds: Array.isArray(a.opIds) ? a.opIds : null,
         ts: Date.now(),
       }, ...prev].slice(0, 60));
@@ -215,7 +215,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
   };
 
   const wipe = () => {
-    if (!window.confirm(`Reset room ${code}? The drawing AND the chat are wiped for everyone — it'll look brand new, and they can't bring it back. (You can still undo it from here; the chat log in /admin is kept.)`)) return;
+    if (!window.confirm(`Reset room ${code}? The drawing AND the chat are wiped for everyone, it'll look brand new, and they can't bring it back. (You can still undo it from here; the chat log in /admin is kept.)`)) return;
     send({ type: "clear" });
   };
 
@@ -245,8 +245,8 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
   const header = (
     <header className="watch-top">
       <div className="watch-title">
-        <h1>🕵️ Watching {code || "—"}</h1>
-        <span className="watch-ghost">Invisible — nobody in this room can see you</span>
+        <h1>🕵️ Watching {code || "-"}</h1>
+        <span className="watch-ghost">Invisible, nobody in this room can see you</span>
         {room?.roomTitle ? <span className="admin-muted">{room.roomTitle}</span> : null}
       </div>
       <div className="watch-status">
@@ -275,7 +275,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
           <h1>🕵️ Watch a room</h1>
           <p>
             Enter your admin key to open {code ? <strong>{code}</strong> : "the room"} as an invisible
-            observer. You won&apos;t be listed, counted, or announced — and this view can&apos;t draw or chat.
+            observer. You won&apos;t be listed, counted, or announced, and this view can&apos;t draw or chat.
           </p>
           <input
             type="password"
@@ -315,7 +315,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
       {header}
 
       <div className="watch-banner">
-        👻 <strong>Observer mode.</strong> Drawing, chat and cursors are disabled here — you can watch the
+        👻 <strong>Observer mode.</strong> Drawing, chat and cursors are disabled here, you can watch the
         canvas, read the chat, and take moderation actions. The room sees “a moderator” act, never you.
       </div>
 
@@ -362,7 +362,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
                 </div>
               ) : null}
               {strokes.length === 0 ? (
-                <p className="admin-empty">No paint yet — anything drawn will show up here, grouped by artist.</p>
+                <p className="admin-empty">No paint yet, anything drawn will show up here, grouped by artist.</p>
               ) : strokes.map((row) => (
                 <div key={row.key} className="watch-row">
                   <span className="watch-row-main">

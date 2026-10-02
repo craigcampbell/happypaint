@@ -1,4 +1,4 @@
-# Uncommitted-work integration review — 2026-09-08
+# Uncommitted-work integration review: 2026-09-08
 
 Reviewed and integrated the outstanding work into `codex/youth-design-refresh`
 following the owner's request to improve, commit, and push the feature branch.

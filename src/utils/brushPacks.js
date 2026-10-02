@@ -1,16 +1,16 @@
-// Community Brush Packs — publish (submit-for-review) + browse + get.
+// Community Brush Packs, publish (submit-for-review) + browse + get.
 //
 // MOCK / LOCAL ONLY (no backend, no network), but shaped to mirror the schema:
 //   - asset_packs            (id, owner_profile_id, title, visibility, version,
 //                             status: draft → pending → approved → rejected)
 //                            check: visibility public/featured requires status approved
-//   - asset_pack_items       (pack_id, asset_id, position) — pack membership
+//   - asset_pack_items       (pack_id, asset_id, position), pack membership
 //   - asset_moderation_queue (id, target_kind 'pack', target_id, submitted_by,
-//                             status 'pending', submitted_at) — review queue entry
+//                             status 'pending', submitted_at), review queue entry
 //   - asset_uses             (id, asset_id, used_by_profile_id, context, source_id)
 //                             recorded when a browsed pack is "Got" into the locker
 //   - space_assets           (kind 'brush' etc., brush_recipe, remix_permission,
-//                             visibility) — the assets inside a pack
+//                             visibility), the assets inside a pack
 //
 // User-facing scope ONLY: publish (submit) + browse approved + get. Admin-side
 // review/approval of submitted packs is a SEPARATE later agent. We seed a few
@@ -314,7 +314,7 @@ export function reviewPackSubmission(queueEntryId, decision, reason = "") {
       return pack;
     }
     if (decision === "approved") {
-      // schema check: public/featured visibility requires status approved — now it is.
+      // schema check: public/featured visibility requires status approved, now it is.
       return { ...pack, status: "approved", updated_at: reviewedAt };
     }
     if (decision === "rejected") {
@@ -342,7 +342,7 @@ export function reviewPackSubmission(queueEntryId, decision, reason = "") {
 }
 
 // Publish a pack from a set of locker assets. Builds an asset_packs row + its
-// asset_pack_items, and — when visibility needs review (public, or friends) —
+// asset_pack_items, and, when visibility needs review (public, or friends) -
 // an asset_moderation_queue entry. Public/friends submissions are set to
 // 'pending'; private packs are stored as 'draft' (no review needed).
 //

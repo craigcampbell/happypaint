@@ -1,4 +1,4 @@
-// AI generation moderation queue — LOCAL mirror of `ai_generations`.
+// AI generation moderation queue: LOCAL mirror of `ai_generations`.
 //
 // AI helpers in utils/aiAssist.js produce ai_generations-shaped records that
 // carry `moderation_status: 'pending'`. Per docs/ai-policy.md §"Moderation of
@@ -76,7 +76,7 @@ export function readAiGenerations() {
 }
 
 // Persist a generation row (e.g. when a user saves/shares an AI output). New
-// rows always enter as 'pending' — clients cannot self-approve (policy §72).
+// rows always enter as 'pending', clients cannot self-approve (policy §72).
 export function recordAiGeneration(generation) {
   const row = {
     id: makeId("aigen"),

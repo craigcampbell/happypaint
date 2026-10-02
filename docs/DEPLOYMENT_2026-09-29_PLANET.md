@@ -4,7 +4,7 @@ Released from hp-dev-one, UTC 2026-09-29 (local CDT Sep 28 evening).
 
 ## Source and artifact
 - Feature commit: 5684cb6 (+ ab3f704 release note), fast-forward merged to main and pushed; `git ls-remote origin main` matches. Canonical repo: git@github.com:craigcampbell/happypaint.git.
-- Production source: /home/craig/Projects/happypaint — synced paths: server.js, src/App.jsx, src/Router.jsx, src/components/SiteNav.jsx, src/components/PlanetPage.jsx (new), src/components/planet.css (new), src/data/world-paths.json (new), public/flags-lineart/*.png (257, new), scripts/planet-verify.mjs (new), scripts/seasonal-marketing-verify.mjs; removed src/components/PaintJarPage.jsx. Pre-sync drift check: every touched prod path matched main byte-for-byte.
+- Production source: /home/craig/Projects/happypaint, synced paths: server.js, src/App.jsx, src/Router.jsx, src/components/SiteNav.jsx, src/components/PlanetPage.jsx (new), src/components/planet.css (new), src/data/world-paths.json (new), public/flags-lineart/*.png (257, new), scripts/planet-verify.mjs (new), scripts/seasonal-marketing-verify.mjs; removed src/components/PaintJarPage.jsx. Pre-sync drift check: every touched prod path matched main byte-for-byte.
 - New running image: sha256:acb7d861eda1d2c320b6569355143cd58ee7699297ff84fd19593ae0a87ca967
 - Previous image / rollback tag: happypaint-app:pre-planet-20260929T031051Z -> sha256:3314ce12c1af8964c43f2368aec96febe2507abd6c6afdf0fb69ea42882beba5 (earlier rollback tags untouched)
 - Container server.js SHA-256: 84258608e0abf440c67ecd14b426dadd56569d3bc08bde826ca4ecddbbaade63 (matches prod + release tree)
@@ -19,7 +19,7 @@ Released from hp-dev-one, UTC 2026-09-29 (local CDT Sep 28 evening).
 - 257 flag line-art sheets generated from flag-icons (MIT) by render -> palette quantise -> edge trace.
 
 ## Verification
-- Release tree (Playwright 1.61 container): planet-verify 28/28, seasonal-marketing-verify 44/44, modwatch 28/28, eslint 0 warnings, vite build green. daily-verify fails identically on the stashed baseline (hardcoded /usr/bin/node) — pre-existing.
+- Release tree (Playwright 1.61 container): planet-verify 28/28, seasonal-marketing-verify 44/44, modwatch 28/28, eslint 0 warnings, vite build green. daily-verify fails identically on the stashed baseline (hardcoded /usr/bin/node), pre-existing.
 - Image inspection before swap: PlanetPage chunk, 257 flag PNGs, src/data/world-paths.json present; server.js hash matches.
 - Swap: docker compose -p happypaint up -d --no-deps --no-build --wait app -> Recreated, Healthy; running image == acb7d861….
 - Blast radius: pocketbase (62bf14b3…, started 2026-09-25T23:54:33Z) and cloudflared (80fcb2da…, started 2026-09-25T23:55:29Z) unchanged.

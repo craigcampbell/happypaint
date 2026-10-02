@@ -1,4 +1,4 @@
-// Paint Space — the user's reusable personal asset locker (Bet #1 MVP).
+// Paint Space, the user's reusable personal asset locker (Bet #1 MVP).
 //
 // Persisted client-side to localStorage. The asset shape mirrors the backend
 // `space_assets` table (id, kind, title, payload, thumbnail, createdAt) so it
@@ -35,7 +35,7 @@ let idSeed = 0;
 
 // Guarded id helper. crypto.randomUUID matches the backend uuid shape when
 // available, but it throws in non-secure contexts (plain HTTP) and isn't
-// present on older engines — fall back to a collision-resistant local id so we
+// present on older engines, fall back to a collision-resistant local id so we
 // never throw (W16). Shared by every call site that previously used
 // crypto.randomUUID unguarded.
 export function makeId(prefix = "id") {
@@ -83,7 +83,7 @@ function writePaintSpaceLocal(assets) {
 // Async load: IndexedDB first, then migrate a legacy localStorage locker forward
 // into IndexedDB (and clear the legacy key to free quota) so existing users keep
 // their assets. Falls back to localStorage when IndexedDB is unavailable.
-// Never throws — load failures resolve to [] (worst case: an empty locker UI).
+// Never throws, load failures resolve to [] (worst case: an empty locker UI).
 export async function loadPaintSpace() {
   if (isIdbAvailable()) {
     try {
@@ -91,7 +91,7 @@ export async function loadPaintSpace() {
       if (Array.isArray(stored)) {
         return stored;
       }
-      // No IndexedDB record yet — migrate a legacy localStorage locker forward.
+      // No IndexedDB record yet, migrate a legacy localStorage locker forward.
       const legacy = readPaintSpaceLocal();
       if (Array.isArray(legacy) && legacy.length > 0) {
         await idbSetKV(PAINT_SPACE_IDB_KEY, legacy);
@@ -104,7 +104,7 @@ export async function loadPaintSpace() {
       }
       return [];
     } catch {
-      // IndexedDB read/migration failed — fall back to whatever localStorage has.
+      // IndexedDB read/migration failed, fall back to whatever localStorage has.
       const legacy = readPaintSpaceLocal();
       return Array.isArray(legacy) ? legacy : [];
     }

@@ -1,4 +1,4 @@
-// Host control panel — the per-room "controller" for a signed-in grown-up who
+// Host control panel, the per-room "controller" for a signed-in grown-up who
 // owns (or co-hosts) a room. Every action is also enforced server-side; this is
 // just the UI. Hidden entirely for anonymous / non-host users.
 
@@ -89,7 +89,7 @@ export default function HostControlPanel({
               ))}
             </ul>
             <p className="account-note">
-              Flagged drawings in this public room. Hiding is reversible — Restore brings it back; Delete is permanent.
+              Flagged drawings in this public room. Hiding is reversible: Restore brings it back; Delete is permanent.
             </p>
           </div>
         ) : null}
@@ -108,7 +108,7 @@ export default function HostControlPanel({
               🧹 Clear everyone&apos;s canvas
             </button>
           </div>
-          <p className="account-note">{locked ? "Locked — only hosts can draw." : "Anyone here can draw."}</p>
+          <p className="account-note">{locked ? "Locked, only hosts can draw." : "Anyone here can draw."}</p>
 
           <label className="color-picker">
             <span>Room name</span>

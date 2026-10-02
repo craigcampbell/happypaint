@@ -1,14 +1,14 @@
-# Drawesome — Asset Production Inventory
+# Drawesome: Asset Production Inventory
 
 Everything visual/audio we need generated, with specs, so any item can be produced
 independently and dropped in. Master rule: **SVG for anything UI, OGG+M4A pairs for
 audio, PNG only for textures/photos.** Keep source files (AI/PSD/Figma) somewhere safe.
 
 Drop points (create if missing):
-- `public/brand/` — logos, favicons, OG images
-- `public/icons/` — the SVG icon set (one file per icon, see naming below)
-- `public/sfx/` — sound effects (`.ogg` + `.m4a` per sound)
-- `public/textures/` — paper/canvas/paint textures (existing: `linen.png`, `canvas.png`)
+- `public/brand/`, logos, favicons, OG images
+- `public/icons/`, the SVG icon set (one file per icon, see naming below)
+- `public/sfx/`, sound effects (`.ogg` + `.m4a` per sound)
+- `public/textures/`, paper/canvas/paint textures (existing: `linen.png`, `canvas.png`)
 
 ---
 
@@ -16,20 +16,20 @@ Drop points (create if missing):
 
 | Asset | File | Format | Notes |
 |---|---|---|---|
-| Wordmark | `brand/drawesome-wordmark.svg` | SVG, single color + full color variants | Playful but not babyish — must work for teens/young pros too. Should sit comfortably next to "a Toon Boom alternative" and next to a kid's fridge drawing. |
+| Wordmark | `brand/drawesome-wordmark.svg` | SVG, single color + full color variants | Playful but not babyish, must work for teens/young pros too. Should sit comfortably next to "a Toon Boom alternative" and next to a kid's fridge drawing. |
 | Glyph / app mark | `brand/drawesome-mark.svg` | SVG, works at 16px | The 🎨 emoji stands in today (SiteNav brand button). Needs to read at favicon size. |
-| Favicon set | `brand/favicon-16.png`, `-32`, `-180` (apple-touch), `favicon.svg` | PNG + SVG | Replaces `vite.svg` (still the favicon today — embarrassing). |
+| Favicon set | `brand/favicon-16.png`, `-32`, `-180` (apple-touch), `favicon.svg` | PNG + SVG | Replaces `vite.svg` (still the favicon today, embarrassing). |
 | OG / share card | `brand/og-default.png` | PNG 1200×630 | Shown when links are shared to Discord/iMessage. One default + later per-room variants. |
 | Loading splash | `brand/splash.svg` | SVG | Optional: paint-blob animation frame for slow loads. |
 
 **Logo direction notes:** dark/light variants; must survive 1-color (chat embeds, watermarks).
 A small `drawesome.art` watermark version for exported PNGs/GIFs/MP4s (bottom-right, ~28px tall).
 
-## 2. UI Icon Set — style spec
+## 2. UI Icon Set, style spec
 
 One style for everything: **24×24 grid, 2px stroke, rounded caps/joins, slightly chunky,
 filled variants for active states.** Naming: `icons/<name>.svg`, kebab-case. Every icon
-must read at 20px on iPad. Current UI uses emoji everywhere (🎨 📤 😀 🖼️ etc.) — fine
+must read at 20px on iPad. Current UI uses emoji everywhere (🎨 📤 😀 🖼️ etc.), fine
 for personality, but the tool chrome needs real icons for a consistent look.
 
 ### 2a. Core studio (replaces emoji in tool chrome)
@@ -38,21 +38,21 @@ for personality, but the tool chrome needs real icons for a consistent look.
 `gallery`, `save`, `share`, `chat`, `report-flag`, `settings-gear`, `home`, `rooms-door`,
 `lock`, `unlock`, `mute`, `kick`, `crown-host`, `sheet-coloring`, `camera-export`.
 
-### 2b. Animation suite (new — film-strip UI)
+### 2b. Animation suite (new, film-strip UI)
 | Icon | Name | Notes |
 |---|---|---|
 | Film frame | `frame.svg` | Single cel with sprocket notches |
 | Add frame | `frame-add.svg` | Cel + plus |
 | Duplicate frame | `frame-duplicate.svg` | Two stacked cels |
 | Delete frame | `frame-delete.svg` | |
-| Onion skin | `onion-skin.svg` | Literally a little onion 🧅 — kids will remember it |
+| Onion skin | `onion-skin.svg` | Literally a little onion 🧅, kids will remember it |
 | Eye open | `eye-open.svg` | Per-frame/track visibility ON |
 | Eye closed | `eye-closed.svg` | Visibility OFF |
 | Play | `play.svg` | Chunky triangle |
 | Pause | `pause.svg` | |
 | Stop | `stop.svg` | |
 | Loop | `loop.svg` | |
-| Playhead | `playhead.svg` | The scrub handle — skeuomorphic, grabbable |
+| Playhead | `playhead.svg` | The scrub handle, skeuomorphic, grabbable |
 | FPS/speed | `speed-gauge.svg` | |
 | Track: art | `track-art.svg` | Paintbrush strip |
 | Track: background | `track-bg.svg` | Mountain/backdrop |
@@ -69,14 +69,14 @@ for personality, but the tool chrome needs real icons for a consistent look.
 `finger-paint` (hand with paint), `smudge-stick`, `paint-blob`, `wash-hands` (clear),
 `big-dot-sizes` (extra-chunky 3-size icon), `sparkle-clean`.
 
-## 3. Sound Effects — Toddler Finger-Paint Room  🔊
+## 3. Sound Effects: Toddler Finger-Paint Room  🔊
 
 Format: **OGG Vorbis + M4A fallback, 44.1kHz, mono ok, ≤ 3s each (loops seamless),
 normalized ≈ −16 LUFS, NO harsh transients** (toddlers + iPad speakers). Names final:
 
 | Sound | File | Trigger | Feel |
 |---|---|---|---|
-| Gooey smear (loop) | `sfx/goo-smear-loop.ogg` | Finger drag, pitch/volume follows speed | Wet, thick, satisfying — like pudding |
+| Gooey smear (loop) | `sfx/goo-smear-loop.ogg` | Finger drag, pitch/volume follows speed | Wet, thick, satisfying, like pudding |
 | Paint squish | `sfx/goo-squish-1.ogg` … `-3.ogg` | Finger down (round-robin 3 variants) | Soft splat |
 | Slorp mix | `sfx/goo-mix.ogg` | Two colors visibly mixing | Sticky swirl |
 | Splat | `sfx/goo-splat.ogg` | Big fast dab | Cartoonish, not startling |
@@ -86,7 +86,7 @@ normalized ≈ −16 LUFS, NO harsh transients** (toddlers + iPad speakers). Nam
 | Happy chime | `sfx/goo-done.ogg` | Save/share | Soft xylophone, 2 notes |
 
 Also: a **global mute toggle is a hard requirement** (parents), and sounds default OFF
-in multiplayer rooms (only the toddler room defaults ON, local-only — never networked).
+in multiplayer rooms (only the toddler room defaults ON, local-only, never networked).
 
 ## 4. Toddler Room Visuals
 
@@ -130,8 +130,8 @@ names lock.
 ---
 
 ### Production order that unblocks the most work
-1. **Icon set 2b (animation)** — the film-strip MVP ships with these
-2. **Logos + favicon** — replaces vite.svg everywhere, needed for any marketing
-3. **Toddler SFX + textures** — gates the toddler room build
-4. Core studio icons (2a) — swap-in, no code dependency
+1. **Icon set 2b (animation)**, the film-strip MVP ships with these
+2. **Logos + favicon**, replaces vite.svg everywhere, needed for any marketing
+3. **Toddler SFX + textures**, gates the toddler room build
+4. Core studio icons (2a), swap-in, no code dependency
 5. Everything else as features land

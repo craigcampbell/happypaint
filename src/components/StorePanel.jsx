@@ -1,11 +1,11 @@
 // Store panel (docs/paint-economy.md §Product Surfaces > Store).
 // Two parts:
-//   1. "Get Drops" — the drop_products with $ prices and a MOCK buy that credits
+//   1. "Get Drops", the drop_products with $ prices and a MOCK buy that credits
 //      Drops. Real purchases use App Store / Google Play / web checkout (copy is
 //      explicit; no real payment is implemented).
-//   2. The store catalog — official packs, room themes, storage/export tokens,
+//   2. The store catalog, official packs, room themes, storage/export tokens,
 //      and event bundles, each with a Drops price and a Buy that spends Drops.
-// No loot boxes / no randomized packs — every item is a transparent bundle.
+// No loot boxes / no randomized packs, every item is a transparent bundle.
 
 import {
   DROP_PRODUCTS,
@@ -92,7 +92,7 @@ export default function StorePanel({ economy, onClose, onBuyDrops, onBuyItem }) 
           <div className="store-section">
             <h3>Get Drops</h3>
             <p className="economy-note">
-              Real purchases use the App Store, Google Play, or web checkout. This preview is a mock — no real payment is
+              Real purchases use the App Store, Google Play, or web checkout. This preview is a mock, no real payment is
               taken. Purchased Drops never expire.
               {minor ? " Spending is guardian-controllable, behind a parental gate." : ""}
             </p>
@@ -104,7 +104,7 @@ export default function StorePanel({ economy, onClose, onBuyDrops, onBuyItem }) 
           </div>
         ) : (
           <p className="economy-note">
-            ✨ Drops are just for fun — you earn them by painting. They aren&apos;t money, can&apos;t be bought, and
+            ✨ Drops are just for fun, you earn them by painting. They aren&apos;t money, can&apos;t be bought, and
             can&apos;t be cashed out. Spend them on cosmetic brushes, themes, and packs below.
           </p>
         )}
@@ -133,7 +133,7 @@ export default function StorePanel({ economy, onClose, onBuyDrops, onBuyItem }) 
         })}
 
         <p className="economy-note">
-          No loot boxes and no randomized packs — every bundle lists exactly what it contains. Drops can&apos;t buy
+          No loot boxes and no randomized packs, every bundle lists exactly what it contains. Drops can&apos;t buy
           safety controls, votes, event placement, or access to other people.
         </p>
       </section>

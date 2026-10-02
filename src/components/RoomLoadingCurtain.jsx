@@ -1,4 +1,4 @@
-// Join curtain — the paint-stroke loading modal that covers the canvas area
+// Join curtain, the paint-stroke loading modal that covers the canvas area
 // while a room hooks up, so nobody sits in front of a blank white rectangle
 // wondering whether Drawesome is broken.
 //
@@ -6,18 +6,18 @@
 // opening → socket open → handshake in → shared history painted) sets a target
 // and the stroke eases toward it, so a slow room visibly creeps instead of
 // freezing on a lie. Progress is written straight to a CSS custom property from
-// one rAF loop — no React render per frame, no layout — and both the loop and
+// one rAF loop, no React render per frame, no layout, and both the loop and
 // its keepalive die with the curtain, so nothing here can cost a drawing frame.
 //
 // The curtain closes itself on a quick join. Past SLOW_JOIN_MS the painter has
 // been staring long enough to have looked away, so it waits for an explicit OK
 // rather than yanking the modal out from under them. A join that never lands
-// gets that OK too (STUCK_MS) — the curtain must never trap anyone.
+// gets that OK too (STUCK_MS), the curtain must never trap anyone.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 // Milestones, in the order the studio reports them. Each one sweeps quickly to
-// `arrive` — that jump is what makes a milestone feel like progress — and then
+// `arrive`, that jump is what makes a milestone feel like progress, and then
 // crawls toward `ceiling` for as long as the step takes. The crawl is the whole
 // trick: a bar parked on an exact number reads as broken, and a bar that runs
 // ahead of the truth is a lie. `ceiling` always stops short of the next step's
@@ -40,7 +40,7 @@ const CLOSE_BEAT_MS = 520; // let the last brush stroke land before closing
 // The palette the curtain dips into. One is picked at random per join and paints
 // the whole stroke; the wet leading edge, the brush bristles and the % readout
 // all wear it, so the card is one color from end to end. Every entry has to
-// hold its own alone, which is why they are all vivid — no pastels, nothing
+// hold its own alone, which is why they are all vivid, no pastels, nothing
 // that would read as a gray bar on a white card.
 const PAINT = [
   "#ff4d8d", // hot pink
@@ -87,7 +87,7 @@ function toRgb(hex) {
 const css = (rgb) => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 
 // Lighter (amount > 0) or deeper (amount < 0) without leaving the hue. Used for
-// the thin light-to-deep run along the stroke — the same paint thinning out as
+// the thin light-to-deep run along the stroke, the same paint thinning out as
 // the brush unloads, not a second color.
 function shade(rgb, amount) {
   const edge = amount > 0 ? 255 : 0;
@@ -103,7 +103,7 @@ function relativeLuma(rgb) {
 }
 
 // Same hue, dimmed until it can be read on the card. Scaling all three channels
-// keeps the paint recognizable — gold reads as a deep bronze rather
+// keeps the paint recognizable, gold reads as a deep bronze rather
 // than washing out to gray. Luminance goes roughly as the 2.4th power of the
 // channels, so that is the exponent the scale has to undo.
 function readable(rgb) {
@@ -223,12 +223,12 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
     };
   }, []);
 
-  // Once the OK button exists it is the only thing left to do — put the keyboard on it.
+  // Once the OK button exists it is the only thing left to do, put the keyboard on it.
   useEffect(() => {
     if (needsOk) okRef.current?.focus();
   }, [needsOk]);
 
-  const label = done ? "All set — happy painting!" : STEPS[stage].label;
+  const label = done ? "All set, happy painting!" : STEPS[stage].label;
 
   return (
     <div className="load-curtain" role="dialog" aria-modal="true" aria-labelledby="load-curtain-title">
@@ -308,7 +308,7 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
             </svg>
           </div>
 
-          {/* Wet paint pooled at the tip — it also hides the clip's hard edge. */}
+          {/* Wet paint pooled at the tip, it also hides the clip's hard edge. */}
           <span className="load-wet" aria-hidden="true" />
 
           {/* The brush doing the work, riding the leading edge with its bristles
@@ -347,10 +347,10 @@ export default function RoomLoadingCurtain({ step = 0, roomLabel = "", onClose }
         {needsOk ? (
           <>
             {stalled ? (
-              <p className="load-hint">This room is taking its time. Head on in — the art pops up as it arrives.</p>
+              <p className="load-hint">This room is taking its time. Head on in, the art pops up as it arrives.</p>
             ) : null}
             <button type="button" className="primary-action load-ok" ref={okRef} onClick={onClose}>
-              {stalled ? "Go in anyway" : "OK — let's paint! 🎨"}
+              {stalled ? "Go in anyway" : "OK, let's paint! 🎨"}
             </button>
           </>
         ) : null}

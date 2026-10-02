@@ -169,7 +169,7 @@ function buildPalette(frames) {
     table[i * 3 + 2] = colors[i][2];
   }
   const transparentIndex = 255;
-  // Transparent slot is left at 0,0,0 — never matched by opaque pixels.
+  // Transparent slot is left at 0,0,0, never matched by opaque pixels.
   return { table, colorCount: Math.max(1, colors.length), transparentIndex };
 }
 

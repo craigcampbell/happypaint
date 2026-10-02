@@ -7,7 +7,7 @@ import { BRUSH_SIZE_MAX, BRUSH_SIZE_MIN } from "./BrushQuickMenu";
 // Color dot that opens the studio's own picker.
 //
 // Size drag: multiplicative, so small brushes get fine control and big ones
-// move fast — every 60px of drag (right or up = bigger, left or down =
+// move fast, every 60px of drag (right or up = bigger, left or down =
 // smaller) doubles / halves the size. A press that moves < 6px is a tap.
 // The pill never touches the canvas hot path: it only calls onSizeChange
 // when the rounded size actually changes.

@@ -1,4 +1,4 @@
-# Putting Happy Paint Online — The Simple Guide
+# Putting Happy Paint Online: The Simple Guide
 
 This is the no-experience-needed version. Follow it top to bottom and you'll have
 the website live on the internet. Each step says **what to click** and **what you
@@ -7,27 +7,27 @@ the end.
 
 There are two services:
 
-1. **DigitalOcean** — hosts the **website** (the drawing app people open in a browser).
-2. **Supabase** — the **accounts + cloud save** ("sign in", "sync across devices").
+1. **DigitalOcean**, hosts the **website** (the drawing app people open in a browser).
+2. **Supabase**, the **accounts + cloud save** ("sign in", "sync across devices").
 
 **You can launch with just DigitalOcean.** Supabase is optional. If you skip it,
-the app still fully works — drawings just save on each person's own device instead
+the app still fully works, drawings just save on each person's own device instead
 of syncing. So if you want to go live fast, do **Part 1** and stop. Add **Part 2**
 later whenever you want accounts.
 
 You will need:
-- The project code in a **GitHub** repository (free — github.com).
+- The project code in a **GitHub** repository (free, github.com).
 - A **DigitalOcean** account (free to make; hosting a small static site is cheap, often a few dollars/month, sometimes free tier).
 - (Optional) A **Supabase** account (free tier is fine to start).
 
 ---
 
-## Part 1 — Put the website online with DigitalOcean
+## Part 1: Put the website online with DigitalOcean
 
 We'll use DigitalOcean **App Platform**, which builds and hosts the site for you.
 You don't touch a server.
 
-### Step 1.1 — Get the code onto GitHub
+### Step 1.1: Get the code onto GitHub
 If your code is already on GitHub, skip this.
 
 1. Go to https://github.com and sign in (or make a free account).
@@ -37,15 +37,15 @@ If your code is already on GitHub, skip this.
 
 ✅ **You should see:** your files (like `index.html`, `package.json`, `src/`) listed on the GitHub repo page.
 
-### Step 1.2 — Create the App on DigitalOcean
+### Step 1.2: Create the App on DigitalOcean
 1. Go to https://cloud.digitalocean.com and sign in.
 2. In the left menu click **App Platform** → big blue **Create App** button.
-3. Choose **GitHub** as the source. Authorize DigitalOcean to see your GitHub (a popup asks permission — click **Authorize**).
+3. Choose **GitHub** as the source. Authorize DigitalOcean to see your GitHub (a popup asks permission, click **Authorize**).
 4. Pick your **`happypaint`** repository and the **`main`** branch.
 5. Leave **"Autodeploy"** checked (this re-publishes the site automatically every time you push new code to GitHub).
 6. Click **Next**.
 
-### Step 1.3 — Tell it this is a static website
+### Step 1.3: Tell it this is a static website
 DigitalOcean tries to guess the settings. Make sure they match this:
 
 - **Resource type:** it should detect a **Static Site**. If it shows "Web Service" instead, change it to **Static Site** (there's a dropdown / "Edit" link on the component).
@@ -58,16 +58,16 @@ DigitalOcean tries to guess the settings. Make sure they match this:
 
 Click **Next** through the remaining screens.
 
-### Step 1.4 — Pick the plan and launch
-1. Choose the **Starter / Basic** static site plan (the cheapest — static sites are inexpensive).
+### Step 1.4: Pick the plan and launch
+1. Choose the **Starter / Basic** static site plan (the cheapest, static sites are inexpensive).
 2. Give the app a name (e.g. `happypaint`).
 3. Click **Create Resources**.
 4. Wait ~2–5 minutes while it builds. You'll see a build log scroll by.
 
 ✅ **You should see:** "Deployed successfully" and a link like
-`https://happypaint-xxxxx.ondigitalocean.app`. Click it — **your drawing app is live!** 🎉
+`https://happypaint-xxxxx.ondigitalocean.app`. Click it, **your drawing app is live!** 🎉
 
-### Step 1.5 — (Optional) Use your own domain name
+### Step 1.5: (Optional) Use your own domain name
 If you bought a domain (like `happypaint.app`):
 1. In your app, go to **Settings → Domains → Add Domain**.
 2. Type your domain and follow the on-screen DNS instructions (you add one record at your domain registrar). DigitalOcean handles the HTTPS lock icon automatically.
@@ -76,18 +76,18 @@ If you bought a domain (like `happypaint.app`):
 
 ---
 
-## Part 2 — Turn on accounts + cloud save with Supabase (optional)
+## Part 2: Turn on accounts + cloud save with Supabase (optional)
 
 Supabase is a separate free service that stores accounts and synced drawings.
-DigitalOcean and Supabase don't "know" about each other — you connect them by
+DigitalOcean and Supabase don't "know" about each other, you connect them by
 copying **two values** from Supabase into DigitalOcean. That's the whole trick.
 
-### Step 2.1 — Make a Supabase project
+### Step 2.1: Make a Supabase project
 1. Go to https://supabase.com and sign in (free account).
 2. Click **New project**. Pick any name, set a strong database password (save it somewhere), choose the region closest to your users, click **Create**.
 3. Wait ~2 minutes for it to finish setting up.
 
-### Step 2.2 — Load the database structure
+### Step 2.2: Load the database structure
 The app needs its tables/rules created. The files are in this repo under `backend/supabase/`.
 1. In Supabase, click **SQL Editor** in the left menu → **New query**.
 2. Open the repo file `backend/supabase/schema.sql`, copy **all** of it, paste into the editor, click **Run**. You should see "Success."
@@ -95,16 +95,16 @@ The app needs its tables/rules created. The files are in this repo under `backen
 
 ✅ **You should see:** "Success. No rows returned" (that's normal for setup scripts).
 
-### Step 2.3 — Copy your two connection values
+### Step 2.3: Copy your two connection values
 1. In Supabase, click **Project Settings** (gear icon) → **API**.
 2. Find and copy these two (keep them in a note for the next step):
-   - **Project URL** — looks like `https://abcdefgh.supabase.co`
-   - **anon public** key — a long string labeled `anon` / `public`.
+   - **Project URL**, looks like `https://abcdefgh.supabase.co`
+   - **anon public** key, a long string labeled `anon` / `public`.
 
-> 🔒 The **anon public** key is safe to put in a website — it's meant to be public.
+> 🔒 The **anon public** key is safe to put in a website, it's meant to be public.
 > **Never** use the **`service_role`** key in the website. Leave that one alone.
 
-### Step 2.4 — Tell DigitalOcean about Supabase
+### Step 2.4: Tell DigitalOcean about Supabase
 1. Back in DigitalOcean → your app → **Settings → App-Level Environment Variables**
    (or edit the **web** component's environment variables).
 2. Add **two** variables (click "Edit", then add each):
@@ -122,7 +122,7 @@ The app needs its tables/rules created. The files are in this repo under `backen
 **Account** panel now offers real sign-in (email magic link / Apple / Google)
 instead of "sync not configured."
 
-### Step 2.5 — Let sign-in links come back to your site
+### Step 2.5: Let sign-in links come back to your site
 When someone signs in by email link or with Google/Apple, Supabase needs to know
 which website to send them back to.
 1. In Supabase → **Authentication → URL Configuration**.
@@ -131,14 +131,14 @@ which website to send them back to.
    testing you can also add `http://localhost:5173`.
 3. Save.
 
-### Step 2.6 — (Optional) Turn on Google / Apple sign-in
+### Step 2.6: (Optional) Turn on Google / Apple sign-in
 Email magic-link works with no extra setup. For the Google/Apple buttons:
 1. Supabase → **Authentication → Providers** → enable **Google** and/or **Apple**.
 2. Each asks for a "client ID" and "secret" you create in Google/Apple's developer
    consoles. Follow Supabase's linked instructions for each. (You can skip this and
    rely on email magic-link to start.)
 
-### Step 2.7 — (Optional) Auto-delete data for "delete my account"
+### Step 2.7: (Optional) Auto-delete data for "delete my account"
 The app has a "Delete my data & account" button. It instantly wipes the person's
 device and files a deletion request. To also erase their cloud data automatically:
 1. Install the Supabase CLI (one-time): https://supabase.com/docs/guides/cli
@@ -149,7 +149,7 @@ device and files a deletion request. To also erase their cloud data automaticall
    ```
 3. Schedule it to run daily (instructions in `backend/supabase/functions/README.md`).
 
-This is optional for launch — the in-app deletion already removes the person's data
+This is optional for launch, the in-app deletion already removes the person's data
 from their device immediately either way.
 
 ---
@@ -164,7 +164,7 @@ don't click anything.
 ## A quick note about the phone apps
 The **iPhone/Android apps are NOT hosted on DigitalOcean.** They're published to the
 Apple App Store and Google Play through Expo. DigitalOcean only hosts the website.
-The phone apps use the same Supabase project — you put the same two values into the
+The phone apps use the same Supabase project, you put the same two values into the
 mobile build as `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 (see `.env.example`). That's a separate release process for later.
 
@@ -175,7 +175,7 @@ mobile build as `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 **The build failed on DigitalOcean.**
 Open the **build logs** (DigitalOcean shows them). Most common causes:
 - Build command isn't `npm ci && npm run build`, or output directory isn't `dist`. Fix in the component settings.
-- A code error you pushed — the log will name the file. Fixing it and pushing again triggers a fresh build.
+- A code error you pushed, the log will name the file. Fixing it and pushing again triggers a fresh build.
 
 **The site loads but refreshing a page like `/studio` shows "Not Found".**
 The static site needs a "catch-all" so all paths serve `index.html`. This repo's
@@ -192,7 +192,7 @@ Add your exact site address to Supabase → **Authentication → URL Configurati
 including `https://`.
 
 **"Is it safe that the anon key is in the website?"**
-Yes — it's designed to be public. The real protection is the database's Row Level
+Yes, it's designed to be public. The real protection is the database's Row Level
 Security rules (created by `schema.sql`), which only let people touch their own data.
 Just never put the **service_role** key in the website.
 

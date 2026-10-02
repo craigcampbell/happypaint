@@ -3,7 +3,7 @@
 // Why this exists: the old share path handed the OS share sheet an animated
 // GIF whose FIRST frame is near-blank paper (a process timelapse starts at
 // the first strokes). Instagram/Android share targets can't ingest animated
-// GIFs and flatten to frame 0 — the receiver sees a white picture even though
+// GIFs and flatten to frame 0, the receiver sees a white picture even though
 // the artwork is fully present in later frames.
 //
 // The contract here:
@@ -32,7 +32,7 @@ export const REPLAY_SHARE_HEIGHT = 360;
 const FRAME_MS = 110;
 const LAST_FRAME_MS = 900;
 
-// Inktober export border palette (export pixels only — never the stored art).
+// Inktober export border palette (export pixels only, never the stored art).
 const BORDER_INK = "#241d2e";
 const BORDER_PAPER = "#fdfbf7";
 
@@ -52,7 +52,7 @@ export async function supportsMp4Share(width = REPLAY_SHARE_WIDTH, height = REPL
   if (typeof window.VideoEncoder !== "function" || typeof window.VideoFrame !== "function") return false;
   try {
     const support = await window.VideoEncoder.isConfigSupported({
-      codec: "avc1.42001f", // H.264 baseline — the plays-everywhere rung
+      codec: "avc1.42001f", // H.264 baseline, the plays-everywhere rung
       width: even(width),
       height: even(height),
       bitrate: 1_500_000,
@@ -81,7 +81,7 @@ function decodeSnapshot(blob) {
 }
 
 // Paint ONE export frame: white paper + the snapshot, or the Inktober-themed
-// treatment (ink border + caption band with the prompt). Export pixels only —
+// treatment (ink border + caption band with the prompt). Export pixels only -
 // the caller's canvas is the only thing touched.
 export function paintExportFrame(
   context,
@@ -111,7 +111,7 @@ export function paintExportFrame(
   }
   // Caption band: event label + the day's prompt, in ink on the paper band.
   const label = eventLabel || "Inktober";
-  const text = prompt ? `${label} — “${prompt}”` : label;
+  const text = prompt ? `${label}: “${prompt}”` : label;
   context.fillStyle = BORDER_INK;
   context.font = `${Math.max(10, 12 * s)}px sans-serif`;
   context.textAlign = "center";
@@ -186,7 +186,7 @@ export async function buildReplayShareAsset({
       if (result && result.ext === "mp4" && result.blob) {
         return { kind: "mp4", blob: result.blob, ext: "mp4", mime: "video/mp4" };
       }
-      // A non-mp4 rung won (e.g. only VP9 encoded) — fall through to PNG.
+      // A non-mp4 rung won (e.g. only VP9 encoded), fall through to PNG.
     } catch (error) {
       if (error?.name === "AbortError") throw error;
       // The encoder claimed support but failed mid-run: explicit PNG fallback.
@@ -200,12 +200,12 @@ export async function buildReplayShareAsset({
 
 // Hand a prepared file to the OS share sheet, preserving user-activation
 // semantics. Returns:
-//   "shared"        — the sheet completed
-//   "aborted"       — the user dismissed the sheet (not a failure)
-//   "unsupported"   — no Web Share file support here (caller downloads instead)
-//   "needs-gesture" — the async prep consumed the user activation; the caller
+//   "shared", the sheet completed
+//   "aborted", the user dismissed the sheet (not a failure)
+//   "unsupported", no Web Share file support here (caller downloads instead)
+//   "needs-gesture", the async prep consumed the user activation; the caller
 //                     must re-call this from a fresh tap ("tap to share")
-//   "failed"        — anything else
+//   "failed", anything else
 export async function shareFile(file, shareData) {
   if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
     return "unsupported";

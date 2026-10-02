@@ -1,4 +1,4 @@
-// Auth layer — PocketBase-backed, ENV-GATED, with a graceful local-only fallback.
+// Auth layer: PocketBase-backed, ENV-GATED, with a graceful local-only fallback.
 //
 // Login is OPTIONAL: the whole app works signed out; an account only unlocks
 // cross-device sync + room ownership/host powers. Mode is decided once at module
@@ -21,7 +21,7 @@ const PB_URL = import.meta.env.VITE_PB_URL || "";
 export const isCloudConfigured = Boolean(PB_URL);
 
 export const LOCAL_ONLY_MESSAGE =
-  "Cloud accounts not configured — your work is saved on this device.";
+  "Cloud accounts not configured, your work is saved on this device.";
 
 // Sign-in affordances. Google first; Apple can be added once enrolled.
 export const OAUTH_PROVIDERS = [
@@ -70,11 +70,11 @@ export async function getSession() {
   }
 }
 
-// SYNCHRONOUS peek: does this browser hold an unexpired sign-in? No SDK load —
+// SYNCHRONOUS peek: does this browser hold an unexpired sign-in? No SDK load -
 // it reads PocketBase's own localStorage record ("pocketbase_auth") and the
 // token's exp claim. The studio uses it to hold its room socket until the real
 // session has loaded: connecting first sent a signed-in person into a private
-// room as a GUEST, which the door turned away with "sign in" — the sign-in loop.
+// room as a GUEST, which the door turned away with "sign in", the sign-in loop.
 // Guests (no stored record) get false and connect instantly, as before.
 export function hasStoredSession() {
   if (!isCloudConfigured) return false;
@@ -90,7 +90,7 @@ export function hasStoredSession() {
   }
 }
 
-// The authenticated user id (profiles/users record id) — the owner key for
+// The authenticated user id (profiles/users record id), the owner key for
 // gallery rows / room ownership. null when signed out / unconfigured.
 export async function getProfileId() {
   try {
@@ -121,7 +121,7 @@ export function onAuthStateChange(handler) {
 }
 
 // OAuth sign-in (Google). `popup` is an already-opened window handed in by the
-// caller's CLICK handler — opening it synchronously on tap is what keeps Safari
+// caller's CLICK handler, opening it synchronously on tap is what keeps Safari
 // (the iPad/iPhone audience) from blocking it, since the SDK loads async first.
 export async function signInWithProvider(providerId, popup) {
   const pb = await getPocketBase();
@@ -189,11 +189,11 @@ export async function signUpWithEmail(email, password) {
       name: id.split("@")[0].slice(0, 20),
     });
     await pb.collection("users").authWithPassword(id, password);
-    return { ok: true, message: "Account created — you're signed in!" };
+    return { ok: true, message: "Account created, you're signed in!" };
   } catch (error) {
     const data = error?.response?.data || {};
     if (data.email) {
-      return { ok: false, message: "That email is already registered — try logging in." };
+      return { ok: false, message: "That email is already registered, try logging in." };
     }
     if (data.password?.message) {
       return { ok: false, message: data.password.message };
@@ -217,7 +217,7 @@ export async function getEnabledOAuthProviderIds() {
   }
 }
 
-// Sign out — PocketBase has no logout endpoint; you just clear the local store.
+// Sign out: PocketBase has no logout endpoint; you just clear the local store.
 export async function signOut() {
   try {
     const pb = await getPocketBase();

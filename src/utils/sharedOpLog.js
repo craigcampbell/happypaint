@@ -2,7 +2,7 @@
 // can put THEIR art back after it restores our own layer pixels.
 //
 // Why this has to exist: since shared layers landed, a friend's op paints into
-// the same layer stack we do (op.layerId routing) — there is no separate
+// the same layer stack we do (op.layerId routing), there is no separate
 // "remote" canvas any more. So the undo snapshot we take before our own stroke
 // holds whatever friends had drawn at that instant, and nothing they drew
 // afterwards. Restoring it verbatim rubs their newer strokes off OUR screen
@@ -13,7 +13,7 @@
 // "Landed" is per-brush, and that is the whole subtlety here (#62):
 //   * an ordinary stroke accumulates in a bbox-capped buffer and hits the
 //     layer ONCE, on its end op. So its pixels are in our snapshot only if it
-//     ENDED before the mark — and replaying one means replaying the whole
+//     ENDED before the mark, and replaying one means replaying the whole
 //     stroke, including the ops that arrived before the mark.
 //   * eraser and legacy smudge cut the layer per segment, so for those only
 //     the ops after the mark are missing from the snapshot.
@@ -34,7 +34,7 @@ export const SHARED_OP_LOG_MAX_CHARS = 24 * 1024 * 1024;
 
 // Brushes that write the layer directly, segment by segment, instead of
 // banking into a stroke buffer. Mirrors the branch order in opReplay.applyOp
-// and App's applyRemoteOp — keep the three in step. The legacy-smudge test is
+// and App's applyRemoteOp, keep the three in step. The legacy-smudge test is
 // inlined (rather than calling normalizeSmudgeSettings) so this module stays
 // free of the brush engine and its canvas globals: it is the `v3` flag from
 // utils/brushes.js#normalizeSmudgeSettings, nothing more.
@@ -45,7 +45,7 @@ function isDirectBrush(settings) {
   return false;
 }
 
-// Rough memory weight of an op. Only the embedded rasters matter — a draw op
+// Rough memory weight of an op. Only the embedded rasters matter, a draw op
 // is a short point batch.
 function opCharge(op) {
   let charge = 64;
@@ -109,14 +109,14 @@ export function createSharedOpLog({
 
     // The ops a restore to `mark` has to re-apply, in arrival order.
     // `isOpen(strokeId)` reports whether that stroke still has a live buffer on
-    // this client. Returns null when the log has rolled past the mark — the
+    // this client. Returns null when the log has rolled past the mark, the
     // caller then does a plain restore, exactly as before this existed.
     replaySince(mark, isOpen = () => false) {
       if (typeof mark !== "number" || mark < firstSeq) return null;
       if (mark >= nextSeq) return [];
 
       // Buffered strokes land whole, on their end op. Collect the ones whose
-      // ink reached the layer AFTER the mark — those need a full replay.
+      // ink reached the layer AFTER the mark, those need a full replay.
       const wholeStrokes = new Set();
       const seenAfterMark = new Set();
       for (const entry of entries) {
@@ -125,7 +125,7 @@ export function createSharedOpLog({
         if (entry.end) wholeStrokes.add(entry.strokeId);
       }
       // A stroke whose end op never arrived (dropped socket, legacy client) is
-      // committed by the idle sweep instead — if it is no longer open here, its
+      // committed by the idle sweep instead, if it is no longer open here, its
       // pixels are on the layer and it needs replaying too.
       for (const strokeId of seenAfterMark) {
         if (!wholeStrokes.has(strokeId) && !isOpen(strokeId)) wholeStrokes.add(strokeId);

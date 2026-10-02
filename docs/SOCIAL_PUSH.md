@@ -31,7 +31,7 @@ private room.** "Start drawing" / "Draw now" (`button.primary-action.home-draw-n
 mints a new random code per page load, so two people who click it one second
 apart can never meet. The one shared-canvas element on the homepage, "Join this
 canvas →", opens a read-only viewer preview (`button.home-viewer`) rather than
-joining — so the **only** routes into a shared room are `/rooms` or a room link
+joining, so the **only** routes into a shared room are `/rooms` or a room link
 you publish yourself. Meanwhile the 20 themed rooms *are* stable, shared and
 guessable:
 
@@ -50,7 +50,7 @@ guessable:
 
 So the product already has a working meeting surface; the funnel just bypasses
 it. **Pointing the primary CTA at a shared room instead of a fresh random one is
-the single highest-leverage change available** — it is small, it is in the front
+the single highest-leverage change available**, it is small, it is in the front
 end, and without it no amount of traffic will ever produce visible activity,
 because no two visitors will ever occupy the same canvas.
 
@@ -59,7 +59,7 @@ Two conclusions follow, and they drive everything below.
 **a) The product is real; the room is empty.** I verified the core promise with
 two separate browser sessions, so this is not a "does it work" problem. But the
 20-room browse surface currently says "Be the first!" twenty times. A visitor
-who arrives alone, in an empty room, experiences a blank canvas — the single
+who arrives alone, in an empty room, experiences a blank canvas, the single
 feature that separates Drawesome from any other drawing site delivers nothing.
 They conclude the site is dead and leave. That is why activity never compounds.
 
@@ -70,7 +70,7 @@ right now. Do not read the empty till as disinterest.
 **The consequence for a social push:** sending traffic to drawesome.art *today*
 burns your best channel on a bad first impression. Reddit gives you one shot at
 a subreddit. So the push has to arrive **together, at a time**, into **one room**
-— not one visitor at a time into twenty separate empty rooms.
+- not one visitor at a time into twenty separate empty rooms.
 
 ---
 
@@ -83,16 +83,16 @@ shared on Reddit. `aggie.io` was the previous free standard in this exact niche
 Every organic aggie.io post I found was **the same shape: two friends made
 something silly together, and posted the result into a fandom subreddit.**
 
-- r/HollowKnight — "Fanart … drawn during a very fun Aggie.io session with some friends"
-- r/fivenightsatfreddys — "Drew a Baby the other day on Aggie.io"
+- r/HollowKnight: "Fanart … drawn during a very fun Aggie.io session with some friends"
+- r/fivenightsatfreddys: "Drew a Baby the other day on Aggie.io"
 - r/wholesomejojo, r/outerwilds, r/Terraria, r/kurzgesagt, r/Sanatolia, r/touhou
-- r/AnimalJam — "all the drawing jammers out there can join a drawing server on Aggie.io" (Oct 2025)
-- r/OscWhiteboards — a whole sub for the Object Show Community built on WhiteboardFox / Conceptboard / Aggie.io
+- r/AnimalJam: "all the drawing jammers out there can join a drawing server on Aggie.io" (Oct 2025)
+- r/OscWhiteboards, a whole sub for the Object Show Community built on WhiteboardFox / Conceptboard / Aggie.io
 
 That is a **strategy**, and it is not "target artists." Artists already have
 Procreate. The people who spread this category are **fandom communities**:
 OC art, character sheets, "draw my OC", art jams. Magma's own homepage confirms
-it — its live-room list reads "Help me fix my Danganronpa OC", "draw my oc",
+it, its live-room list reads "Help me fix my Danganronpa OC", "draw my oc",
 "OC Shipping & interact central!".
 
 There is also a **direct, standing ask** this product answers, found verbatim:
@@ -100,7 +100,7 @@ There is also a **direct, standing ask** this product answers, found verbatim:
 - A fandom post titled: *"THEY BLOCKED MAGMA SO I HAVE TO FIND ANOTHER DRAWING APP TO USE BRUH I DON'T WANT TO USE CANVA"*
 
 The second one is the opening. School and network filters block magma.com.
-Drawesome is free, needs no account, and needs no install — which is exactly the
+Drawesome is free, needs no account, and needs no install, which is exactly the
 combination a blocked-out kid can still reach.
 
 ### The demand is being voiced constantly, in your own words
@@ -108,26 +108,26 @@ combination a blocked-out kid can still reach.
 You do not have to convince anyone this category should exist. People ask for it
 repeatedly, and the tools keep dying underneath them:
 
-- r/learnart — *"Many years ago I used a site called **iscribble**, it allowed for collaborative art drawings with strangers in real time. Are there any apps or sites like this?"*
-- r/learntodraw — *"Is there any app that allows multiple people to draw on the same canvas together? I'm surprised more apps don't have this, especially Clip Studio and Procreate."*
-- r/learnart — *"Why is it so hard to find local artists to collaborate with?"*
-- r/homeschool — *"Any good free online 'Drawing' classes? I have a 10yo who draws constantly."*
+- r/learnart, *"Many years ago I used a site called **iscribble**, it allowed for collaborative art drawings with strangers in real time. Are there any apps or sites like this?"*
+- r/learntodraw, *"Is there any app that allows multiple people to draw on the same canvas together? I'm surprised more apps don't have this, especially Clip Studio and Procreate."*
+- r/learnart, *"Why is it so hard to find local artists to collaborate with?"*
+- r/homeschool, *"Any good free online 'Drawing' classes? I have a 10yo who draws constantly."*
 
 Note the pattern: **aggie.io died. iscribble died. The request never does.** That
-is the most useful positioning fact you have — not "another drawing app," but
+is the most useful positioning fact you have, not "another drawing app," but
 *the shared canvas that is still running*.
 
 ### r/DigitalArt is already asking for exactly this, in the wrong shape
 
-That sub carries a constant stream of collab posts — *"LOOKING TO DO AN ART COLLAB"*,
+That sub carries a constant stream of collab posts, *"LOOKING TO DO AN ART COLLAB"*,
 *"Anybody wanna collab?!"*, *"Does anyone want to do a collab art project where we
-all work together to make one masterpiece"* — and they all resolve the same
+all work together to make one masterpiece"*, and they all resolve the same
 clumsy way: **each person draws separately and posts "my part / their part."**
 
 That is your single best pitch, because it is not a pitch. It is an obvious
 improvement on something they are already trying to do:
 
-> You don't have to trade files back and forth — you can both be on the same
+> You don't have to trade files back and forth, you can both be on the same
 > canvas at the same time and watch it come together.
 
 Answer those posts. Don't lead with the site; lead with the fact that
@@ -137,7 +137,7 @@ simultaneous is possible at all.
 
 ## 3. The plan: an art jam, not a link drop
 
-### Step 1 — Seed the room with people you already have (this week)
+### Step 1: Seed the room with people you already have (this week)
 
 Do not lead with strangers. Get 3-6 humans into **one room at one time**. Two
 people drawing together is enough to make every screenshot and every clip real.
@@ -146,7 +146,7 @@ Use the surface that already exists. Every themed room has a **stable, guessable
 code**, so a room link you publish keeps working and keeps collecting people:
 
 - **`/join/DINOS`** ("Dino World") or **`/join/MAIN`** ("Open Studio", the shared
-  public canvas) are the best jam venues — they're stable, they're advertised on
+  public canvas) are the best jam venues, they're stable, they're advertised on
   `/rooms`, and the names are self-explanatory.
 
 **Publish the room URL, never the bare domain.** `drawesome.art` sends a visitor
@@ -166,9 +166,9 @@ the only thing that has ever fixed it.
 Cadence to try: a fixed 20-minute slot, twice a week, announced once. Pick the
 time from the audience you're aiming at, not your own convenience.
 
-### Step 2 — Make the demo before you make the post
+### Step 2: Make the demo before you make the post
 
-You can produce the content natively — I confirmed these buttons exist in the
+You can produce the content natively: I confirmed these buttons exist in the
 studio: **🎬 Timelapse**, **🖼 GIF**, **🧲 Wall**, **📤 Share**, plus *Draw &
 Guess* and *Draw Phone* room modes.
 
@@ -176,12 +176,12 @@ A 15-25 second clip of **two cursors contributing to one finished drawing**
 beats any feature list, and it is the format that performs on TikTok / Reels /
 X. The repo's own launch plan says the same thing, and it's right.
 
-### Step 3 — Post the *output* first, the *site* second
+### Step 3: Post the *output* first, the *site* second
 
 The proven unit is "my friend and I made this." So the sequence is:
 
 1. Post the finished collaborative drawing into a **fandom or group-doodle
-   subreddit** as art, with the tool mentioned in a comment — not as a pitch.
+   subreddit** as art, with the tool mentioned in a comment, not as a pitch.
 2. Only then, once you have something worth showing, post the *tool* to the
    maker/website subs.
 
@@ -192,7 +192,7 @@ The proven unit is "my friend and I made this." So the sequence is:
 I read the actual rules where they were retrievable. Rule text is quoted from
 the subreddit's own wiki.
 
-### Tier 1 — best fit
+### Tier 1, best fit
 
 | Venue | Why it fits | The rule to respect |
 | --- | --- | --- |
@@ -201,7 +201,7 @@ the subreddit's own wiki.
 | **Fandom subs** (your own OC/fandom) | Where this category actually spread, per §2. | Post the art. Tool in a comment. Never a cold link. |
 | **r/learntodraw, r/ArtEd, r/homeschool** | Standing demand ("is there an app where we draw on the same canvas") and the parent/teacher angle. | Answer the question; disclose you're the maker; link only if asked. |
 
-### r/InternetIsBeautiful — read this before you post
+### r/InternetIsBeautiful, read this before you post
 
 **Look at what the sub actually accepts.** Its current front page is all highly
 specific single-purpose tools: a defrag simulator, a 56k dial-up simulator, a
@@ -216,13 +216,13 @@ between a post and a removal.
 
 Quoted from the wiki:
 
-- **"Not unique"**: *"a site is considered not unique if too many similar services can be easily found or are known to the mod reviewing submissions."* Magma, Drawpile, Kleki and WhiteboardFox all exist. This is the rule most likely to kill the post — so **lead with what is genuinely different**: a shared room + 6,000+ coloring sheets + kid-safe rooms, no account, no install. Do not lead with "online drawing app."
+- **"Not unique"**: *"a site is considered not unique if too many similar services can be easily found or are known to the mod reviewing submissions."* Magma, Drawpile, Kleki and WhiteboardFox all exist. This is the rule most likely to kill the post, so **lead with what is genuinely different**: a shared room + 6,000+ coloring sheets + kid-safe rooms, no account, no install. Do not lead with "online drawing app."
 - **90/10**: *"If more than 10% of your account is used for self-promotion, you will be banned."* This is about your **account history**, not this post. If the account you use is new or all-promo, it will be removed and you may be banned. Check your own history first.
-- **No web games** — post those to r/webgames. Draw & Guess / Draw Phone are game modes; mention them second, if at all.
-- **No paywalled features and no required signup.** Your core is free and anonymous, so you pass — but do not say "free demo," which is disqualifying language.
+- **No web games**, post those to r/webgames. Draw & Guess / Draw Phone are game modes; mention them second, if at all.
+- **No paywalled features and no required signup.** Your core is free and anonymous, so you pass, but do not say "free demo," which is disqualifying language.
 - Posts perform in **weekday mornings US Eastern**, and comments decide the outcome. Be free for two hours after posting.
 
-### Tier 2 — explicitly promotion-tolerant, and where your peers already are
+### Tier 2, explicitly promotion-tolerant, and where your peers already are
 
 **r/alphaandbetausers** is the best fit for the feedback you asked for, and it
 is already full of your exact category. Live examples found today:
@@ -230,32 +230,32 @@ is already full of your exact category. Live examples found today:
 - *"I built an infinite canvas where you can draw together in real time. Looking for someone who can draw…"*
 - *"I built a social platform where artists can continue each other's drawings"* (Sketch.Social)
 - *"Looking for people to test the no-signup drawing flow on my shared pixel mural"*
-- *"[Web, Beta] OUR PLACE — a shared 1000x1000 pixel canvas I turned on this morning. Come draw on it… because right now it is mostly me."*
+- *"[Web, Beta] OUR PLACE, a shared 1000x1000 pixel canvas I turned on this morning. Come draw on it… because right now it is mostly me."*
 
 Two things follow. First, this venue will accept your post and answer it honestly.
 Second, **the empty-canvas problem is the universal failure mode of this product
-category**, not a Drawesome defect — which means the fix is the known one
+category**, not a Drawesome defect, which means the fix is the known one
 (a fixed time and place) rather than something you have to invent.
 
 Also: r/SideProject, r/UsefulWebsites, r/InteractiveWebsites, r/IMadeThis,
 r/Shamelessplug, r/somethingimade. Good for feedback rather than reach. Ask a
-real question — *"could you get two people drawing without me explaining it?"*
-— and you will get useful answers.
+real question, *"could you get two people drawing without me explaining it?"*
+- and you will get useful answers.
 
-### r/characterdrawing — participate, don't pitch
+### r/characterdrawing, participate, don't pitch
 
 This sub runs on `[LFA]` ("looking for artist") posts: people describing an
 original character and hoping someone will draw them. Many go unfilled. It is
-the clearest demand signal for a shared canvas that exists on Reddit — people
+the clearest demand signal for a shared canvas that exists on Reddit, people
 want their OC drawn, and artists want practice.
 
 The legitimate move is to **become a participant**: pick an `[LFA]` post, draw it
-on Drawesome, and post the result as a filled request — mentioning the tool only
+on Drawesome, and post the result as a filled request, mentioning the tool only
 in passing. You earn the right to talk about your site by having used it to give
 someone art they asked for. Do not post a link there cold; that community's whole
 point is free art, and a pitch will be removed on sight.
 
-### Tier 3 — your own accounts (IG, X, TikTok)
+### Tier 3, your own accounts (IG, X, TikTok)
 
 This is where your "share their drawings" goal lives, and it needs a **logged-in
 browser**. I checked: TikTok search renders nothing logged out, X forces a login
@@ -271,7 +271,7 @@ So: I cannot read or post there until we set that up (§6).
   accepted in-session then silently vanished on reload. On a personal account,
   bulk IG actions are the top trigger for an action-block. This is the single
   most likely way to lose the accounts you need.
-- **No buying traffic, votes, followers or reviews** — Reddit's User Agreement
+- **No buying traffic, votes, followers or reviews**: Reddit's User Agreement
   covers vote manipulation, and it is permanent-ban territory.
 - **Don't post the same link to many subs at once.** That is the pattern
   Reddit's spam filters are built to catch.
@@ -286,7 +286,7 @@ You asked for three things: activity, opinions, and people sharing their art.
   get a second person drawing without me explaining it? What broke?" beats
   "feedback welcome." Put it in r/SideProject and r/alphaandbetausers.
 - **Sharing:** the Wall + the 📤 Share / 🎬 Timelapse buttons already exist, so
-  the ask is small — but nobody shares art into an empty gallery. **Seed the
+  the ask is small, but nobody shares art into an empty gallery. **Seed the
   Wall yourself first** (it currently holds 2 placeholder posts). A wall with 15
   real drawings makes sharing feel normal; a wall with 2 makes it feel pointless.
 - **Returning:** the honest reason to come back is *someone being there.* That is
@@ -312,16 +312,16 @@ Chrome and log in by hand once (the profile persists for future runs):
 
 Then I can, in your browser, harvest what's actually being said around digital
 drawing/painting, find the threads worth answering, and draft or post to your
-approval. I will not type credentials or touch 2FA — you log in, I work the page.
+approval. I will not type credentials or touch 2FA, you log in, I work the page.
 
 Also useful, and I'll assume the obvious answer unless you say otherwise:
 - **Which accounts?** A `drawesome.art` brand account is better than your
-  personal one for IG/TikTok — the content is the product, not you. Your
+  personal one for IG/TikTok, the content is the product, not you. Your
   personal Reddit account is *fine* for posting as long as its history passes
   the 90/10 rule.
 - **Who is the jam for?** The two audiences pull in different directions:
   *fandom teens* (where this category spreads) vs *parents/teachers* (where the
-  money and the safety story are). Pick one for the first push — I'd pick
+  money and the safety story are). Pick one for the first push: I'd pick
   fandom for activity, because that's what the aggie.io evidence shows works.
 
 ---
@@ -335,7 +335,7 @@ Also useful, and I'll assume the obvious answer unless you say otherwise:
 - The stronger commercial fit is the **adult buyer with a budget**: the parent/
   teacher/club path (the repo's `docs/LAUNCH_PLAN.md` models ~$99/year per
   teacher, one-time institutional rather than monthly consumer). Your assets for
-  that audience are real and already built — the 6,000+ coloring library,
+  that audience are real and already built, the 6,000+ coloring library,
   kid-safe rooms, no-student-accounts rooms.
 - Keep ads off for now. There is no traffic baseline to monetize, and ad
   approval for a child-directed site is work with no payoff at zero users.

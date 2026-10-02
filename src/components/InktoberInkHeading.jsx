@@ -1,11 +1,11 @@
 // Hand-inked display lettering for the Inktober hero paper card.
 //
 // Original calligraphic treatment, drawn for this site: the words are set in a
-// bundled connected brush-cursive font (Caveat, SIL OFL — see
+// bundled connected brush-cursive font (Caveat, SIL OFL, see
 // public/fonts/caveat/OFL.txt), given an energetic hand-tilted baseline, and
 // surrounded by hand-authored SVG ink pools, flicks and splatters on the cream
-// paper of the card. The marks are deliberately irregular — no two blobs share
-// a path — so the heading reads as wet ink, not clip art.
+// paper of the card. The marks are deliberately irregular, no two blobs share
+// a path, so the heading reads as wet ink, not clip art.
 //
 // Everything here is decorative presentation of the REAL heading text: the
 // words stay selectable DOM text (readable, translatable, announced via the
@@ -26,7 +26,7 @@ function InkSplatter({ variant, className }) {
         <path d="M70 34c4-1 7 2 6 6-1 3-6 4-8 1-2-2-1-6 2-7z" />
       </>
     ),
-    // Long flick — a stroke that thins into a hairline tail.
+    // Long flick, a stroke that thins into a hairline tail.
     b: (
       <>
         <path d="M8 30c16-10 34-16 52-18 4-1 7 1 6 4-1 2-4 3-8 4-16 4-32 10-46 18-3 2-6-2-4-8z" />
@@ -34,7 +34,7 @@ function InkSplatter({ variant, className }) {
         <path d="M20 44c2-2 6-1 6 2 1 3-3 5-5 4-2-1-3-4-1-6z" />
       </>
     ),
-    // Splash crown — pool with upward spikes like a dropped blot.
+    // Splash crown, pool with upward spikes like a dropped blot.
     c: (
       <>
         <path d="M40 38c-6-2-9-8-6-13l7 4 3-12 6 10 7-8 2 12 10-4-5 10c3 6-3 12-11 12-5 0-10-4-13-11z" />

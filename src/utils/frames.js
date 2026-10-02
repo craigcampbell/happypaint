@@ -60,7 +60,7 @@ export function cloneFrame(frame, { durationMs } = {}) {
 
 // Composite a single frame (its visible layers) onto a fresh canvas of the
 // given size. Used for thumbnails, onion-skin, GIF export, loop assets.
-// A COLD frame (layers === null — see utils/frameRasters.js) composites to a
+// A COLD frame (layers === null, see utils/frameRasters.js) composites to a
 // blank canvas here; callers that can wait use the frame's raster instead.
 export function compositeFrameToCanvas(frame, {
   width = frame.layers?.[0]?.canvas.width || CANVAS_WIDTH,
@@ -75,14 +75,14 @@ export function compositeFrameToCanvas(frame, {
 
 // A frame shell for a server-synced animation room: no canvases until it is
 // hydrated, just its identity, timing and (soon) its ops + raster. `layerMeta`
-// is the server's canonical layer list — the stack is built from it when the
+// is the server's canonical layer list, the stack is built from it when the
 // cel hydrates, so every client materializes the SAME layers (ids included).
 export function createColdFrame(id, durationMs = DEFAULT_FRAME_DURATION, layerMeta = null) {
   return { id, durationMs, layers: null, activeLayerId: null, layerMeta: layerMeta || null, ops: [], raster: null, rasterCount: -1, hydrating: null };
 }
 
 // Build a live layer stack from the server's layer meta (order preserved, ids
-// adopted). Pixels start blank — the frame's ops replay into them.
+// adopted). Pixels start blank, the frame's ops replay into them.
 export function layersFromMeta(meta, width = CANVAS_WIDTH, height = CANVAS_HEIGHT) {
   if (!Array.isArray(meta) || meta.length === 0) return createDefaultLayers(width, height);
   return meta.map((item) => {

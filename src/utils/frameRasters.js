@@ -1,6 +1,6 @@
 // Cold frames. A hydrated frame owns full-size layer canvases (~40MB each);
 // that is why a scene used to cap at 8 frames. In a server-synced animation
-// room only the ACTIVE frame and its neighbors stay hydrated now — every
+// room only the ACTIVE frame and its neighbors stay hydrated now, every
 // other frame keeps its op list (the shared source of truth) plus a compressed
 // raster, and re-hydrates by replaying its ops through the parity-tested
 // offline interpreter when the artist steps onto it.
@@ -86,20 +86,20 @@ export async function encodeRaster(draw, width = RASTER_WIDTH, height = RASTER_H
 // the shared world canvas, then downscale + encode. `layersMeta` is the
 // frame's server-canonical layer stack (frame.layerMeta): with more than one
 // layer the ops route into per-layer surfaces and composite in stack order
-// honoring visibility + opacity — the same structure coolFrame encodes from
+// honoring visibility + opacity, the same structure coolFrame encodes from
 // the live layers, so a frame's raster no longer depends on whether THIS
 // client ever visited it. No metadata (legacy rooms) keeps flat replay;
 // the composite helper also preserves the opaque, visible single-layer path.
 // The per-layer surfaces come from the module pool (compositeScratch), NOT a
-// per-call allocation — a 60-cel sweep reuses one stack's worth of canvases.
+// per-call allocation, a 60-cel sweep reuses one stack's worth of canvases.
 //
 // Phase 4: a frame carrying `checkpoint` (a verified wire descriptor retained
-// from the scene's history) restores its trusted baseline BEFORE the tail —
+// from the scene's history) restores its trusted baseline BEFORE the tail -
 // the checkpoint is re-decoded/validated here (bounded, cancellable), its
 // layers drawn 1:1 into the scratch stack, its mix-map continuation state
 // restored, and only then do the retained tail ops replay. A checkpoint that
 // fails validation rejects with CheckpointError: the caller must drop the
-// poisoned descriptor and refetch the full scene — NEVER paint the bare tail.
+// poisoned descriptor and refetch the full scene: NEVER paint the bare tail.
 //
 // All rasterization serializes through one module chain: the world canvas and
 // the scratch stack are singletons, so concurrent callers (idle rasterizer,
@@ -191,8 +191,8 @@ export function decodeRaster(blob) {
 
 // ---- The cold-raster contract ----------------------------------------------
 // A cold frame's raster is a composite of its layer stack, so the stack's
-// RENDER-AFFECTING fields — the ordered layer ids, each layer's visibility
-// and its opacity — are part of the raster's identity, exactly like the op
+// RENDER-AFFECTING fields, the ordered layer ids, each layer's visibility
+// and its opacity, are part of the raster's identity, exactly like the op
 // count. Names and locks don't move a pixel and must NOT trigger a rebuild.
 // `layerRenderSig` fingerprints just the render-affecting fields so a layer
 // sync can tell "the raster no longer matches" apart from "a label changed".
@@ -206,7 +206,7 @@ export function layerRenderSig(layersMeta) {
 // The ONE staleness check every cold-raster consumer shares (the idle
 // rasterizer, the diagnostics handle): a cold frame holding ops needs a
 // (re)build when its raster was made from a different op count OR a different
-// render-affecting layer stack. A hydrated frame never does — it paints its
+// render-affecting layer stack. A hydrated frame never does, it paints its
 // live canvases; a blank cold frame has nothing to build.
 export function coldRasterStale(frame) {
   if (!frame || frame.layers) return false;
@@ -218,7 +218,7 @@ export function coldRasterStale(frame) {
 // A cold-raster build is async (offline replay + WebP encode). While it is in
 // flight the inputs can change: an op lands, a clear replaces the op list, a
 // layer sync hides a layer. Capture a ticket BEFORE the await and install the
-// blob ONLY if it is still current — otherwise the frame would wear a raster
+// blob ONLY if it is still current, otherwise the frame would wear a raster
 // built from inputs it no longer has, and with the op count UNCHANGED (a
 // hidden layer, a reorder) the old count-based check could never tell.
 // `frame.rasterGen` is bumped by every invalidation site; the ops identity
@@ -235,7 +235,7 @@ export function rasterTicketCurrent(frame, ticket) {
 }
 
 // Tiny LRU of decoded rasters, bounded by BOTH count and BYTES. Every entry
-// accounts its real allocation (width × height × 4) — a cache of 1600x1000
+// accounts its real allocation (width × height × 4), a cache of 1600x1000
 // bitmaps is ~6.4MB apiece, and the Phase 4 contract budgets decoded bitmaps
 // by bytes, not by an item count that silently scales with bitmap size.
 // Evicted bitmaps are closed to free GPU memory.
@@ -305,7 +305,7 @@ export function createBitmapCache(limit = 16, maxBytes = Infinity) {
       map.delete(key);
     },
     // Drop every entry whose key starts with `prefix` (one frame's whole
-    // generation line) — frees the GPU memory now instead of on LRU eviction.
+    // generation line), frees the GPU memory now instead of on LRU eviction.
     deletePrefix(prefix) {
       for (const key of [...map.keys()]) {
         if (key.startsWith(prefix)) this.delete(key);
@@ -324,7 +324,7 @@ export function createBitmapCache(limit = 16, maxBytes = Infinity) {
 // Count cap for tiny thumbnails, byte cap for the real budget: 24 full
 // raster bitmaps ≈ 154MB of decoded GPU memory, never unbounded.
 const bitmaps = createBitmapCache(48, 160 * 1024 * 1024);
-// `id:rasterCount` used to key the LRU — but a REGENERATED raster can carry
+// `id:rasterCount` used to key the LRU, but a REGENERATED raster can carry
 // the same op count (a layer was hidden, the stack reordered), and the old
 // ImageBitmap would then be served forever. Key on the raster BLOB's identity
 // instead: a fresh blob is a fresh key, whatever the count. Superseded
@@ -344,7 +344,7 @@ const rasterKey = (frame) => {
   return `${frame.id}:${id}`;
 };
 
-// The decoded raster if it's already in the LRU, else null — and kick off the
+// The decoded raster if it's already in the LRU, else null, and kick off the
 // decode so the NEXT paint has it (playback / scrub / onion never await).
 export function peekFrameBitmap(frame) {
   if (!frame?.raster) return null;

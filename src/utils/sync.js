@@ -1,4 +1,4 @@
-// Local-first cloud sync — activates ONLY when signed in to a configured
+// Local-first cloud sync, activates ONLY when signed in to a configured
 // PocketBase instance. The local IndexedDB / localStorage stays the source of
 // truth: the app works fully offline and signed out, and sync is a best-effort
 // mirror layered on top.
@@ -10,7 +10,7 @@
 // RESILIENCE: every network op is wrapped in try/catch and is best-effort. A
 // failure never throws to the UI and never blocks offline use; it just flips the
 // status to "paused" so the AccountPanel can surface it. If the `snapshots`
-// collection doesn't exist yet, sync simply stays paused — the app is unaffected.
+// collection doesn't exist yet, sync simply stays paused, the app is unaffected.
 
 import { getPocketBase, getProfileId } from "./auth";
 import { idbGetKV, idbSetKV, isIdbAvailable } from "./idb";
@@ -27,7 +27,7 @@ const STATUS_LABELS = {
   "signed-out": "Sign in to sync",
   synced: "Synced",
   syncing: "Syncing…",
-  paused: "Sync paused — offline",
+  paused: "Sync paused, offline",
 };
 
 let currentStatus = "signed-out";

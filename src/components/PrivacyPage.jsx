@@ -49,7 +49,7 @@ export default function PrivacyPage({ onNavigate }) {
         <ul>
           <li>No behavioral ad targeting and no selling personal data.</li>
           <li>No paid coins, cash tips, or child-facing purchases. Family is an optional adult-owned subscription.</li>
-          <li>No public people-search — you find <em>rooms</em>, not individual kids.</li>
+          <li>No public people-search, you find <em>rooms</em>, not individual kids.</li>
         </ul>
 
         <h2>Deleting data</h2>

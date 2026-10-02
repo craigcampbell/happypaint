@@ -1,4 +1,4 @@
-// Artist room settings — the owner-only publishing panel for one artist
+// Artist room settings, the owner-only publishing panel for one artist
 // studio (audience 'artist_public'). Contract: docs/ARTIST-ROOMS-CONTRACT.md.
 //
 // The REST endpoints for this panel (POST /api/rooms/:code/publish and
@@ -8,29 +8,29 @@
 // publish/unpublish confirmation flow. When the backend lands, the parent
 // wires the callbacks to fetch() with `Authorization: Bearer <token>`.
 //
-// Props (concrete interface — all callbacks receive the bearer token, never
+// Props (concrete interface, all callbacks receive the bearer token, never
 // store it, and must throw or reject with an Error whose .message is shown
 // verbatim to the owner):
 //
-//   roomCode: string                    — required. The studio's room code.
-//   session: null | { access_token }    — required for any action. null renders
+//   roomCode: string, required. The studio's room code.
+//   session: null | { access_token }, required for any action. null renders
 //                                         a sign-in notice and fires NO callbacks.
 //   loadPublishInfo: async ({ roomCode, token }) => {
-//     listed: boolean,                  — owner-listed in the public gallery
+//     listed: boolean,, owner-listed in the public gallery
 //     description: string,
 //     tags: string[],
-//     inktober: boolean,                — Inktober 2026 opt-in for this room
-//     publishedAt: string | null,       — ISO timestamp or null
-//     moderationHidden: boolean,        — hidden by moderators; owner cannot override
+//     inktober: boolean,               : Inktober 2026 opt-in for this room
+//     publishedAt: string | null,      : ISO timestamp or null
+//     moderationHidden: boolean,, hidden by moderators; owner cannot override
 //   }
 //   publish: async ({ roomCode, token, description, tags, inktober }) =>
 //     publish-info object (same shape as loadPublishInfo's result)
 //   unpublish: async ({ roomCode, token }) =>
 //     publish-info object (same shape)
-//   onNavigate?: (path: string) => void — optional, used for the "view studio" link
+//   onNavigate?: (path: string) => void, optional, used for the "view studio" link
 //
 // Behavior guarantees (contract):
-//   * Publishing is always an explicit, confirmed action — never implicit.
+//   * Publishing is always an explicit, confirmed action, never implicit.
 //   * Unpublishing removes gallery discovery ONLY; the copy states plainly
 //     that the room link keeps working ("unlisted still viewable by link").
 //   * moderationHidden disables publishing; the owner cannot override it.
@@ -38,7 +38,7 @@
 //     leave the previous published state untouched (no optimistic flip).
 
 // Limits/tag parsing live in ArtistGalleryPage.jsx; duplicated here (not
-// imported) so each component file exports only its component — the repo's
+// imported) so each component file exports only its component, the repo's
 // eslint zero-warnings policy flags mixed component/helper exports.
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./artist-rooms.css";
@@ -134,7 +134,7 @@ export default function ArtistRoomSettings({
       else if (confirm === "unpublish") setInfo((cur) => (cur ? { ...cur, listed: false } : cur));
       setConfirm(null);
     } catch (err) {
-      // State is left exactly as the server last reported it — no optimistic flip.
+      // State is left exactly as the server last reported it, no optimistic flip.
       setActionError(err?.message || "That didn't save. Please try again.");
     } finally {
       setSaving(false);
@@ -182,7 +182,7 @@ export default function ArtistRoomSettings({
           <p className={`ars-state ${listed ? "ars-state-listed" : "ars-state-unlisted"}`}>
             {listed
               ? `Listed in the public gallery${info.publishedAt ? ` since ${new Date(info.publishedAt).toLocaleDateString()}` : ""}.`
-              : "Not listed — this studio does not appear in gallery search."}
+              : "Not listed, this studio does not appear in gallery search."}
           </p>
           {!listed ? (
             <p className="ars-note">
@@ -194,7 +194,7 @@ export default function ArtistRoomSettings({
           {hidden ? (
             <p className="ars-moderation" role="alert">
               Moderators have hidden this studio from the gallery. Publishing
-              controls are disabled — this can’t be overridden from here.
+              controls are disabled, this can’t be overridden from here.
             </p>
           ) : null}
 
@@ -236,7 +236,7 @@ export default function ArtistRoomSettings({
                 onChange={(e) => setInktober(e.target.checked)}
               />
               <span>
-                Join Inktober 2026 — ink &amp; pencil tools only in this studio
+                Join Inktober 2026, ink &amp; pencil tools only in this studio
                 during October. Prompts come from the server; the mural is
                 never auto-wiped.
               </span>
@@ -268,7 +268,7 @@ export default function ArtistRoomSettings({
               <div className="ars-confirm" role="alertdialog" aria-label="Confirm unpublishing">
                 <p>
                   Remove this studio from gallery search? <strong>The room link
-                  keeps working</strong> — anyone who has it can still view the
+                  keeps working</strong>, anyone who has it can still view the
                   studio. Unpublishing only stops new people discovering it.
                 </p>
                 <div className="ars-confirm-actions">

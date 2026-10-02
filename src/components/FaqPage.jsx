@@ -1,4 +1,4 @@
-// Safety & FAQ — a plain-language page parents and kids can read to understand
+// Safety & FAQ, a plain-language page parents and kids can read to understand
 // exactly how Drawesome keeps rooms kind, what data we keep, and how to get help.
 // Written to match how the app actually works today (not aspirational).
 import SiteNav from "./SiteNav";
@@ -21,7 +21,7 @@ export default function FaqPage({ onNavigate }) {
         <p className="site-lead">
           Drawesome is a paint-together studio for kids and teens. Here’s exactly how it works, how we
           keep rooms kind, and how to get help. If you’re a grown-up deciding whether it’s okay for your
-          kid — this page is for you.
+          kid, this page is for you.
         </p>
 
         <QA q="Is Drawesome safe for my kid?">
@@ -32,7 +32,7 @@ export default function FaqPage({ onNavigate }) {
           </p>
           <p>These tools can miss harmful content. For younger artists, start in a private room with people you know and an adult present.</p>
           <p>
-            <strong>Private rooms</strong> — the ones you make by sharing a short code — are meant for people
+            <strong>Private rooms</strong>, the ones you make by sharing a short code, are meant for people
             you already know. Serious/explicit chat is filtered everywhere. Private rooms are unlisted,
             but anyone who receives their link or code can join. Keep invitations with people you trust.
           </p>
@@ -44,7 +44,7 @@ export default function FaqPage({ onNavigate }) {
 
         <QA q="Do you need an account?">
           <p>
-            No. Drawing is guest-friendly — tap in and paint. Where accounts are available, an optional
+            No. Drawing is guest-friendly, tap in and paint. Where accounts are available, an optional
             sign-in adds gallery sync and persistent room ownership. Free drawing and rooms work signed out.
           </p>
         </QA>
@@ -52,13 +52,13 @@ export default function FaqPage({ onNavigate }) {
         <QA q="How old should you be?">
           <p>
             Drawesome is made for kids and teens. If you’re a younger kid, please make sure a parent or
-            guardian is okay with you drawing online with others. Grown-ups: you know your kid best — the
+            guardian is okay with you drawing online with others. Grown-ups: you know your kid best, the
             <a href="/privacy" onClick={(e) => { e.preventDefault(); onNavigate("/privacy"); }}> Privacy page</a> lists
             exactly what we store.
           </p>
         </QA>
 
-        <QA q="What information do you collect — and can I delete it?">
+        <QA q="What information do you collect, and can I delete it?">
           <p>
             Settings and drafts can live on your device. Shared-room drawings and chat, server-saved art,
             and public Wall posts also use server storage, including when you are signed out. The Account
@@ -74,7 +74,7 @@ export default function FaqPage({ onNavigate }) {
           </p>
         </QA>
 
-        <QA q="Someone is bugging me — can I block them?">
+        <QA q="Someone is bugging me, can I block them?">
           <p>
             Yes. You can hide a specific person’s chat and cursor just for you, without waiting for a host.
             Room hosts can also mute or remove someone for everyone.
@@ -83,9 +83,9 @@ export default function FaqPage({ onNavigate }) {
 
         <QA q="What are the rules? (Be kind!)">
           <ul>
-            <li>Be friendly — you’re drawing <em>with</em> people, not at them.</li>
+            <li>Be friendly, you’re drawing <em>with</em> people, not at them.</li>
             <li>No mean, gross, scary, or grown-up content.</li>
-            <li>Never share your real name, address, school, phone, or socials — and don’t ask others for theirs.</li>
+            <li>Never share your real name, address, school, phone, or socials, and don’t ask others for theirs.</li>
             <li>Don’t wreck other people’s art on purpose.</li>
             <li>If something feels wrong, tell a grown-up and use Report.</li>
           </ul>
@@ -93,8 +93,8 @@ export default function FaqPage({ onNavigate }) {
 
         <QA q="Who runs Drawesome? How do I reach you?">
           <p>
-            We’re a small team. For anything safety-related — a report that needs a human, a privacy request,
-            or a worry — email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.
+            We’re a small team. For anything safety-related, a report that needs a human, a privacy request,
+            or a worry, email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.
           </p>
         </QA>
 

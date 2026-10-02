@@ -1,4 +1,4 @@
-// Client-side animation video export. Everything runs in the browser — the
+// Client-side animation video export. Everything runs in the browser, the
 // server has no rendering stack (and never needs one: the brush engine only
 // exists here).
 //
@@ -9,7 +9,7 @@
 //
 // Frames are drawn ON DEMAND through a caller-supplied draw() callback into one
 // reusable canvas, so a 24-frame export never holds 24 full-res snapshots.
-// Timestamps honor the authored per-frame durations exactly — no fixed-fps
+// Timestamps honor the authored per-frame durations exactly, no fixed-fps
 // resampling, so a 500ms hold really holds.
 //
 // Minutes-long films (stage 3): the muxer streams its output into Blob parts
@@ -250,7 +250,7 @@ async function encodeWithWebCodecs(job, attempt, config) {
 }
 
 // Last resort: play the animation onto a captured canvas in real time. Total
-// wall time = the animation's length (loops are seconds long — acceptable).
+// wall time = the animation's length (loops are seconds long, acceptable).
 // No soundtrack on this rung.
 async function recordWithMediaRecorder({ width, height, count, durationMsAt, draw, onProgress, signal }) {
   const canvas = document.createElement("canvas");
@@ -329,7 +329,7 @@ export async function encodeAnimationVideo(job) {
         return await encodeWithWebCodecs(sized, attempt, config);
       } catch (error) {
         if (error?.name === "AbortError") throw error;
-        // Codec claimed support but failed mid-encode — try the next rung.
+        // Codec claimed support but failed mid-encode, try the next rung.
       }
     }
   }

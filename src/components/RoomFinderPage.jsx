@@ -1,6 +1,6 @@
 // Room Finder: browse every open public room and jump into one. Reuses the live
 // /api/rooms/public feed (featured prompt rooms first, then any active ad-hoc rooms).
-// Signed in, it opens with YOUR rooms first ("pick up where you left off") —
+// Signed in, it opens with YOUR rooms first ("pick up where you left off") -
 // logging in lands here, so a returning artist is one tap from their work.
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
@@ -39,7 +39,7 @@ export default function RoomFinderPage({ onNavigate }) {
     };
   }, []);
 
-  // "Where are the people?" — the feed already carries live counts, but a flat
+  // "Where are the people?", the feed already carries live counts, but a flat
   // grid of 20 identical "Be the first!" cards answers that question with a
   // shrug. Busy rooms rise to the top, cards with someone in them get a hot
   // highlight, and when nobody is anywhere we say so once instead of 20 times.
@@ -93,7 +93,7 @@ export default function RoomFinderPage({ onNavigate }) {
               fontWeight: 600,
             }}
           >
-            Nobody&rsquo;s drawing this minute. Pick any room &mdash; your canvas lights up the
+            Nobody&rsquo;s drawing this minute. Pick any room, your canvas lights up the
             moment you&rsquo;re in, and a friend can join with its code.
           </p>
         ) : null}

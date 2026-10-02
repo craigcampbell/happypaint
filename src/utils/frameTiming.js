@@ -1,6 +1,6 @@
 // Server-negotiated per-frame hold timing (Phase 4). The room handshake and
 // `room_animation` broadcasts may carry `frameTiming: {minMs, maxMs, defaultMs}`
-// — today only FLIPBOOK does (1000..3000, default 1000); every other room
+//, today only FLIPBOOK does (1000..3000, default 1000); every other room
 // leaves it null and keeps the local 40..10000ms slider. This module is the
 // ONE place that validates the wire shape and derives the clamped slider
 // steps, so the studio, the film strip and any future consumer can't drift.

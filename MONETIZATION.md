@@ -109,6 +109,6 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
   past-due grace boundary, cancellation at period end, and webhook retries.
 - With Google test inventory: open chat and confirm the sponsor slot; shorten
   `VITE_AD_BREAK_MINUTES` only in a local build to exercise natural breaks.
-- `node scripts/price-ads-verify.mjs` — isolated boot that asserts the served
+- `node scripts/price-ads-verify.mjs`, isolated boot that asserts the served
   Family prices, the `/ads.txt` 404-when-unset / GAM-line-when-set gate, and
   that no stale price leaks into the `/family` HTML.

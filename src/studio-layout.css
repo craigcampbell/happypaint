@@ -1,10 +1,10 @@
 /* ==========================================================================
-   Studio layout tiers — the canvas is the page.
+   Studio layout tiers, the canvas is the page.
 
    The tier is resolved in JS (src/hooks/useLayoutTier.js) and stamped on the
    shell as data-layout="desktop|tablet|phone"; the shell also carries
    .rail-open / .rail-collapsed for the tool rail. The media queries that make
-   a tier "compact" live in that hook — keep them in sync.
+   a tier "compact" live in that hook, keep them in sync.
 
      desktop  docked 328px rail that COLLAPSES (remembered), floating studio
               menu, slim in-flow room bar, zero padding: the canvas fills the
@@ -118,7 +118,7 @@
   display: none;
 }
 
-/* Slim, in-flow room bar (not floated over the art — you don't want to draw
+/* Slim, in-flow room bar (not floated over the art, you don't want to draw
    under it). The floating "Studio" menu button sits in its left gutter. */
 .studio-shell[data-layout="desktop"] .mp-bar {
   min-height: 52px;
@@ -328,8 +328,8 @@
 
 /* ---- Left-hand mode: the tools open on the LEFT --------------------------- */
 /* The Hand & pen preference (utils/inputPrefs) stamps data-hand="left" on the
-   shell. It mirrors the tool rail — the docked desktop column and the tablet
-   side sheet — plus the floating chrome that would otherwise sit under the
+   shell. It mirrors the tool rail, the docked desktop column and the tablet
+   side sheet, plus the floating chrome that would otherwise sit under the
    open sheet. Phones use a bottom sheet, so there is nothing to flip there. */
 .studio-shell[data-layout="desktop"][data-hand="left"] {
   grid-template-columns: 328px minmax(0, 1fr);

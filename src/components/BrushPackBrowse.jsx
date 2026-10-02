@@ -1,7 +1,7 @@
 // Community Brush Pack browse surface.
 //
 // Shows APPROVED + public brush packs (seed packs + any locally-approved pack).
-// Browse is by pack / topic — NOT by finding people (no public people search).
+// Browse is by pack / topic: NOT by finding people (no public people search).
 // Each card shows: name, preview swatches, tags, author space, and the remix
 // permission. "Get / Add to my brushes" copies the pack's brushes into the
 // user's locker (records asset_uses); StudioApp owns the locker write so the
@@ -39,7 +39,7 @@ function PackCard({ pack, onGet, gotPackIds }) {
       </div>
       <p className="brush-pack-remix">{remixLabel(pack.remix_permission)} · {brushCount} brushes</p>
       <button type="button" className="full-width" disabled={got} onClick={() => onGet(pack)}>
-        {got ? "Added to your brushes" : "Get — add to my brushes"}
+        {got ? "Added to your brushes" : "Get, add to my brushes"}
       </button>
     </article>
   );
@@ -48,7 +48,7 @@ function PackCard({ pack, onGet, gotPackIds }) {
 export default function BrushPackBrowse({ query = "", onGet }) {
   const [gotPackIds, setGotPackIds] = useState([]);
   const [notice, setNotice] = useState(
-    "Community packs are moderated before they go public. Browse by pack and topic — never by searching for people.",
+    "Community packs are moderated before they go public. Browse by pack and topic, never by searching for people.",
   );
 
   const packs = useMemo(() => {
@@ -69,7 +69,7 @@ export default function BrushPackBrowse({ query = "", onGet }) {
   const handleGet = async (pack) => {
     const added = await onGet?.(pack);
     if (added === false) {
-      setNotice("Couldn't add those brushes — storage may be full.");
+      setNotice("Couldn't add those brushes, storage may be full.");
       return;
     }
     setGotPackIds((current) => (current.includes(pack.id) ? current : [...current, pack.id]));

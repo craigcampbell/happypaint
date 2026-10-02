@@ -2,7 +2,7 @@
 //
 // Two problems this solves (see the phase-2 room-loading work):
 //
-// 1) RACE — a joining/fetching socket entered the broadcast roster BEFORE its
+// 1) RACE, a joining/fetching socket entered the broadcast roster BEFORE its
 //    async catch-up finished, so live ops (and clears/structure changes) could
 //    reach it ahead of the history frame and then AGAIN inside the computed
 //    tail: duplicates, out-of-order ink, stale structure. This module gates
@@ -19,7 +19,7 @@
 //    inside that state). A newer scene_fetch supersedes an in-flight one: the
 //    stale fetch never completes late.
 //
-// 2) PERF — scene histories (join / scene_fetch / modwatch resync) bypassed
+// 2) PERF, scene histories (join / scene_fetch / modwatch resync) bypassed
 //    the shared gzip cache: every fetch re-scanned the whole visible history
 //    and re-stringified the scene on the event loop. Scenes now get the same
 //    treatment as the full-room frame: one gzipped frame per scene, ONE shared
@@ -28,12 +28,12 @@
 //    layer structure. The cache is bounded (entry count + bytes, LRU).
 //
 // Queue bounds: a gate queue that overflows CATCHUP_QUEUE_MAX_MESSAGES /
-// CATCHUP_QUEUE_MAX_BYTES closes the socket with 1013 ("try again") — the
+// CATCHUP_QUEUE_MAX_BYTES closes the socket with 1013 ("try again"), the
 // client reconnects and re-catches-up from the durable history rather than
 // receiving a silently-truncated stream. Only ephemeral traffic is ever
 // droppable; durable ops are disconnect/resync, never discard.
 //
-// Phase-3 note: the reusable seam is runCatchup(ws, room, scope, deliver) —
+// Phase-3 note: the reusable seam is runCatchup(ws, room, scope, deliver) -
 // it owns gating, supersede, queue bounds, liveness checks and the ordered
 // flush. A checkpoint baseline deliverer (manifest + assets + ordered op tail)
 // can plug in as `deliver` and inherit exactly-once ordering for free, as long
@@ -55,7 +55,7 @@ const GATED_TYPES = new Set([
 // Last-wins states whose message carries everything the client needs: safe to
 // deliver AFTER any baseline, in order, without duplicating baseline content.
 const INDEPENDENT_TYPES = new Set(['sheet', 'storybook_state', 'room_animation', 'scene_add', 'scene_set', 'scene_del']);
-// Give up scanning for a scene tail past this many history entries — the
+// Give up scanning for a scene tail past this many history entries, the
 // watermark is hopelessly behind and a rebuild is cheaper (bounded work per
 // warm fetch; legitimate large histories still ride one shared rebuild).
 const TAIL_SCAN_MAX = 8000;
@@ -137,7 +137,7 @@ export function createCatchup(deps) {
       cache.entries.delete(oldest.value);
     }
   }
-  // Ops newer than the cached frame that belong to the scene — binary search +
+  // Ops newer than the cached frame that belong to the scene, binary search +
   // bounded scan, never a whole-history walk. Null = can't extend (rebuild).
   function sceneTailAfter(room, sceneId, lastOpId) {
     const history = room.history;
@@ -223,9 +223,9 @@ export function createCatchup(deps) {
   }
 
   // Ordered flush of the gated queue after the baseline landed. `outcome`:
-  //  - { kind:'frame', throughOpId } — gz frame + tail delivered through that opId
-  //  - { kind:'fresh', throughOpId } — complete state delivered (covers everything ≤ it)
-  //  - { kind:'none' } — nothing delivered (dead socket/superseded): drop the queue.
+  //  - { kind:'frame', throughOpId }, gz frame + tail delivered through that opId
+  //  - { kind:'fresh', throughOpId }, complete state delivered (covers everything ≤ it)
+  //  - { kind:'none' }, nothing delivered (dead socket/superseded): drop the queue.
   function flushQueue(ws, room, gate, outcome) {
     const queue = gate.queue;
     if (!queue.length || !outcome || outcome.kind === 'none') return;
@@ -247,10 +247,10 @@ export function createCatchup(deps) {
         continue;
       }
       if (INDEPENDENT_TYPES.has(entry.type)) { sends.push(entry); continue; }
-      // A wholesale/structure event survived a supposedly-valid frame build —
+      // A wholesale/structure event survived a supposedly-valid frame build -
       // the invalidation keys missed a path. Resync fresh rather than guess.
       if (outcome.kind === 'frame') { needsFresh = true; break; }
-      // fresh: the event is inside the delivered state — drop.
+      // fresh: the event is inside the delivered state, drop.
     }
     try {
       if (needsFresh) {
@@ -273,7 +273,7 @@ export function createCatchup(deps) {
 
   // The reusable seam (phase 3): gate the socket, run the async deliverer,
   // then flush the queue in order. Only the LATEST catch-up on a socket owns
-  // the flush — a superseded deliverer returns { kind:'none' } and vanishes.
+  // the flush, a superseded deliverer returns { kind:'none' } and vanishes.
   async function runCatchup(ws, room, scope, deliver) {
     const gate = beginGate(ws, scope);
     const epoch = gate.epoch;
@@ -287,7 +287,7 @@ export function createCatchup(deps) {
     ws.catchup = null; // ungate BEFORE flushing
     if (ws.readyState !== 1 || rooms.get(room.code) !== room) return;
     if (!outcome) {
-      // The deliverer failed: never leave a gated socket without a baseline —
+      // The deliverer failed: never leave a gated socket without a baseline -
       // fall back to the complete current state, then flush what queued.
       try { outcome = sendFresh(ws, room, scope, { fallback: true }); } catch { try { ws.close(1013, 'catch-up failed'); } catch { /* gone */ } return; }
     }
@@ -368,7 +368,7 @@ export function createCatchup(deps) {
     }
     const built = await building;
     // The shared build populates the cache even when THIS awaiter was
-    // superseded — otherwise a join immediately followed by a scene_fetch
+    // superseded, otherwise a join immediately followed by a scene_fetch
     // would waste the join's build and force the next client to rebuild.
     if (built) cachePut(cache, built);
     if (!isCurrent(ws, gate, epoch)) return { kind: 'none' }; // superseded fetch
@@ -404,7 +404,7 @@ export function createCatchup(deps) {
     // The phase-3 seam: runCatchup owns gating/supersede/bounds/flush around
     // any async baseline deliverer; isCurrent is the liveness test deliverers
     // use after each await; sendFresh is the complete-state fallback.
-    // deliverRoomVariant is the ordinary full/spectator gz-frame deliverer —
+    // deliverRoomVariant is the ordinary full/spectator gz-frame deliverer -
     // the checkpoint service (server/checkpoints.js) calls it as its in-gate
     // fallback whenever a checkpoint baseline can't be served. deliverScene
     // is the same fallback for the phase-4 scene checkpoint path.

@@ -1,8 +1,8 @@
-# Drawesome — Architecture
+# Drawesome: Architecture
 
 A real-time, paint-together drawing studio for kids and friends, hosted at
 **drawesome.art**. Mobile/tablet-first. Self-hosted in Docker behind a Cloudflare
-tunnel — no cloud bill, all data on disk.
+tunnel, no cloud bill, all data on disk.
 
 > New here? Read this file, then [AGENTS.md](AGENTS.md) (how to work in the code)
 > and [ROADMAP.md](ROADMAP.md) (vision + what's next). Operational guides:
@@ -28,24 +28,24 @@ Three containers, one folder, one domain:
                     └──────────────────────┘   └──────────────────────────┘
 ```
 
-- **(1) app** — `server.js`: a single Node process that serves the built Vite SPA
+- **(1) app**, `server.js`: a single Node process that serves the built Vite SPA
   (`dist/`), a WebSocket relay at `/ws`, and the REST API. All on one port (8787)
   so one tunnel route covers page + socket.
-- **(2) pocketbase** — accounts (Google OAuth), the cross-device gallery, file
+- **(2) pocketbase**, accounts (Google OAuth), the cross-device gallery, file
   storage. The app validates PocketBase tokens but holds **no secrets**.
-- **(3) cloudflared** — the Cloudflare tunnel, in the stack (compose profile
+- **(3) cloudflared**, the Cloudflare tunnel, in the stack (compose profile
   `tunnel`). Routes the two hostnames at the **service names** `app:8787` /
   `pocketbase:8090`.
 
 **Sign-in is OPTIONAL everywhere.** With PocketBase unconfigured (`VITE_PB_URL` /
-`PB_URL` unset) the whole app runs fully local + anonymous — drawing, rooms,
+`PB_URL` unset) the whole app runs fully local + anonymous, drawing, rooms,
 coloring sheets, play-money drops all work. Accounts only add ownership/host
 powers and cross-device gallery sync. **Every account feature is env-gated** so
 nothing breaks when unconfigured. This is the single most important invariant.
 
 ## Frontend (React + Vite)
 
-- **Studio component.** `src/App.jsx` exports `StudioApp` — canvas, tools,
+- **Studio component.** `src/App.jsx` exports `StudioApp`, canvas, tools,
   layers, loop/animation, chat, multiplayer, economy, modals.
 - **Route loading.** `src/Router.jsx` owns the `pathname` router and lazy-loads
   the studio and supporting pages. `src/main.jsx` loads shared styles once.
@@ -64,7 +64,7 @@ nothing breaks when unconfigured. This is the single most important invariant.
   `sync.js` (gallery ↔ PocketBase `snapshots`), `economy.js` (play-money wallet),
   `accountDeletion.js` (App-Review-grade delete), `paintSpace.js`, `idb.js`, etc.
 
-## Realtime model — one shared canvas
+## Realtime model, one shared canvas
 
 The defining design choice: **one shared canvas** - everyone paints the same
 document, and the LAYER a stroke belongs to is shared state. Every op carries
@@ -79,7 +79,7 @@ The server is an op-agnostic relay + store:
 
 - Clients send `{type:'op', op:{kind, ...}}`; the server tags it with the author,
   appends to a capped per-room history (`MAX_HISTORY` 20000 for private rooms,
-  `MAX_PUBLIC_HISTORY` 12000 for public ones — public rooms wipe every 3 days
+  `MAX_PUBLIC_HISTORY` 12000 for public ones, public rooms wipe every 3 days
   and are the ones that go viral), and rebroadcasts. Ops are the only WS
   mutation with size caps but, until 2026-09, no rate cap: a per-socket token
   bucket (`OP_RATE_PER_SEC` 30, `OP_RATE_BURST` 120) now bounds how MANY, far
@@ -91,8 +91,8 @@ The server is an op-agnostic relay + store:
   `DecompressionStream` exists; `src/utils/wsInflate.js` decodes it in arrival
   order), plus the ops newer than the frame as ordinary `op` messages. The
   frame is rebuilt lazily once that tail passes `HISTORY_CACHE_TAIL_MAX` (400)
-  or the history changed shape — `room.history` is an accessor whose setter
-  bumps `historyGen`, and `hiddenGen` tracks moderation hides — so a cap-full
+  or the history changed shape, `room.history` is an accessor whose setter
+  bumps `historyGen`, and `hiddenGen` tracks moderation hides, so a cap-full
   room costs one stringify+gzip per ~400 ops instead of one per joiner.
   Clients without `gz=1` (old builds, the test harness by default) get text.
 - **Minutes-long films (2026-09).** Length comes from time and from cold frames:
@@ -103,14 +103,14 @@ The server is an op-agnostic relay + store:
   - Cold frames (`src/utils/frameRasters.js`): in a server-synced room only the
     active frame ± 2 hold live layer canvases. Other frames keep their own op
     list (bucketed from the scene history, appended for every op sent/received)
-    plus a 1600×1000 WebP raster — made from the live pixels when a frame cools,
+    plus a 1600×1000 WebP raster, made from the live pixels when a frame cools,
     or by the offline interpreter on idle. Stepping onto a cold frame allocates
     canvases and replays its ops (`hydrateFrame`); playback/scrub/onion/thumbs/
     exports paint cold frames from a small decoded-raster LRU. Local layer
     stacks flatten when a frame cools (the shared truth is flat). Caps: private
     rooms 60 frames/scene, 40 scenes, 120k ops; the public FLIPBOOK (one scene)
     240 frames (~30s at 8fps), 24k ops; the handshake carries `animMaxFrames`.
-    Multi-frame rooms are never front-trimmed on reload (`historyCeiling`) —
+    Multi-frame rooms are never front-trimmed on reload (`historyCeiling`) -
     that would erase the first frames. `window.__drawesomeFrames()` is a read-only diagnostic.
   - Export (`src/utils/videoExport.js`): past 90s the muxer streams into Blob
     parts (fragmented MP4 / streaming WebM), bitrate scales to keep a film under
@@ -119,7 +119,7 @@ The server is an op-agnostic relay + store:
   - Soundtrack (`set_soundtrack`, `/api/audio/:id`, `src/utils/soundtrack.js`):
     one audio file per animation room, stored under `DATA_DIR/.audio` (8MB,
     magic-byte sniffed, name through the text filter), same accountability gate
-    as a trace photo (private rooms: any member; public: host of an owned room —
+    as a trace photo (private rooms: any member; public: host of an owned room -
     FLIPBOOK never). Meta rides the handshake, `soundtrack` broadcast and
     `/film`; each client fetches + decodes the bytes. Playback starts the track
     at the scene's film offset and restarts when the looped scene wraps.
@@ -153,16 +153,16 @@ The server is an op-agnostic relay + store:
 
 ## Brush engine (`src/utils/brushes.js`)
 
-Every `draw` op is replayed by three consumers — the studio's local stroke,
+Every `draw` op is replayed by three consumers, the studio's local stroke,
 the studio's remote strokes, and `opReplay.applyOp` (history, spectators, film
-export) — and **all three must land byte-identical pixels, forever**: room
+export), and **all three must land byte-identical pixels, forever**: room
 history is a stored op list, so an engine change that repaints an old op
 repaints every mural on the server. The rules that follow from that:
 
 - **Versioned strokes.** Ops without `v` are the pre-2026 legacy segment path
   (`drawBrushSegment`, verbatim). `v: 2` resolves a dab through the static
   `brushCatalog`; `v: 3` carries its own sanitized inline dab
-  (`normalizeInlineDab`, strict clamps — a hostile op degrades to a bounded
+  (`normalizeInlineDab`, strict clamps, a hostile op degrades to a bounded
   brush) embedded at pen-down from `NATURAL_DABS`, so editing that table only
   changes NEW strokes. Old shape branches are frozen; a new look is a new
   shape id.
@@ -184,7 +184,7 @@ repaints every mural on the server. The rules that follow from that:
   it (sampled from the 1/8-scale layer-0 mix map, `mixMap.js`). Sample-free
   brushes (marker, ink, pencil, crayon, dry watercolor, glow) never touch the
   map; watercolor mixes by its multiply glaze instead.
-- **Brush physics** (Stage 5 — dab fields that default 0/off so pre-Stage-5
+- **Brush physics** (Stage 5, dab fields that default 0/off so pre-Stage-5
   ops render byte-identical): `tilt` steers a sprite dab with the pen's lean
   (the wire has carried integer tilt as `tx`/`ty` since Stage 3; touch / mouse
   / old ops read lean 0 and paint the pre-tilt stroke), `splay` spreads the
@@ -192,12 +192,12 @@ repaints every mural on the server. The rules that follow from that:
   reservoir with distance walked (flow fades, dry tooth appears, the commit
   bleed scales with the stroke's average wetness), `diffuse` swells + blooms
   a wash dab that lands on sampled paint (wet-into-wet). All are pure
-  functions of the op's points + dab params + the mix-map sample — the same
+  functions of the op's points + dab params + the mix-map sample, the same
   determinism class as the Stage-3 pigment mixing.
 - **Commit passes** (`prepareStrokeCommit`, order frozen: end → bleed → wet
   edge → impasto → granulation → grain) run inside the buffer before its single
   opacity-stamped commit, on the renderer's **ink bbox** (a tracked superset of
-  the stroke's pixels) rather than the whole allocated buffer — pixel-identical
+  the stroke's pixels) rather than the whole allocated buffer, pixel-identical
   and several times cheaper on CPU-raster canvases (iPad Safari).
 - **Smudge / Blend** (brush id `smudge`, private rooms; `settings.v >= 3` +
   `settings.smudgeMode` "drag" | "blend", one `normalizeSmudgeSettings` for every
@@ -248,7 +248,7 @@ pinned by goldens where noted rather than fixed):
   can commit in a different order (source-over shapes only).
 - Non-hex color strings: the legacy vector branches paint whatever the canvas
   parses, but sprite shapes tint through `parseColorRgb`, whose fallback is
-  near-black — deterministic on every consumer, just not the legacy color.
+  near-black, deterministic on every consumer, just not the legacy color.
 
 ### WebSocket protocol (`/ws?room=CODE&token=…`)
 The optional `token` is a PocketBase access token; the server validates it to
@@ -271,8 +271,8 @@ so two tabs are one vote). The asker can cancel until the last 3s. Member wipes
 keep the chat and can't be "brought back" by members. A bare `clear` from a
 non-host is treated as a request too; a host's Clear (host panel), the Draw &
 Guess drawer's own turn, and flipbook per-frame clears stay instant. A
-moderator's Wipe (`moderateResetRoom`) is a reset — mural, sheet **and** chat,
-as if new — that only the moderator's Undo can restore (the `.chatlog` audit
+moderator's Wipe (`moderateResetRoom`) is a reset, mural, sheet **and** chat,
+as if new, that only the moderator's Undo can restore (the `.chatlog` audit
 trail is never touched). All paths share `wipeMural`.
 
 Client hook: `src/hooks/useMultiplayer.js` (`useMultiplayer(roomId, onMessage,
@@ -299,14 +299,14 @@ token)`), returns `send*` emitters + `disconnect()`.
   person's OWN last chat line; `/api/me/rooms/:code/thumb` serves a card
   picture only for a room in that list. UI: `MyRooms.jsx` on `/rooms` (where a
   log-in lands) and in the studio's Rooms modal. Derived from existing stores
-  (analytics, `.chatlog`, room files) — nothing new to wipe on deletion.
+  (analytics, `.chatlog`, room files), nothing new to wipe on deletion.
 - **Room ownership**: the first signed-in user to enter an unowned room becomes
   `ownerProfileId` (persisted). Owner + `coHosts` = hosts. Host-only WS actions
   (lock/clear/kick/mute/rename/promote) are enforced **server-side** behind
   `isHost(room,user)`. Hardened: kick adds a short `kickedProfiles` ban, mute is
   bound to `mutedProfileIds` (survives reconnect), and a locked room **auto-unlocks
   when the last host leaves** (no bricked canvases). Only the opaque profile id is
-  persisted — never a display name (PII).
+  persisted, never a display name (PII).
 - **Family entitlement**: Stripe webhooks maintain an atomic, event-deduplicated
   profile-to-subscription mapping in `.billing.json`. Access is bounded by the
   last paid-through time (plus a short configured past-due grace), reconciled
@@ -322,7 +322,7 @@ token)`), returns `send*` emitters + `disconnect()`.
   `{type:'mod_auth'}`, never a URL param): a moderator socket that lives in
   `room.mods` instead of `room.users`, so it is invisible to the room's roster,
   headcount, beacons and analytics, works in PRIVATE rooms, and is allowlisted to
-  moderation actions only — it cannot draw, chat or impersonate. Moderation
+  moderation actions only, it cannot draw, chat or impersonate. Moderation
   actions themselves are shared with the host paths (`moderateClear`,
   `moderateHideOps`, …) and attributed to "a moderator". See
   [docs/CONTENT_MODERATION.md](docs/CONTENT_MODERATION.md) §7.
@@ -332,7 +332,7 @@ token)`), returns `send*` emitters + `disconnect()`.
 - Source PNGs (transparent line art) live in `coloring-library/full/`
   (~1.2 GB, git-ignored, a Docker volume). `scripts/prep-sheets.mjs` moves them
   there, generates 256px webp thumbnails (`thumbs/`), and builds `index.json`
-  ({id, title, searchable text}) **straight from the descriptive filenames — no AI
+  ({id, title, searchable text}) **straight from the descriptive filenames, no AI
   classifier**.
 - Server static-serves `/coloring-sheets/full` + `/thumbs`; `GET
   /api/coloring-sheets` returns the index (client searches in-browser);
@@ -342,29 +342,29 @@ token)`), returns `send*` emitters + `disconnect()`.
   active sheet; changing it clears the canvas (confirm). Library sheet ids are
   prefixed `lib:` in the `set_sheet` protocol and loaded as static PNGs.
 
-## Economy — play-money only
+## Economy, play-money only
 
 `economy.js` is a local-first wallet (IndexedDB `economy:v1`). `PLAY_MONEY_ONLY =
 true`: **Drops are earned by painting** (`earnDropsForPainting`, throttled), spent
 on cosmetic items. The real-money rails (in-app purchase catalog, $-equivalence
-display, creator payouts, tips-as-cash) are **OFF and must stay off** — real money
+display, creator payouts, tips-as-cash) are **OFF and must stay off**, real money
 + minors = app-store/COPPA/money-transmission obligations. See [ROADMAP.md](ROADMAP.md).
 
 ## Storage layout
 
 All mutable server state lives under **`DATA_DIR`** (default `.data/` inside the
-app dir — never the app dir itself, so chat logs and the admin key are not one
+app dir, never the app dir itself, so chat logs and the admin key are not one
 careless `express.static` away from being served; a pre-existing root-level
 layout is moved across on boot. `/data` in Docker) so one volume persists
 everything:
-- `.rooms/<ID>.json` — per-room meta: owner, coHosts, locked, mutes, sheet, chat
+- `.rooms/<ID>.json`, per-room meta: owner, coHosts, locked, mutes, sheet, chat
   buffer, `opCount`/`savedAt` (the idle sweep reads these instead of parsing art).
-  `.rooms/<ID>.history.json` — the op history base; `.rooms/<ID>.ops.jsonl` —
+  `.rooms/<ID>.history.json`, the op history base; `.rooms/<ID>.ops.jsonl` -
   ops appended since (see "Realtime model").
-- `.artworks/<key>.json` — anonymous per-device saved art (capped `MAX_SAVES`).
-- `.sheets.json` — admin-uploaded custom sheets. `.sheet-theme.json` — today's pick.
+- `.artworks/<key>.json`, anonymous per-device saved art (capped `MAX_SAVES`).
+- `.sheets.json`, admin-uploaded custom sheets. `.sheet-theme.json`, today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
-- `.billing.json` — opaque Stripe ids, Family paid-through state, processed
+- `.billing.json`, opaque Stripe ids, Family paid-through state, processed
   webhook ids, pending cancellation retries, and adult-attestation version,
   keyed by the PocketBase profile id. Card data and billing email never enter
   this store.
@@ -389,7 +389,7 @@ counts behind the admin key);
 - **Docker**: `Dockerfile` (Node app, multi-stage; bakes `VITE_PB_URL`),
   `pocketbase.Dockerfile` (binary), `docker-compose.yml`. `docker compose
   --profile tunnel up -d --build` = app + pocketbase + cloudflared.
-- **Portability**: the project folder *is* the app — copy it (with `.env` +
+- **Portability**: the project folder *is* the app, copy it (with `.env` +
   `pb_data`/`app_data`/`coloring-library`) to any Docker host. Tunnel token, DNS,
   and Google OAuth are account-side (cloud), not machine-bound. See
   [MOVING.md](MOVING.md).
@@ -406,4 +406,4 @@ counts behind the admin key);
 | `src/components/*` | AccountPanel, HostControlPanel, ColoringSheetModal, LiveAdmin, economy panels |
 | `scripts/prep-sheets.mjs` | One-time coloring-library build (thumbs + index) |
 | `docker-compose.yml` / `Dockerfile` / `pocketbase.Dockerfile` | The stack |
-| `backend/supabase/` | **Legacy** Supabase schema (reference only — we use PocketBase) |
+| `backend/supabase/` | **Legacy** Supabase schema (reference only, we use PocketBase) |

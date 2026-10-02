@@ -69,7 +69,7 @@ Each of these can only be reconsidered through a product-council safety review (
 
 Any AI output that could become shareable, public, or part of a pack must pass moderation before it leaves the creating user's private space.
 
-- Every generation is logged in `ai_generations` with `moderation_status` defaulting to `pending`. The status flows `pending -> approved` or `pending -> blocked`. `moderation_status` is server/admin-set only — clients cannot self-approve. The insert policy forces new rows to `pending`.
+- Every generation is logged in `ai_generations` with `moderation_status` defaulting to `pending`. The status flows `pending -> approved` or `pending -> blocked`. `moderation_status` is server/admin-set only, clients cannot self-approve. The insert policy forces new rows to `pending`.
 - A generation stays usable privately by its creator while `pending`, but cannot be published, shared into a room beyond the creator, or packaged until `approved`.
 - When an AI-assisted output is promoted into a reusable Paint Space asset or pack, it joins the existing community asset pipeline via `asset_moderation_queue` (`target_kind` of `asset` or `pack`, `status` `pending -> approved | rejected | needs_changes`). AI provenance from `ai_generations` is carried into that review so moderators know an item is AI-assisted.
 - `blocked` generations are retained for audit/abuse review but cannot be surfaced or reused.
@@ -91,7 +91,7 @@ AI has a real per-use cost when it runs server-side, so it is metered with credi
 - **AI credits, not unlimited hidden cost.** Server-side AI consumes from a per-profile balance in `ai_credits` (`balance`, non-negative). v1 local/deterministic helpers do not consume credits because they cost nothing per call.
 - **Basic non-AI creation stays free.** Drawing, layers, rooms, saving, sharing, blocking, reporting, and account deletion are never gated behind AI credits.
 - **Guardian-controlled spend for minors.** For minors, AI credit purchase and spend are guardian-controlled, consistent with the economy's guardian-gated purchasing rules. Under-13 accounts cannot independently buy credits.
-- **Sell credit bundles only after safety review.** AI credit bundles (sold for Drops) ship only after the AI safety model — consent, moderation, gating — is live and has passed product-council review. We do not sell credits ahead of the safety apparatus.
+- **Sell credit bundles only after safety review.** AI credit bundles (sold for Drops) ship only after the AI safety model, consent, moderation, gating, is live and has passed product-council review. We do not sell credits ahead of the safety apparatus.
 - **No predatory patterns.** No loot-box randomness, no scarcity pressure aimed at kids, no streaks that push AI spend. Credit balances and AI spend history are visible to guardians.
 
 ## Model & Vendor Posture
@@ -106,9 +106,9 @@ The shipped v1 favors local, deterministic helpers and makes **no external model
 
 ## Rollout Phases
 
-- **v1 — Local helpers, no external calls.** Palette, curated prompt cards, brush recipes, curated background thumbnails, captions/alt-text, and tiny-loop in-betweens run on-device/deterministically. No data leaves the device for generation. No credits consumed. Available (in curated form) in `kid_safe`. Consent is still recorded so transparency and labeling are in place from day one.
-- **v2 — Consented server-side cleanup behind credits + moderation.** Sketch-to-line cleanup (and any helper that genuinely needs a server model) runs server-side only with active consent, consumes `ai_credits`, logs to `ai_generations`, and routes shareable output through the moderation gate. Available in `friends` (and guardian-approved `kid_safe`) with conservative defaults. Vendor must have passed product-council review.
-- **v3 — Broader assist for older / guardian-approved users.** Additional assist for verified adults and guardian-approved teens, still excluding face/person generation, style-cloning of living artists, copyrighted-character default flows, and training-without-consent. Each new capability is added only via a consent-version bump and a safety review.
+- **v1: Local helpers, no external calls.** Palette, curated prompt cards, brush recipes, curated background thumbnails, captions/alt-text, and tiny-loop in-betweens run on-device/deterministically. No data leaves the device for generation. No credits consumed. Available (in curated form) in `kid_safe`. Consent is still recorded so transparency and labeling are in place from day one.
+- **v2: Consented server-side cleanup behind credits + moderation.** Sketch-to-line cleanup (and any helper that genuinely needs a server model) runs server-side only with active consent, consumes `ai_credits`, logs to `ai_generations`, and routes shareable output through the moderation gate. Available in `friends` (and guardian-approved `kid_safe`) with conservative defaults. Vendor must have passed product-council review.
+- **v3: Broader assist for older / guardian-approved users.** Additional assist for verified adults and guardian-approved teens, still excluding face/person generation, style-cloning of living artists, copyrighted-character default flows, and training-without-consent. Each new capability is added only via a consent-version bump and a safety review.
 
 ## Compliance
 

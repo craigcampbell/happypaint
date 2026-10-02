@@ -1,7 +1,7 @@
 // Secret-free PocketBase token validation for the realtime server.
 //
 // PocketBase auth tokens are HS256 JWTs signed with a PER-RECORD secret that
-// lives inside PocketBase's database, so they can't be verified standalone — the
+// lives inside PocketBase's database, so they can't be verified standalone, the
 // correct approach is to let PocketBase validate the token for us. We POST it to
 // the auth-refresh endpoint with the token as a RAW Authorization header (no
 // "Bearer " prefix, per the PocketBase API). 200 → the user record (whose `id`
@@ -54,7 +54,7 @@ export async function verifyAccessToken(token) {
   try {
     const res = await fetch(`${url}/api/collections/users/auth-refresh`, {
       method: 'POST',
-      headers: { Authorization: token }, // RAW token — PocketBase does not want "Bearer "
+      headers: { Authorization: token }, // RAW token: PocketBase does not want "Bearer "
     });
     if (!res.ok) {
       remember(token, null, BAD_TTL_MS);

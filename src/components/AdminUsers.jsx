@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const KEY_STORAGE = "drawesome:adminkey:v1";
 
 function timeAgo(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -70,13 +70,13 @@ const SORTERS = {
 };
 
 // A block on a device/session/ip key is much weaker than one on an account
-// key — say so plainly instead of letting the console overpromise.
+// key, say so plainly instead of letting the console overpromise.
 function blockCaveat(keyKind, userKey) {
   if (keyKind === "account") return null;
   if (String(userKey).startsWith("ip:")) {
-    return "Anonymous block on a shared IP — this can catch a whole school or household network, and the user can move networks to evade it.";
+    return "Anonymous block on a shared IP, this can catch a whole school or household network, and the user can move networks to evade it.";
   }
-  return "Anonymous block on a device/session key — the user can clear site data or open a private window to get a new key. Strongest when they also sign in.";
+  return "Anonymous block on a device/session key, the user can clear site data or open a private window to get a new key. Strongest when they also sign in.";
 }
 
 export default function AdminUsers({ onNavigate }) {
@@ -224,13 +224,13 @@ export default function AdminUsers({ onNavigate }) {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         const closed = Number(data.closed) || 0;
-        setBlockUiFor(key, { open: false, busy: false, reason: "", notice: `Blocked${closed ? ` — closed ${closed} live connection${closed === 1 ? "" : "s"}` : ""}.` });
+        setBlockUiFor(key, { open: false, busy: false, reason: "", notice: `Blocked${closed ? `, closed ${closed} live connection${closed === 1 ? "" : "s"}` : ""}.` });
         refresh();
       } else {
-        setBlockUiFor(key, { busy: false, notice: "Block failed — try again." });
+        setBlockUiFor(key, { busy: false, notice: "Block failed, try again." });
       }
     } catch {
-      setBlockUiFor(key, { busy: false, notice: "Block failed — network error." });
+      setBlockUiFor(key, { busy: false, notice: "Block failed, network error." });
     }
   };
 
@@ -251,10 +251,10 @@ export default function AdminUsers({ onNavigate }) {
         setBlockUiFor(key, { busy: false, notice: "Unblocked." });
         refresh();
       } else {
-        setBlockUiFor(key, { busy: false, notice: "Unblock failed — try again." });
+        setBlockUiFor(key, { busy: false, notice: "Unblock failed, try again." });
       }
     } catch {
-      setBlockUiFor(key, { busy: false, notice: "Unblock failed — network error." });
+      setBlockUiFor(key, { busy: false, notice: "Unblock failed, network error." });
     }
   };
 
@@ -319,7 +319,7 @@ export default function AdminUsers({ onNavigate }) {
         <h2>
           Cross-room users{" "}
           <span className="admin-muted" style={{ fontSize: "0.8rem" }}>
-            one row per person across every room · updated {updatedAt ? timeAgo(updatedAt) : "—"}
+            one row per person across every room · updated {updatedAt ? timeAgo(updatedAt) : "-"}
           </span>
         </h2>
         {totals ? (
@@ -382,7 +382,7 @@ export default function AdminUsers({ onNavigate }) {
         </div>
 
         {sortedUsers.length === 0 ? (
-          <p className="admin-empty">No users match — or no one has painted yet.</p>
+          <p className="admin-empty">No users match, or no one has painted yet.</p>
         ) : (
           <div className="admin-table">
             <div className="admin-table-row admin-table-head">
@@ -442,7 +442,7 @@ export default function AdminUsers({ onNavigate }) {
                       {formatCount(user.sessions)}
                       <small>{formatCount(user.activeSessions)} live</small>
                     </span>
-                    <span>{user.lastRoom || "—"}</span>
+                    <span>{user.lastRoom || "-"}</span>
                     <span>
                       {timeAgo(user.lastSeen)}
                       <small>{formatDuration(user.totalDurationSec)} total</small>
@@ -535,7 +535,7 @@ export default function AdminUsers({ onNavigate }) {
                                   <div key={room.room}>
                                     <strong>
                                       {room.room}
-                                      {room.title ? ` — ${room.title}` : ""}
+                                      {room.title ? `, ${room.title}` : ""}
                                       {room.owned ? " · OWNER" : room.hasOwner ? " · guest of another account" : " · no account owner"}
                                       {room.users > 0 ? ` · ${room.users} in it now` : ""}
                                     </strong>
@@ -558,7 +558,7 @@ export default function AdminUsers({ onNavigate }) {
                             </div>
                           ) : (
                             <p className="admin-muted" style={{ margin: "4px 0 10px" }}>
-                              None — no surviving private room is tied to this {user.keyKind === "account" ? "account" : "person"}.
+                              None, no surviving private room is tied to this {user.keyKind === "account" ? "account" : "person"}.
                             </p>
                           )}
 
@@ -613,7 +613,7 @@ export default function AdminUsers({ onNavigate }) {
           </div>
         )}
         <p className="admin-muted admin-note">
-          Risk is a heuristic from behavior across every room (clears, room-hopping, moderation hits) — always read the
+          Risk is a heuristic from behavior across every room (clears, room-hopping, moderation hits), always read the
           reasons before acting on a score. Blocking applies to every room at once; per-room kicks from the Live admin
           only remove someone from that one room.
         </p>

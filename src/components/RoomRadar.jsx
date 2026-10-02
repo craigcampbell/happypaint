@@ -1,6 +1,6 @@
 // Room Radar (/admin/rooms): the moderator's whole-estate room console. One
-// admin-guarded payload (/api/admin/radar) carries every room's row — activity,
-// reports summary and the chat digest — so 300+ rooms can be searched, sorted
+// admin-guarded payload (/api/admin/radar) carries every room's row, activity,
+// reports summary and the chat digest, so 300+ rooms can be searched, sorted
 // and filtered client-side with no per-room round-trips. Report-driven row
 // highlighting is the headline feature: open reports paint a row amber, urgent
 // reports paint it red, and a chat digest that needs review (but has no report)
@@ -8,7 +8,7 @@
 //
 // Row tint choice: the admin palette in App.css is LIGHT (white .admin-report /
 // .admin-room cards, #0f172a ink), so the tints mirror the existing
-// .admin-chat-row.is-blocked treatment (#fef2f2 / red border) — pale fills with
+// .admin-chat-row.is-blocked treatment (#fef2f2 / red border), pale fills with
 // dark slate text keep ~12:1 contrast and stay readable next to the white rows.
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -17,7 +17,7 @@ const ROW_CAP = 150; // render cap: a 300+ room estate stays snappy without pagi
 const POLL_MS = 10000;
 
 function timeAgo(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -90,7 +90,7 @@ const SORT_LABELS = {
   concerns: "Concerns",
 };
 
-// The room's latest baked thumbnail — same pattern as LiveAdmin's RoomThumb:
+// The room's latest baked thumbnail, same pattern as LiveAdmin's RoomThumb:
 // fetched with the admin header (an <img src> can't carry one) and re-fetched
 // only when the server reports a newer bake.
 function RoomThumb({ id, thumbAt, adminKey }) {
@@ -465,12 +465,12 @@ export default function RoomRadar({ onNavigate }) {
 
         {visibleRooms.length > ROW_CAP ? (
           <p className="admin-muted" style={{ margin: "0 0 10px" }}>
-            showing {ROW_CAP} of {visibleRooms.length} — narrow with search or filters
+            showing {ROW_CAP} of {visibleRooms.length}, narrow with search or filters
           </p>
         ) : null}
 
         {shown.length === 0 ? (
-          <p className="admin-empty">No rooms match — loosen the search or filters.</p>
+          <p className="admin-empty">No rooms match, loosen the search or filters.</p>
         ) : (
           <div className="admin-list">
             {shown.map((room) => {
@@ -500,7 +500,7 @@ export default function RoomRadar({ onNavigate }) {
                   <div className="admin-report-main">
                     <strong>
                       Room {room.id}
-                      {room.title ? ` — ${room.title}` : ""}
+                      {room.title ? `, ${room.title}` : ""}
                     </strong>{" "}
                     {reports.urgent > 0 ? <span className="admin-badge">⚑ {reports.urgent} urgent</span> : null}
                     {reports.open > 0 ? <span className="admin-badge" style={{ background: "#d97706" }}>{reports.open} open</span> : null}
@@ -511,7 +511,7 @@ export default function RoomRadar({ onNavigate }) {
                       <span className="admin-badge" style={{ background: "#334155" }}>🔒 private</span>
                     ) : null}
                     {room.dormant ? (
-                      <span className="admin-badge" style={{ background: "#64748b" }} title="Saved on disk, not loaded — nobody has opened it since the last restart. Watch loads it.">
+                      <span className="admin-badge" style={{ background: "#64748b" }} title="Saved on disk, not loaded, nobody has opened it since the last restart. Watch loads it.">
                         💤 asleep
                       </span>
                     ) : null}
@@ -527,7 +527,7 @@ export default function RoomRadar({ onNavigate }) {
                     {reports.total > 0 ? (
                       <p className="admin-reason">
                         🚩 {reports.open}/{reports.total} reports open{reports.urgent > 0 ? ` (${reports.urgent} urgent)` : ""}
-                        {reports.lastReason ? ` — “${reports.lastReason}”` : ""} · {timeAgo(reports.lastTs)}
+                        {reports.lastReason ? `: “${reports.lastReason}”` : ""} · {timeAgo(reports.lastTs)}
                         {reports.lastSource ? ` · via ${reports.lastSource}` : ""}
                       </p>
                     ) : null}
@@ -568,7 +568,7 @@ export default function RoomRadar({ onNavigate }) {
       {selectedRoom ? (
         <section className="admin-section">
           <h2>
-            Room {selectedRoom.id} {selectedRoom.title ? `— ${selectedRoom.title}` : ""}
+            Room {selectedRoom.id} {selectedRoom.title ? `- ${selectedRoom.title}` : ""}
           </h2>
           <div className="admin-report" style={rowTint(selectedRoom)}>
             <RoomThumb id={selectedRoom.id} thumbAt={selectedRoom.thumbAt} adminKey={adminKey} />
@@ -680,7 +680,7 @@ export default function RoomRadar({ onNavigate }) {
                       <em className="admin-chat-flag">BLOCKED{line.terms?.length ? ` (${line.terms.join(", ")})` : ""} · </em>
                     ) : null}
                     {line.message || "(no text)"}
-                    {line.why?.length ? <span className="admin-muted"> — {line.why.join(", ")}</span> : null}
+                    {line.why?.length ? <span className="admin-muted">, {line.why.join(", ")}</span> : null}
                   </span>
                 </div>
               ))}

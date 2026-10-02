@@ -1,9 +1,9 @@
-// The Painted Planet — Drawesome's community page (replaces the Paint Jar;
+// The Painted Planet: Drawesome's community page (replaces the Paint Jar;
 // /paintjar still routes here). Three things, all fed by GET /api/planet:
 //
 //  1. A spinning painterly GLOBE (globe/PainterlyGlobe.jsx): a real
 //     orthographic sphere rendered on canvas from Natural Earth lon/lat
-//     polygons — washed ocean, brush-glazed countries tinted by recorded
+//     polygons, washed ocean, brush-glazed countries tinted by recorded
 //     activity, wet-edge rims, paint drips hanging off the busiest countries.
 //     Drag to spin it, tap a country for its numbers, click to open its FLAG
 //     ROOM (/join/FLAGxx); a keyboard country selector keeps the back
@@ -11,7 +11,7 @@
 //     under prefers-reduced-motion, offscreen, or a hidden tab.
 //  2. A still nature painting (globe/NatureScene.jsx) that fills in as the
 //     community's recorded strokes pass illustrative milestones. Deliberately
-//     static — no animation at all. Labeled illustrative — never a measured
+//     static, no animation at all. Labeled illustrative, never a measured
 //     saving.
 //  3. The honest numbers underneath, same as before.
 //
@@ -78,7 +78,7 @@ export default function PlanetPage({ onNavigate }) {
   const total = Math.max(sessions || 0, countries.reduce((s, c) => s + (c.count || 0), 0));
   const openFlag = useCallback((code) => onNavigate(`/join/FLAG${code}`), [onNavigate]);
 
-  // Flag rooms with art on them right now (opCount > 0), busiest first — the
+  // Flag rooms with art on them right now (opCount > 0), busiest first, the
   // "where's the action" strip under the globe.
   const activeFlags = useMemo(() => Object.entries(live)
     .filter(([code, v]) => flags.includes(code) && (v.painting > 0 || v.ops > 0))
@@ -103,7 +103,7 @@ export default function PlanetPage({ onNavigate }) {
 
         {status === "error" ? (
           <div className="jar-error" role="alert">
-            <p>We couldn&rsquo;t reach the planet just now — no numbers until it&rsquo;s back.</p>
+            <p>We couldn&rsquo;t reach the planet just now, no numbers until it&rsquo;s back.</p>
             <button type="button" onClick={() => load(false)}>Try again</button>
           </div>
         ) : null}
@@ -116,7 +116,7 @@ export default function PlanetPage({ onNavigate }) {
                 <p className="jar-panel-sub">
                   {countries.length > 0
                     ? `${countries.length} country ${countries.length === 1 ? "group has" : "groups have"} painted here (groups under 5 stay private).`
-                    : "No country groups to show yet — groups under 5 painters stay private."}
+                    : "No country groups to show yet, groups under 5 painters stay private."}
                   {liveTotal > 0 ? ` ${liveTotal} coloring flags right now.` : ""}
                 </p>
               </div>
@@ -154,7 +154,7 @@ export default function PlanetPage({ onNavigate }) {
               <div className="planet-panel-head">
                 <h2 id="planet-scene-title">The scene we&rsquo;re painting together</h2>
                 <p className="jar-panel-sub">
-                  Every recorded stroke on Drawesome adds a little paint to this picture. It fills in as the whole community draws —
+                  Every recorded stroke on Drawesome adds a little paint to this picture. It fills in as the whole community draws -
                   an illustration of how much drawing happens here, not a measured saving of anything.
                 </p>
               </div>
@@ -179,12 +179,12 @@ export default function PlanetPage({ onNavigate }) {
             <section className="jar-note" aria-labelledby="planet-note-title">
               <h2 id="planet-note-title">What the numbers mean</h2>
               <p>
-                Strokes and sessions are <strong>aggregate recorded painting activity</strong> — not unique people, and
+                Strokes and sessions are <strong>aggregate recorded painting activity</strong>, not unique people, and
                 never individual visitors. A country&rsquo;s paint color comes from how many recorded painting sessions
-                started there (coarse, country-level only — nothing more precise is ever kept). The
+                started there (coarse, country-level only, nothing more precise is ever kept). The
                 &ldquo;sheets of paper&rdquo; figure is an <strong>illustrative equivalent</strong>: every {fmt(data.milestones?.strokesPerSheet || 1000)} recorded
                 strokes count as one sheet, and the growing scene above unlocks at illustrative stroke milestones. None of it is a{" "}
-                <strong>measured saving</strong> of paper, trees, paint, water or carbon — it&rsquo;s a friendly way to picture how much
+                <strong>measured saving</strong> of paper, trees, paint, water or carbon, it&rsquo;s a friendly way to picture how much
                 drawing happens here together.
               </p>
               {data.disclaimer ? <p>{data.disclaimer}</p> : null}
@@ -197,7 +197,7 @@ export default function PlanetPage({ onNavigate }) {
 
             <p className="jar-cta">
               <button type="button" className="primary-action" onClick={() => onNavigate("/join/MAIN")}>
-                Add your strokes — start drawing 🖌️
+                Add your strokes, start drawing 🖌️
               </button>
             </p>
           </>

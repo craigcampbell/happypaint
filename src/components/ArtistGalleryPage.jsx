@@ -1,4 +1,4 @@
-// Artist gallery — the public, searchable index of artist studios
+// Artist gallery, the public, searchable index of artist studios
 // (audience 'artist_public') plus the verified-account studio creation form.
 // Contract: docs/ARTIST-ROOMS-CONTRACT.md.
 //
@@ -6,13 +6,13 @@
 //   { rooms: [{ code, title, description, tags, users, ops, event, canWatch }],
 //     total, topTags }
 // Only explicitly listed, non-moderation-hidden artist rooms appear, and the
-// payload carries no account identifiers, emails, or location data — we render
+// payload carries no account identifiers, emails, or location data, we render
 // exactly what the server sends, as plain text.
 //
 // Studio creation is POST /api/rooms with
 //   { audience: "artist_public", title, description, tags, inktober }
 // and an Authorization: Bearer token from the session prop. Creation requires
-// a verified account; the SERVER is the source of truth for that — when
+// a verified account; the SERVER is the source of truth for that, when
 // accounts are unconfigured it answers accounts_required and we show the
 // error instead of faking an identity. Creating a studio does NOT list it in
 // this gallery; publishing is a separate explicit owner action (see
@@ -22,12 +22,12 @@
 // parent wires the route (e.g. /gallery) and passes the props below.
 //
 // Props:
-//   onNavigate(path: string)            — required; SPA navigation (Router's navigate)
+//   onNavigate(path: string), required; SPA navigation (Router's navigate)
 //   session: null | { access_token: string, verified?: boolean, user?: object }
-//                                       — signed-in session; null/undefined = guest.
+//, signed-in session; null/undefined = guest.
 //                                         verified === false shows a verify-account
 //                                         notice instead of the create form.
-//   pageSize?: number                   — gallery page size, default 12 (contract max 60)
+//   pageSize?: number, gallery page size, default 12 (contract max 60)
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
@@ -64,7 +64,7 @@ function readInitialFilters() {
 }
 
 // Parse a comma-separated tag field into plain lowercase tags. Anything that
-// is not letters/numbers/hyphens is stripped — tags are display labels, not
+// is not letters/numbers/hyphens is stripped, tags are display labels, not
 // markup, and the server re-validates.
 function parseTags(input) {
   const seen = new Set();
@@ -106,7 +106,7 @@ function createErrorMessage(status, payload) {
       if (payload && typeof payload.message === "string") return payload.message;
       if (typeof code === "string") return `The server said: ${code}`;
       return status === 401 || status === 403
-        ? "The server refused that — you may need a verified account."
+        ? "The server refused that, you may need a verified account."
         : "Couldn't create the studio right now. Please try again.";
   }
 }
@@ -326,7 +326,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
                 <p>No studios match that search. Try different words, or clear the filters.</p>
               ) : (
                 <p>
-                  No artist studios are listed yet. Yours could be the first —
+                  No artist studios are listed yet. Yours could be the first -
                   create a studio below and publish it when you’re ready.
                 </p>
               )}
@@ -407,7 +407,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
           <h2 id="ag-create-title">Start your own artist studio</h2>
           {!session ? (
             <p className="ag-signin-note">
-              Creating an artist studio needs a verified account — we never fake
+              Creating an artist studio needs a verified account, we never fake
               an identity. Sign in, then come back here to open yours. Drawing in
               the commons stays free and anonymous, as always.
             </p>
@@ -419,7 +419,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
           ) : created ? (
             <div className="ag-created" role="status">
               <p>
-                <strong>Your studio is ready — room code {created.code}.</strong>
+                <strong>Your studio is ready, room code {created.code}.</strong>
               </p>
               <p>
                 It is <em>not</em> listed in this gallery yet. Open it, paint,
@@ -444,7 +444,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
           ) : (
             <form className="ag-create-form" onSubmit={submitCreate}>
               <p className="ag-create-note">
-                Your studio is public to <em>view</em> — only you and painters
+                Your studio is public to <em>view</em>, only you and painters
                 you approve can draw. It won’t appear in this gallery until you
                 publish it yourself.
               </p>
@@ -487,7 +487,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
                   onChange={(e) => setInktober(e.target.checked)}
                 />
                 <span>
-                  Join Inktober 2026 — during October this studio uses ink &amp;
+                  Join Inktober 2026, during October this studio uses ink &amp;
                   pencil tools only, with the day’s prompt from the official
                   challenge. Your mural is never wiped when the prompt changes.
                 </span>

@@ -1,6 +1,6 @@
 # Self-hosting drawesome.art with PocketBase (accounts) in Docker
 
-Everything runs in three containers on your machine — the app, PocketBase, and
+Everything runs in three containers on your machine, the app, PocketBase, and
 the Cloudflare tunnel itself. One `docker compose` command brings the whole thing
 up and Docker restarts it on reboot. No monthly bill, all data on your disk.
 
@@ -11,10 +11,10 @@ up and Docker restarts it on reboot. No monthly bill, all data on your disk.
 ```
 
 Because the tunnel runs *inside* the Docker network, its public hostnames point
-at the **service names** (`app:8787`, `pocketbase:8090`) — not `localhost`.
+at the **service names** (`app:8787`, `pocketbase:8090`), not `localhost`.
 
 > Versions matter: this targets **PocketBase v0.39.x**. PocketBase moves fast and
-> v0.23 was a breaking rewrite — ignore any older tutorial (admins → superusers,
+> v0.23 was a breaking rewrite, ignore any older tutorial (admins → superusers,
 > first-superuser-via-CLI, etc.).
 
 The two values you'll create: a **Google OAuth Client ID + secret** (you paste
@@ -33,7 +33,7 @@ This builds + starts the app and PocketBase and creates `pb_data/` + `app_data/`
 During setup you can reach PocketBase's admin at `http://localhost:8090/_/`.
 
 ## 2. Create the PocketBase admin (superuser) **[you]**
-Since v0.23 the first admin can't be made by visiting the dashboard — create it
+Since v0.23 the first admin can't be made by visiting the dashboard, create it
 via the CLI:
 ```bash
 docker compose exec pocketbase /pb/pocketbase superuser upsert you@example.com a-strong-password
@@ -48,7 +48,7 @@ The tunnel now runs as the `cloudflared` container, so three things change:
    - `drawesome.art` → Service `http://app:8787` *(change from `localhost:8787`)*
    - `pb.drawesome.art` → Service `http://pocketbase:8090` *(add this one)*
 
-   These are the Docker **service names** — cloudflared reaches them because it's
+   These are the Docker **service names**, cloudflared reaches them because it's
    on the same network.
 
 2. **Give the container your tunnel token.** On the host:
@@ -61,7 +61,7 @@ The tunnel now runs as the `cloudflared` container, so three things change:
    TUNNEL_TOKEN=eyJ...your token...
    ```
 
-3. **Stop the host cloudflared** so the connector lives only in Docker — otherwise
+3. **Stop the host cloudflared** so the connector lives only in Docker, otherwise
    the old host connector keeps trying the now-`app:8787` route it can't reach:
    ```bash
    # Windows: stop the "cloudflared" service (services.msc) or Ctrl-C its terminal
@@ -74,7 +74,7 @@ OAuth client ID → Web application**:
 - **Authorized redirect URIs:** `https://pb.drawesome.art/api/oauth2-redirect`
 - **Authorized JavaScript origins:** `https://drawesome.art`
 - (Configure the **OAuth consent screen** first if prompted. Keeping it in
-  "Testing" is fine while it's just family — add testers' emails.)
+  "Testing" is fine while it's just family, add testers' emails.)
 
 Copy the **Client ID** and **Client secret**.
 
@@ -85,7 +85,7 @@ In `https://pb.drawesome.art/_/`: open the **`users`** collection → **Options*
 and **Settings → ... → User IP proxy headers** = `CF-Connecting-IP` (so logs show
 real IPs behind the tunnel).
 
-> The redirect host must match exactly — `https://pb.drawesome.art`. A mismatch
+> The redirect host must match exactly, `https://pb.drawesome.art`. A mismatch
 > (e.g. `127.0.0.1`) is the #1 cause of "redirect_uri_mismatch".
 
 ## 6. Create the `snapshots` collection (for the cross-device gallery)
@@ -114,7 +114,7 @@ VITE_PB_URL=https://pb.drawesome.art
 ```
 This is baked into the SPA at build time.
 
-## 8. Start the full stack — with the tunnel
+## 8. Start the full stack, with the tunnel
 ```bash
 docker compose --profile tunnel up -d --build
 ```
@@ -125,7 +125,7 @@ works, and the whole stack comes back automatically after a reboot.
 
 > Open `https://drawesome.art` → the Account panel's **Continue with Google** now
 > works, and a signed-in grown-up owns + hosts their room with a cross-device
-> gallery. (Plain `docker compose up -d` — no `--profile tunnel` — runs app +
+> gallery. (Plain `docker compose up -d`, no `--profile tunnel`, runs app +
 > PocketBase only, handy for local testing without exposing anything.)
 
 ---
@@ -138,14 +138,14 @@ sh scripts/backup.sh           # writes ./backups/drawesome-backup-<stamp>.tgz
 ```
 For a fully consistent copy, `docker compose down` first, back up, then `up -d`.
 PocketBase also has built-in scheduled **Backups** (Dashboard → Settings →
-Backups) that can push to S3 — nice for off-machine safety.
+Backups) that can push to S3, nice for off-machine safety.
 
 ## Good to know
-- **Sign-in is optional** — anonymous painting always works; accounts only add
+- **Sign-in is optional**, anonymous painting always works; accounts only add
   ownership/host powers and the cross-device gallery.
 - **Account deletion is a true hard delete** (PocketBase removes the user record
-  and cascade-deletes their gallery) — free and always available in the app.
+  and cascade-deletes their gallery), free and always available in the app.
 - **Apple sign-in** can be added later (PocketBase supports it; it needs the
   $99/yr Apple Developer Program and a Services ID, same as anywhere).
-- The **~1GB of coloring pages** import is a separate step I'll wire next — those
+- The **~1GB of coloring pages** import is a separate step I'll wire next, those
   become files on the `app_data` volume.

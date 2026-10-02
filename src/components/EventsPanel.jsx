@@ -1,4 +1,4 @@
-// Event Engine UI — the recurring-event loop on the discovery surface.
+// Event Engine UI, the recurring-event loop on the discovery surface.
 //
 // Renders the daily-prompt + weekend-challenge cards and a list of timed events
 // with their lifecycle phase (upcoming / live / voting / ended), a countdown to
@@ -53,7 +53,7 @@ function PromptCard({ pack, onEnterStudio }) {
 function EventEntries({ eventId, votedPostIds, onVote }) {
   const entries = useMemo(() => getEventEntries(eventId, votedPostIds), [eventId, votedPostIds]);
   if (entries.length === 0) {
-    return <p className="event-empty">No entries yet — be the first to enter this prompt.</p>;
+    return <p className="event-empty">No entries yet, be the first to enter this prompt.</p>;
   }
   return (
     <div className="event-entry-grid">
@@ -101,7 +101,7 @@ function EventCard({ event, votedPostIds, onEnterStudio, onVote }) {
       </div>
 
       {event.status === "upcoming" ? (
-        <p className="event-note">Starts soon — check back to enter.</p>
+        <p className="event-note">Starts soon, check back to enter.</p>
       ) : null}
 
       {event.status === "live" ? (
@@ -112,7 +112,7 @@ function EventCard({ event, votedPostIds, onEnterStudio, onVote }) {
 
       {event.status === "voting" ? (
         <div className="event-voting">
-          <p className="event-note">Voting is open — one vote per person per post.</p>
+          <p className="event-note">Voting is open, one vote per person per post.</p>
           <EventEntries eventId={event.id} votedPostIds={votedPostIds} onVote={onVote} />
         </div>
       ) : null}

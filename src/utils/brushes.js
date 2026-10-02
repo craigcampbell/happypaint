@@ -3,7 +3,7 @@ import { FAMILIES, SPRITE_PX, SPRITE_UNIT, getCarryScratch, getPaperTile, getSmu
 import { LATENT_SIZE, latentToRgb, mixLatent, rgbToLatent } from "./pigment";
 
 // Sprite lifecycle hooks (App.jsx: idle prebuild of the fixed-seed atlases
-// after the studio mounts — pass the IdleDeadline through so the build paces
+// after the studio mounts, pass the IdleDeadline through so the build paces
 // itself one piece per idle slice; release of every backing store on unmount
 // / tab hidden so iOS gets its canvas memory back).
 export { prebuildBrushSprites, releaseBrushSprites } from "./brushSprites";
@@ -12,78 +12,78 @@ export { prebuildBrushSprites, releaseBrushSprites } from "./brushSprites";
 // art box rather than a list of text chips.
 //
 // `dab` (Brush Engine Stage 2): brushes with a dab object render through
-// makeStrokeRenderer — spaced stamps walked along the stroke — instead of the
+// makeStrokeRenderer, spaced stamps walked along the stroke, instead of the
 // legacy drawBrushSegment lines. Ops from these brushes carry settings.v = 2 so
 // every consumer (local / remote / spectator / history replay) routes the same
 // way; brushes WITHOUT a dab entry (spray, eraser, anything custom) stay on the
 // legacy path forever, keeping old history pixel-stable.
-//   spacing  — dab step as a fraction of the dab's current size
-//   minSize  — dab size at zero pressure, as a fraction of settings.size
-//   flow     — per-dab base alpha (stroke opacity is applied ONCE at commit)
-//   shape    — stamp: "round" | "pencil" | "crayon" | "ellipse" | "glow"
+//   spacing, dab step as a fraction of the dab's current size
+//   minSize, dab size at zero pressure, as a fraction of settings.size
+//   flow, per-dab base alpha (stroke opacity is applied ONCE at commit)
+//   shape, stamp: "round" | "pencil" | "crayon" | "ellipse" | "glow"
 //              | "bristle" (oil/acrylic) | "water" (watercolor)
-//   scatter  — perpendicular jitter as a fraction of dab size
-//   rotJitter— random rotation range (radians) around the stroke tangent
-//   grain    — paper-tooth strength etched at commit time (0 = none)
-//   bristles — sub-dab count for shape "bristle" (seed-stable per stroke)
-//   stretch  — bristle-dab elongation along the stroke tangent
-//   wetEdge  — commit-pass darkened-rim strength (0 = none)
-//   impasto  — commit-pass top-left emboss strength (0 = none)
+//   scatter, perpendicular jitter as a fraction of dab size
+//   rotJitter- random rotation range (radians) around the stroke tangent
+//   grain, paper-tooth strength etched at commit time (0 = none)
+//   bristles, sub-dab count for shape "bristle" (seed-stable per stroke)
+//   stretch, bristle-dab elongation along the stroke tangent
+//   wetEdge, commit-pass darkened-rim strength (0 = none)
+//   impasto, commit-pass top-left emboss strength (0 = none)
 //
-// v3 inline dabs (NATURAL_DABS below) add the SPRITE shapes — "wash" |
+// v3 inline dabs (NATURAL_DABS below) add the SPRITE shapes: "wash" |
 // "graphite" | "wax" | "softOval" | "matte" | "loaded" | "halo": one drawImage
 // of a fixed-seed atlas texture (brushSprites.js) per dab, which is what
 // gives a blotch an irregular rim and a pencil its tooth at zero per-dab
-// cost — and these fields:
-//   blend      — "multiply" commits (and previews) the stroke with multiply,
+// cost, and these fields:
+//   blend     : "multiply" commits (and previews) the stroke with multiply,
 //                so overlapping strokes glaze darker (luma guard: see
 //                getStrokeComposite); anything else is source-over
-//   aspect     — sprite stretch along the tangent (x:y); aspectJitter adds a
+//   aspect, sprite stretch along the tangent (x:y); aspectJitter adds a
 //                per-dab roll on top
-//   sizeJitter / flowJitter — per-dab size / alpha rolls (wash: stop cells tiling)
-//   spacingJitter — per-dab ±fraction on the step to the next dab (wash: no
+//   sizeJitter / flowJitter, per-dab size / alpha rolls (wash: stop cells tiling)
+//   spacingJitter, per-dab ±fraction on the step to the next dab (wash: no
 //                fixed period for the rims to braid on)
-//   variants   — how many of the family's atlas variants a stroke may roll
-//   bloom      — wash: chance of a second 1.3x, 0.3-alpha stamp of another variant
-//   dry        — wash: chance (x (1 - pressure)) of a drybrush tooth variant, and
+//   variants, how many of the family's atlas variants a stroke may roll
+//   bloom, wash: chance of a second 1.3x, 0.3-alpha stamp of another variant
+//   dry, wash: chance (x (1 - pressure)) of a drybrush tooth variant, and
 //                the light-touch fade below pressure 0.35
-//   startFlow  — wash: extra pigment load over the first 6 sizes of travel
-//   bleed / granulation — watercolor commit passes (filter-free), see prepareStrokeCommit
-//   laneCull   — loaded: stamp only as many bristle lanes as the dab is wide
-//   mixModel   — "km": the dab color is a Kubelka-Munk pigment mix of what
+//   startFlow, wash: extra pigment load over the first 6 sizes of travel
+//   bleed / granulation, watercolor commit passes (filter-free), see prepareStrokeCommit
+//   laneCull, loaded: stamp only as many bristle lanes as the dab is wide
+//   mixModel  : "km": the dab color is a Kubelka-Munk pigment mix of what
 //                the bristles carry and the paint under the dab (Stage 3:
 //                kmSample in makeStrokeRenderer); absent = the frozen legacy
 //                RGB-lerp wet pickup
-//   mix        — km: the fraction of the under-paint a DRY dab takes on
+//   mix, km: the fraction of the under-paint a DRY dab takes on
 //                (0 = a dry stroke never samples)
-//   pickup     — the fraction a WET dab (settings.wet) takes on; absent =
+//   pickup, the fraction a WET dab (settings.wet) takes on; absent =
 //                the legacy WET_PICKUP table
-//   drag       — how fast the carried color drifts toward what the stroke
+//   drag, how fast the carried color drifts toward what the stroke
 //                passes over (wet; x 0.35 for a dry km stroke)
 //
-// Stage 5 — brush physics. Four dab fields, all defaulting to 0/off so every
+// Stage 5, brush physics. Four dab fields, all defaulting to 0/off so every
 // dab persisted before them renders byte-identical:
-//   tilt     — pen-lean steering (the wire has carried tiltX/tiltY as tx/ty
+//   tilt, pen-lean steering (the wire has carried tiltX/tiltY as tx/ty
 //              since Stage 3): the dab's long axis blends from the stroke
 //              tangent toward the lean azimuth and the stamp widens with lean
-//              (a flat brush / mop laid on its side). Points without tilt —
-//              touch, mouse, every old op — read lean 0 and paint exactly the
+//              (a flat brush / mop laid on its side). Points without tilt -
+//              touch, mouse, every old op, read lean 0 and paint exactly the
 //              pre-tilt stroke. Sprite shapes only.
-//   splay    — pressure splays a `loaded` brush's bristle fan: lane spread
+//   splay, pressure splays a `loaded` brush's bristle fan: lane spread
 //              scales with pressure around a mid-press neutral (light = the
 //              tip, hard = the full fan).
-//   charge   — wash only: the brush's water reservoir, in dab diameters of
+//   charge, wash only: the brush's water reservoir, in dab diameters of
 //              travel. As it drains, flow fades toward half, dry-brush tooth
 //              appears even at full pressure, blooms get rarer, and the
 //              commit-time bleed scales with the stroke's average wetness
 //              (a long stroke ends dry and bleeds less).
-//   diffuse  — wash only: wet-into-wet spread. The dab samples the mix map
+//   diffuse, wash only: wet-into-wet spread. The dab samples the mix map
 //              even in DRY mode (one shared read with the color paths), and
 //              over existing paint it swells and blooms more; over blank
 //              paper nothing changes. Cross-client the read can wobble by a
-//              map cell (the accepted km sampling class — bounded, cosmetic).
-//   pool     — wash only (Stage 6): a leaned round mop deposits asymmetrically
-//              — the dab's center shifts toward the lean azimuth and the stamp
+//              map cell (the accepted km sampling class, bounded, cosmetic).
+//   pool, wash only (Stage 6): a leaned round mop deposits asymmetrically
+//, the dab's center shifts toward the lean azimuth and the stamp
 //              widens a touch along it (pigment pooling "downhill"). Reads the
 //              same per-point tx/ty as tilt; a tilt-less point reads lean 0.
 //
@@ -95,7 +95,7 @@ export const brushCatalog = [
     name: "Marker",
     icon: "🖊️",
     tier: "free",
-    description: "Clean, bold color that darkens where lines cross — for coloring pages and outlines.",
+    description: "Clean, bold color that darkens where lines cross, for coloring pages and outlines.",
     dab: { spacing: 0.1, minSize: 0.22, flow: 1, shape: "round" },
   },
   {
@@ -103,7 +103,7 @@ export const brushCatalog = [
     name: "Crayon",
     icon: "🖍️",
     tier: "free",
-    description: "Waxy, broken coverage with paper grain — layer colors like real wax.",
+    description: "Waxy, broken coverage with paper grain, layer colors like real wax.",
     dab: { spacing: 0.14, minSize: 0.25, flow: 0.8, shape: "crayon", scatter: 0.08, grain: 0.22 },
   },
   {
@@ -111,7 +111,7 @@ export const brushCatalog = [
     name: "Pencil",
     icon: "✏️",
     tier: "free",
-    description: "Grainy graphite line — light for sketching, press harder for darker marks.",
+    description: "Grainy graphite line, light for sketching, press harder for darker marks.",
     dab: { spacing: 0.16, minSize: 0.12, flow: 0.72, shape: "pencil", scatter: 0.05, grain: 0.14 },
   },
   {
@@ -127,24 +127,24 @@ export const brushCatalog = [
     name: "Oil",
     icon: "🛢️",
     tier: "free",
-    description: "Thick, buttery oil with bristle streaks and ridges — lean your pen to steer the brush, press to splay it.",
+    description: "Thick, buttery oil with bristle streaks and ridges, lean your pen to steer the brush, press to splay it.",
     dab: { spacing: 0.08, minSize: 0.3, flow: 0.85, shape: "bristle", bristles: 8, stretch: 2.2, wetEdge: 0.18, impasto: 0.14 },
   },
   {
-    // No `dab`: knife is v3-only (no pre-v3 history) — its look lives entirely
+    // No `dab`: knife is v3-only (no pre-v3 history), its look lives entirely
     // in NATURAL_DABS below, like every brush introduced after Stage 2.
     id: "knife",
     name: "Palette Knife",
     icon: "🔪",
     tier: "free",
-    description: "Thick, flat slabs of paint laid with a palette knife — lean your pen to steer the blade; bold ridges and relief.",
+    description: "Thick, flat slabs of paint laid with a palette knife, lean your pen to steer the blade; bold ridges and relief.",
   },
   {
     id: "acrylic",
     name: "Acrylic",
     icon: "🎨",
     tier: "free",
-    description: "Bold, fast-drying paint with visible brush streaks — leans with your pen and splays as you press.",
+    description: "Bold, fast-drying paint with visible brush streaks, leans with your pen and splays as you press.",
     dab: { spacing: 0.1, minSize: 0.25, flow: 0.95, shape: "bristle", bristles: 5, stretch: 1.7, impasto: 0.1 },
   },
   {
@@ -152,24 +152,24 @@ export const brushCatalog = [
     name: "Watercolor",
     icon: "💧",
     tier: "free",
-    description: "Soft translucent washes with uneven edges and paper texture — the brush runs dry as you paint and blooms into wet paint.",
+    description: "Soft translucent washes with uneven edges and paper texture, the brush runs dry as you paint and blooms into wet paint.",
     dab: { spacing: 0.14, minSize: 0.32, flow: 0.3, shape: "water", wetEdge: 0.25, grain: 0.18 },
   },
   {
-    // No `dab`: v3-only (no pre-v3 history). A wetter, looser wash — more
+    // No `dab`: v3-only (no pre-v3 history). A wetter, looser wash, more
     // pigment bleed, stronger granulation, and heavier wet-on-wet pickup.
     id: "watercolor-wet",
     name: "Wet Wash",
     icon: "🌊",
     tier: "free",
-    description: "A very wet watercolor — a long, juicy stroke that bleeds and pools, and dives into damp paint.",
+    description: "A very wet watercolor, a long, juicy stroke that bleeds and pools, and dives into damp paint.",
   },
   {
     id: "gouache",
     name: "Gouache",
     icon: "🧴",
     tier: "free",
-    description: "Flat matte poster paint with slightly irregular edges — bold color that just covers.",
+    description: "Flat matte poster paint with slightly irregular edges, bold color that just covers.",
     dab: { spacing: 0.1, minSize: 0.25, flow: 0.92, shape: "gouache", grain: 0.08, wetEdge: 0.08 },
   },
   {
@@ -177,13 +177,13 @@ export const brushCatalog = [
     name: "Brushed ink",
     icon: "🖋️",
     tier: "free",
-    description: "A pointed ink brush — press for bold strokes, lift for hairline tapers.",
+    description: "A pointed ink brush, press for bold strokes, lift for hairline tapers.",
     // minSize 0.08 is the whole point: a huge thin-to-thick pressure range, so
     // the stroke is ALL about taper. Crisp round dab, no commit passes.
     dab: { spacing: 0.06, minSize: 0.08, flow: 1, shape: "round" },
   },
   {
-    // No `dab`: spray is already a scatter stamp — it stays on the legacy path
+    // No `dab`: spray is already a scatter stamp, it stays on the legacy path
     // (Stage 2 intentionally excludes it from v2 routing).
     id: "spray",
     name: "Spray",
@@ -201,9 +201,9 @@ export const brushCatalog = [
   },
   {
     // No `dab`: smudge is special-cased BY ID in every consumer. It has no
-    // pigment of its own (noColor) — it moves / softens LAYER 0's existing
+    // pigment of its own (noColor), it moves / softens LAYER 0's existing
     // paint via makeSmudgeRenderer. Its ops carry settings.v = 3 +
-    // settings.smudgeMode ("drag" | "blend" — the Smudge | Blend toggle) +
+    // settings.smudgeMode ("drag" | "blend", the Smudge | Blend toggle) +
     // settings.strength and run as buffered strokes that sample layer 0
     // (makeStrokeEntryCore); legacy ops (no `v`) keep the frozen square
     // renderer, which draws on layer 0 directly. Private rooms only: in
@@ -215,11 +215,11 @@ export const brushCatalog = [
     tier: "free",
     privateOnly: true,
     noColor: true,
-    description: "Drag and blend the paint that's already there — like a finger on wet paint.",
+    description: "Drag and blend the paint that's already there, like a finger on wet paint.",
   },
   {
     // No `dab`: goo is special-cased BY ID in every consumer (Stage 6), like
-    // smudge — it has no dab params and no commit passes. It is the gooey
+    // smudge, it has no dab params and no commit passes. It is the gooey
     // finger paint: displacement + pigment in one dab walk, with `settings.
     // gooiness` (0 = runny, 1 = thick) captured into the op at pen-down.
     // privateOnly: dropped in kid_safe rooms (server + client), like smudge;
@@ -229,14 +229,14 @@ export const brushCatalog = [
     icon: "🫠",
     tier: "free",
     privateOnly: true,
-    description: "Squishy finger paint — drags the color underneath and leaves a gooey blob. Set how thick with Gooeyness.",
+    description: "Squishy finger paint, drags the color underneath and leaves a gooey blob. Set how thick with Gooeyness.",
   },
   {
     id: "glow",
     name: "Glow",
     icon: "✨",
     tier: "free",
-    description: "Smooth neon glow with a soft halo — for sparkles, magic, and night scenes.",
+    description: "Smooth neon glow with a soft halo, for sparkles, magic, and night scenes.",
     dab: { spacing: 0.22, minSize: 0.3, flow: 0.85, shape: "glow" },
   },
 ];
@@ -308,7 +308,7 @@ const NATURAL_DABS = {
     shape: "wash",
     // Rims that land on a fixed period braid into a scallop down the stroke
     // (Stage 2's look): throw each dab sideways, vary its size and its step,
-    // and let it turn — the wash sprite's rim is firmest across the stroke,
+    // and let it turn, the wash sprite's rim is firmest across the stroke,
     // so the turn stays under half a right angle.
     scatter: 0.09,
     rotJitter: 0.55,
@@ -323,7 +323,7 @@ const NATURAL_DABS = {
     // 0.2 / 0.27 sat just under the lab's 0.024 stroke-mean cap; the slight
     // bump trades a touch more edge character for a touch more pop). No
     // wetEdge: the wash sprite's own lateral rim pools 1.14-1.89x its core
-    // (sprite-lab, 7 of 8 variants >= 1.15 — the spec's condition for
+    // (sprite-lab, 7 of 8 variants >= 1.15, the spec's condition for
     // dropping the filter pass), and that pass was the one commit-time
     // ctx.filter blit left on a v3 watercolor, ~half its pen-up cost on a
     // CPU-raster canvas (iPad Safari). Higher pickup = wet strokes drag more
@@ -336,7 +336,7 @@ const NATURAL_DABS = {
     mix: 0,
     pickup: 0.48,
     drag: 0.15,
-    // Stage 5: a real reservoir — the wash runs drier over ~34 dab-widths of
+    // Stage 5: a real reservoir, the wash runs drier over ~34 dab-widths of
     // travel (flow fades, tooth appears, the commit bleed follows the stroke's
     // wetness), and dabs landing on existing paint spread wet-into-wet.
     charge: 34,
@@ -345,7 +345,7 @@ const NATURAL_DABS = {
     pool: 0.5,
   },
   // Wet-on-wet wash: a very wet watercolor. More pigment bleed into the paper,
-  // stronger granulation, and the highest pickup of the family — a wet stroke
+  // stronger granulation, and the highest pickup of the family, a wet stroke
   // visibly drags and pools the color already on the canvas.
   "watercolor-wet": {
     spacing: 0.12,
@@ -384,7 +384,7 @@ const NATURAL_DABS = {
     stretch: 2.4,
     // Stronger impasto (the top-left emboss reads as raised paint ridges),
     // a firmer wet edge, more under-paint mixing, and more canvas tooth than
-    // the first pass — closer to thick, buttery oil out of the tube.
+    // the first pass, closer to thick, buttery oil out of the tube.
     wetEdge: 0.14,
     impasto: 0.22,
     loaded: 1,
@@ -426,7 +426,7 @@ const NATURAL_DABS = {
     mix: 0.22,
     pickup: 0.18,
     drag: 0.12,
-    // Stage 5: a knife is ALL tilt — the blade follows the pen's lean.
+    // Stage 5: a knife is ALL tilt, the blade follows the pen's lean.
     tilt: 0.8,
   },
   acrylic: {
@@ -522,7 +522,7 @@ export function normalizeInlineDab(dab) {
     // drawImages per dab, wash with bloom = 2, loaded = 1 + <= 24 ribbons.
     // aspect / aspectJitter are tighter than the spec's 3 / 1: no shipped dab
     // stretches past 1.6 (+ 0.25 jitter), and a 3 + 1 stretch at size 160 is
-    // a 4 x 160 px cell per dab — the wide, slow rasterisation a hostile op
+    // a 4 x 160 px cell per dab, the wide, slow rasterisation a hostile op
     // would pick, and most of what pushed the pad past MAX_PAD.
     blend: dab.blend === "multiply" ? "multiply" : "source-over",
     aspect: clampNumber(dab.aspect, 1, 0.3, 2),
@@ -593,7 +593,7 @@ export function getStrokeDab(settings) {
   return null;
 }
 
-// The blend mode a stroke's buffer commits (and previews) with — a pure
+// The blend mode a stroke's buffer commits (and previews) with, a pure
 // function of the op settings, decided in ONE place so local / remote /
 // spectator / replay can never disagree. Only a dab that asks for "multiply"
 // AND a color dark enough for multiply to read (luma < 0.92; near-white
@@ -611,7 +611,7 @@ export function getStrokeComposite(settings, dab = getStrokeDab(settings)) {
 }
 
 // A sprite cell is SPRITE_PX wide for a SPRITE_UNIT-px unit radius, so a
-// stamped cell reaches SPRITE_EXTENT (~1.19) radii — the wash rim swells out
+// stamped cell reaches SPRITE_EXTENT (~1.19) radii, the wash rim swells out
 // to there; every other family is transparent past 1 radius, but the cell is
 // what gets drawn, so the box is sized for it.
 const SPRITE_EXTENT = SPRITE_PX / 2 / SPRITE_UNIT;
@@ -620,7 +620,7 @@ const HALO_RADIUS = 2.4; // the glow halo stamp, in dab radii
 const BLOOM_RADIUS = 1.3; // the wash bloom stamp, in dab radii
 
 // Ink-bbox bookkeeping (see makeStrokeRenderer's inkBounds): how far one
-// dab's pixels can reach from its center, in dab RADII, per shape branch —
+// dab's pixels can reach from its center, in dab RADII, per shape branch -
 // the sprite cell (transparent past its circular guard, so a rotated cell's
 // ink stays inside the circle of its larger half-extent) and, for the
 // legacy branches, the widest fleck / ellipse / ribbon / shadow the branch
@@ -639,7 +639,7 @@ const HALO_REACH = HALO_RADIUS * SPRITE_EXTENT;
 const LEGACY_REACH = { round: 1, water: 1, ellipse: 1.6, gouache: 1.3, pencil: 1.9, crayon: 1.9, glow: 4 };
 
 // Widest reach of ONE dab as a multiple of `size` (dab diameter = 1): what a
-// box has to be to hold the whole stamp — stretched ellipses, fanned bristle
+// box has to be to hold the whole stamp, stretched ellipses, fanned bristle
 // ribbons, pencil/crayon flecks, the glow halo. Shared by the cursor tip and
 // the chips (box sizing) and the stroke-buffer pad. Numbers come from the
 // shape branches in emitDab (fleck throw + fleck radius, ribbon length, blur
@@ -691,7 +691,7 @@ export function dabExtent(dab) {
       extent = 1; // round, water
   }
   // Stage 5: a leaned pen widens the stamp (tilt) and a wash dab spreads
-  // over damp paint (diffuse) — the pad must cover the widest case. Both
+  // over damp paint (diffuse), the pad must cover the widest case. Both
   // default 0 on every pre-Stage-5 dab, which then multiplies by exactly 1.
   if (d.tilt > 0) {
     extent *= 1 + TILT_WIDEN * d.tilt;
@@ -712,14 +712,14 @@ export function dabExtent(dab) {
 // (size x 3 + 40) is the floor: every shape shipped so far reaches less than
 // 3 x size, and shrinking the pad would move buffer allocations / overflow
 // points and so repaint persisted strokes. A wider dab (a hostile inline
-// stretch/scatter) grows it instead of clipping — up to MAX_PAD. The cap is
+// stretch/scatter) grows it instead of clipping, up to MAX_PAD. The cap is
 // what stops a hostile v3 dab (aspect + aspectJitter + sizeJitter + bloom +
 // scatter 2 at size 160 reaches ~13 x size) from pinning the margin at
 // ensure()'s 1020 ceiling, where EVERY point of the stroke overflows the
 // 2048² buffer: a commit-pass + 16 MB re-allocation per point, persisted,
 // so every replay of that op pays it again. 640 moves no legitimate stroke:
 // the widest shipped dab is under 3 x size, so the pad of any stroke the
-// studio persists is at most 3 x 160 + 40 = 520 — inside the cap, and the
+// studio persists is at most 3 x 160 + 40 = 520, inside the cap, and the
 // golden groups (every shipped shape at sizes up to 90, the overflow and
 // symmetry strokes included) prove no buffer rect or overflow point moved.
 const LEGACY_PAD_EXTENT = 3;
@@ -941,7 +941,7 @@ export function parseColorRgb(color) {
 // shiftLightness for numeric channels: same math, no string parsing on the
 // wet-mix hot path (per-bristle tinting of the per-dab blended color, up to
 // 24 strings per 5-bit color-bucket change). Module-level helper rather
-// than a closure per call — the call runs inside the dab loop, so it must
+// than a closure per call, the call runs inside the dab loop, so it must
 // allocate nothing but the string it returns; the concatenation of rounded
 // ints is byte-identical to the template it replaces (goldens prove it).
 function shiftChannel(c, amount) {
@@ -959,13 +959,13 @@ function rgbString(r, g, b) {
 // Wet-canvas pickup strength per brush: how strongly a dab's color blends
 // toward the paint already on layer 0 under it (settings.wet strokes only).
 const WET_PICKUP = { oil: 0.3, acrylic: 0.25, watercolor: 0.45, gouache: 0.2 };
-// How fast the carried color diffuses toward what the stroke passes over —
+// How fast the carried color diffuses toward what the stroke passes over -
 // the "drag" that smears a picked-up color along the rest of the stroke.
 const WET_DRAG = 0.15;
 
 // Pigment mixing (Stage 3: dabs with mixModel "km"). mixLatent's `t` is a
-// Kubelka-Munk concentration share — pigment b lands at weight t² (times its
-// luminance) against (1 - t)² for a — so t = 0.15 is a ~3% blend, not the
+// Kubelka-Munk concentration share, pigment b lands at weight t² (times its
+// luminance) against (1 - t)² for a, so t = 0.15 is a ~3% blend, not the
 // 15% the same number means to the legacy lerp. The dab's mix / pickup /
 // drag keep the lerp's meaning (the FRACTION of the under color a dab takes
 // on); this maps a fraction to the t at which two equal-luminance pigments
@@ -982,7 +982,7 @@ function kmShareToT(share) {
 }
 // How much of its own pigment a loaded brush re-supplies per dab (a fraction,
 // mapped like the dab params): the carried color drifts back toward the
-// brush color at this rate — over paint, so a long ride settles at a mix
+// brush color at this rate, over paint, so a long ride settles at a mix
 // instead of converging to the under-paint, and over blank paper, so a
 // picked-up color fades out over ~20 dabs instead of persisting for the
 // rest of the stroke (Stage 0 found the legacy lerp never recovers). Frozen
@@ -999,7 +999,7 @@ export function pointRand(seed, x, y) {
   return mulberry32((seed ^ (Math.round(x) * 73856093) ^ (Math.round(y) * 19349663)) >>> 0);
 }
 
-// The FIRST draw of pointRand(seed, x, y) without building the generator —
+// The FIRST draw of pointRand(seed, x, y) without building the generator -
 // bit-identical to `pointRand(seed, x, y)()`, zero allocation. The sprite
 // path's per-lane dice use this so a loaded dab allocates nothing.
 function pointRoll(seed, x, y) {
@@ -1015,7 +1015,7 @@ function pointRoll(seed, x, y) {
 // Buffered consumers pass strokeBuffer.base(); identity-space ones (brush
 // studio preview, chips, the DPR-scaled cursor tip) pass nothing, and the
 // current transform is read once per addPoints / stamp call (not per dab)
-// into this reused object. Uniform scale + translation only — that is all
+// into this reused object. Uniform scale + translation only, that is all
 // any consumer applies.
 const IDENTITY_BASE = Object.freeze({ s: 1, tx: 0, ty: 0 });
 const capturedBase = { s: 1, tx: 0, ty: 0 };
@@ -1132,7 +1132,7 @@ export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
   if (settings.brush === "crayon") {
     // Waxy crayon: scatter short, jittered, semi-transparent flecks along the
     // segment so coverage is uneven. The gaps let the color underneath show
-    // through, so layering two crayons blends optically — like real wax on paper.
+    // through, so layering two crayons blends optically, like real wax on paper.
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const dist = Math.hypot(dx, dy);
@@ -1218,9 +1218,9 @@ export function drawBrushSegment(ctx, from, to, settings, rand = Math.random) {
 // utils/inputPrefs pressureFlagsFor) so every consumer agrees:
 //   sizeOn    (default true)  dab size tapers with pressure via the brush's
 //                             minSize; off = every dab at the full size.
-//   opacityOn (default false) dab flow follows pressure — a light touch lays
+//   opacityOn (default false) dab flow follows pressure, a light touch lays
 //                             near-nothing, full press the brush's full flow
-//                             — instead of the fixed half-to-full flow ramp.
+//, instead of the fixed half-to-full flow ramp.
 // The stroke's overall opacity (the buffer commit alpha) is untouched either
 // way: pressure shapes the paint WITHIN the stroke, the slider caps it.
 function pressureFlags(settings) {
@@ -1244,23 +1244,23 @@ function pressureAlpha(pressure) {
 // distance, started flag) and lives in the per-stroke entry next to the
 // Stage-1 buffer, so the 40ms wire batching CANNOT change output: the
 // residual carries across addPoints calls, and per-dab randomness is
-// coordinate-derived (pointRand(seed, dabX, dabY)) — already batching-proof.
+// coordinate-derived (pointRand(seed, dabX, dabY)), already batching-proof.
 // Dabs draw into the Stage-1 stroke buffer at their flow alpha, NEVER at
 // settings.opacity (the buffer commits once at the stroke's opacity).
 
 const TWO_PI = Math.PI * 2;
-const DAB_MIN_STEP = 1.5; // world px — absolute spacing floor (perf guardrail)
+const DAB_MIN_STEP = 1.5; // world px, absolute spacing floor (perf guardrail)
 const DAB_CAP = 600; // dabs per addPoints call before the step doubles
 // Below this radius a sprite dab is an analytic disc instead (a pure function
 // of pressure + size, parity-safe): under ~3 px across the texture can't
-// resolve anyway. Deliberately not the 3 px the spec floated — at 3 px the
+// resolve anyway. Deliberately not the 3 px the spec floated, at 3 px the
 // light end of a pencil / watercolor stroke turned into solid discs.
 const SPRITE_ARC_RADIUS = 1.5;
 // Streak salt for the per-stroke `loaded` variant roll (see makeStrokeRenderer).
 const LOADED_VARIANT_SALT = 0x51ab3e7d;
 // `loaded` ribbons ride ON TOP of a solid sprite body in the same color, so
 // the bristle table's ±8% lightness tints (tuned for ribbons over paper) are
-// widened to ±28% — otherwise the streaks vanish into the body.
+// widened to ±28%, otherwise the streaks vanish into the body.
 const LOADED_TINT_GAIN = 3.5;
 // The wash bloom (second stamp) alpha, as a fraction of the dab's.
 const BLOOM_ALPHA = 0.3;
@@ -1283,7 +1283,7 @@ const TILT_LEAN_FLOOR = 0.04;
 // above it, narrower below (a light touch paints with the tip).
 const SPLAY_NEUTRAL = 0.45;
 // Charge: at an empty reservoir the wash's flow bottoms out at this fraction
-// (the dry-brush tooth takes over — see the dry roll), and the commit bleed
+// (the dry-brush tooth takes over, see the dry roll), and the commit bleed
 // scales between BLEED_DRY and 1 with the stroke's average wetness.
 const CHARGE_FLOW_FLOOR = 0.5;
 const BLEED_DRY = 0.4;
@@ -1293,16 +1293,16 @@ const DIFFUSE_SWELL = 0.55;
 const DIFFUSE_BLOOM = 0.45;
 // Pool (Stage 6): a leaned mop widens by pool x lean x POOL_WIDEN, and its
 // center shifts toward the lean by pool x lean x POOL_SHIFT (a fraction of the
-// dab size — the buffer pad's +40 px absorbs it).
+// dab size, the buffer pad's +40 px absorbs it).
 const POOL_WIDEN = 0.12;
 const POOL_SHIFT = 0.15;
 
 // `getMix` (optional): a sampler (x, y) -> [r, g, b] | null over the 1/8-scale
 // LAYER-0 mix map. Only consulted when the op's settings carry wet: true AND
-// the brush picks up (dab.pickup, else the legacy WET_PICKUP entry) — so dry
+// the brush picks up (dab.pickup, else the legacy WET_PICKUP entry), so dry
 // strokes cost nothing. Wetness rides IN the op settings, so replay is
 // deterministic regardless of later toggles; cross-client differences in the
-// sampled values (canvas AA) are accepted — bounded and cosmetic.
+// sampled values (canvas AA) are accepted, bounded and cosmetic.
 export function makeStrokeRenderer(settings, getMix) {
   const dab = getStrokeDab(settings) || {};
   const color = settings.color;
@@ -1313,8 +1313,8 @@ export function makeStrokeRenderer(settings, getMix) {
   const dragK = dab.drag == null ? WET_DRAG : dab.drag;
   const sampler = typeof getMix === "function" ? getMix : null;
   // Which color path this stroke is on. Ops whose dab says mixModel "km"
-  // mix pigment (kmSample below); every other op — v2 catalog dabs, the
-  // Stage-0 v3 bristle dabs, anything hostile — keeps the frozen RGB-lerp
+  // mix pigment (kmSample below); every other op, v2 catalog dabs, the
+  // Stage-0 v3 bristle dabs, anything hostile, keeps the frozen RGB-lerp
   // wet pickup. A wet km stroke takes on `pickup` of the under-paint, a dry
   // one `mix` (0 = never samples: watercolor's multiply glaze is its dry
   // mixing). Stamp tips are excluded: their tint cache is keyed per color
@@ -1338,7 +1338,7 @@ export function makeStrokeRenderer(settings, getMix) {
   }
   const minSize = dab.minSize == null ? 0.5 : dab.minSize;
   const flowBase = dab.flow == null ? 1 : dab.flow;
-  // Big brushes stamp fewer, larger dabs — blur/fleck cost scales with area.
+  // Big brushes stamp fewer, larger dabs, blur/fleck cost scales with area.
   const spacingK = (dab.spacing == null ? 0.14 : dab.spacing) * (size > 80 ? 1.5 : 1);
   const scatterK = dab.scatter || 0;
   const rotJitter = dab.rotJitter || 0;
@@ -1366,11 +1366,11 @@ export function makeStrokeRenderer(settings, getMix) {
   const startFlowK = dab.startFlow || 1;
   const laneCull = isLoaded && dab.laneCull > 0;
   // --- Stage 5 physics (all 0 / off for every dab persisted before it) ---
-  // tilt: pen-lean steering of the dab (sprite shapes; halo excluded — a
+  // tilt: pen-lean steering of the dab (sprite shapes; halo excluded, a
   // glow has no flat to steer). splay: the loaded fan's pressure spread.
   // charge: the wash reservoir in world px (dab diameters x size); 0 = the
   // bottomless pre-Stage-5 reservoir. diffuse: the wash's wet-into-wet
-  // spread — needs a sampler, so a mapless consumer (previews) skips it.
+  // spread, needs a sampler, so a mapless consumer (previews) skips it.
   const tiltK = spriteShape && !isHalo ? dab.tilt || 0 : 0;
   const splayK = isLoaded ? dab.splay || 0 : 0;
   const chargeRange = isWash && dab.charge > 0 ? dab.charge * size : 0;
@@ -1413,7 +1413,7 @@ export function makeStrokeRenderer(settings, getMix) {
     kmOut = new Float64Array(LATENT_SIZE);
   };
   // `loaded` lanes are baked per VARIANT, so a coherent streak along the
-  // stroke needs ONE variant per stroke — rolled here from the seed like the
+  // stroke needs ONE variant per stroke, rolled here from the seed like the
   // bristle table, not per dab.
   const strokeVariant = isLoaded ? (mulberry32((seedValue ^ LOADED_VARIANT_SALT) >>> 0)() * variantCount) | 0 : -1;
   // Wet-path color cache: the tint strings (ribbons / the tiny-dab disc) are
@@ -1435,7 +1435,7 @@ export function makeStrokeRenderer(settings, getMix) {
 
   // Oil/acrylic bristle table: each bristle's lane / length / width / alpha /
   // tint is rolled ONCE here from the stroke seed (mulberry32(seed ^ index)),
-  // NOT from the per-dab dice — so a bristle holds its exact character along
+  // NOT from the per-dab dice, so a bristle holds its exact character along
   // the whole stroke instead of shimmering dab to dab. Deterministic across
   // clients because it depends only on settings.seed + the catalog count.
   let bristleTable = null;
@@ -1445,7 +1445,7 @@ export function makeStrokeRenderer(settings, getMix) {
     for (let i = 0; i < count; i += 1) {
       const roll = mulberry32((seedValue ^ Math.imul(i, 2654435761)) >>> 0);
       // NOTE: roll() consumption order is frozen (offset → length → width →
-      // alpha → tint) — reordering would re-roll every persisted oil/acrylic
+      // alpha → tint), reordering would re-roll every persisted oil/acrylic
       // stroke's bristle character on the next history replay.
       const entry = {
         offset: (roll() * 2 - 1) * 0.85, // perpendicular lane, fraction of radius
@@ -1484,7 +1484,7 @@ export function makeStrokeRenderer(settings, getMix) {
   // the shape's widest draw (LEGACY_REACH / ribbonReach / the sprite cell),
   // and inkBounds() pads the result by INK_MARGIN. Survives buffer grows
   // (world coords); the overflow sites restart it with the buffer via
-  // prepareStrokeCommit(…, final = false). Deterministic per op stream —
+  // prepareStrokeCommit(…, final = false). Deterministic per op stream -
   // and the passes' pixels don't depend on it anyway (spec P3).
   let inkX0 = Infinity;
   let inkY0 = Infinity;
@@ -1556,7 +1556,7 @@ export function makeStrokeRenderer(settings, getMix) {
     : () => size;
 
   // One stamp. `rand` consumption order is FROZEN per shape, so the same seed
-  // + dab coordinate rolls the same dice on every client — and reordering
+  // + dab coordinate rolls the same dice on every client, and reordering
   // would re-roll every persisted stroke of that shape:
   //   round / water / glow / ellipse / gouache / stamp: scatter → rot
   //   pencil / crayon: scatter → rot → fleck count → per fleck (angle, dist,
@@ -1565,19 +1565,19 @@ export function makeStrokeRenderer(settings, getMix) {
   //   wash / graphite / wax / softOval / matte: variant → scatter → rot →
   //     aspectJitter → sizeJitter → flowJitter; wash then → bloom roll
   //     (→ bloom variant, only when it fires) → dry roll; then (all five)
-  //     → spacing roll (Stage 3, spacingJitter > 0 only — appended LAST)
+  //     → spacing roll (Stage 3, spacingJitter > 0 only, appended LAST)
   //   halo: scatter → rot (no variant roll: halo + core are fixed variants)
   //   loaded: (variant rolled ONCE per stroke from the seed) scatter → rot,
   //     then the lanes' own pointRoll gap dice
   // A roll is consumed only when its parameter is > 0 (scatter, rotJitter,
-  // the jitters, bloom, dry), exactly like the legacy scatter / rot rolls —
+  // the jitters, bloom, dry), exactly like the legacy scatter / rot rolls -
   // the parameters ride in the op, so this is deterministic per stroke.
   //
-  // DAB-PATH-BEGIN — the per-dab hot path. scripts/brush-lab.mjs --guard scans
+  // DAB-PATH-BEGIN, the per-dab hot path. scripts/brush-lab.mjs --guard scans
   // this region: no readbacks, no ctx.filter / shadowBlur, no allocation. The
   // shape branches in emitDab are FROZEN legacy stamps (persisted v1/v2/v3
   // ops replay through them byte-for-byte); their save/restore and the glow
-  // shadowBlur are grandfathered with `guard-ok` — the v3 shapes ship on the
+  // shadowBlur are grandfathered with `guard-ok`, the v3 shapes ship on the
   // sprite path (emitSpriteDab) instead of rewriting these.
 
   // One sprite stamp: compose base x [rotation x scale x translation] into a
@@ -1602,9 +1602,9 @@ export function makeStrokeRenderer(settings, getMix) {
     ? getTintedSprite(shape, variant, dryR, dryG, dryB, true)
     : getTintedSprite(shape, variant, wetR, wetG, wetB));
 
-  // The km dab color — Stage 3. `sampled` is the dab's ONE shared under-
+  // The km dab color: Stage 3. `sampled` is the dab's ONE shared under-
   // paint read (Stage 5 hoisted it out of here so the color paths and the
-  // wash's diffuse physics share a single mix-map read per dab — the same
+  // wash's diffuse physics share a single mix-map read per dab, the same
   // count, at the same coordinates, as the pre-Stage-5 code). Leaves
   // wetR/G/B, the cached strings (rebuilt only on a 5-bit bucket change) and
   // dabExact set for the stamp. With a non-null sample: the bristles take on
@@ -1618,7 +1618,7 @@ export function makeStrokeRenderer(settings, getMix) {
   // (no dice), so local / remote / replay agree. Three mixLatent + one
   // latentToRgb per sampled dab (~1 µs), one + one while relaxing, nothing
   // once relaxed; no allocation (the latents are the renderer's, the sample
-  // array is the mix map's reused one — read before the next sample, never
+  // array is the mix map's reused one, read before the next sample, never
   // kept).
   const kmSample = (sampled) => {
     if (sampled) {
@@ -1698,7 +1698,7 @@ export function makeStrokeRenderer(settings, getMix) {
       }
     }
     // Stage 5 tilt: a leaned pen steers the dab's long axis off the stroke
-    // tangent toward the lean azimuth and widens the stamp across it — the
+    // tangent toward the lean azimuth and widens the stamp across it, the
     // flat-brush / mop-on-its-side read. No dice: a pure function of the
     // point's tx/ty, so a tilt-less point (touch, mouse, every pre-Stage-5
     // op) renders exactly the pre-tilt dab.
@@ -1716,7 +1716,7 @@ export function makeStrokeRenderer(settings, getMix) {
         radius *= 1 + tiltK * lean * TILT_WIDEN;
       }
     }
-    // Stage 6 pool: a leaned round mop deposits pigment downhill of the lean —
+    // Stage 6 pool: a leaned round mop deposits pigment downhill of the lean -
     // the dab's center shifts toward the lean azimuth and it widens a touch.
     // Same per-point tx/ty as tilt; tilt-less points read lean 0 (no shift).
     if (poolK > 0 && (dabTx !== 0 || dabTy !== 0)) {
@@ -1731,7 +1731,7 @@ export function makeStrokeRenderer(settings, getMix) {
       }
     }
     // Stage 5: ONE shared under-paint read per dab, and only when a feature
-    // consumes it — the legacy wet lerp, the km pigment mix, or the wash's
+    // consumes it, the legacy wet lerp, the km pigment mix, or the wash's
     // diffuse. Pre-Stage-5 dabs take the identical read at the identical
     // coordinates (wetPickup > 0 and kmActive already imply a sampler), and
     // the read can't feed back into the stroke: dabs land in the buffer,
@@ -1741,7 +1741,7 @@ export function makeStrokeRenderer(settings, getMix) {
       sampled = getMix(dx, dy);
     }
     // Stage 5 charge: the wash's water reservoir drains with the distance
-    // walked (renderer state — it survives overflow restarts, like startFlow).
+    // walked (renderer state, it survives overflow restarts, like startFlow).
     let chargeLeft = 1;
     if (chargeRange > 0) {
       chargeLeft = 1 - walked / chargeRange;
@@ -1749,7 +1749,7 @@ export function makeStrokeRenderer(settings, getMix) {
         chargeLeft = 0;
       }
     }
-    // Stage 5 diffuse: pigment diffuses into damp paper — a dab that lands
+    // Stage 5 diffuse: pigment diffuses into damp paper, a dab that lands
     // on existing paint swells, and (below) blooms more readily.
     const damp = diffuseK > 0 && sampled != null;
     if (damp) {
@@ -1790,7 +1790,7 @@ export function makeStrokeRenderer(settings, getMix) {
     // Ink bbox: the cell's larger half-extent (a bloom stamps a second cell
     // at BLOOM_RADIUS; the halo at HALO_RADIUS; loaded = body + ribbons).
     inkAdd(dx, dy, radius * (isHalo ? HALO_REACH : isLoaded ? loadedReachK : Math.max(aspect, 1) * SPRITE_EXTENT * (bloomVariant >= 0 ? BLOOM_RADIUS : 1)));
-    // Spacing roll — last in the order (Stage 3): the step to the next dab
+    // Spacing roll, last in the order (Stage 3): the step to the next dab
     // is scaled by 1 ± spacingJitter (see stepScale).
     stepScale = 1;
     if (spacingJitterK > 0) {
@@ -1814,7 +1814,7 @@ export function makeStrokeRenderer(settings, getMix) {
     // Color. Legacy wet (no mixModel): the frozen RGB lerp toward the paint
     // under the dab; km: the pigment mix (kmSample). The tint strings follow
     // the 5-bit bucket either way. `sampled` is the dab's one shared read
-    // (Stage 5) — null here only when no feature asked for it.
+    // (Stage 5), null here only when no feature asked for it.
     let fallback = color;
     if (wetPickup > 0) {
       if (sampled) {
@@ -1876,7 +1876,7 @@ export function makeStrokeRenderer(settings, getMix) {
     if (isLoaded) {
       // The solid loaded-paint body, stretched along the tangent, laid UNDER
       // what the stroke already holds (destination-over): it fills coverage
-      // without burying the previous dabs' bristle ribbons — a body stamped
+      // without burying the previous dabs' bristle ribbons, a body stamped
       // over them buried a ribbon under the dozen bodies that followed it
       // (0.55^12 of it left), and no ribbon alpha or tint gain got streaks
       // through that. The ribbons below ride on top, so the streaks are
@@ -1899,7 +1899,7 @@ export function makeStrokeRenderer(settings, getMix) {
       const ny = c;
       const lanes = laneCull ? Math.min(bristleTable.length, Math.max(3, (sizePx / 2.5) | 0)) : bristleTable.length;
       const ribbonHalf = (radius * 1.7) / bristleTable.length;
-      // Stage 5 splay: pressure spreads the bristle fan — 1 at the neutral
+      // Stage 5 splay: pressure spreads the bristle fan: 1 at the neutral
       // press, wider pressed hard, narrower on the tip. Exactly 1 for a
       // pre-Stage-5 dab (splayK 0), and x * 1 === x, so old strokes are
       // bit-identical.
@@ -1932,7 +1932,7 @@ export function makeStrokeRenderer(settings, getMix) {
           ctx.moveTo(bristle.lastX, bristle.lastY);
           // The ribbon starts at the bristle's remembered position (an EMA
           // that survives an overflow restart), so the ink bbox must cover
-          // it too — pixel-neutral, it only ever grows the pass rect.
+          // it too, pixel-neutral, it only ever grows the pass rect.
           inkAdd(bristle.lastX, bristle.lastY, width);
         }
         ctx.lineTo(bx + c * length * 0.5, by + s * length * 0.5);
@@ -1970,7 +1970,7 @@ export function makeStrokeRenderer(settings, getMix) {
     // Wet canvas: blend this dab's color toward the paint already under it
     // (skipping transparent samples), and drag the carried color along so a
     // picked-up hue smears down the rest of the stroke. Cheap: one CPU-array
-    // sample + a few mults per dab — never a getImageData here.
+    // sample + a few mults per dab, never a getImageData here.
     let dabColor = color;
     let wetR = 0;
     let wetG = 0;
@@ -1993,7 +1993,7 @@ export function makeStrokeRenderer(settings, getMix) {
     } else if (kmActive) {
       // A km dab on a legacy shape (nothing authored ships this, but an
       // inline dab may say so): the pigment mix as the fill color. Its own
-      // read — the shared-sample hoist lives in the sprite branch.
+      // read, the shared-sample hoist lives in the sprite branch.
       kmSample(getMix(dx, dy));
       if (!dabExact) {
         dabColor = wetColor;
@@ -2006,23 +2006,23 @@ export function makeStrokeRenderer(settings, getMix) {
         return;
       }
       ctx.globalAlpha = flowAlpha;
-      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.save(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(dab.roundness || 1, 1);
       ctx.drawImage(stamp, -radius, -radius, radius * 2, radius * 2);
-      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.restore(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "ellipse") {
       // Loaded-brush paint: elongated 1.6x along the stroke tangent.
       ctx.globalAlpha = flowAlpha;
-      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.save(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(1.6, 1);
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, TWO_PI);
       ctx.fill();
-      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.restore(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "pencil") {
       // Small graphite core + 2-3 tiny flecks of tooth around it.
       ctx.globalAlpha = flowAlpha;
@@ -2040,7 +2040,7 @@ export function makeStrokeRenderer(settings, getMix) {
         ctx.fill();
       }
     } else if (shape === "crayon") {
-      // Waxy base + 3-5 flecks at random alpha — the legacy crayon fleck look
+      // Waxy base + 3-5 flecks at random alpha, the legacy crayon fleck look
       // (uneven coverage that blends optically when layered) in per-dab form.
       ctx.globalAlpha = flowAlpha * 0.4;
       ctx.beginPath();
@@ -2058,17 +2058,17 @@ export function makeStrokeRenderer(settings, getMix) {
       }
     } else if (shape === "gouache") {
       // Matte poster paint: a round dab slightly stretched 1.3x along the
-      // stroke tangent — soft, flat, opaque. Its light grain + wet-edge
+      // stroke tangent, soft, flat, opaque. Its light grain + wet-edge
       // character lands in the commit passes, not per dab.
       ctx.globalAlpha = flowAlpha;
-      ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.save(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       ctx.translate(dx, dy);
       ctx.rotate(rot);
       ctx.scale(1.3, 1);
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, TWO_PI);
       ctx.fill();
-      ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+      ctx.restore(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
     } else if (shape === "bristle") {
       // Oil/acrylic: N elongated sub-dab ribbons fanned perpendicular to the
       // tangent, stretched `stretchK` along it. All per-bristle variation
@@ -2080,7 +2080,7 @@ export function makeStrokeRenderer(settings, getMix) {
         const ty = Math.sin(rot);
         const nx = -Math.sin(rot);
         const ny = Math.cos(rot);
-        ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+        ctx.save(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         for (let i = 0; i < bristleTable.length; i += 1) {
@@ -2134,9 +2134,9 @@ export function makeStrokeRenderer(settings, getMix) {
           bristle.lastY = bristle.lastY == null ? by : bristle.lastY * bristleMemory + by * (1 - bristleMemory);
           bristle.paintLoad = clamp(load - depletion * (0.35 + pressure * 0.9) + reload * pressure * (1.5 - load), 0.02, 1.5);
         }
-        ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+        ctx.restore(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       } else {
-        ctx.save(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+        ctx.save(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
         ctx.translate(dx, dy);
         ctx.rotate(rot);
         for (const bristle of bristleTable) {
@@ -2156,10 +2156,10 @@ export function makeStrokeRenderer(settings, getMix) {
           );
           ctx.fill();
         }
-        ctx.restore(); // guard-ok — frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
+        ctx.restore(); // guard-ok, frozen legacy branch (Stage 2 sprite shapes use setTransform instead)
       }
     } else if (shape === "water") {
-      // Watercolor: a faint full-size wash under a denser core — a soft-edged
+      // Watercolor: a faint full-size wash under a denser core, a soft-edged
       // round dab without shadowBlur cost. Low flow means each pass lays a
       // translucent film that pools where dabs overlap.
       ctx.globalAlpha = flowAlpha * 0.5;
@@ -2172,10 +2172,10 @@ export function makeStrokeRenderer(settings, getMix) {
       ctx.fill();
     } else if (shape === "glow") {
       // Round dab under the existing neon shadow styling. shadowBlur is
-      // expensive — glow's wider spacing (0.22) pays for it.
+      // expensive, glow's wider spacing (0.22) pays for it.
       ctx.globalAlpha = flowAlpha;
       ctx.shadowColor = color;
-      ctx.shadowBlur = sizePx * 0.85; // guard-ok — frozen legacy glow branch (Stage 2 replaces it for v3 ops)
+      ctx.shadowBlur = sizePx * 0.85; // guard-ok, frozen legacy glow branch (Stage 2 replaces it for v3 ops)
       ctx.beginPath();
       ctx.arc(dx, dy, radius, 0, TWO_PI);
       ctx.fill();
@@ -2184,7 +2184,7 @@ export function makeStrokeRenderer(settings, getMix) {
       ctx.beginPath();
       ctx.arc(dx, dy, Math.max(0.5, radius * 0.35), 0, TWO_PI);
       ctx.fill();
-      ctx.shadowBlur = 0; // guard-ok — frozen legacy glow branch (Stage 2 replaces it for v3 ops)
+      ctx.shadowBlur = 0; // guard-ok, frozen legacy glow branch (Stage 2 replaces it for v3 ops)
     } else {
       // "round": crisp solid circle (marker).
       ctx.globalAlpha = flowAlpha;
@@ -2196,15 +2196,15 @@ export function makeStrokeRenderer(settings, getMix) {
   // DAB-PATH-END
 
   // Walk dabs from lastPoint through each incoming point. All consumers feed
-  // this the same point sequence — the local client feeds the very object the
-  // wire sends (quarter-px quantized + deduped, see drawBrushFromEvent) — so
+  // this the same point sequence, the local client feeds the very object the
+  // wire sends (quarter-px quantized + deduped, see drawBrushFromEvent), so
   // with per-stroke residual + coordinate-seeded dice the dab layout is
   // batching-independent and pixel-identical on every client.
   //
   // `base` (optional) is the buffer's world-origin transform from
   // strokeBuffer.base(). Sprite shapes (Stage 2) compose it with their own
   // per-dab placement in a single setTransform, so after the point loop the
-  // origin transform is put back ONCE here — one call per addPoints, not a
+  // origin transform is put back ONCE here, one call per addPoints, not a
   // save/restore pair per dab. The legacy vector branches above never leave
   // the transform changed, so re-setting it is pixel-neutral for them. Omit
   // it for identity-space consumers (brush studio preview, chips, cursor tip).
@@ -2221,7 +2221,7 @@ export function makeStrokeRenderer(settings, getMix) {
     for (const raw of points) {
       const pressure = clamp(raw.pressure == null ? 0.55 : raw.pressure, 0.06, 1);
       // Stage 5 tilt rides the point (pen tx/ty ints on the wire; absent on
-      // touch / mouse / pre-Stage-5 ops reads as a vertical pen — lean 0).
+      // touch / mouse / pre-Stage-5 ops reads as a vertical pen, lean 0).
       const rtx = raw.tx || 0;
       const rty = raw.ty || 0;
       if (!started) {
@@ -2253,7 +2253,7 @@ export function makeStrokeRenderer(settings, getMix) {
         let step = Math.max(DAB_MIN_STEP, spacingK * dabSizeAt(p) * stepScale);
         if (emitted > DAB_CAP) {
           // Giant-flick guardrail: past the cap the step doubles, and doubles
-          // again per additional cap-block — stays smooth enough, can't jank.
+          // again per additional cap-block, stays smooth enough, can't jank.
           // Deterministic: the count is per call, and every parity-relevant
           // consumer feeds addPoints one point (= one segment) at a time.
           step *= Math.min(16, 2 ** Math.floor(emitted / DAB_CAP));
@@ -2276,7 +2276,7 @@ export function makeStrokeRenderer(settings, getMix) {
   // One dab, outside the walk: no residual/lastPoint bookkeeping, so the
   // preview surfaces (cursor tip, chips via drawSingleDab) show exactly the
   // stamp emitDab lays down without opening a stroke. Drawn in the ctx's
-  // current (uniformly scaled) space — the cursor tip is DPR-scaled.
+  // current (uniformly scaled) space, the cursor tip is DPR-scaled.
   const stamp = (ctx, x, y, pressure, angle) => {
     ctx.globalCompositeOperation = "source-over";
     strokeBase = spriteShape ? currentBase(ctx) : IDENTITY_BASE;
@@ -2292,13 +2292,13 @@ export function makeStrokeRenderer(settings, getMix) {
   };
 
   // Stroke-end hook. Dabs are emitted as points arrive, so nothing to flush
-  // today — this exists so the per-stroke lifecycle is explicit (a future
+  // today, this exists so the per-stroke lifecycle is explicit (a future
   // taper / wet-edge will need it). Never called on overflow restarts
   // (prepareStrokeCommit final = false).
   const end = () => {};
 
   // Stage 5: the wash reservoir level at this point of the walk (1 = full, 0
-  // = dry) — the commit passes read it at banking time so a stroke bleeds in
+  // = dry), the commit passes read it at banking time so a stroke bleeds in
   // proportion to how wet it still was. null when the dab has no reservoir,
   // so prepareStrokeCommit's fx.charge gate stays the op-side authority.
   const chargeLeft = chargeRange > 0
@@ -2316,8 +2316,8 @@ export function makeStrokeRenderer(settings, getMix) {
 // BrushPreview.jsx chips): ONE stamp of `brush` (v3-first through
 // getAuthoringDab, so the tip previews the dab the engine will embed in the
 // next stroke) or of explicit `settings`, at (x, y) in the ctx's own space.
-// Scatter is zeroed so the stamp sits where asked; everything else — flecks,
-// ribbons, halo, rotation jitter — is the engine's own emitDab with a fixed
+// Scatter is zeroed so the stamp sits where asked; everything else, flecks,
+// ribbons, halo, rotation jitter, is the engine's own emitDab with a fixed
 // seed, so the preview never shimmers between renders. A v2 catalog dab is
 // re-expressed as an inline v3 dab (normalizeInlineDab fills exactly the
 // defaults emitDab would read), which renders identically.
@@ -2331,7 +2331,7 @@ export function previewDabFor(brushOrSettings) {
 
 // A single wash dab at flow 0.12 is invisible on a chip; a stroke pixel sees
 // ~7 overlapping dabs, so ONE preview dab is shown at a legible floor instead
-// (shape, texture and rim are the brush's own — only the film is thicker).
+// (shape, texture and rim are the brush's own, only the film is thicker).
 const PREVIEW_FLOW_FLOOR = 0.45;
 
 export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle = 0, pressure = 1, seed = 4242 }) {
@@ -2353,9 +2353,9 @@ export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle =
 }
 
 // ---------------------------------------------------------------------------
-// The ONE per-stroke entry builder every consumer starts from — App.jsx
+// The ONE per-stroke entry builder every consumer starts from: App.jsx
 // (local stroke + each symmetry copy + remote strokes), opReplay.applyOp
-// (history / spectator / film) — so the buffer, the dab renderer, the commit
+// (history / spectator / film), so the buffer, the dab renderer, the commit
 // passes, the pad, the opacity and the commit composite are decided in a
 // single place and can never drift between consumers. Callers spread the
 // result into their entry and add their own fields (frameId, lastTouch,
@@ -2363,21 +2363,21 @@ export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle =
 // normalize (nothing can draw it).
 //
 // `buffered: false` is the past-the-cap fallback (too many concurrent remote
-// strokes): no buffer, so no renderer / passes either — the legacy direct
+// strokes): no buffer, so no renderer / passes either, the legacy direct
 // per-segment path, exactly as before.
 //
 // Known divergences between the local studio and a remote / replay consumer
-// (opReplay.applyOp, App's remote branch, LiveRoomCanvas) — bounded and
+// (opReplay.applyOp, App's remote branch, LiveRoomCanvas), bounded and
 // documented here (and in ARCHITECTURE.md) rather than fixed, because each
 // fix repaints persisted history or costs the dab path:
 // - Ops carry no layer: a remote / replay consumer commits every stroke to
 //   layer 0 while the studio commits to the active layer. A pre-existing
-//   class, widened by multiply — a multiply stroke on a layer >= 1
+//   class, widened by multiply, a multiply stroke on a layer >= 1
 //   multiplies over different pixels locally than remotely.
 // - Symmetry with >= 5 copies: the studio buffers every copy, but remote /
 //   replay consumers cap concurrent buffers at 4 (MAX_STROKE_BUFFERS /
 //   REMOTE_BUFFER_CAP), so copies 5+ replay on the legacy direct-segment
-//   path — no dabs, no commit passes. Pinned by the symmetry-radial8 golden.
+//   path, no dabs, no commit passes. Pinned by the symmetry-radial8 golden.
 // - Symmetry + an overflow-sized stroke + copies that overlap: the studio
 //   banks each copy's chunk the instant that copy's ensure() overflows, in
 //   copy order per point; a replay consumer expands the op into per-copy
@@ -2385,36 +2385,36 @@ export function drawSingleDab(ctx, { brush, settings, color, size, x, y, angle =
 //   can commit in the other order (visible for source-over shapes only).
 // - Non-hex color strings: the legacy vector branches paint whatever the
 //   canvas parses, while sprite shapes tint through parseColorRgb, whose
-//   fallback is near-black — the same on every consumer, but not the color
+//   fallback is near-black, the same on every consumer, but not the color
 //   a legacy shape would show for the same string.
 // - v3 smudge strokes that interleave inside ONE consumer share the carry
 //   scratch (a module singleton, cleared at every stroke start): a remote
 //   smudge landing during a local one, or two users' smudge ops interleaved
 //   in history, mix their carried color / blur temp. Bounded (a dab lands
 //   at <= strength alpha of a feathered pad) and inside smudge's accepted
-//   live-overlap divergence anyway — every consumer samples layer 0 as it
+//   live-overlap divergence anyway, every consumer samples layer 0 as it
 //   stands when the stroke starts, so two smudges over the same paint never
 //   matched pixel-for-pixel across consumers. Past a remote / replay
 //   consumer's buffer cap (4 open strokes) a v3 smudge op is skipped (it
 //   has no direct fallback), the way a 5th symmetry copy loses its dabs.
 export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeSource = null } = {}) {
   if (settings.brush === "smudge") {
-    // v3 smudge (Stage 4): a buffered stroke like every brush — its dabs
-    // land in the buffer and commit once at pen-up — whose renderer SAMPLES
+    // v3 smudge (Stage 4): a buffered stroke like every brush, its dabs
+    // land in the buffer and commit once at pen-up, whose renderer SAMPLES
     // `smudgeSource`, the consumer's layer 0 as it stands before the stroke.
     // That is the whole point: a finger that re-samples its own deposits
     // (the direct legacy way) recycles them, and above strength ~0.3 the
-    // smear self-sustains at a fixed point and never fades (measured — see
+    // smear self-sustains at a fixed point and never fades (measured, see
     // makeSmudgeV3Renderer); sampling the pre-stroke paper lets the load
     // fade at its own rate. No dab, no commit passes, source-over, opacity
     // 1 (Strength IS smudge's strength; the opacity slider is hidden for it
     // and the op's opacity is ignored, as the legacy renderer ignored it).
-    // Legacy smudge ops (no `v`) never reach here — every consumer routes
+    // Legacy smudge ops (no `v`) never reach here, every consumer routes
     // them to the direct legacy renderer first. Past a consumer's buffer
     // cap (buffered: false) there is no direct fallback for v3: the stroke
     // gets a SKIP entry (no buffer, no renderer) that stays in the consumer's
     // stroke map until its end-op, so every later op of the stroke is
-    // dropped too — a consistently missing stroke, never a partial one that
+    // dropped too, a consistently missing stroke, never a partial one that
     // resumes mid-way once a buffer frees. (Local always buffers, so this is
     // the documented over-cap local-vs-remote divergence class.)
     const smudge = normalizeSmudgeSettings(settings);
@@ -2449,7 +2449,7 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
     // strength; the opacity slider is hidden for it). Samples the pre-stroke
     // layer 0 (smudgeSource) and the mix map (getMix). Past a consumer's
     // buffer cap there is no direct fallback, so it gets a SKIP entry like
-    // smudge — a consistently missing stroke, never a partial one.
+    // smudge, a consistently missing stroke, never a partial one.
     if (!buffered || !smudgeSource) {
       return {
         buf: null,
@@ -2497,7 +2497,7 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
 }
 
 // ---------------------------------------------------------------------------
-// Smudge (private rooms only): a dab walk that carries NO pigment — it moves
+// Smudge (private rooms only): a dab walk that carries NO pigment, it moves
 // and softens the paint already on LAYER 0. Ops carry no layer, so every
 // consumer samples and lands smudge on layer 0 (the studio too, whatever
 // layer is active) in server op order: history replay is deterministic, and
@@ -2506,12 +2506,12 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
 //
 // Two generations share the brush id "smudge"; the OP decides which one
 // renders it (never the catalog, never a client setting):
-// - LEGACY (no settings.v): makeLegacySmudgeRenderer — every dab re-stamps a
+// - LEGACY (no settings.v): makeLegacySmudgeRenderer, every dab re-stamps a
 //   SQUARE of layer 0 sampled slightly behind the motion through one
 //   self-referential drawImage, DIRECTLY onto layer 0 (no buffer). Frozen
 //   verbatim: persisted history replays through it byte-for-byte (the
 //   smudge-legacy golden pins it).
-// - v3 (settings.v >= 3, Stage 4): makeSmudgeV3Renderer — the feathered
+// - v3 (settings.v >= 3, Stage 4): makeSmudgeV3Renderer, the feathered
 //   "drag" and "blend" modes named by settings.smudgeMode, run as a normal
 //   BUFFERED stroke (makeStrokeEntryCore) that samples the pre-stroke layer
 //   0 and commits once at pen-up. A stale client that predates v3 renders
@@ -2520,7 +2520,7 @@ export function makeStrokeEntryCore(settings, getMix, { buffered = true, smudgeS
 //   kid_safe room by brush id).
 // normalizeSmudgeSettings is the ONE reading of a smudge op's generation /
 // mode / strength, and makeSmudgeRenderer is the ONE factory that applies
-// it — the studio's local walker (startStroke), applyRemoteOp, opReplay
+// it, the studio's local walker (startStroke), applyRemoteOp, opReplay
 // (spectators, history, film export) and the lab all build their renderer
 // through it, so no consumer can route an op differently.
 
@@ -2532,13 +2532,13 @@ const SMUDGE_DRAG = 0.35; // sample offset behind the motion, fraction of dab si
 // v3 (Stage 4) constants. Frozen once shipped: a v3 op carries only its mode
 // and strength, so these numbers ARE the persisted look.
 const SMUDGE_BLEND_SPACING = 0.22;
-// drag: the carry's EMA weight per dab — the rate the finger's load turns
+// drag: the carry's EMA weight per dab, the rate the finger's load turns
 // over, so ~1 / pickup dabs is how far a picked-up color rides (half-life
 // ~10 dabs at a feather touch, ~30 when pressed hard: the smudge-length
 // curve of every finger tool). Interpolated on the pressure-driven strength.
 const SMUDGE_PICKUP_LIGHT = 0.07;
 const SMUDGE_PICKUP_HARD = 0.02;
-const SMUDGE_PAD = 128; // drag: the carry pad, px of the carry singleton — the finger's face in dab space
+const SMUDGE_PAD = 128; // drag: the carry pad, px of the carry singleton, the finger's face in dab space
 // The feather drawn over the pad after every pickup (the inverse mask,
 // destination-out) so its rim can't fill up to a hard disc across many
 // dabs: the cell size and origin of the mask for a SMUDGE_PAD-wide dab
@@ -2559,7 +2559,7 @@ const BLEND_FINAL_X = 200;
 // inside 0.55 radii, 0 at the rim) reaches exactly the dab's edge.
 export const SMUDGE_MASK_CELL = SPRITE_PX / (2 * SPRITE_UNIT); // shared with the cursor tip
 
-// The one reading of a smudge op's settings — every consumer's renderer is
+// The one reading of a smudge op's settings, every consumer's renderer is
 // built from this. `v3` picks the generation (an op without v >= 3 is the
 // frozen legacy square, whatever else it carries); `mode` is "blend" only
 // when the op says exactly that, otherwise "drag" (missing, unknown or
@@ -2581,7 +2581,7 @@ export function normalizeSmudgeSettings(settings) {
 
 // The smudge renderer for an op: { addPoints(ctx, points), end() }.
 // `sourceCanvas` is layer 0 (the paint being smeared); `ctx` is where the
-// dabs land — layer 0 itself for a legacy op, the stroke buffer's
+// dabs land, layer 0 itself for a legacy op, the stroke buffer's
 // world-transformed context for a v3 op. Fed one point per addPoints call
 // by every consumer, like the dab renderers, so wire batching can't move a
 // dab.
@@ -2595,7 +2595,7 @@ export function makeSmudgeRenderer(settings, sourceCanvas) {
 
 // LEGACY smudge (ops without `v`): sample-and-drag of a SQUARE rect via a
 // self-referential drawImage. drawImage with source === destination canvas
-// is well-defined (the source rect is snapshotted first) — but that
+// is well-defined (the source rect is snapshotted first), but that
 // snapshot is the WHOLE 4000x2500 layer, ~8 ms per dab, which is why v3
 // below never draws layer -> layer. FROZEN: this body must stay byte-for-
 // byte (the smudge-legacy golden), so read it as history, not as a template.
@@ -2671,7 +2671,7 @@ function makeLegacySmudgeRenderer(settings, sourceCanvas) {
       const sdy = raw.y - lastPoint.y;
       const d = Math.hypot(sdx, sdy);
       if (d < 1e-6) {
-        continue; // stationary pressure-only update — see makeStrokeRenderer
+        continue; // stationary pressure-only update, see makeStrokeRenderer
       }
       const angle = Math.atan2(sdy, sdx);
       let pos = residual;
@@ -2699,16 +2699,16 @@ function makeLegacySmudgeRenderer(settings, sourceCanvas) {
 }
 
 // v3 smudge (Stage 4): the feathered blend brush. Both modes stamp a SOFT
-// disc (the fixed-seed softMask sprite — the same feather on every client)
+// disc (the fixed-seed softMask sprite, the same feather on every client)
 // instead of the legacy square, and pressure drives how hard the finger
 // presses. Per-dab state lives in two module-singleton 256^2 scratches
 // (brushSprites.getSmudgeScratch / getCarryScratch): the sampled footprint
-// and the finger's carry — never a per-stroke allocation.
+// and the finger's carry, never a per-stroke allocation.
 //
 // "drag" (default): the footprint is sampled TRAILING the motion by
-//   SMUDGE_DRAG x size, and what lands under the dab is the CARRY — the
+//   SMUDGE_DRAG x size, and what lands under the dab is the CARRY, the
 //   finger's load, an EMA (weight SMUDGE_PICKUP_LIGHT..HARD) of the
-//   footprints it touched, kept in a dab-relative pad — at the pressure-
+//   footprints it touched, kept in a dab-relative pad, at the pressure-
 //   driven strength. Paint moves with the finger (the load lags the dab by
 //   the trail plus the EMA's memory), and past an edge the load fades by
 //   (1 - pickup) per dab: the carried color thins out over ~10 dabs at a
@@ -2716,7 +2716,7 @@ function makeLegacySmudgeRenderer(settings, sourceCanvas) {
 //   metric). This only works because the footprint is the PRE-STROKE paper
 //   (the stroke lands in a buffer): a finger that re-samples its own
 //   deposits recycles them, and with ~4 overlapping dabs that loop's gain
-//   exceeds 1 above strength ~0.3 — measured both ways (a direct re-stamp,
+//   exceeds 1 above strength ~0.3, measured both ways (a direct re-stamp,
 //   and carry-only on the live layer), the last 15% of a 300-px tail onto
 //   blank paper still read as the field color at ~0.85-0.95 alpha.
 // "blend": the footprint is sampled CENTERED (no trail), box-blurred by an
@@ -2730,10 +2730,10 @@ function makeLegacySmudgeRenderer(settings, sourceCanvas) {
 // Determinism: no dice at all. The walk and the carry are pure functions of
 // the fed point sequence, and every draw is a scaled drawImage of pixels the
 // same engine produced, so local / remote / replay agree byte-for-byte on
-// one engine (cross-engine resampling kernels may drift — accepted, as for
+// one engine (cross-engine resampling kernels may drift, accepted, as for
 // every bilinear stamp). The carry is a singleton: two smudge strokes that
 // interleave in one consumer (a live remote stroke during a local one, or
-// two users' ops interleaved in history) share it — a bounded, documented
+// two users' ops interleaved in history) share it, a bounded, documented
 // divergence (see makeStrokeEntryCore's list), cleared at every stroke start.
 function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
   const blend = mode === "blend";
@@ -2744,14 +2744,14 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
   const strengthAt = (pressure) => strength * (0.35 + 0.65 * pressure * (0.5 + 0.5 * pressure));
   // The feather as its INVERSE (alpha 1 - mask, opaque to the cell corners):
   // a destination-out draw of it multiplies by the feather like
-  // destination-in with the mask would, but bounded to the drawn cell —
+  // destination-in with the mask would, but bounded to the drawn cell -
   // destination-in is canvas-wide (see getSoftMaskInverse).
   const feather = getSoftMaskInverse();
 
   // The scratches are re-fetched per addPoints call (not cached for the
   // stroke): releaseBrushSprites (tab hidden) can drop them mid-stroke, and
   // a fresh singleton must replace the dead canvas instead of throwing.
-  // A carry seen for the first time is cleared — the finger starts clean.
+  // A carry seen for the first time is cleared, the finger starts clean.
   // Once per stroke in the normal case; never per dab.
   let scratch = null;
   let scratchCtx = null;
@@ -2784,7 +2784,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
 
   // The dab's footprint on layer 0: the sample rect clamped to the canvas,
   // the destination shifted by the same amount so the sampled pixels keep
-  // their exact offset — the legacy rule. Written into these slots, so a
+  // their exact offset, the legacy rule. Written into these slots, so a
   // dab allocates nothing.
   let fx = 0; // clamped sample origin on layer 0
   let fy = 0;
@@ -2819,7 +2819,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
     return fw >= 1 && fh >= 1;
   };
 
-  // DAB-PATH-BEGIN — the v3 smudge per-dab path (Stage 4). Layer 0 is only
+  // DAB-PATH-BEGIN, the v3 smudge per-dab path (Stage 4). Layer 0 is only
   // ever a drawImage SOURCE into the scratch or a DESTINATION for the
   // scratch / carry, never both in one call (a self-referential drawImage
   // snapshots the whole 4000x2500 layer: ~8 ms per dab, the legacy cost).
@@ -2956,7 +2956,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
       return; // no DOM / no sprites: nothing to smear with
     }
     // The layer ctx is left canonical by everything that draws on it, but
-    // the deposit relies on source-over — assert it once per call.
+    // the deposit relies on source-over, assert it once per call.
     ctx.globalCompositeOperation = "source-over";
     let emitted = 0;
     for (const raw of points) {
@@ -2974,7 +2974,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
       const sdy = raw.y - lastY;
       const d = Math.hypot(sdx, sdy);
       if (d < 1e-6) {
-        continue; // stationary pressure-only update — see makeStrokeRenderer
+        continue; // stationary pressure-only update, see makeStrokeRenderer
       }
       const angle = blend ? 0 : Math.atan2(sdy, sdx);
       let pos = residual;
@@ -2998,7 +2998,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
   };
 
   // Nothing to flush at pen-up (every dab already landed in the buffer),
-  // no ink bbox to keep (smudge has no commit passes — fx is null, so
+  // no ink bbox to keep (smudge has no commit passes, fx is null, so
   // prepareStrokeCommit never asks; null means "the whole buffer" anyway)
   // and nothing to restart on an overflow bank: the walk and the carry
   // survive a buffer restart as they are, like every dab renderer's.
@@ -3011,7 +3011,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
 
 // ---------------------------------------------------------------------------
 // Gooey finger paint (Stage 6): ONE dab walk that merges the two mechanisms
-// the engine already ships — displacement (smudge drag) and a wet-tinted
+// the engine already ships, displacement (smudge drag) and a wet-tinted
 // pigment deposit. The dab first re-stamps the paint TRAILING the motion (the
 // v3 smudge carry pad + feather, reusing the same singleton scratches), then
 // lays a soft blob of the brush's own color, whose pigment bends toward what
@@ -3023,7 +3023,7 @@ function makeSmudgeV3Renderer({ mode, strength, size }, sourceCanvas) {
 // Determinism: no dice. The walk, the carry and the pigment are pure functions
 // of the fed point sequence + the mix-map sample (op-order deterministic). The
 // carry scratch is the SAME singleton the v3 smudge drag uses, so two goo /
-// smudge strokes that interleave in one consumer share it — the documented,
+// smudge strokes that interleave in one consumer share it, the documented,
 // bounded live-overlap divergence (cleared at every stroke start). Like
 // smudge, goo samples the PRE-stroke layer 0 (`sourceCanvas`) and commits once
 // at pen-up through a stroke buffer, so opacity is locked to 1.
@@ -3048,7 +3048,7 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
   const { gooiness, size } = normalizeGooSettings(settings);
   const color = settings.color;
   // Viscosity → physics (0 = runny, 1 = thick): the roadmap's goo-thick /
-  // paint-runny presets, interpolated. Frozen once shipped — a goo op carries
+  // paint-runny presets, interpolated. Frozen once shipped, a goo op carries
   // only gooiness, so these numbers ARE the persisted look.
   const smear = 0.2 + 0.4 * gooiness; // displacement re-stamp alpha
   const drag = 0.5 - 0.25 * gooiness; // sample trail, fraction of dab size
@@ -3062,7 +3062,7 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
   const feather = getSoftMaskInverse();
   const sampler = typeof getMix === "function" ? getMix : null;
 
-  // Carried pigment color (floats) — the deposit's tint, chasing the paint
+  // Carried pigment color (floats), the deposit's tint, chasing the paint
   // the goo crosses. Per renderer, not a singleton: remote strokes interleave
   // with the local one, each carrying its own color.
   let carryR = baseRgb[0];
@@ -3071,7 +3071,7 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
   const depositRgb = [baseRgb[0], baseRgb[1], baseRgb[2]]; // the blob's tint, written per dab
 
   // The scratches are re-fetched per addPoints call (releaseBrushSprites can
-  // drop them mid-stroke — see makeSmudgeV3Renderer); the carry is cleared on
+  // drop them mid-stroke, see makeSmudgeV3Renderer); the carry is cleared on
   // first bind so the finger starts clean. Same singletons as smudge drag.
   let scratch = null;
   let scratchCtx = null;
@@ -3148,9 +3148,9 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
     scratchCtx.drawImage(feather, ux - fx + (sizePx - cell) / 2, uy - fy + (sizePx - cell) / 2, cell, cell);
   };
 
-  // DAB-PATH-BEGIN — the goo per-dab path. Layer 0 is a drawImage SOURCE (into
+  // DAB-PATH-BEGIN, the goo per-dab path. Layer 0 is a drawImage SOURCE (into
   // the scratch) or a DESTINATION (the deposit) never both in one call; every
-  // step is a bounded fill / drawImage — no readbacks, no allocation, no
+  // step is a bounded fill / drawImage, no readbacks, no allocation, no
   // save/restore. `ctx` is the stroke buffer's context (world coords): the
   // displacement and the pigment accumulate there and commit once at pen-up.
   const emitDab = (ctx, x, y, pressure, angle) => {
@@ -3184,7 +3184,7 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
     }
     // Pigment: the brush's own color, dragged toward what it crosses. A
     // sampled dab bends by `pickup`; blank paper lets the carry relax (it
-    // stays where it is — no re-supply, so a picked-up hue persists like a
+    // stays where it is, no re-supply, so a picked-up hue persists like a
     // dirty finger, which is the goo toy).
     if (sampler) {
       const sampled = sampler(x, y);
@@ -3244,7 +3244,7 @@ export function makeGooRenderer(settings, sourceCanvas, getMix) {
       const sdy = raw.y - lastY;
       const d = Math.hypot(sdx, sdy);
       if (d < 1e-6) {
-        continue; // stationary pressure-only update — see makeStrokeRenderer
+        continue; // stationary pressure-only update, see makeStrokeRenderer
       }
       const angle = Math.atan2(sdy, sdx);
       let pos = residual;
@@ -3306,7 +3306,7 @@ function getGrainTile() {
 
 // Erode `strength` worth of tooth across `rect` ({x0, y0, w, h}, WORLD
 // coords: the stroke's ink rect, or the whole buffer). Tiles are aligned to
-// world-space multiples of the tile size — the buffer ctx carries the
+// world-space multiples of the tile size, the buffer ctx carries the
 // buffer's world-origin transform, so world position (not buffer position)
 // decides the pattern phase: two strokes over the same paper spot share the
 // same tooth. Bounding the tile loop to the rect is pixel-neutral: a tile
@@ -3332,14 +3332,14 @@ export function applyGrain(bufferCtx, rect, strength) {
 // ---------------------------------------------------------------------------
 // Stage 3 commit passes: wet edge + impasto. Each draws the stroke buffer
 // ONTO ITSELF (source-atop, so nothing escapes the stroke's alpha) with a
-// small offset and a brightness() filter — pure functions of the buffer's
+// small offset and a brightness() filter, pure functions of the buffer's
 // already-deterministic pixels, so three-way replay parity holds. On clients
 // without canvas ctx.filter (ancient browsers) the pass no-ops entirely:
 // skipping is the parity-safe fallback (an unfiltered stamp would still
 // change pixels, differently).
 //
-// Every self-blit below is the 9-argument drawImage of `rect` — the pass
-// rect prepareStrokeCommit derives from the renderer's ink bbox — read from
+// Every self-blit below is the 9-argument drawImage of `rect`, the pass
+// rect prepareStrokeCommit derives from the renderer's ink bbox, read from
 // the buffer at (rect - bounds origin) and drawn back at the same world
 // rect plus the pass's offset. Reading a sub-rect is pixel-identical to
 // drawing the whole buffer as long as the sub-rect's outermost pixel ring
@@ -3377,7 +3377,7 @@ function supportsCanvasFilter() {
 
 // Darkened copy of the stroke stamped at (+1.5, +1.5) inside its own alpha:
 // the offset leaves a lighter crescent on one rim and a pigment-pool shadow
-// on the other — the watercolor/oil "wet edge".
+// on the other, the watercolor/oil "wet edge".
 function applyWetEdge(ctx, canvas, bounds, rect, strength) {
   if (!supportsCanvasFilter()) {
     return;
@@ -3396,7 +3396,7 @@ function applyWetEdge(ctx, canvas, bounds, rect, strength) {
 }
 
 // Top-left light emboss: a brightened copy at (-1, -1) plus a darkened copy
-// at (+1, +1), both clipped to the stroke — reads as raised paint ridges.
+// at (+1, +1), both clipped to the stroke, reads as raised paint ridges.
 function applyImpasto(ctx, canvas, bounds, rect, strength) {
   if (!supportsCanvasFilter()) {
     return;
@@ -3421,16 +3421,16 @@ function applyImpasto(ctx, canvas, bounds, rect, strength) {
 // ---------------------------------------------------------------------------
 // Watercolor commit passes (Stage 2), both filter-free. Like every commit
 // pass, a pure function of the buffer's pixels + the op settings + fixed
-// tiles — never of the buffer's dimensions or any consumer-local state
-// (spec P3) — so three-way parity holds.
+// tiles, never of the buffer's dimensions or any consumer-local state
+// (spec P3), so three-way parity holds.
 
 // Bleed: four offset copies of the stroke drawn BEHIND it (destination-over)
-// at (±b, 0) / (0, ±b), each at strength / 4 — a soft fringe of pigment that
+// at (±b, 0) / (0, ±b), each at strength / 4, a soft fringe of pigment that
 // crept past the wet boundary. b scales with the stroke size (1.5..6 px).
 // The fringe lands OUTSIDE the ink, so the caller's rect is the ink grown by
 // more than b: every pixel the fringe can reach is inside the drawn rect,
 // and what the whole-buffer draw would add past it is a transparent source
-// (read from beyond the ink) — nothing.
+// (read from beyond the ink), nothing.
 function bleedOffset(size) {
   return clamp(0.08 * size, 1.5, 6);
 }
@@ -3449,8 +3449,8 @@ function applyBleed(ctx, canvas, bounds, rect, strength, b) {
 
 // Granulation: pigment settling into the paper's valleys. The paper tile
 // (brushSprites.js: black, alpha = 2-octave value noise, seamless) is laid
-// world-aligned like applyGrain — same phase rule, so two strokes over the
-// same spot share the same paper — twice: source-atop darkens the stroke
+// world-aligned like applyGrain, same phase rule, so two strokes over the
+// same spot share the same paper, twice: source-atop darkens the stroke
 // where the paper is deep, then destination-out thins it there, so the
 // valleys read denser AND the film breaks up. The tile loop is bounded to
 // `rect` like applyGrain's (neither composite touches a transparent pixel).
@@ -3482,7 +3482,7 @@ function applyGranulation(ctx, rect, strength) {
 
 // The world rect a commit pass works on: the renderer's ink bbox grown by
 // `reach` (the pass's own offset + resampling footprint), clipped to the
-// buffer — or the whole buffer when no ink bbox is known (renderer-less
+// buffer, or the whole buffer when no ink bbox is known (renderer-less
 // entries). One module-level object, filled in place; false = empty.
 const PASS_RECT = { x0: 0, y0: 0, w: 0, h: 0 };
 function passRect(bounds, ink, reach) {
@@ -3501,10 +3501,10 @@ function passRect(bounds, ink, reach) {
 }
 
 // One-stop pre-commit hook for a v2 stroke buffer: flush the dab renderer,
-// then run the brush's commit passes — inside the buffer, before the single
+// then run the brush's commit passes, inside the buffer, before the single
 // opacity-stamped commit. Pass order is FROZEN (spec P3): renderer.end →
 // bleed → wet edge → impasto → granulation → grain. `fx` is the entry core's
-// { ...dab, size } (or null for legacy strokes — full no-op). All consumers
+// { ...dab, size } (or null for legacy strokes, full no-op). All consumers
 // (local, remote, spectator, history replay, and every OVERFLOW commit) share
 // this helper, so the passes can never diverge per consumer. Pass `final =
 // false` on OVERFLOW commits: end() is skipped (the renderer's residual /
@@ -3513,27 +3513,27 @@ function passRect(bounds, ink, reach) {
 //
 // The passes run on the renderer's ink bbox (renderer.inkBounds(): a
 // superset of the stroke's pixels), grown per pass by its own reach and
-// clipped to the buffer — not on the whole allocated buffer, which for a
+// clipped to the buffer, not on the whole allocated buffer, which for a
 // size-80 stroke is 2048² of mostly-transparent pixels and, on a CPU-raster
 // canvas (iPad Safari, the lab's software renderer), 4 + 1 full-buffer
 // blits per watercolor pen-up. Pixel-identical (proved by the golden
 // groups): each pass is a no-op wherever the buffer is transparent, so the
-// rect only has to contain the ink plus what a pass adds — bleed's fringe
+// rect only has to contain the ink plus what a pass adds, bleed's fringe
 // (grown by ceil(b) + 1 for the passes that follow), and the wet-edge /
 // impasto offsets (1.5 px + 1 px of bilinear footprint). A renderer-less
 // entry (no ink bbox) keeps the whole-buffer passes.
 //
 // Accepted preview "pops" (the live preview is the raw buffer at the
 // stroke's opacity + composite, so a pass that changes pixels lands at
-// pen-up): the passes themselves (kept small — the lab's penUpPop gates
+// pen-up): the passes themselves (kept small, the lab's penUpPop gates
 // watercolor at <= 0.024 stroke-mean), and for multiply strokes the preview
 // multiplies over the whole document composite while the commit multiplies
-// only into the active layer — identical on a single-layer room, a visible
+// only into the active layer, identical on a single-layer room, a visible
 // shift under a second layer, a layer opacity < 1, a trace-a-photo sheet or
 // an onion-skin ghost drawn beneath the preview.
 //
 // Known divergences (local vs remote / replay), all bounded and documented
-// rather than fixed here — see makeStrokeEntryCore's block for the list.
+// rather than fixed here, see makeStrokeEntryCore's block for the list.
 export function prepareStrokeCommit(buf, renderer, fx, final = true) {
   if (buf && buf.has()) {
     if (renderer && final) {
@@ -3558,7 +3558,7 @@ function runCommitPasses(buf, ink, fx, renderer) {
   if (fx.bleed > 0) {
     const b = bleedOffset(clamp(fx.size || 24, 1, 160));
     // Stage 5 charge: a wash bleeds while it's wet, so the fringe scales with
-    // the stroke's average reservoir — the linear drain's mean is (1 + end) /
+    // the stroke's average reservoir, the linear drain's mean is (1 + end) /
     // 2, floored at BLEED_DRY (even a stroke that ran dry started wet). An
     // fx without charge (every pre-Stage-5 op) keeps strength === fx.bleed,
     // and an overflow chunk bleeds by the wetness it reached.

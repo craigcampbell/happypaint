@@ -1,4 +1,4 @@
-// The standalone op interpreter — the third parity-tested consumer of the
+// The standalone op interpreter, the third parity-tested consumer of the
 // brush engine (after the studio's local + remote paths). Moved here from
 // LiveRoomCanvas so BOTH the homepage spectator previews and the production
 // film renderer replay ops through the exact same code.
@@ -32,7 +32,7 @@ export const MAX_STROKE_BUFFERS = 4;
 
 // The ONE randomness policy for the direct (unbuffered) eraser path, shared by
 // this interpreter and the studio's local + remote eraser branches: a stroke
-// whose settings carry a seed rolls pointRand(seed, x, y) — the same dice for
+// whose settings carry a seed rolls pointRand(seed, x, y), the same dice for
 // the same point on the painter, every live remote, history replay, spectator
 // and cold-frame raster. Legacy ops WITHOUT a seed keep Math.random:
 // reseeding them would repaint saved history, so seedless erasers stay a
@@ -45,7 +45,7 @@ export function eraserRand(settings, point) {
 // Apply one op to a full-res offscreen context. `lastMap` threads each
 // stroke's previous point across op batches; `strokes` holds the per-strokeId
 // in-progress buffers; `deferred` queues v3 stamp strokes until tips load.
-// `docW`/`docH` are the document's WORLD bounds (symmetry axes + mix map) —
+// `docW`/`docH` are the document's WORLD bounds (symmetry axes + mix map) -
 // callers replaying a smaller document can supply its own dimensions.
 export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW = CANVAS_WIDTH, docH = CANVAS_HEIGHT, targetFor = null) {
   if (!op) return;
@@ -118,12 +118,12 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
       return;
     }
     if (settings.brush === "smudge" && !normalizeSmudgeSettings(settings).v3) {
-      // Legacy smudge (no `v`) edits the paper directly — the off canvas IS
-      // this consumer's layer 0 — with the frozen square renderer; no
+      // Legacy smudge (no `v`) edits the paper directly, the off canvas IS
+      // this consumer's layer 0, with the frozen square renderer; no
       // buffer, end just cleans up. v3 smudge ops (Stage 4) take the
       // buffered path below like every brush: makeStrokeEntryCore builds
       // their drag / blend renderer over this canvas (smudgeSource) and the
-      // buffer commits onto it — the same routing as the studio's local and
+      // buffer commits onto it, the same routing as the studio's local and
       // remote branches, through the same normalizer.
       let smudgeEntry = strokes.get(op.strokeId);
       if (!smudgeEntry) {
@@ -142,7 +142,7 @@ export function applyOp(ctx, op, lastMap, strokes, onImage, mix, deferred, docW 
       let buffered = 0;
       for (const open of strokes.values()) if (open.buf) buffered += 1;
       // The shared entry core (buffer / dab renderer / commit passes / pad /
-      // opacity / commit composite) — the same builder the studio's local +
+      // opacity / commit composite), the same builder the studio's local +
       // remote branches use, so nothing about a stroke is decided differently
       // here. Past the buffer cap (buffered: false) it is the legacy direct
       // per-segment fallback; null = a v3 op whose inline dab can't render.
@@ -256,7 +256,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
       if (img) {
         // Route through targetFor like every other op kind: an image tagged
         // L1 (a per-layer checkpoint, a pasted cel) must land on L1, not the
-        // flat base — cold hydration and layered composites pass a router.
+        // flat base, cold hydration and layered composites pass a router.
         const dest = targetFor ? (targetFor(op) || ctx) : ctx;
         dest.drawImage(img, op.x, op.y, op.w, op.h);
         mix.markDirty({ x0: op.x, y0: op.y, w: op.w, h: op.h });
@@ -291,7 +291,7 @@ export async function replayFrameOnto(canvas, ops, docW = canvas.width, docH = c
 // single-layer rooms render byte-identically to before.
 //
 // Caveat: a stroke with no end marker (legacy) commits into layer 0 whichever
-// layer it was tagged with — the same "no end op" edge the flat consumer has.
+// layer it was tagged with, the same "no end op" edge the flat consumer has.
 export async function replayFrameComposite(target, layersMeta, ops, docW = target.width, docH = target.height, scratch = []) {
   const metas = Array.isArray(layersMeta) && layersMeta.length ? layersMeta : null;
   if (!metas || (metas.length === 1 && metas[0].visible !== false && metas[0].opacity === 1)) {
@@ -314,7 +314,7 @@ export async function replayFrameComposite(target, layersMeta, ops, docW = targe
     indexOfLayer.set(meta.id, i);
   });
   // An op naming a layer the metadata no longer has (a raced delete) lands on
-  // layer 0 — the same rule the live client uses.
+  // layer 0, the same rule the live client uses.
   const targetFor = (op) => scratch[indexOfLayer.has(op.layerId) ? indexOfLayer.get(op.layerId) : 0].getContext("2d");
   await replayFrameOnto(scratch[0], ops, docW, docH, targetFor);
 

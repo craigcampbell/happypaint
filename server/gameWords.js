@@ -40,7 +40,7 @@ export function pickWord(rand = Math.random) {
 }
 
 // Offer the drawer a small choice so they aren't stuck with a word they can't
-// draw — three distinct words from mixed difficulty.
+// draw, three distinct words from mixed difficulty.
 export function pickWordChoices(rand = Math.random, n = 3) {
   const chosen = new Set();
   let guard = 0;

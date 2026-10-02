@@ -17,7 +17,7 @@ import './site-nav.css'
 // iOS Safari: the studio handles its own canvas gestures. Marketing and guide
 // pages retain native browser zoom and context menus for accessibility.
 // The canvas runs its own pinch-zoom off pointer events, so blocking Safari's
-// non-standard gesture events doesn't affect drawing — it only prevents the
+// non-standard gesture events doesn't affect drawing, it only prevents the
 // "site zooms way in and taps miss" behavior on iPad. Listeners are passive:false
 // so preventDefault() takes effect.
 for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
@@ -28,7 +28,7 @@ for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
 
 // Long-press while drawing: Android Chrome's "Save image / Copy image" sheet and
 // iOS's Copy · Look Up callout are both driven by the `contextmenu` event, which
-// CSS cannot reach — user-select/-webkit-touch-callout stop the SELECTION, but
+// CSS cannot reach, user-select/-webkit-touch-callout stop the SELECTION, but
 // the event still fires, so a finger landing on a chip, the quick bar, the tool
 // rail or any <img> pops the platform menu over the canvas mid-stroke. The
 // overlay canvas prevents it on itself (App.jsx); every other surface a finger

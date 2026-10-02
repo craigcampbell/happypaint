@@ -2,7 +2,7 @@
 //
 // A shareable window into one public room's mural. Read-only by construction: it
 // renders the SAME spectator client the homepage uses (LiveRoomCanvas without a
-// modKey opens /ws?room=CODE&spectate=1) and hands it nothing to send with — no
+// modKey opens /ws?room=CODE&spectate=1) and hands it nothing to send with, no
 // chat box, no brushes, no admin-key field, no socket control channel. The
 // server is the real boundary (it refuses non-kid_safe/unlisted rooms, caps the
 // viewers, drops every inbound frame a spectator sends and answers from an
@@ -30,7 +30,7 @@ function makeAlias() {
 const BLOCKED_COPY = {
   not_watchable: {
     title: "This room isn’t open to watchers",
-    body: "Only public rooms can be watched live. This one is private — its code is an invitation to draw with people you know, not a window for strangers.",
+    body: "Only public rooms can be watched live. This one is private, its code is an invitation to draw with people you know, not a window for strangers.",
   },
   room_full: {
     title: "All the watch seats are taken",
@@ -38,7 +38,7 @@ const BLOCKED_COPY = {
   },
   offline: {
     title: "We couldn’t reach that room",
-    body: "Check your connection and reload — or go find a room that’s live.",
+    body: "Check your connection and reload, or go find a room that’s live.",
   },
 };
 
@@ -70,7 +70,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
   // changes, so a fresh arrow here would reconnect the viewer on every render.
   const onActivity = useCallback((count) => setOps(count || 0), []);
 
-  // Sketchbook page? One cheap probe — a 404 means an ordinary room.
+  // Sketchbook page? One cheap probe, a 404 means an ordinary room.
   useEffect(() => {
     if (!code) return undefined;
     let active = true;
@@ -108,7 +108,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
 
     // The lobby feed doubles as the warm-up: /api/rooms/public materializes the
     // always-open prompt rooms (FEATURED_ROOMS.forEach(getRoom)), so a featured
-    // room that isn't in memory yet — a freshly restarted server — still answers
+    // room that isn't in memory yet, a freshly restarted server, still answers
     // the spectate probe below instead of reading as "not watchable".
     const load = () =>
       fetch("/api/rooms/public", { cache: "no-store" })
@@ -134,7 +134,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
         return;
       }
       probe.onmessage = (event) => {
-        if (typeof event.data !== "string") return; // gz history frame — not ours to parse
+        if (typeof event.data !== "string") return; // gz history frame, not ours to parse
         let data;
         try {
           data = JSON.parse(event.data);
@@ -203,14 +203,14 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
         </p>
 
         <p style={{ margin: "0 0 14px", color: "#44535e", fontWeight: 600 }}>
-          <span aria-hidden="true">👀</span> You’re watching as <strong>{alias}</strong> — no sign-in, nothing saved.
+          <span aria-hidden="true">👀</span> You’re watching as <strong>{alias}</strong>, no sign-in, nothing saved.
           Watching is read-only: you can’t draw or chat from here.
         </p>
 
         {bookLink ? (
           <p style={{ margin: "0 0 14px", color: "#6b4a1f", fontWeight: 600 }}>
             <span aria-hidden="true">📖</span> This is page {bookLink.pageIndex + 1} of an Inktober sketchbook
-            (Day {bookLink.day} — “{bookLink.prompt}”).{" "}
+            (Day {bookLink.day}: “{bookLink.prompt}”).{" "}
             <a href={`/sketchbook/${bookLink.bookId}`} onClick={(e) => follow(e, `/sketchbook/${bookLink.bookId}`, onNavigate)}>
               Flip through the whole book →
             </a>
@@ -274,8 +274,8 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
           >
             <p style={{ margin: "0 0 12px", fontWeight: 700 }}>
               {ops > 0
-                ? `No one is painting in ${code} this minute — the mural below is what they made earlier. Watch it here, or be the one who brings it back to life.`
-                : `The canvas in ${code} is blank — nobody has started drawing yet. You could be the first.`}
+                ? `No one is painting in ${code} this minute, the mural below is what they made earlier. Watch it here, or be the one who brings it back to life.`
+                : `The canvas in ${code} is blank, nobody has started drawing yet. You could be the first.`}
             </p>
             <p style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: 0 }}>
               <a className="primary-action" href={`/join/${code}`} onClick={(e) => follow(e, `/join/${code}`, onNavigate)}>

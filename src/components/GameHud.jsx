@@ -1,4 +1,4 @@
-// Draw & Guess HUD — the on-canvas game overlay. Shows whose turn it is, the
+// Draw & Guess HUD, the on-canvas game overlay. Shows whose turn it is, the
 // secret word (to the drawer) or masked blanks (to guessers), a live countdown,
 // the scoreboard, and celebratory pops when someone guesses or the word is
 // revealed. Pure presentation: all game logic is server-authoritative; this
@@ -38,17 +38,17 @@ export default function GameHud({ game, myWord, myId, isHost, pop, onSkip }) {
             {game.phase === "waiting" ? (
               <span className="game-word-wait">Waiting for another player to join… 👋</span>
             ) : game.phase === "intermission" ? (
-              <span className="game-word-wait">Get ready — next round starting…</span>
+              <span className="game-word-wait">Get ready, next round starting…</span>
             ) : iAmDrawer ? (
               <span className="game-word-draw">
                 <span className="game-word-label">Your word</span>
                 <strong>{myWord || "…"}</strong>
-                <span className="game-word-hint">draw it — no letters or numbers!</span>
+                <span className="game-word-hint">draw it, no letters or numbers!</span>
               </span>
             ) : (
               <span className="game-word-guess">
                 <span className="game-word-label">
-                  {game.drawerName || "Someone"} is drawing — guess in chat!
+                  {game.drawerName || "Someone"} is drawing, guess in chat!
                 </span>
                 <strong className="game-blanks">{game.wordMask || "_ ".repeat(game.wordLen || 3)}</strong>
               </span>

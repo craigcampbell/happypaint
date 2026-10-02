@@ -1,5 +1,5 @@
 // Shared site footer: the crawlable trust-and-navigation graph. Real anchors
-// (crawlers + middle-click work), SPA-routed on plain left-click — same
+// (crawlers + middle-click work), SPA-routed on plain left-click, same
 // pattern as SiteNav.
 
 import { isCloudConfigured } from "../utils/auth";

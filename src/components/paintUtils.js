@@ -2,8 +2,8 @@
 //
 // Everything here is decorative and deterministic (seeded, no Math.random) so
 // the picture is identical on every render and every device. Nothing in it
-// encodes data — the data lives in the country fills and splashes in
-// PlanetPage.jsx — and every element is aria-hidden / pointer-events:none.
+// encodes data, the data lives in the country fills and splashes in
+// PlanetPage.jsx, and every element is aria-hidden / pointer-events:none.
 
 // ---- deterministic randomness ----------------------------------------------
 export function hashCode(str) {

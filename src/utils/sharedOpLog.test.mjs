@@ -36,7 +36,7 @@ test("a friend's stroke that started and ended after the mark replays whole", ()
 
 test("a stroke that was mid-flight at the mark replays from its first op", () => {
   // Its ink lands on the layer only at the end op, so the snapshot holds NONE
-  // of it — replaying just the tail would restore half a stroke.
+  // of it, replaying just the tail would restore half a stroke.
   const log = createSharedOpLog();
   log.note(brush("a"));
   log.note(brush("a"));
@@ -54,7 +54,7 @@ test("a stroke that finished before the mark is already in the snapshot", () => 
   assert.deepEqual(ids(log.replaySince(mark)), ["b"]);
 });
 
-test("a stroke still open in a live buffer is skipped — its buffer commits itself", () => {
+test("a stroke still open in a live buffer is skipped, its buffer commits itself", () => {
   const log = createSharedOpLog();
   const mark = log.mark();
   log.note(brush("open"));
@@ -65,7 +65,7 @@ test("a stroke still open in a live buffer is skipped — its buffer commits its
   assert.deepEqual(ids(log.replaySince(mark)).sort(), ["done", "open"]);
 });
 
-test("eraser ops replay only from the mark — they cut the layer per segment", () => {
+test("eraser ops replay only from the mark, they cut the layer per segment", () => {
   const log = createSharedOpLog();
   log.note(eraser("e"));
   const mark = log.mark();

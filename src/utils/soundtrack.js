@@ -34,7 +34,7 @@ export async function decodeSoundtrack(arrayBuffer) {
 }
 
 // Play `buffer` from `offsetMs` (a scene's start within the film). Returns a
-// stop() — call it when playback stops or restarts. `onEnded` fires if the
+// stop(), call it when playback stops or restarts. `onEnded` fires if the
 // track runs out before the scene does.
 export function playSoundtrack(buffer, offsetMs, onEnded) {
   const ctx = audioContext();
@@ -58,8 +58,8 @@ export function playSoundtrack(buffer, offsetMs, onEnded) {
   };
 }
 
-// Render the slice of the soundtrack a film covers — from `offsetMs` for
-// `durationMs` — into planar 48kHz channel data (silence-padded when the track
+// Render the slice of the soundtrack a film covers, from `offsetMs` for
+// `durationMs`, into planar 48kHz channel data (silence-padded when the track
 // is shorter). This is what the video encoder muxes.
 export async function renderSoundtrackSlice(buffer, offsetMs, durationMs) {
   if (!buffer || durationMs <= 0) return null;

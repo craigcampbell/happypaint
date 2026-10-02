@@ -83,7 +83,7 @@ Vite uses port 5173 and proxies `/ws` to port 8787. Avoid starting another serve
 on the production port or pointing tests at production `app_data/`. Empty
 PocketBase and billing variables leave drawing and rooms available anonymously.
 
-Security-relevant defaults (2026-09 audit — `node scripts/security-verify.mjs`):
+Security-relevant defaults (2026-09 audit, `node scripts/security-verify.mjs`):
 
 - `node server.js` listens on **127.0.0.1 only**. To test from a phone/tablet on
   the LAN, opt in with `HOST=0.0.0.0` (the Docker image sets this itself).

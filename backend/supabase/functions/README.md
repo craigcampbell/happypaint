@@ -9,7 +9,7 @@ out-of-band counterpart to the `public.request_account_deletion()` RPC: the RPC
 actual purge.
 
 It uses the **service role key** and bypasses RLS, so it must only ever run
-server-side — on a schedule or via an admin invoke. It is never callable by a
+server-side, on a schedule or via an admin invoke. It is never callable by a
 normal client.
 
 ### Behavior

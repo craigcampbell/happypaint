@@ -1,4 +1,4 @@
-// About Drawesome — drawing together and the available room controls.
+// About Drawesome, drawing together and the available room controls.
 import SiteNav from "./SiteNav";
 
 export default function AboutPage({ onNavigate }) {
@@ -8,18 +8,18 @@ export default function AboutPage({ onNavigate }) {
       <main className="site-page-body">
         <h1>About Drawesome <span aria-hidden="true">🎨</span></h1>
         <p className="site-lead">
-          Drawesome is a free studio for drawing, coloring, and painting together in real time —
+          Drawesome is a free studio for drawing, coloring, and painting together in real time -
           in the browser, on a phone, or on a tablet. No account needed to start.
         </p>
 
         <div className="about-grid">
           <article>
             <h3>🖌️ Paint together, live</h3>
-            <p>Join an open public room or share a short code with friends and paint on the same canvas at once — everyone’s cursors and strokes appear instantly.</p>
+            <p>Join an open public room or share a short code with friends and paint on the same canvas at once, everyone’s cursors and strokes appear instantly.</p>
           </article>
           <article>
             <h3>🌈 Real tools, made fun</h3>
-            <p>Markers, crayons, pencils, spray, glow, coloring sheets, layers, GIF import, pinch-zoom &amp; rotate — chunky and tappable on touch.</p>
+            <p>Markers, crayons, pencils, spray, glow, coloring sheets, layers, GIF import, pinch-zoom &amp; rotate, chunky and tappable on touch.</p>
           </article>
           <article>
             <h3>🛡️ Know your room</h3>

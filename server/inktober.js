@@ -1,4 +1,4 @@
-// Inktober 2026 — seasonal event state for the INKTOBER room + wall event.
+// Inktober 2026, seasonal event state for the INKTOBER room + wall event.
 //
 // Independent fan participation: we use the official daily prompt list (owned
 // by the parent in src/data/inktober2026.json, verified against
@@ -6,16 +6,16 @@
 //
 // Everything is DERIVED from the UTC date (like the daily challenge): every
 // server, restart and client agrees on the phase and the day's prompt with no
-// stored state, and the rollover is a real UTC-midnight flip — never a RAM
+// stored state, and the rollover is a real UTC-midnight flip, never a RAM
 // latch. The one shared INKTOBER mural is NEVER wiped by this: only the prompt
 // rotates.
 //
 // Phases:
-//   upcoming — before Oct 1: a warm-up prompt + banner, day is null (no false
+//   upcoming, before Oct 1: a warm-up prompt + banner, day is null (no false
 //              day stamping), nextChangeAt is the Oct 1 UTC start.
-//   active   — Oct 1..31: day = UTC day-of-month, prompt = the official list,
+//   active  : Oct 1..31: day = UTC day-of-month, prompt = the official list,
 //              nextChangeAt = the next UTC midnight.
-//   ended    — from Nov 1: day null, nextChangeAt null.
+//   ended, from Nov 1: day null, nextChangeAt null.
 //
 // Test hook: INKTOBER_CLOCK_FILE points at a file containing an ISO timestamp
 // and is re-read on every evaluation (never set in production), so the
@@ -33,7 +33,7 @@ let raw = { year: 2026, source: 'https://inktober.com/rules', prompts: [] };
 try {
   raw = JSON.parse(readFileSync(join(__dirname, '..', 'src', 'data', 'inktober2026.json'), 'utf8'));
 } catch {
-  // Missing list degrades to an empty prompt table — the room still runs.
+  // Missing list degrades to an empty prompt table, the room still runs.
 }
 
 export const INKTOBER_YEAR = Number(raw.year) || 2026;
@@ -48,8 +48,8 @@ const PROMPTS = (Array.isArray(raw.prompts) ? raw.prompts : [])
   .sort((a, b) => a.day - b.day);
 
 // Kid-safe, no brand assets, no date claims beyond the real calendar.
-const WARMUP_PROMPT = 'Warm up your pen — Inktober starts October 1!';
-const ENDED_PROMPT = 'Inktober has wrapped for this year — thanks for inking with us!';
+const WARMUP_PROMPT = 'Warm up your pen: Inktober starts October 1!';
+const ENDED_PROMPT = 'Inktober has wrapped for this year, thanks for inking with us!';
 
 function nowMs() {
   const file = process.env.INKTOBER_CLOCK_FILE;
@@ -95,11 +95,11 @@ export function inktoberState(atMs = null) {
 }
 
 // ---- Ink & pencil room guard -------------------------------------------------
-// The INKTOBER room is ink + pencil only (eraser permitted — the contract's
+// The INKTOBER room is ink + pencil only (eraser permitted, the contract's
 // "tool draw eraser settings"). Brushes are identified by the op's settings,
 // which ride every batch. V3 strokes carry their own inline dab descriptor:
 // legitimate ink/pencil strokes use the native shapes below, so inline dabs
-// are NOT blanket-rejected — but a dab that describes a DIFFERENT brush
+// are NOT blanket-rejected, but a dab that describes a DIFFERENT brush
 // (a watercolor wash, a glow, an imported stamp tip) is a forged bypass and
 // is refused.
 export const INK_BRUSHES = new Set(['ink', 'pencil', 'eraser']);
@@ -116,7 +116,7 @@ export function inkDrawSettingsAllowed(settings) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
   const brush = typeof settings.brush === 'string' ? settings.brush : '';
   if (!INK_BRUSHES.has(brush)) return false;
-  if (brush === 'eraser') return true; // eraser has no dab — allowed by contract
+  if (brush === 'eraser') return true; // eraser has no dab, allowed by contract
   const dab = settings.dab;
   if (dab == null) return true; // v2 / legacy stroke: brush id is the contract
   if (typeof dab !== 'object' || Array.isArray(dab)) return false;

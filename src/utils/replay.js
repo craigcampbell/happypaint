@@ -1,4 +1,4 @@
-// Room Replay & Timelapse — SNAPSHOT-BASED process capture (not per-stroke).
+// Room Replay & Timelapse: SNAPSHOT-BASED process capture (not per-stroke).
 //
 // Design rationale (docs/product-research.md §"Room Replay and Timelapse"):
 //   - We capture downscaled COMPOSITED snapshots of the artwork over time, NOT a
@@ -20,7 +20,7 @@
 
 import { idbGetKV, idbSetKV, idbDeleteKV, isIdbAvailable } from "./idb";
 
-// Downscaled snapshot size — small enough that 80 of them is a few MB of PNG,
+// Downscaled snapshot size, small enough that 80 of them is a few MB of PNG,
 // and a good source resolution for the GIF timelapse (which downscales further).
 export const SNAPSHOT_WIDTH = 480;
 export const SNAPSHOT_HEIGHT = 360;
@@ -45,7 +45,7 @@ const LEGACY_REPLAY_KEY_PREFIX = "replay:v1:";
 // visits gets its own timelapse; the studio remounts per room (Router keys
 // StudioApp by code) so a recorder never outlives its room. Before this the
 // studio used one shared id for every room, which stitched strokes from every
-// room visited into a single timelapse — that legacy key is purged on boot.
+// room visited into a single timelapse, that legacy key is purged on boot.
 export const LEGACY_REPLAY_ID = "current";
 export const DEFAULT_REPLAY_ID = "MAIN";
 
@@ -137,7 +137,7 @@ export function decimateSnapshots(snapshots, max = MAX_SNAPSHOTS) {
 }
 
 // A lightweight live recorder. The studio creates one per session. It does NOT
-// own a canvas — the caller hands it a function that paints the current
+// own a canvas, the caller hands it a function that paints the current
 // composite into a provided 2D context at SNAPSHOT_WIDTH x SNAPSHOT_HEIGHT.
 //
 // Usage:

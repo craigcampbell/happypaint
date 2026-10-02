@@ -125,7 +125,7 @@ check('scan: stretched/repeated-letter evasion trips (3+ runs)', () => {
   assert.equal(scan('fuuuuuck').severity, 'severe');
   assert.equal(scan('niiigger').severity, 'severe');
   // NOTE: stretching an ALREADY-doubled letter (gg → gggg) over-collapses to a
-  // single g, so "nigggger" is a known acceptable MISS — chasing it would risk
+  // single g, so "nigggger" is a known acceptable MISS, chasing it would risk
   // false positives. Misses are tolerable per the contract; FPs are not.
   assert.equal(scan('raaape').severity, 'severe');
   assert.equal(scan('poooorn').severity, 'severe');

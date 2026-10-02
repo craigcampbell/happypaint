@@ -52,7 +52,7 @@ export default function FamilyPage({ onNavigate }) {
         .then(({ ok, data }) => {
           if (!active || !ok || !data) return;
           setBilling(data);
-          if (data.active) setMessage("Family is active — welcome!");
+          if (data.active) setMessage("Family is active, welcome!");
         })
         .catch(() => {});
     }
@@ -67,7 +67,7 @@ export default function FamilyPage({ onNavigate }) {
 
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get("checkout");
-    if (result === "success") setMessage("Family is activating — welcome! It may take a few seconds to update.");
+    if (result === "success") setMessage("Family is activating, welcome! It may take a few seconds to update.");
     // Accepts the legacy ?checkout=cancelled spelling on old Stripe cancel URLs.
     if (isCanceled(result)) setMessage("Nothing was charged. You can come back whenever you're ready.");
   }, []);
@@ -191,7 +191,7 @@ export default function FamilyPage({ onNavigate }) {
         </section>
 
         <section className="family-plain-language">
-          <h2>Built for a parent to own—not a kid to buy.</h2>
+          <h2>Built for a parent to own-not a kid to buy.</h2>
           <p>There are no paid coins, cash tips, or purchases inside the canvas. The free studio remains usable without an account. Family simply removes advertising from private spaces owned by the subscribed account.</p>
         </section>
       </main>

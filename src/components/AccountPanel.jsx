@@ -1,4 +1,4 @@
-// Account / Auth panel — sign-in state + OPTIONAL sign-in + in-app account
+// Account / Auth panel, sign-in state + OPTIONAL sign-in + in-app account
 // deletion. Login is optional (the app fully works signed out); auth only gates
 // future sync/social. When cloud sync isn't configured we say so plainly.
 //
@@ -64,12 +64,12 @@ export default function AccountPanel({ onClose, onDeleted }) {
     const result = await (mode === "signup" ? signUpWithEmail : signInWithEmail)(email, password);
     setMessage(result.message);
     setBusy(false);
-    // Session updates via onAuthStateChange — the panel flips to the signed-in view.
+    // Session updates via onAuthStateChange, the panel flips to the signed-in view.
   };
 
   const handleProvider = async (provider) => {
     // Open the popup synchronously on tap so Safari (the iPad/iPhone audience)
-    // doesn't block it — the SDK loads async, so we hand the open window to
+    // doesn't block it, the SDK loads async, so we hand the open window to
     // sign-in which points it at the provider once ready.
     const popup = window.open("", "_blank", "width=520,height=680");
     setBusy(true);
@@ -143,7 +143,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
           ) : (
             <>
               <p className="account-note">
-                Signing in is <strong>optional</strong> — your work keeps going without an account. An
+                Signing in is <strong>optional</strong>, your work keeps going without an account. An
                 account saves your gallery and follows you to any device.
               </p>
               {!isCloudConfigured ? (
@@ -204,7 +204,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
         <div className="ps-group account-section">
           <h3>Drawesome Family</h3>
           <p className="account-note">
-            A parent can make every private room they own ad-free—including for friends who join as guests.
+            A parent can make every private room they own ad-free-including for friends who join as guests.
           </p>
           <button type="button" className="primary-action" onClick={() => { window.location.href = "/family"; }}>
             View Family plan

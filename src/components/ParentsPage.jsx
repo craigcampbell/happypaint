@@ -1,6 +1,6 @@
 // The parents & teachers page: one honest, plain-language landing spot for the
 // grown-up deciding whether Drawesome is okay for their kid or their class.
-// Everything stated here reflects SHIPPED behavior — if a claim stops being
+// Everything stated here reflects SHIPPED behavior, if a claim stops being
 // true in code, fix the code or fix this page in the same change.
 
 import SiteNav from "./SiteNav";
@@ -26,7 +26,7 @@ const PILLARS = [
   {
     icon: "👤",
     title: "No accounts needed, no people search",
-    body: "Kids draw as guests with fun random names. You browse rooms and art — there is no way to search for people, no follower counts, and no direct messages.",
+    body: "Kids draw as guests with fun random names. You browse rooms and art, there is no way to search for people, no follower counts, and no direct messages.",
   },
   {
     icon: "🚫",
@@ -100,7 +100,7 @@ export default function ParentsPage({ onNavigate }) {
           <h2>Ages</h2>
           <p>
             Drawing never requires an account. Creating an account is for ages <strong>13 and up</strong>,
-            or set up by a parent/guardian for a younger child — the sign-up form asks, and under-13s
+            or set up by a parent/guardian for a younger child, the sign-up form asks, and under-13s
             are pointed back to guest drawing. For a family or class, begin in a private room with an
             adult present. Read the privacy and safety information before using it with students.
           </p>

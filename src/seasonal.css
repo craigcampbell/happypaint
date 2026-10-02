@@ -1,4 +1,4 @@
-/* Seasonal marketing UI — Inktober event page, Paint Jar page, and the
+/* Seasonal marketing UI: Inktober event page, Paint Jar page, and the
    homepage seasonal banner / room cards / prompt-artwork strips.
    Mobile-first; honors prefers-reduced-motion. Loaded by the seasonal
    components (HomePage / InktoberPage / PaintJarPage); reuses the global
@@ -43,10 +43,10 @@
   }
 }
 /* With the extra auth CTA in the row, the homepage wordmark crowds the
-   hamburger against the viewport edge at phone widths — drop the text, keep
+   hamburger against the viewport edge at phone widths, drop the text, keep
    the mark (other pages already hide it ≤390px). NOTE: main.jsx imports
    Router before its CSS, so seasonal.css lands EARLIER in the cascade than
-   homepage-redesign.css — this selector needs the extra .site-nav class to
+   homepage-redesign.css, this selector needs the extra .site-nav class to
    beat homepage-redesign's ≤620px `display: inline` on specificity. */
 @media (max-width: 480px) {
   .home-page .site-nav .site-brand .brand-name { display: none; }
@@ -473,7 +473,7 @@
   50% { transform: translateX(4%) rotate(1.2deg); }
 }
 .jar-jar::after {
-  /* scale marks — the jar reads as a gauge even at 0% */
+  /* scale marks, the jar reads as a gauge even at 0% */
   content: "";
   position: absolute;
   inset: 0;

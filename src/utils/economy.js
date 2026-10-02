@@ -1,4 +1,4 @@
-// Happy Paint economy — local mock wallet model (docs/paint-economy.md).
+// Happy Paint economy, local mock wallet model (docs/paint-economy.md).
 //
 // This is a MOCK economy surface: NO real payments, NO real purchase flows. It
 // mirrors the backend economy tables (backend/supabase/schema.sql §Economy) so
@@ -18,7 +18,7 @@
 //   - The ledger is append-only; balances are a projection of it.
 //   - Every entry has a positive amount, a currency_type, and a direction.
 //   - Paid Drops do not expire. No user-to-user currency transfer.
-//   - No loot boxes / no randomized packs — every product is a transparent bundle.
+//   - No loot boxes / no randomized packs, every product is a transparent bundle.
 
 import { idbGetKV, idbSetKV, isIdbAvailable } from "./idb";
 import { makeId } from "./paintSpace";
@@ -41,7 +41,7 @@ export const DIRECTION = { credit: "credit", debit: "debit" };
 export const PLATFORM = { apple: "apple", google: "google", web: "web" };
 
 // PLAY-MONEY MODE. Drops are a cosmetic, non-cash, non-transferable in-app
-// counter you EARN by painting — there is no way to buy them with real money and
+// counter you EARN by painting, there is no way to buy them with real money and
 // no payout/cash-out. We keep this ON for the family release: real in-app
 // purchases + creator payouts carry app-store, COPPA, and money-handling
 // obligations that need their own deliberate, reviewed setup. Flipping this to
@@ -60,7 +60,7 @@ const REAL_DROP_PRODUCTS = [
 ];
 export const DROP_PRODUCTS = PLAY_MONEY_ONLY ? [] : REAL_DROP_PRODUCTS;
 
-// Store catalog — spendable-with-Drops items. Each item is a transparent bundle
+// Store catalog, spendable-with-Drops items. Each item is a transparent bundle
 // (no randomized contents / loot boxes). `grants` is a mock entitlement key that
 // owning the item confers (e.g. "studio" unlocks the studio brush/paper tier).
 // Prices use the doc's "Price examples".
@@ -76,7 +76,7 @@ export const STORE_ITEMS = [
     id: "creator-brushes",
     category: "packs",
     title: "Creator Brushes",
-    description: "Glow neon brush, Night paper, and the Poster palette — unlocks the studio brush tier.",
+    description: "Glow neon brush, Night paper, and the Poster palette, unlocks the studio brush tier.",
     price_drops: 150,
     grants: "studio",
   },
@@ -151,7 +151,7 @@ export function formatPrice(cents) {
 }
 
 // Approximate local-money value of a Drops amount, derived from the best
-// available $/Drop rate in the catalog (the largest pack — best value). Shown
+// available $/Drop rate in the catalog (the largest pack, best value). Shown
 // near spend moments per the doc ("always show approximate local-money equiv").
 export function dropsToApproxMoney(drops) {
   // Play-money mode: Drops have no cash value, so show no money equivalence.
@@ -189,7 +189,7 @@ function emptyState() {
 // Derive balances from the append-only ledger so they stay consistent (schema:
 // "Balances are cached projections of the append-only ledger"). drops/kudos use
 // the standard balance; creator credits land in BOTH creator_balance and
-// locked_balance (tips are locked until payouts are eligible — Phase 1).
+// locked_balance (tips are locked until payouts are eligible: Phase 1).
 export function projectBalances(ledger) {
   const wallet = { drops_balance: 0, kudos_balance: 0, creator_balance: 0, locked_balance: 0 };
   for (const entry of ledger) {
@@ -262,7 +262,7 @@ function normalize(raw) {
   return withDerivedWallet(state);
 }
 
-// Never throws — load failures resolve to a fresh empty wallet.
+// Never throws, load failures resolve to a fresh empty wallet.
 export async function loadEconomy() {
   if (isIdbAvailable()) {
     try {
@@ -389,7 +389,7 @@ export function earnDropsForQuest(state, setId, missionId, amount = 3) {
 // Send a Drops tip. Spends Drops from the sender and records the tip into the
 // (mock) creator's locked balance via a creator-currency credit. In this local
 // surface the sender IS the creator (single profile), so both sides land in the
-// same wallet — the ledger still records the spend and the locked credit
+// same wallet, the ledger still records the spend and the locked credit
 // separately, which is what the backend would do across two profiles.
 // Returns { ok, state, reason }.
 export function sendTip(state, { amount, sourceType = "gallery_post", sourceId = null, receiverName = "Creator" }) {
@@ -434,7 +434,7 @@ export function ownsItem(state, itemId) {
   return Boolean(state?.owned?.includes(itemId));
 }
 
-// True when the account is a minor (child/teen) — drives guardian-control copy.
+// True when the account is a minor (child/teen), drives guardian-control copy.
 export function isMinorAccount(state) {
   return state?.profile_kind === "child" || state?.profile_kind === "teen";
 }

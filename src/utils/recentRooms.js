@@ -6,7 +6,7 @@
 // Each entry can also carry the mention-watch capability for that room: the
 // display name we held there and the `mentionKey` the server's join handshake
 // issued for it. The notify socket presents that pair to subscribe to @mention
-// pings — without it the server refuses the watch (anti-eavesdrop).
+// pings, without it the server refuses the watch (anti-eavesdrop).
 
 const KEY = "happypaint:recent-rooms:v1";
 const MAX = 8;
@@ -38,6 +38,6 @@ export function recordRecentRoom(code, title, when, watch) {
     const next = [entry, ...prev.filter((r) => r.code !== code)].slice(0, MAX);
     window.localStorage.setItem(KEY, JSON.stringify(next));
   } catch {
-    // best-effort — losing a recents entry is non-fatal
+    // best-effort, losing a recents entry is non-fatal
   }
 }

@@ -1,10 +1,10 @@
-// Member wipe card — floats over the top of the canvas while a wipe is pending:
+// Member wipe card, floats over the top of the canvas while a wipe is pending:
 // a countdown (alone / two people) or a room vote (3+). The server owns the
 // clock and the tally and sends ms-LEFT, never a timestamp, so a kid's skewed
 // device clock can't make it lie; this card only ticks its own display.
 //
 // It re-renders at most once a second (the shown second or the cancel lock
-// changing) and only itself — never the studio — and the draining bar is a
+// changing) and only itself, never the studio, and the draining bar is a
 // CSS transform animation, so a countdown adds no jank to the drawing path.
 
 import { useEffect, useState } from "react";
@@ -16,7 +16,7 @@ function msLeftOf(req) {
 export default function WipeCountdown({ req, myId, onCancel, onVote }) {
   const [secs, setSecs] = useState(() => Math.ceil(msLeftOf(req) / 1000));
   const [locked, setLocked] = useState(() => msLeftOf(req) <= req.cancelLockMs);
-  // A vote tapped but not yet echoed back — stops a double tap voting twice.
+  // A vote tapped but not yet echoed back, stops a double tap voting twice.
   const [sentVote, setSentVote] = useState(null); // { id, vote }
 
   useEffect(() => {
@@ -40,7 +40,7 @@ export default function WipeCountdown({ req, myId, onCancel, onVote }) {
   if (vote) {
     title = mine ? `🗳️ Asking the room to ${what}` : `🗳️ ${who} wants to ${what}`;
     if (locked && passing) sub = "Here it comes! 🧽";
-    else if (passing) sub = `✅ ${req.yes} of ${req.people} said yes — wiping when the timer ends`;
+    else if (passing) sub = `✅ ${req.yes} of ${req.people} said yes, wiping when the timer ends`;
     else if (myVote && !mine) sub = `You voted ${myVote === "yes" ? "to wipe" : "to keep it"} · ${req.yes} of ${req.needed} yes votes so far`;
     else sub = `It wipes if ${req.needed} of ${req.people} say yes · ${req.yes} so far`;
   } else {
@@ -66,7 +66,7 @@ export default function WipeCountdown({ req, myId, onCancel, onVote }) {
         <span className="wipe-req-clock" aria-label={`${secs} seconds left`}>{secs}</span>
         <div className="wipe-req-text">
           <strong>{title}</strong>
-          {/* Live, but only the line that changes on EVENTS (votes, the lock) —
+          {/* Live, but only the line that changes on EVENTS (votes, the lock) -
               never the ticking title, which would be read out every second. */}
           <small aria-live="polite">{sub}</small>
         </div>

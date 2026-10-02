@@ -1,4 +1,4 @@
-# Drawesome Creative Five — Product and QA Review
+# Drawesome Creative Five: Product and QA Review
 
 Independent product, safety, feasibility, mobile, performance, and release
 review of [creative-five-feature-plan.md](creative-five-feature-plan.md).
@@ -77,7 +77,7 @@ resolved.
 
 ## Prioritized findings
 
-### P0 — must resolve before feature implementation or merge
+### P0, must resolve before feature implementation or merge
 
 1. **Storybook cannot be one persistent, always-open featured book.**
    `STORYBOOK` would be hostless like every other featured public room, while
@@ -119,7 +119,7 @@ resolved.
    experiences or explicit room enhancements; do not allow arbitrary
    combinations until the combinations are tested.
 
-### P1 — release blockers for the affected feature
+### P1, release blockers for the affected feature
 
 1. **Kaleido must update every operation consumer.** Local stroke rendering,
    remote live rendering in `App.jsx`, standalone replay in `opReplay.js`, and
@@ -187,7 +187,7 @@ resolved.
     canvas/blob, and then continue. Individual full-resolution PNG export may
     be an explicit desktop follow-up.
 
-### P2 — polish and follow-up
+### P2, polish and follow-up
 
 - Name mirror modes in child-friendly language and show a tiny icon: “Mirror,”
   “Four corners,” and “Magic wheel.” The technical mode remains available to
@@ -397,7 +397,7 @@ and focused unit/integration coverage.
 
 ## Recommended release sequence
 
-### Phase 0 — shared safety rails
+### Phase 0, shared safety rails
 
 - Add server-owned mode/capability normalization and backward-compatible room
   defaults.
@@ -407,21 +407,21 @@ and focused unit/integration coverage.
 - Capture an ordinary-room operation/replay baseline before feature changes.
 - Keep every new featured entry disabled until its feature-specific gate passes.
 
-### Phase 1 — Kaleido pilot
+### Phase 1: Kaleido pilot
 
 - Release fixed four-way symmetry in `KALEIDO` with the limited brush allowlist.
 - Enable private-room mirror/four-way controls.
 - Add radial-eight only after target-mobile stress and replay parity pass.
 - Watch event-loop lag, client responsiveness, room-file size, and crash reports.
 
-### Phase 2 — Paint Orchestra
+### Phase 2: Paint Orchestra
 
 - Release as an explicit session opt-in in `ORCHSTRA`.
 - Start with four sounds and fixed mapping; verify real iOS Safari and Android
   Chrome behavior before exposing it as a private-room enhancement.
 - This phase can reuse feature-discovery work without changing persisted art.
 
-### Phase 3 — Remix Trails
+### Phase 3: Remix Trails
 
 - First ship consent metadata, owner revocation, canonical source-room creation,
   and orphan-safe attribution behind an unlisted test route.
@@ -429,7 +429,7 @@ and focused unit/integration coverage.
   tests pass.
 - Do not ship a lineage tree in this phase.
 
-### Phase 4 — Canvas Quests
+### Phase 4: Canvas Quests
 
 - Launch private-room quest sets first to validate quorum language and reward
   idempotency with small groups.
@@ -438,7 +438,7 @@ and focused unit/integration coverage.
 - Assess whether the reward improves completion or distracts from collaboration;
   the quests must remain satisfying with the reward removed.
 
-### Phase 5 — Storybook project pilot
+### Phase 5: Storybook project pilot
 
 - Build only after the fresh-project launcher and authoritative page-lock
   design are accepted.

@@ -2,12 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PageImage from "./PageImage";
 import DoodlePad from "./DoodlePad";
 
-// Canvas Chat — Twitch × iMessage, ON the canvas.
+// Canvas Chat: Twitch × iMessage, ON the canvas.
 //
 // Two modes:
 //  • AMBIENT (closed): the last few messages float as self-scrimmed bubbles
 //    over the art (readable on any background) and fade away Twitch-style.
-//    The layer is pointer-events:none — drawing passes straight through it.
+//    The layer is pointer-events:none, drawing passes straight through it.
 //  • OPEN: a glassy panel with scrollback, iMessage message clustering,
 //    tap-a-bubble tapbacks, reply threading (quoted context), a composer, and
 //    the hype tray (big animated reactions over the canvas).
@@ -147,7 +147,7 @@ export default function CanvasChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, fadeTick]);
 
-  // Expire ambient bubbles on a slow tick — only while any are showing.
+  // Expire ambient bubbles on a slow tick, only while any are showing.
   useEffect(() => {
     if (open || ambient.length === 0) return undefined;
     const t = window.setInterval(() => setFadeTick((n) => n + 1), 1000);
@@ -184,7 +184,7 @@ export default function CanvasChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Keep the log pinned to the newest message while open — but only when a NEW
+  // Keep the log pinned to the newest message while open, but only when a NEW
   // message actually appended (a tapback count patch must not yank the scroll).
   const lastPinnedRef = useRef(0);
   useEffect(() => {
@@ -312,7 +312,7 @@ export default function CanvasChat({
 
           {replyTo ? (
             <div className="cc-replying">
-              <span>↩ Replying to <strong>{replyTo.name}</strong> — “{String(replyTo.message).slice(0, 44)}{String(replyTo.message).length > 44 ? "…" : ""}”</span>
+              <span>↩ Replying to <strong>{replyTo.name}</strong>: “{String(replyTo.message).slice(0, 44)}{String(replyTo.message).length > 44 ? "…" : ""}”</span>
               <button type="button" onClick={() => setReplyTo(null)} aria-label="Cancel reply">✕</button>
             </div>
           ) : null}

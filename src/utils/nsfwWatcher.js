@@ -1,4 +1,4 @@
-// NSFW watcher — main-thread controller/glue.
+// NSFW watcher, main-thread controller/glue.
 //
 // WHY THIS CANNOT TOUCH THE DRAWING EXPERIENCE (docs/CONTENT_MODERATION.md §0):
 //   1. Inert until the server elects this client: setActive(true) is the ONLY thing
@@ -6,7 +6,7 @@
 //      in a kid_safe room. Constructing the watcher does nothing on its own.
 //   2. A live local stroke always wins. Before every sample we ask isDrawing()
 //      (the host passes () => activePointerRef.current != null). If a stroke is in
-//      progress we skip and reschedule — we never read the canvas mid-stroke.
+//      progress we skip and reschedule, we never read the canvas mid-stroke.
 //   3. Throttled to one sample per intervalMs (default 8000ms) AND gated by a dirty
 //      flag: markDirty() must have fired (host calls it on op/stroke commit) or we
 //      don't even snapshot. Scheduling uses requestIdleCallback (setTimeout fallback)
@@ -14,10 +14,10 @@
 //   4. The snapshot is a SINGLE drawImage into a tiny reused offscreen canvas
 //      (<= maxDim px, default 256, longest side), then createImageBitmap (async).
 //      No getImageData, no pixel loops, no synchronous work of size on the main
-//      thread — pixels are read inside the worker only.
+//      thread, pixels are read inside the worker only.
 //   5. All inference is in nsfwWatcher.worker.js via OffscreenCanvas. Here we only
 //      postMessage(imageBitmap, [transfer]) and receive a number back.
-//   6. Capability gate: isWatcherCapable() — weak devices never scan.
+//   6. Capability gate: isWatcherCapable(), weak devices never scan.
 //
 // DETECTOR SEAM: lives in the worker (see nsfwWatcher.worker.js loadDetector). The
 // controller is detector-agnostic; it just relays bitmaps and scores.
@@ -28,7 +28,7 @@ const DEFAULT_THRESHOLD = 0.7;
 // Evidence encoding happens entirely in the worker, only after a flag. PNG is
 // the default: lossless, so the stored frame decodes to pixels bit-identical
 // to what the classifier read. If the encode never comes back (worker died,
-// stale generation) the flag still goes out — without pixels — after this.
+// stale generation) the flag still goes out, without pixels, after this.
 const DEFAULT_EVIDENCE_TIMEOUT_MS = 2500;
 
 /**
@@ -42,7 +42,7 @@ export function isWatcherCapable() {
   }
   // NEVER run heavy on-device ML (TF.js + the model) on a touch-first device.
   // Phones and tablets are usually the very device someone is drawing on, and
-  // inference contends with the canvas for CPU/GPU/memory — which on iOS Safari
+  // inference contends with the canvas for CPU/GPU/memory, which on iOS Safari
   // shows up as dropped touches and stutter. Require a desktop-class device with
   // a fine (mouse/trackpad) primary pointer.
   if (typeof matchMedia === "function") {
@@ -53,10 +53,10 @@ export function isWatcherCapable() {
       return false;
     }
   } else if (typeof navigator.maxTouchPoints === "number" && navigator.maxTouchPoints > 1) {
-    return false; // no matchMedia — treat multi-touch as a touch device
+    return false; // no matchMedia, treat multi-touch as a touch device
   }
   // iPadOS Safari with a trackpad/keyboard reports a fine pointer and platform
-  // "MacIntel", but it's still a tablet — exclude it explicitly.
+  // "MacIntel", but it's still a tablet, exclude it explicitly.
   const platform = navigator.platform || "";
   if (/iP(hone|ad|od)/.test(platform) || /iP(hone|ad|od)/.test(navigator.userAgent || "")) {
     return false;
@@ -114,7 +114,7 @@ function cancelIdle(token) {
  * @param {'png'|'jpeg'} [opts.evidenceFormat='png']  frozen-frame encoding (png is lossless)
  * @param {number} [opts.evidenceQuality=0.92]  jpeg-only
  * @param {number} [opts.evidenceTimeoutMs=2500]  flag goes out pixel-less after this
- * @param {() => object} [opts.workerFactory]  test seam — defaults to the real Worker
+ * @param {() => object} [opts.workerFactory]  test seam, defaults to the real Worker
  * @returns {{ setActive:(b:boolean)=>void, markDirty:()=>void, destroy:()=>void }}
  */
 export function createNsfwWatcher({
@@ -135,7 +135,7 @@ export function createNsfwWatcher({
   let dirty = false;
   let scanning = false;
   // True while a flagged frame's evidence encode is in flight. The scan canvas
-  // inside the worker is SEALED for that frame — if we sampled again now, the
+  // inside the worker is SEALED for that frame, if we sampled again now, the
   // next scan would overwrite the exact pixels we are about to freeze. So the
   // sampling loop pauses until the encode resolves (or times out).
   let sealing = false;
@@ -232,7 +232,7 @@ export function createNsfwWatcher({
           // and only then fire onFlag with the pixels attached.
           requestEvidenceAndFlag({ score, sinceOpId, toOpId, generation: msg.generation });
         }
-        // Leave lastCleanOpId where it was — the dirty delta is still suspect until
+        // Leave lastCleanOpId where it was, the dirty delta is still suspect until
         // a host acts. We do, however, advance past this sample so we don't refire
         // the identical delta every interval.
         lastCleanOpId = toOpId;
@@ -247,7 +247,7 @@ export function createNsfwWatcher({
   }
 
   // A scan crossed the threshold. Ask the worker to encode ITS scan canvas
-  // (sealed by generation — a stale answer or a mismatched generation is
+  // (sealed by generation, a stale answer or a mismatched generation is
   // dropped) and fire the flag once the pixels come back. If anything goes
   // wrong the flag still fires, just without evidence: moderation must never
   // depend on the encode succeeding.
@@ -310,7 +310,7 @@ export function createNsfwWatcher({
     }
     const ev = msg.ok ? msg.evidence : null;
     // Bind pixels to THIS flag only when they provably came from the same scan
-    // generation the score came from — anything else could be a newer frame.
+    // generation the score came from, anything else could be a newer frame.
     const valid =
       ev &&
       msg.generation === entry.generation &&

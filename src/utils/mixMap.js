@@ -1,11 +1,11 @@
 // Wet-canvas mix map: a 1/8-scale offscreen mirror of LAYER 0 plus a cached
 // CPU pixel array, so wet strokes can sample "what color is under this dab?"
-// for a few array reads per dab — NEVER a getImageData against the full
+// for a few array reads per dab: NEVER a getImageData against the full
 // 4000x2500 layer on the draw hot path.
 //
 // Freshness model (dirty-region, flush-on-demand): producers call markDirty()
 // with the bbox of whatever just landed on layer 0 (stroke-buffer commits,
-// image stamps, fills) — that's O(1). The actual pixel refresh (drawImage of
+// image stamps, fills), that's O(1). The actual pixel refresh (drawImage of
 // the dirty bbox into the 1/8 canvas + a small getImageData of just that rect)
 // runs lazily inside sample(), the first time a wet dab actually looks. So:
 //  - rooms that never touch the wet toggle pay nothing but bbox unions;
@@ -18,20 +18,20 @@
 // can run while the pen is up instead of on the first wet dab of the next
 // stroke. A prefetch reads layer 0 EARLIER than the lazy path would, so it is
 // only op-order-equivalent if nothing lands on layer 0 between the prefetch
-// and the sample that would have flushed — and layer 0 has writers that never
+// and the sample that would have flushed, and layer 0 has writers that never
 // markDirty (eraser, smudge, shapes, text: direct, unbuffered). The map keeps
 // a ledger of what its prefetches have read since the last sample-flush point
-// (`prefetched`), and invalidatePrefetch() — called by App.jsx at every such
-// unmarked write — puts exactly that rect back on the dirty list, so the next
+// (`prefetched`), and invalidatePrefetch(), called by App.jsx at every such
+// unmarked write, puts exactly that rect back on the dirty list, so the next
 // sample re-reads it where the lazy path would have read it for the first
 // time. It never dirties more than the lazy path still had dirty (the ledger
 // is cleared at every sample, the lazy flush point), so a prefetching map and
-// a lazy one — history replay, spectators, the other clients — read the same
+// a lazy one, history replay, spectators, the other clients, read the same
 // bytes at the same op-order points. Over-calling invalidatePrefetch() is
 // always safe; forgetting a write site is the only way to diverge.
 
 export const MIX_SCALE = 8;
-const MIX_ALPHA_FLOOR = 32; // below this the paper shows through — nothing to pick up
+const MIX_ALPHA_FLOOR = 32; // below this the paper shows through, nothing to pick up
 
 // sample() hands back THIS array every time (a dab reads r/g/b and moves on):
 // no allocation per dab. Callers that keep a sample across calls must copy it.
@@ -73,7 +73,7 @@ export function createMixMap(getSource, worldWidth, worldHeight) {
 
   const markAllDirty = () => {
     dirty = { x0: 0, y0: 0, w: worldWidth, h: worldHeight };
-    prefetched = null; // everything is dirty — nothing left to hand back
+    prefetched = null; // everything is dirty, nothing left to hand back
   };
 
   // Layer 0 was wiped: cheaper than re-reading a blank canvas.
@@ -120,7 +120,7 @@ export function createMixMap(getSource, worldWidth, worldHeight) {
     refresh();
   };
 
-  // An unmarked write landed on layer 0 (eraser / smudge / shape / text —
+  // An unmarked write landed on layer 0 (eraser / smudge / shape / text -
   // paths that draw the layer directly and never markDirty): anything a
   // prefetch read since the last sample may be stale now. Re-dirty exactly
   // that, so the next sample reads it where the lazy path would have.
@@ -131,7 +131,7 @@ export function createMixMap(getSource, worldWidth, worldHeight) {
     }
   };
 
-  // World coords in, [r, g, b] out — or null over (near-)transparent paper.
+  // World coords in, [r, g, b] out, or null over (near-)transparent paper.
   // The returned array is the shared SAMPLE (see above): read it before the
   // next sample() call, copy it if you need to keep it.
   const sample = (x, y) => {

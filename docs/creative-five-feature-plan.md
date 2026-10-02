@@ -563,9 +563,9 @@ Run with both `PB_URL` and `VITE_PB_URL` unset:
 
 ## Recommended implementation order
 
-1. Kaleido Jam — smallest technical surface and fastest visible payoff.
-2. Paint Orchestra — mostly isolated and a strong featured-room differentiator.
-3. Remix Trails — connects the Wall to creation and improves retention.
-4. Canvas Quests — adds persistent cooperative progression.
-5. Storybook Expeditions — largest scope and best built after the shared room
+1. Kaleido Jam, smallest technical surface and fastest visible payoff.
+2. Paint Orchestra, mostly isolated and a strong featured-room differentiator.
+3. Remix Trails, connects the Wall to creation and improves retention.
+4. Canvas Quests, adds persistent cooperative progression.
+5. Storybook Expeditions, largest scope and best built after the shared room
    capability/state patterns are proven.

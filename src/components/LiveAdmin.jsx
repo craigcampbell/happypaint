@@ -13,7 +13,7 @@ function formatUptime(s) {
 }
 
 function timeAgo(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -127,8 +127,8 @@ function RoomThumb({ id, thumbAt, adminKey }) {
 }
 
 // The frozen classifier snapshot bound to a report (server.js: case 'flag' +
-// GET /api/admin/evidence/:reportId). Fetched with the admin header — an
-// <img src> can't carry one — exactly like RoomThumb. Unlike the room thumb
+// GET /api/admin/evidence/:reportId). Fetched with the admin header, an
+// <img src> can't carry one, exactly like RoomThumb. Unlike the room thumb
 // this NEVER goes stale: these are the pixels at flag time, not the live room.
 function EvidenceThumb({ reportId, adminKey }) {
   const [src, setSrc] = useState(null);
@@ -178,10 +178,10 @@ function EvidenceThumb({ reportId, adminKey }) {
 function EvidenceNote({ ev }) {
   return (
     <p className="admin-muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
-      <strong>Watcher-captured snapshot — client-supplied corroboration, NOT proof.</strong>{" "}
+      <strong>Watcher-captured snapshot, client-supplied corroboration, NOT proof.</strong>{" "}
       A modified client can forge pixels; verify against the op-history replay. It shows the room
-      canvas between ops {ev.sinceOpId}–{ev.toOpId}, attributed to no one — authorship stays
-      “suspected — review required”. Score {typeof ev.score === "number" ? ev.score.toFixed(2) : "?"} ·{" "}
+      canvas between ops {ev.sinceOpId}–{ev.toOpId}, attributed to no one, authorship stays
+      “suspected, review required”. Score {typeof ev.score === "number" ? ev.score.toFixed(2) : "?"} ·{" "}
       {ev.model || "unknown model"} · {ev.w}×{ev.h} {ev.mime === "image/png" ? "PNG" : "JPEG"} ·
       captured {ev.capturedAt ? timeAgo(ev.capturedAt) : "?"} · watcher {ev.watcher || "(scrubbed)"}
     </p>
@@ -342,7 +342,7 @@ export default function LiveAdmin({ onNavigate }) {
   };
 
   const clearRoom = async (id) => {
-    if (!window.confirm(`Reset room "${id}"? The drawing AND the chat are wiped for everyone in it — as if brand new. (The chat log here in /admin is kept.)`)) return;
+    if (!window.confirm(`Reset room "${id}"? The drawing AND the chat are wiped for everyone in it, as if brand new. (The chat log here in /admin is kept.)`)) return;
     await fetch(`/api/admin/rooms/${id}/clear`, { method: "POST", headers: { "x-admin-key": adminKey } });
     refresh();
   };
@@ -378,7 +378,7 @@ export default function LiveAdmin({ onNavigate }) {
 
   // Watching is the incognito path: /watch/<code> opens the glass room, where
   // the admin sees the canvas, roster and chat but is never listed, counted or
-  // announced — and cannot draw. (Opening /join/<code> would join for real,
+  // announced, and cannot draw. (Opening /join/<code> would join for real,
   // visible and with a brush in hand, which is not what moderation wants.)
   const watchRoom = (id) => window.open(`/watch/${id}`, "_blank", "noopener");
 
@@ -569,7 +569,7 @@ export default function LiveAdmin({ onNavigate }) {
                   {Object.entries(day.routes || {})
                     .sort((a, b) => b[1] - a[1])
                     .map(([route, n]) => `${route} ${n}`)
-                    .join(" · ") || "—"}
+                    .join(" · ") || "-"}
                 </span>
               </div>
             ))}
@@ -584,7 +584,7 @@ export default function LiveAdmin({ onNavigate }) {
           Why this won&apos;t match Google Analytics: GA counts only visitors whose browser ran its script (content blockers,
           Safari and consent settings drop a large share), while these page loads are every HTML page this server sent to a
           non-bot browser. &quot;Visitors&quot; here is one per device per day, GA&apos;s &quot;users&quot; is per cookie. And the
-          Users tab counts <em>room joins</em> — one per room entered, so one visitor hopping through three rooms is three
+          Users tab counts <em>room joins</em>, one per room entered, so one visitor hopping through three rooms is three
           sessions there, and someone who only reads the homepage or the Wall is none.
         </p>
       </section>
@@ -650,7 +650,7 @@ export default function LiveAdmin({ onNavigate }) {
                     </span>
                   ) : r.evidence?.dropped || r.evidence?.expired ? (
                     <span className="admin-muted" style={{ fontSize: 12 }}>
-                      evidence {r.evidence.expired ? "expired (TTL)" : `dropped (${r.evidence.dropped})`} — text record only
+                      evidence {r.evidence.expired ? "expired (TTL)" : `dropped (${r.evidence.dropped})`}, text record only
                     </span>
                   ) : null}
                   {r.chatContext?.length ? (
@@ -665,7 +665,7 @@ export default function LiveAdmin({ onNavigate }) {
                               {c.doodleImage ? (
                                 <img src={c.doodleImage} alt="reported doodle" style={{ display: "block", maxWidth: 170, borderRadius: 8, margin: "4px 0" }} />
                               ) : (
-                                <em> (doodle {c.doodle} — image expired)</em>
+                                <em> (doodle {c.doodle}, image expired)</em>
                               )}
                               <button type="button" className="admin-danger" onClick={() => removeDoodle(c.doodle)}>
                                 Remove doodle
@@ -752,11 +752,11 @@ export default function LiveAdmin({ onNavigate }) {
           </div>
           <p className="admin-muted admin-note">
             Every accepted message from every room lands here as it is sent, plus the messages the safety filter refused
-            (red — they were never shown to anyone, and the sender was auto-moderated). Private rooms included. Use Watch
+            (red, they were never shown to anyone, and the sender was auto-moderated). Private rooms included. Use Watch
             on a room to see its canvas alongside the conversation.
           </p>
           {chatFeed.chat.length === 0 ? (
-            <p className="admin-empty">Nothing matches — or no one has chatted yet.</p>
+            <p className="admin-empty">Nothing matches, or no one has chatted yet.</p>
           ) : (
             <div className="admin-chat-log">
               {chatFeed.chat.map((line, i) => (

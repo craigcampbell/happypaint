@@ -1,30 +1,30 @@
 // Bbox-capped offscreen stroke buffer (Brush Engine Stage 1, bug #62).
 //
 // A live stroke is painted into this small offscreen canvas at FULL opacity,
-// then composited over the document each frame — and committed into its layer
-// exactly once at stroke end — at the stroke's opacity. That makes a
+// then composited over the document each frame, and committed into its layer
+// exactly once at stroke end, at the stroke's opacity. That makes a
 // 50%-opacity stroke read as 50% instead of accumulating per segment where the
 // round caps overlap.
 //
-// Memory rules (iOS WebKit has a hard canvas-memory ceiling — NEVER allocate a
+// Memory rules (iOS WebKit has a hard canvas-memory ceiling: NEVER allocate a
 // full-size 4000x2500 scratch canvas per stroke):
 // - lazily allocated, starting at 512x512 around the first point;
 // - grows by power-of-2 re-allocation only when the stroke leaves the box;
 // - hard-capped at 2048x2048. When a grow would exceed the cap, ensure()
 //   reports { overflow: true } and the CALLER commits the current buffer to
 //   the layer and reset()s to restart a fresh buffer at the new point (a rare,
-//   visually-minor opacity seam on giant strokes — intended).
+//   visually-minor opacity seam on giant strokes, intended).
 //
 // Origin-offset model: the buffer covers the world rect {x0, y0, w, h} and its
 // context carries a translate(-x0, -y0) transform, so callers draw in WORLD
 // coordinates. Display compositing reads `canvas` + `x0/y0/w/h` (or bounds())
 // directly. base() hands the same transform to the dab renderer as ONE stable
-// object ({ s, tx, ty }, mutated in place — never reallocated), so a sprite
+// object ({ s, tx, ty }, mutated in place, never reallocated), so a sprite
 // dab can compose world x local with a single setTransform and addPoints can
 // put the origin transform back with one call instead of save/restore.
 //
 // `composite` is the stroke's commit blend mode (getStrokeComposite in
-// brushes.js — stored here once at creation by makeStrokeEntryCore) so every
+// brushes.js, stored here once at creation by makeStrokeEntryCore) so every
 // commit site inherits it by default and none can drift.
 
 const MIN_SIZE = 512;
@@ -136,7 +136,7 @@ export function createStrokeBuffer() {
     },
 
     // Stamp the whole buffer onto a target context ONCE at the stroke's
-    // opacity — the uniform-opacity commit — with the stroke's composite
+    // opacity, the uniform-opacity commit, with the stroke's composite
     // (this.composite, set at creation; the parameter exists for probes).
     commit(targetCtx, opacity, composite = this.composite) {
       if (!this.canvas) {

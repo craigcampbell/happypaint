@@ -1,6 +1,6 @@
 // Illustrative stroke milestones for the Painted Planet's nature scene.
 // Each layer unlocks when the community's recorded strokes pass `at`.
-// Illustrative only — never a measured saving of anything.
+// Illustrative only, never a measured saving of anything.
 export const SCENE_LAYERS = [
   { at: 0, key: "sky", label: "a sky" },
   { at: 500, key: "hills", label: "rolling hills" },

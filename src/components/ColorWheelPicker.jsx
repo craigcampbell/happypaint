@@ -8,7 +8,7 @@ import { hexToHsv, hsvToHex, isHexColor, normalizeHex, withAlpha } from "../util
 // Perf: dragging the ring or a bar re-renders only THIS component; the
 // parent (App, a 10k-line component) hears about it at most once per frame
 // through a rAF-throttled onChange, and onCommit fires once, debounced, after
-// the drag settles — that's the moment a swatch is added to "recent".
+// the drag settles, that's the moment a swatch is added to "recent".
 //
 // HSB state lives here rather than being derived from the hex prop, because
 // a hex loses its hue at s=0 / v=0 (white, black, grays): dragging brightness
@@ -39,7 +39,7 @@ function drawHueRing(canvas) {
   const step = Math.PI / 180;
   // 360 one-degree wedges, each overdrawn a touch so no hairline seams show at
   // any DPR. Hue 0 (red) sits at 12 o'clock and runs clockwise. (No
-  // createConicGradient — older iPads lack it; this is one-off work anyway.)
+  // createConicGradient, older iPads lack it; this is one-off work anyway.)
   for (let deg = 0; deg < 360; deg += 1) {
     const a0 = (deg - 90) * step;
     ctx.beginPath();

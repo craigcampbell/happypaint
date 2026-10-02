@@ -96,7 +96,7 @@ export function hexToHsv(hex) {
   return rgbToHsv(r, g, b);
 }
 
-// "rgba(r, g, b, a)" for a hex + 0..1 alpha — what a swatch paints over its
+// "rgba(r, g, b, a)" for a hex + 0..1 alpha, what a swatch paints over its
 // checkerboard so the brush opacity is visible at a glance.
 export function withAlpha(hex, alpha = 1) {
   const [r, g, b] = hexToRgb(hex);
@@ -104,7 +104,7 @@ export function withAlpha(hex, alpha = 1) {
   return `rgba(${r}, ${g}, ${b}, ${Number.isFinite(a) ? a : 1})`;
 }
 
-// Perceived lightness 0..1 (Rec. 601 luma) — picks a readable ring/label
+// Perceived lightness 0..1 (Rec. 601 luma), picks a readable ring/label
 // color over a swatch.
 export function luma(hex) {
   const [r, g, b] = hexToRgb(hex);

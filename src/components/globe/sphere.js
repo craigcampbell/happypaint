@@ -2,8 +2,8 @@
 //
 // The globe is a true sphere: countries are stored as lon/lat rings
 // (src/data/world-geo.json, Natural Earth 110m) and rendered through an
-// orthographic projection every frame. This module is pure — no DOM, no
-// React — so the verify script can import and test it directly.
+// orthographic projection every frame. This module is pure, no DOM, no
+// React, so the verify script can import and test it directly.
 
 import { hashCode, mix, rng } from "../paintUtils.js";
 
@@ -11,7 +11,7 @@ export const DEG = Math.PI / 180;
 
 // Longitude normalized to [-180, 180). Rotation accumulates unbounded degrees
 // (spin + drag inertia), and shortest-path math via raw `%` goes wrong on
-// negative values — always route lon deltas through this.
+// negative values, always route lon deltas through this.
 export function normalizeLon(lon) {
   return ((((lon + 180) % 360) + 360) % 360) - 180;
 }
@@ -66,7 +66,7 @@ function ringArea(ring) {
 // correct one keeps the closed path's orientation consistent with the ring
 // itself. (Orthographic projection viewed from outside reverses orientation:
 // for every fully-visible country ring, sign(screen area) = -sign(lonlat
-// area). This is deterministic — a point-sample near the limb overshoots
+// area). This is deterministic, a point-sample near the limb overshoots
 // razor-thin coastal strips and picks the disc-filling wrong side.)
 function horizonArc(a, b, seg, wantSign) {
   const aa = Math.atan2(a[1], a[0]);
@@ -86,7 +86,7 @@ function horizonArc(a, b, seg, wantSign) {
   const short = build(sweep);
   const area = signedArea([...seg, ...short.slice(1, -1)]);
   // Degenerate micro-fragments (coast grazing the limb) have near-zero area
-  // whose sign is numerical noise — but closing them the long way fills the
+  // whose sign is numerical noise, but closing them the long way fills the
   // whole disc. Nearby crossings always mean a cap/dip: the short arc. A
   // genuinely long closure only ever comes from a large fragment, where the
   // orientation sign is reliable.
@@ -99,7 +99,7 @@ const onLimb = (pt) => Math.abs(Math.hypot(pt[0], pt[1]) - 1) < 1e-9;
 // Clip one closed lon/lat ring to the front hemisphere. Returns visible
 // polyline fragments ([[x,y],...] in unit-disc screen coords, y down). A
 // fragment cut by the limb carries an `arc` array of unit-circle points
-// closing it along the horizon — closing with a straight chord carves false
+// closing it along the horizon, closing with a straight chord carves false
 // cutouts into the fill. A ring whose initial vertex is visible splits one
 // visible run into a first and last fragment around the wrap; those are
 // stitched back together.
@@ -140,7 +140,7 @@ export function clipRing(ring, rotLon, rotLat) {
   // Stitch fragments that meet at the SAME limb point. A visible run splits
   // not only at the ring's index wrap but also where a vertex/edge grazes the
   // limb (z ≈ 0): the ring exits and re-enters at the same crossing, and the
-  // two pieces must rejoin before the horizon-arc closure — closed apart, a
+  // two pieces must rejoin before the horizon-arc closure, closed apart, a
   // micro-fragment's orientation is meaningless and it fills the whole disc.
   const samePt = (p, q) => (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 < 1e-12;
   const joined = [];

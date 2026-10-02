@@ -1,10 +1,10 @@
-// Artist public rooms — pure helpers for the audience 'artist_public'.
+// Artist public rooms, pure helpers for the audience 'artist_public'.
 // Contract: docs/ARTIST-ROOMS-CONTRACT.md.
 //
 // An artist studio is publicly VIEWABLE (guests and strangers may watch) but
 // never publicly editable: only the verified owner and explicitly approved
-// painter accounts may draw. Everything here is pure data-shaping — no I/O,
-// no room-map access — so server.js wires the same rules into load/persist,
+// painter accounts may draw. Everything here is pure data-shaping, no I/O,
+// no room-map access, so server.js wires the same rules into load/persist,
 // the WS guards, and the REST surface from one place.
 
 export const ARTIST_AUDIENCE = 'artist_public';
@@ -50,7 +50,7 @@ export function normalizeGallery(raw) {
   };
 }
 
-// Approved painters are opaque verified account ids (PocketBase record ids) —
+// Approved painters are opaque verified account ids (PocketBase record ids) -
 // never names or emails, so a leaked room file identifies nobody.
 export function normalizePainters(raw) {
   if (!Array.isArray(raw)) return [];
@@ -90,7 +90,7 @@ function cleanText(value) {
   if (typeof value !== 'string') return '';
   // Plain text only: strip control characters (zero-width tricks, bidi
   // overrides) and collapse whitespace. What remains is safe to render and
-  // safe to embed in a JSON API — the client renders it as text, not markup.
+  // safe to embed in a JSON API, the client renders it as text, not markup.
   return value
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '')
@@ -107,14 +107,14 @@ export function validateArtistFields(input, scan) {
   const body = input && typeof input === 'object' ? input : {};
   const title = cleanText(body.title);
   if (title.length > ARTIST_LIMITS.title) {
-    return { ok: false, error: 'bad_title', message: `The title is too long — keep it to ${ARTIST_LIMITS.title} characters.` };
+    return { ok: false, error: 'bad_title', message: `The title is too long, keep it to ${ARTIST_LIMITS.title} characters.` };
   }
   const description = cleanText(body.description);
   if (description.length > ARTIST_LIMITS.description) {
-    return { ok: false, error: 'bad_description', message: `The description is too long — keep it to ${ARTIST_LIMITS.description} characters.` };
+    return { ok: false, error: 'bad_description', message: `The description is too long, keep it to ${ARTIST_LIMITS.description} characters.` };
   }
   if (Array.isArray(body.tags) && body.tags.length > ARTIST_LIMITS.tags) {
-    return { ok: false, error: 'bad_tags', message: `Too many tags — keep it to ${ARTIST_LIMITS.tags}.` };
+    return { ok: false, error: 'bad_tags', message: `Too many tags, keep it to ${ARTIST_LIMITS.tags}.` };
   }
   const tags = sanitizeTags(body.tags);
   for (const [field, text] of [['title', title], ['description', description], ...tags.map((t) => ['tag', t])]) {
@@ -132,7 +132,7 @@ export function validateArtistFields(input, scan) {
 }
 
 // Who may draw in an artist studio: the verified owner and verified approved
-// painters. Co-hosts are MODERATORS — hosting without approval does NOT grant
+// painters. Co-hosts are MODERATORS, hosting without approval does NOT grant
 // painting. Anonymous users can never paint in an artist room.
 export function canPaintIn(room, user) {
   if (!isArtistRoom(room)) return true; // other audiences: existing guards decide
@@ -154,15 +154,15 @@ export function roomProfileFor(room, eventState = null) {
 }
 
 // The message types a NON-painter in an artist room may send: read-only,
-// social, and the access-request flow. Everything else — draw ops, clears,
+// social, and the access-request flow. Everything else, draw ops, clears,
 // sheets, imports, layers, frames, scenes, animation structures, votes,
-// helper setters, moderation, room management — is denied before the switch,
+// helper setters, moderation, room management, is denied before the switch,
 // so a patched client has no mutation bypass. Painters then pass through the
 // existing host/layer/frame/lock guards like any room member.
 export const ARTIST_VIEWER_ALLOWLIST = new Set([
   'ping', // keepalive
   'client_info', // device/timezone info (analytics)
-  'chat', // social — artist-room chat is filtered like a public room
+  'chat', // social, artist-room chat is filtered like a public room
   'chat_react', // tapbacks
   'reaction', // emoji bursts
   'hype',
@@ -179,7 +179,7 @@ export const ARTIST_VIEWER_ALLOWLIST = new Set([
 // brush renderer, symmetry, theme votes, sheet/underlay, soundtrack and any
 // story structure stay with the host (the verified owner and their co-host
 // moderators). These are denied BEFORE the switch alongside the viewer
-// allowlist, so a patched painter client has no management bypass — while
+// allowlist, so a patched painter client has no management bypass, while
 // ops, layers and frames keep flowing through the ordinary draw guards.
 export const ARTIST_MANAGE_HOST_ONLY = new Set([
   'set_wet',
@@ -199,7 +199,7 @@ export const ARTIST_MANAGE_HOST_ONLY = new Set([
 ]);
 
 // One sanitized gallery card: exactly the contracted keys, no account ids,
-// no emails, no names, no location — safe to serve unauthenticated.
+// no emails, no names, no location, safe to serve unauthenticated.
 export function galleryCard(entry) {
   return {
     code: entry.code,
@@ -214,7 +214,7 @@ export function galleryCard(entry) {
 }
 
 // Case-insensitive substring search over title + description + tags. Plain
-// text in, plain text out — no regex from the query string.
+// text in, plain text out, no regex from the query string.
 export function galleryMatches(entry, q) {
   if (!q) return true;
   const needle = String(q).toLowerCase();

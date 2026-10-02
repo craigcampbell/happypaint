@@ -10,7 +10,7 @@ only. Read this before changing anything in `server/economy.js`.
 
 `src/utils/economy.js` was a client-side mock: balances lived in the browser's
 IndexedDB (`happypaint:economy:v1`) and the ledger was projected in the tab.
-That is fine for a cosmetic play-money counter and fatal for money — any user can
+That is fine for a cosmetic play-money counter and fatal for money, any user can
 open devtools and mint a balance, so neither a purchase nor a payout against it
 can be trusted.
 
@@ -33,7 +33,7 @@ on `paidDrops`.**
 
 Without this, painting is a money printer: the earn throttle is ~900 Drops/hour
 and costs the painter nothing, so cashing earned Drops out would drain real
-money nobody paid in. The throttle is politeness, not the safety mechanism —
+money nobody paid in. The throttle is politeness, not the safety mechanism -
 provenance is.
 
 Tips follow the same rule: `sendTip` spends paid Drops first and credits the
@@ -44,11 +44,11 @@ value. Covering tests: `test-economy.mjs` §THE ANTI-FARMING RULE.
 ## Pricing (decided 2026-09-27)
 
 Anchor is the catalog: 1,000 Drops = $9.99 retail; the best pack (2,200/$19.99)
-is 0.909¢/Drop — the same figure `dropsToApproxMoney()` reports to users.
+is 0.909¢/Drop, the same figure `dropsToApproxMoney()` reports to users.
 
-Payout is **65¢ per 100 Drops (0.65¢/Drop)** — `ECONOMY_PAYOUT_CENTS_PER_100_DROPS`.
+Payout is **65¢ per 100 Drops (0.65¢/Drop)**, `ECONOMY_PAYOUT_CENTS_PER_100_DROPS`.
 Derivation: a $9.99 charge nets ~$9.40 after Stripe (~2.9% + 30¢); a 70/30
-creator/platform split — the Roblox-style ratio `docs/paint-economy.md` cites —
+creator/platform split, the Roblox-style ratio `docs/paint-economy.md` cites -
 leaves ~$6.58. So:
 
 - 1,000 Drops → **$6.50**
@@ -58,7 +58,7 @@ leaves ~$6.58. So:
   hold until tax info is on file
 
 At the earn rate, 1,000 Drops is roughly 1–2 hours of a child's painting, so the
-payout is ~$3–$6/hour of effort — fair, and affordable only because it is funded
+payout is ~$3–$6/hour of effort, fair, and affordable only because it is funded
 by money that actually arrived.
 
 ## Enabling purchases (revenue in)
@@ -79,9 +79,9 @@ for a cent.
 Crediting is idempotent on the Stripe session id (`state.receipts`), because
 webhooks retry and a double credit is free Drops. Refunds claw back the exact
 credited amount; a refund after the Drops were spent drives the balance negative,
-which is correct — the debt is real.
+which is correct, the debt is real.
 
-## Payouts (money out) — still OFF
+## Payouts (money out), still OFF
 
 `ECONOMY_PAYOUTS_ENABLED` is unset, and `/api/creator/payouts/onboard` returns
 501 by design. Turning payouts on is a policy decision, not a refactor:
@@ -97,5 +97,5 @@ reason, so the number is visible rather than hidden.
 - Anything a user can trigger is rate-limited and idempotent.
 - Owner keys are client-supplied, so `walletFor()` rejects `__proto__` and
   friends before any bracket assignment on a plain object.
-- Wallet population is capped (`ECONOMY_MAX_WALLETS`) — an anonymous caller can
+- Wallet population is capped (`ECONOMY_MAX_WALLETS`), an anonymous caller can
   otherwise grow the file by choosing new device keys.

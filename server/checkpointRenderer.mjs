@@ -1,16 +1,16 @@
-// Trusted checkpoint renderer — the WORKER CHILD side of the phase-3 process
+// Trusted checkpoint renderer, the WORKER CHILD side of the phase-3 process
 // boundary (see docs: CHECKPOINT-CONTRACT.md). Spawned by
 // server/checkpointWorker.js as a bare Node child with a scrubbed environment
 // (no app credentials) and one job in flight at a time.
 //
 // Trust model:
 //  - The job payload is ops + metadata ONLY. Nothing in it is ever eval'd,
-//    imported, navigated to, or turned into a URL — it crosses into the page
+//    imported, navigated to, or turned into a URL, it crosses into the page
 //    as structured data through page.evaluate(fn, job).
 //  - The page can only reach a fixed virtual origin; every request is
 //    intercepted and fulfilled from a frozen, in-memory copy of the pinned
-//    renderer module list (CHECKPOINT_RENDERER_FILES). Anything else —
-//    any origin, any path outside the list — is aborted. There is NO
+//    renderer module list (CHECKPOINT_RENDERER_FILES). Anything else -
+//    any origin, any path outside the list, is aborted. There is NO
 //    listening socket and NO network route of any kind.
 //  - One fresh browser context per job; the context is always closed, and a
 //    failed job also drops the browser so a poisoned renderer can't leak
@@ -33,7 +33,7 @@ import { CHECKPOINT_RENDERER_FILES, checkpointRendererVersion } from './checkpoi
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ORIGIN = 'http://checkpoint.render';
 
-// Hard ceilings even if the parent's budgets are absent/malformed — the child
+// Hard ceilings even if the parent's budgets are absent/malformed, the child
 // is the last fence, so its own limits must stand alone.
 const HARD_MAX_OPS = 30000;
 const HARD_MAX_POINTS = 8_000_000;
@@ -153,7 +153,7 @@ async function renderInPage(job) {
   }
 
   // Wire-encode the mix map: pixelsBase64, `data` omitted (client rebuilds
-  // the Uint8ClampedArray before restoreState — see mixMap.js header).
+  // the Uint8ClampedArray before restoreState, see mixMap.js header).
   const u8 = mix.data;
   const parts = [];
   const CHUNK = 0x8000;

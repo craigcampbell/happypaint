@@ -1,4 +1,4 @@
-// Room lobby — browse the live public (kid_safe) drawing rooms and hop between
+// Room lobby, browse the live public (kid_safe) drawing rooms and hop between
 // them, or spin up a new room. Public rooms are discoverable and moderated;
 // private rooms are invite-only. Creating a public room needs a signed-in
 // grown-up to own/host it (the server enforces this); private rooms are open to
@@ -59,7 +59,7 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
         return;
       }
       if (!res.ok) {
-        onToast?.("Couldn't make the room — please try again");
+        onToast?.("Couldn't make the room, please try again");
         setCreating(false);
         return;
       }
@@ -68,9 +68,9 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
         onJoin(data.code);
         return; // navigating away
       }
-      onToast?.("Couldn't make the room — please try again");
+      onToast?.("Couldn't make the room, please try again");
     } catch {
-      onToast?.("Couldn't make the room — please try again");
+      onToast?.("Couldn't make the room, please try again");
     }
     setCreating(false);
   }, [creating, makePublic, signedIn, token, title, onJoin, onToast]);
@@ -96,7 +96,7 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
           className="lobby-home"
           onClick={() => (onHome ? onHome() : onClose())}
         >
-          🏠 Front page — explore &amp; watch live rooms
+          🏠 Front page, explore &amp; watch live rooms
         </button>
 
         {/* Signed in: your rooms from the server (owned + visited, with who's
@@ -114,7 +114,7 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
             <p className="account-note">Looking for rooms…</p>
           ) : rooms.length === 0 ? (
             <p className="account-note">
-              {error ? "Couldn't load rooms right now." : "No public rooms are open yet — start one below!"}
+              {error ? "Couldn't load rooms right now." : "No public rooms are open yet, start one below!"}
             </p>
           ) : (
             <ul className="lobby-room-list">

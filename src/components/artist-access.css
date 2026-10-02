@@ -1,4 +1,4 @@
-/* Artist studio access UI — the owner's "Studio" panel (paint requests,
+/* Artist studio access UI, the owner's "Studio" panel (paint requests,
    approved painters, publishing) and the viewer banner. Contract:
    docs/ARTIST-ROOMS-CONTRACT.md. Uses the same visual language as
    artist-rooms.css (ArtistRoomSettings renders inside the owner panel). */

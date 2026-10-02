@@ -1,10 +1,10 @@
-// AI Assist v1 panel — LOCAL & SAFETY-GATED (docs/ai-policy.md).
+// AI Assist v1 panel: LOCAL & SAFETY-GATED (docs/ai-policy.md).
 //
 // All helpers are local + deterministic (no network/model). The panel is gated
 // behind a one-time consent screen (mirrors ai_consent: version + consentedAt,
 // with a visible guardian-approval gate for child accounts). Generated outputs
 // carry moderation_status: 'pending' in their stored shape. Server-side helpers
-// (sketch cleanup, etc.) are deferred behind credits + moderation — noted in UI.
+// (sketch cleanup, etc.) are deferred behind credits + moderation, noted in UI.
 
 import { useMemo, useState } from "react";
 import {
@@ -24,7 +24,7 @@ function ConsentGate({ onConsent }) {
   return (
     <div className="ai-consent">
       <p className="ps-subtitle">
-        AI Assist v1 runs <strong>entirely on your device</strong> — no data leaves it, no external model is called.
+        AI Assist v1 runs <strong>entirely on your device</strong>, no data leaves it, no external model is called.
         It helps you <em>start</em> art (palettes, prompts, brush recipes); it never makes finished art for you.
       </p>
       <p className="economy-note">

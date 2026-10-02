@@ -1,4 +1,4 @@
-// Room Replay player — a modal that loads the captured snapshot series and
+// Room Replay player, a modal that loads the captured snapshot series and
 // plays it back as a flipbook: play/pause, a scrubber over the keyframes, a
 // speed control, "Remix from here" (restores the selected snapshot as a new
 // single-layer artwork via the existing restore path), and "Export timelapse"
@@ -161,7 +161,7 @@ export default function ReplayPlayer({
 
         {count === 0 ? (
           <div className="empty-gallery ps-empty">
-            No replay snapshots yet. Keep drawing — snapshots are captured automatically while you paint.
+            No replay snapshots yet. Keep drawing, snapshots are captured automatically while you paint.
           </div>
         ) : (
           <>
@@ -229,7 +229,7 @@ export default function ReplayPlayer({
                     type="button"
                     className="replay-share primary-action"
                     onClick={() => onSharePrepared()}
-                    title="Your share is ready — this tap completes it"
+                    title="Your share is ready, this tap completes it"
                   >
                     {shareReadyKind === "mp4" ? "📤 Tap to share your video" : "📤 Tap to share your drawing"}
                   </button>
@@ -239,7 +239,7 @@ export default function ReplayPlayer({
                     className="replay-share primary-action"
                     onClick={() => onShareTimelapse({ themed: seasonalPrompt ? themedExport : false })}
                     disabled={isExporting}
-                    title="Share as a video (MP4) — or the finished drawing where video isn't supported. Never a flat GIF."
+                    title="Share as a video (MP4), or the finished drawing where video isn't supported. Never a flat GIF."
                   >
                     {isExporting ? "Making it…" : "📤 Share my timelapse"}
                   </button>

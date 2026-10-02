@@ -14,7 +14,7 @@
 //  - `history.checkpoint.frames` carries a SUBSET of the scene's frames, each
 //    with its OWN throughOpId watermark; `history.ops` keeps global order and
 //    holds the tail above the watermark for checkpointed frames plus FULL ops
-//    for every uncached frame (partial coverage — never truncated ink);
+//    for every uncached frame (partial coverage, never truncated ink);
 //  - builds are LAZY and requested-frame priority: joins and scene_fetch
 //    (optional scene_fetch.frameId) warm exactly the frame someone is waiting
 //    on; the op hot path only ever re-warms frames that already have an
@@ -29,25 +29,25 @@
 //    CURRENT scene via the ordinary scene history (not all room frames).
 //
 // What this is not: it never truncates old ops, never replaces the history,
-// and every failure mode — flag off, missing Chromium, version mismatch,
+// and every failure mode, flag off, missing Chromium, version mismatch,
 // worker error/timeout, corrupt or over-budget result, mutation mid-build,
-// stale room object — degrades to the ordinary full/scene catch-up.
+// stale room object, degrades to the ordinary full/scene catch-up.
 //
 // Safe-cut policy (contract "Renderer parity and safe cut"):
 //  - the prefix ends at a CLOSED-stroke boundary: every draw stroke started
 //    inside it carries its end op inside it. Open strokes are tracked by
-//    AUTHOR + stroke identity (`userId:strokeId`) inside ONE frame — the
+//    AUTHOR + stroke identity (`userId:strokeId`) inside ONE frame, the
 //    frame filter scopes identity, and an end op can never close another
 //    author's (or another frame's) stroke;
 //  - every draw stroke inside it is SEEDED (settings.seed != null on its
-//    first op) — unseeded strokes roll Math.random and can never be
+//    first op), unseeded strokes roll Math.random and can never be
 //    parity-cut;
 //  - AMBIGUOUS stroke identity conservatively ENDS the prefix (the prefix
 //    stays a real closed prefix, history/tail stay exact): the same strokeId
 //    opened by two different authors at once, or a mid-stroke settings batch
 //    that changes brush or seed (e.g. a switch to eraser before `end`) can
 //    never be cut safely. ORDINARY repeated-settings batches (same brush,
-//    same seed — how the apps actually stream a stroke) are preserved;
+//    same seed, how the apps actually stream a stroke) are preserved;
 //  - text ops (system font) and non-inline rasters are excluded: the first
 //    ineligible op ends the prefix for good, matching "retain source history,
 //    fall back to full replay".
@@ -80,7 +80,7 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Mirror dimensions (mixMap is a 1/8 mirror of layer 0): capture/restore
-// contract — see src/utils/mixMap.js.
+// contract, see src/utils/mixMap.js.
 const MIX_W = Math.ceil(CHECKPOINT_WIDTH / 8);
 const MIX_H = Math.ceil(CHECKPOINT_HEIGHT / 8);
 // After a failed build, don't hammer the worker on every join/op.
@@ -110,7 +110,7 @@ export function createCheckpointService(deps) {
   // room-wide one; every build still needs SOME ops to be worth a render.
   const frameMinOps = Math.max(1, Number(config.frameMinOps) || minOps);
   // Cap on checkpoint descriptors served in ONE scene baseline (the rest of
-  // the scene rides full ops — partial coverage by design).
+  // the scene rides full ops, partial coverage by design).
   const sceneMaxFrames = Math.max(1, Number(config.sceneMaxFrames) || 8);
   // Ops to wait before rescanning a frame whose prefix was ineligible/small/
   // oversize (a generation change resets the watermark immediately).
@@ -199,7 +199,7 @@ export function createCheckpointService(deps) {
   // object, same content generation, same moderation generation, the frame
   // still present with the SAME layer stack, same renderer, and the watermark
   // still present in history (a front trim past it makes the prefix
-  // unverifiable -> full replay). Other frames' structure is irrelevant —
+  // unverifiable -> full replay). Other frames' structure is irrelevant -
   // served metadata is always rebuilt live.
   function usable(room, entry) {
     if (!entry || entry.room !== room) return false;
@@ -224,18 +224,18 @@ export function createCheckpointService(deps) {
         if (typeof sid !== 'string' || !sid) return false;
         const authorKey = `${op.userId || ''}:${sid}`;
         if (op.settings) {
-          // Unseeded strokes roll Math.random per consumer — never cut-able.
+          // Unseeded strokes roll Math.random per consumer, never cut-able.
           if (op.settings.seed == null) return false;
           const brush = op.settings.brush || '';
           const seed = op.settings.seed;
           const prior = open.get(authorKey);
           // Mid-stroke brush/seed change (e.g. switching to eraser before the
           // end op): the renderer's stroke buffer is still open, so a cut
-          // here is premature — end the prefix conservatively. ORDINARY
+          // here is premature, end the prefix conservatively. ORDINARY
           // repeated-settings batches (identical brush+seed) are fine.
           if (prior && (prior.brush !== brush || prior.seed !== seed)) return false;
           // The same strokeId open under a DIFFERENT author: replay keys
-          // buffers loosely enough that the two interpretations diverge —
+          // buffers loosely enough that the two interpretations diverge -
           // decline the ambiguous region, keep the earlier closed prefix.
           const otherAuthor = openIds.get(sid);
           if (otherAuthor && otherAuthor !== authorKey) return false;
@@ -263,10 +263,10 @@ export function createCheckpointService(deps) {
   // the relay for a long history. Returns:
   //  - { ops, throughOpId }            a real closed prefix;
   //  - { ops: null, ineligible: true } an ineligible op ended the scan before
-  //    any closed boundary — only a content/moderation GENERATION change can
+  //    any closed boundary, only a content/moderation GENERATION change can
   //    ever change that verdict (new ops never move the blocking op);
   //  - { ops: null, ineligible: false } no closed boundary YET (empty frame
-  //    or a stroke still open) — more ops can complete it.
+  //    or a stroke still open), more ops can complete it.
   async function selectFramePrefix(room, frameId) {
     counters.prefixScans += 1;
     const all = visibleHistory(room);
@@ -309,7 +309,7 @@ export function createCheckpointService(deps) {
 
   // Freeze the prefix for the async build PER OP with the byte budget
   // enforced DURING the clone: over-budget declines before the clone is even
-  // complete, and the loop yields on the shared budget — never one
+  // complete, and the loop yields on the shared budget, never one
   // synchronous whole-history JSON.parse/stringify pair on the event loop.
   // (The deep copy matters: layer merges retag live ops in place.)
   async function freezeOps(ops) {
@@ -368,7 +368,7 @@ export function createCheckpointService(deps) {
   //  - INELIGIBLE / oversize (skipGen): new ops can NEVER move the blocking
   //    op or shrink the prefix, so rescan only when the content or moderation
   //    generation changes (a clear removes the text op, a hide covers it);
-  //  - NOT YET / too small (skipUntil): more ops complete the prefix — retry
+  //  - NOT YET / too small (skipUntil): more ops complete the prefix, retry
   //    once the op counter has grown by the deficit (never per-op).
   const skipGen = new Map(); // key -> { gen, hiddenGen, anim }
   function noteSkipGen(room, key) {
@@ -385,7 +385,7 @@ export function createCheckpointService(deps) {
   function skipActive(room, key) {
     // The animation toggle swaps the min-ops semantics (room-wide pilot floor
     // vs per-frame floor): a verdict recorded on the other side of it is
-    // meaningless — expire it instead of wedging the frame.
+    // meaningless, expire it instead of wedging the frame.
     const g = skipGen.get(key);
     if (g) {
       if (g.gen === room.historyGen && g.hiddenGen === (room.hiddenGen || 0) && g.anim === !!room.animationEnabled) return true;
@@ -500,14 +500,14 @@ export function createCheckpointService(deps) {
     return promise;
   }
 
-  // O(1)-ish guard on the op hot path. Correctness never depends on this — a
+  // O(1)-ish guard on the op hot path. Correctness never depends on this, a
   // join/fetch with no usable entry just takes the ordinary path.
   function noteOp(room, frameId = null) {
     if (disabled()) return;
     if (room.animationEnabled) {
       // Animation: the op hot path only RE-WARMS frames that already have an
       // entry. First builds are requested-frame priority from join/scene_fetch
-      // — never an eager render of every frame anyone draws on.
+      //, never an eager render of every frame anyone draws on.
       const fid = frameId && room.frames.some((f) => f.id === frameId) ? frameId : null;
       if (!fid) return;
       const key = `${room.code}:${fid}`;
@@ -533,7 +533,7 @@ export function createCheckpointService(deps) {
   }
 
   // The ops newer than a checkpoint watermark (moderation-filtered, bounded)
-  // — null when the watermark is gone or the tail is too long. Pilot scope:
+  //, null when the watermark is gone or the tail is too long. Pilot scope:
   // the whole (single-frame) room.
   function tailAfter(room, throughOpId) {
     const history = room.history;
@@ -561,7 +561,7 @@ export function createCheckpointService(deps) {
     if (disabled()) return ordinary();
     if (!ws.acceptsGzip || ws.checkpointsDisabled || ws.checkpointVersion !== rendererVersion) {
       // Not a checkpoint client (legacy, text-only, nacked, or stale bundle):
-      // ordinary join — but warm the cache in the background if the room
+      // ordinary join, but warm the cache in the background if the room
       // qualifies, so the NEXT capable joiner finds it ready.
       startBuild(room, room.frames[0] && room.frames[0].id);
       return ordinary();
@@ -604,7 +604,7 @@ export function createCheckpointService(deps) {
       if (built.gz.length > serveMaxBytes) {
         // Too big for one WS message: drop the entry, serve ordinary, and
         // remember so we don't rebuild the same oversize frame every join.
-        // Evict BEFORE stamping the cooldown — evictRoom clears failure
+        // Evict BEFORE stamping the cooldown, evictRoom clears failure
         // timestamps, and the phase-3 ordering silently wiped this one.
         counters.oversize += 1;
         evictKey(key);
@@ -637,7 +637,7 @@ export function createCheckpointService(deps) {
     if (disabled()) return ordinary();
     const sceneFrames = framesOfScene(room, sceneId);
     if (!sceneFrames.length) return ordinary();
-    // Optional scene_fetch.frameId: the frame the client WANTS current —
+    // Optional scene_fetch.frameId: the frame the client WANTS current -
     // its build jumps the worker queue. Absent → the scene's first frame.
     let wanted = null;
     if (opts.frameId != null) {
@@ -646,7 +646,7 @@ export function createCheckpointService(deps) {
     }
     const warmTarget = wanted || sceneFrames[0].id;
     if (!ws.acceptsGzip || ws.checkpointsDisabled || ws.checkpointVersion !== rendererVersion) {
-      // Not a checkpoint client: ordinary scene history — but warm the
+      // Not a checkpoint client: ordinary scene history, but warm the
       // requested frame in the background for the NEXT capable fetch.
       startBuild(room, warmTarget, { priority: wanted ? 2 : 1 });
       return ordinary();
@@ -678,7 +678,7 @@ export function createCheckpointService(deps) {
       return fallback();
     }
     // The requested frame isn't covered by a warm entry: build it in the
-    // background (queue-priority) so the NEXT fetch finds it — only ever the
+    // background (queue-priority) so the NEXT fetch finds it, only ever the
     // requested frame, never the whole film.
     if (wanted && !picked.some((e) => e.frameId === wanted)) {
       startBuild(room, wanted, { priority: 2 });
@@ -701,7 +701,7 @@ export function createCheckpointService(deps) {
     if (!watermarks.size) return fallback(); // every tail outgrew the budget
     // Assemble in GLOBAL history order: tail above each checkpointed frame's
     // watermark, full ops for every other scene frame. freezeWatermark is the
-    // last scene op covered by this baseline — the gate flush re-sends only
+    // last scene op covered by this baseline, the gate flush re-sends only
     // strictly-newer in-scope ops (exactly-once, same contract as the
     // ordinary frame+tail path).
     const ops = [];
@@ -735,8 +735,8 @@ export function createCheckpointService(deps) {
       framesKey: JSON.stringify([sceneId, descriptors.map((d) => d.frameId)]),
       msg, budgetMs: buildBudgetMs,
     });
-    // The async gzip spans loop turns: a mutation (draw burst is fine —
-    // covered by the tail watermark — but clear/moderation/structure is not)
+    // The async gzip spans loop turns: a mutation (draw burst is fine -
+    // covered by the tail watermark, but clear/moderation/structure is not)
     // may have landed mid-build. Re-validate everything before serving.
     if (rooms.get(room.code) !== room || room.historyGen !== gen
       || (room.hiddenGen || 0) !== hiddenGen
@@ -763,9 +763,9 @@ export function createCheckpointService(deps) {
   }
 
   // The client refused/failed a checkpoint: disable them FOR THIS CONNECTION
-  // ONLY and re-send the ordinary baseline — the CURRENT scene for a
+  // ONLY and re-send the ordinary baseline, the CURRENT scene for a
   // scene-paged (animation) connection, the full history otherwise. No
-  // server-side retry loop — the flag dies with the socket.
+  // server-side retry loop, the flag dies with the socket.
   function handleNack(ws, room) {
     if (ws.checkpointsDisabled) return;
     ws.checkpointsDisabled = true;

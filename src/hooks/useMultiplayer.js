@@ -12,12 +12,12 @@ import { checkpointClientSupport } from "../utils/checkpointClient";
 // served by Vite on :5173 is redirected to the server on :8787.
 
 function resolveSocketUrl(roomId) {
-  // NOTE: the auth token deliberately does NOT ride the URL — query strings
+  // NOTE: the auth token deliberately does NOT ride the URL, query strings
   // land in proxy/CDN access logs and browser history. Identity is sent as the
   // socket's first frame ({type:'auth', token}) instead; see onopen below.
   // `gz=1` opts into the server's shared gzipped history frame (wsInflate.js).
   const gz = supportsGzipFrames() ? "&gz=1" : "";
-  // `cp=<renderer fingerprint>` opts into trusted checkpoint baselines — ONLY
+  // `cp=<renderer fingerprint>` opts into trusted checkpoint baselines: ONLY
   // when this bundle can actually verify them (compile-time fingerprint +
   // WebCrypto + bitmap decode, see utils/checkpointClient.js). Without it the
   // server sends the ordinary full history.
@@ -94,7 +94,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const [self, setSelf] = useState(null);
   const [chat, setChat] = useState([]);
   // Artist studios (audience 'artist_public'): whether WE may draw. The server
-  // is the authority — true everywhere except an artist room where we're not
+  // is the authority, true everywhere except an artist room where we're not
   // the owner or an approved painter. Default true keeps the anonymous
   // commons unchanged; an artist room's handshake flips it to false.
   const [canPaint, setCanPaint] = useState(true);
@@ -118,7 +118,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     try {
       ws = new WebSocket(resolveSocketUrl(roomId));
     } catch {
-      // Malformed URL or blocked — retry shortly.
+      // Malformed URL or blocked, retry shortly.
       reconnectTimerRef.current = window.setTimeout(connect, 2000);
       return;
     }
@@ -142,14 +142,14 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
           // which is exactly the default a fresh socket starts from.
           setCanPaint(data.canPaint !== false);
           setRoomProfile(data.roomProfile || null);
-          // A reconnect re-derives access from the handshake — a stale
+          // A reconnect re-derives access from the handshake, a stale
           // "pending" from the previous socket must not linger.
           setPaintStatus(null);
           setPaintRequests([]);
           break;
         case "role_changed":
           // Server-authoritative paint access change (approve/revoke/promote/
-          // demote — the frame always carries canPaint). The App dispatcher
+          // demote, the frame always carries canPaint). The App dispatcher
           // also sees this frame and handles the stroke abort + status copy.
           if (data.canPaint !== undefined) setCanPaint(data.canPaint !== false);
           break;
@@ -177,17 +177,17 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
           break;
         case "chat":
           // Keep the whole line (msgId keys tapbacks/replies). Arrival time
-          // drives the ambient overlay's fade — the server ts can lag it.
+          // drives the ambient overlay's fade, the server ts can lag it.
           setChat((current) => [...current.slice(-79), { ...data, arrivedAt: Date.now() }]);
           break;
         case "chat_history":
           // Server catch-up on join: seed the log with recent messages (no
-          // arrivedAt — history shouldn't flash through the ambient overlay).
+          // arrivedAt, history shouldn't flash through the ambient overlay).
           setChat(Array.isArray(data.messages) ? data.messages.slice(-50) : []);
           break;
         case "chat_react": {
           // A tapback count changed on one bubble. Bail with the SAME array
-          // reference when the line isn't in our window — no re-render.
+          // reference when the line isn't in our window, no re-render.
           setChat((current) => {
             const at = current.findIndex((m) => m.msgId === data.msgId);
             if (at < 0) return current;
@@ -210,7 +210,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
           break;
         }
         case "chat_react_self": {
-          // Private ack: OUR toggle landed — highlight (or un-highlight) the chip.
+          // Private ack: OUR toggle landed, highlight (or un-highlight) the chip.
           setChat((current) => {
             const at = current.findIndex((m) => m.msgId === data.msgId);
             if (at < 0) return current;
@@ -233,12 +233,12 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     ws.onopen = () => {
       setConnected(true);
       retryRef.current = 0;
-      // FIRST frame is always auth (token or null) — the server holds the join
+      // FIRST frame is always auth (token or null), the server holds the join
       // until it arrives, so identity lands without ever touching the URL.
       // userKey is this device's own random id (the same one the gallery sync
       // uses) and is what lets a moderation block stick for a guest with no
       // account. It is never a name, an email, or anything a person typed, and
-      // its absence is fine — an older server simply ignores the extra field.
+      // its absence is fine, an older server simply ignores the extra field.
       ws.send(JSON.stringify({ type: "auth", token: token || null, userKey: localDeviceKey() }));
       ws.send(JSON.stringify(clientInfoPayload()));
       pingTimerRef.current = window.setInterval(() => {
@@ -279,7 +279,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   }, []);
 
   // Permanently tear down the socket and stop reconnecting (used when a host
-  // kicks us — otherwise the auto-reconnect would silently put us right back).
+  // kicks us, otherwise the auto-reconnect would silently put us right back).
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
     if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
@@ -293,7 +293,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
   // A received checkpoint failed verification: turn checkpoints off for THIS
   // connection and ask the server for the ordinary full-history baseline
-  // instead (one-shot — the App guards against re-sending so a bad server
+  // instead (one-shot, the App guards against re-sending so a bad server
   // can't loop us).
   const sendCheckpointNack = useCallback(() => send({ type: "checkpoint_nack" }), [send]);
   // Upload a client-rendered mural snapshot for late-joiner catch-up (the
@@ -394,7 +394,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     [send],
   );
   // Duplicate (copy the layer's ops under fresh ids) and merge (re-tag onto the
-  // layer below, then remove). Both are the SERVER's call — the pixels are the
+  // layer below, then remove). Both are the SERVER's call, the pixels are the
   // ops' doing, so only the server can make them shared.
   const sendLayerDup = useCallback((frameId, layerId) => send({ type: "layer_dup", frameId: frameId || null, layerId }), [send]);
   const sendLayerMerge = useCallback((frameId, layerId) => send({ type: "layer_merge", frameId: frameId || null, layerId }), [send]);
@@ -405,7 +405,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendProductionCreate = useCallback((title) => send({ type: "production_create", title: title || null }), [send]);
   const sendProductionAddSegment = useCallback(() => send({ type: "production_add_segment" }), [send]);
   const sendProductionRename = useCallback((title) => send({ type: "production_rename", title }), [send]);
-  // Crew presence (COLD path — sent on frame-select / scene-switch / join, never
+  // Crew presence (COLD path, sent on frame-select / scene-switch / join, never
   // per stroke) + the "come look at my frame!" beacon. Both ephemeral, relayed.
   const sendFramePresence = useCallback((sceneId, frameId) => send({ type: "frame_presence", sceneId: sceneId || null, frameId: frameId || null }), [send]);
   const sendBeacon = useCallback((sceneId, frameId) => send({ type: "beacon", sceneId: sceneId || null, frameId: frameId || null }), [send]);
@@ -442,7 +442,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendWipeKeep = useCallback(() => send({ type: "wipe_keep" }), [send]);
   const sendForkPrivate = useCallback(() => send({ type: "fork_private" }), [send]);
   // Member wipes: ASK to wipe the mural (optionally for a fresh coloring
-  // sheet) — the server runs the countdown, or a room vote at 3+ people.
+  // sheet), the server runs the countdown, or a room vote at 3+ people.
   const sendWipeRequest = useCallback((sheetId) => send(sheetId ? { type: "wipe_request", sheetId } : { type: "wipe_request" }), [send]);
   const sendWipeVote = useCallback((id, yes) => send({ type: "wipe_vote", id, yes: !!yes }), [send]);
   const sendWipeCancel = useCallback((id) => send({ type: "wipe_cancel", id }), [send]);

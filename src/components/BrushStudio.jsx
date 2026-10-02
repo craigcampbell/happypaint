@@ -1,4 +1,4 @@
-// Brush Studio Lite — create + apply community-style brush recipes.
+// Brush Studio Lite, create + apply community-style brush recipes.
 //
 // Adjust base brush + size/opacity/variation + glow/textured flags, see a live
 // preview stroke on a small canvas, then save the recipe as a `space_assets`

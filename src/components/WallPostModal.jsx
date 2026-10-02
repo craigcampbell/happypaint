@@ -1,4 +1,4 @@
-// "Pin it to the Fridge Wall" — the studio's post dialog. The studio hands us
+// "Pin it to the Fridge Wall", the studio's post dialog. The studio hands us
 // already-captured frame dataURLs (1 for a drawing, up to 8 for an animation);
 // we preview them (cycling if animated), collect title + up to 5 tags + artist
 // name, and POST to /api/wall. The server profanity-gates every text field, so
@@ -63,7 +63,7 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
           frames,
           durationMs: draft.durationMs,
           userKey: deviceKey(),
-          // Which room this was drawn in — posts from the DAILY room join
+          // Which room this was drawn in, posts from the DAILY room join
           // today's challenge gallery on the homepage.
           room: room || null,
           allowRemix,
@@ -76,16 +76,16 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
       }
       const data = await res.json().catch(() => ({}));
       if (data.error === "language") {
-        setError("Some of those words can't go on the wall — try different ones! 💛");
+        setError("Some of those words can't go on the wall, try different ones! 💛");
       } else if (res.status === 429) {
         setError("Whoa, speedy! Wait a little before posting again.");
       } else if (data.error === "wall_full") {
-        setError("The wall is packed right now — try again tomorrow!");
+        setError("The wall is packed right now, try again tomorrow!");
       } else {
-        setError("Couldn't pin that — try again in a moment.");
+        setError("Couldn't pin that, try again in a moment.");
       }
     } catch {
-      setError("Couldn't reach the wall — check your connection and try again.");
+      setError("Couldn't reach the wall, check your connection and try again.");
     } finally {
       setPosting(false);
     }
@@ -135,7 +135,7 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
         </label>
 
         <div className="wall-post-field">
-          <span>Tags (up to 5 — help friends find it!)</span>
+          <span>Tags (up to 5, help friends find it!)</span>
           <div className="wall-post-tags">
             {tags.map((t) => (
               <button

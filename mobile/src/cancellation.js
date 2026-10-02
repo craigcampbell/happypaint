@@ -1,4 +1,4 @@
-// Canonical cancellation value — US spelling ("canceled") is the ONLY value
+// Canonical cancellation value: US spelling ("canceled") is the ONLY value
 // new code emits. Readers must keep accepting the legacy UK spelling
 // ("cancelled") found in older stored rows, locally persisted receipts, and
 // pre-rename backend data, so an old value never silently falls through a

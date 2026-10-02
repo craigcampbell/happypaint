@@ -13,7 +13,7 @@ const CHIP_DAB = 18;
 // pressure with a fixed seed, so the chip shows exactly what the brush lays
 // down and never shimmers. Hand-drawn special cases: eraser = dashed "removes"
 // nib, smudge = neutral drag streak, spray = dot cluster (legacy path, no dab),
-// ink = a thick-to-hairline sweep (its dab is a plain disc — the taper IS the
+// ink = a thick-to-hairline sweep (its dab is a plain disc, the taper IS the
 // brush, and a disc would just duplicate the marker chip).
 export default function BrushPreview({ brush, color }) {
   const ref = useRef(null);
@@ -28,7 +28,7 @@ export default function BrushPreview({ brush, color }) {
     ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, w, h);
     if (brush === "eraser") {
-      // Nothing to paint — show a dashed eraser nib so it reads as "removes".
+      // Nothing to paint, show a dashed eraser nib so it reads as "removes".
       ctx.strokeStyle = "#7a8794";
       ctx.setLineDash([3, 3]);
       ctx.lineWidth = 2;
@@ -37,7 +37,7 @@ export default function BrushPreview({ brush, color }) {
       return;
     }
     if (brush === "smudge") {
-      // No pigment of its own — a neutral streak fading along the drag
+      // No pigment of its own, a neutral streak fading along the drag
       // direction, so it reads as "pushes the paint that's already there".
       const grad = ctx.createLinearGradient(w / 2 - 14, 0, w / 2 + 14, 0);
       grad.addColorStop(0, "rgba(122, 135, 148, 0.9)");

@@ -1,4 +1,4 @@
-# Drawesome — paste-ready copy
+# Drawesome, paste-ready copy
 
 Drafts for owner review. Nothing here has been posted. Read the rule in
 `docs/SOCIAL_PUSH.md` §4 for each venue before using its draft.
@@ -9,14 +9,14 @@ claims about safety or data deletion that outrun what the product actually does.
 
 ---
 
-## 1. r/groupdoodles — post the ART, not the tool
+## 1. r/groupdoodles, post the ART, not the tool
 
 **Title:** My friend and I drew a whole alien market stall together in one browser tab
 
 **Body:**
 
 > We're in different timezones so we can't share a desk. Found a browser canvas
-> where we both draw on the same page live, no install, no account — I sent a
+> where we both draw on the same page live, no install, no account: I sent a
 > room code and we were both in it in about ten seconds.
 >
 > Rules we played by: I did the structure and the awning, she did everything
@@ -26,7 +26,7 @@ claims about safety or data deletion that outrun what the product actually does.
 >
 > [attach the exported PNG]
 >
-> Happy to share the tool in the comments if anyone wants it — didn't want to
+> Happy to share the tool in the comments if anyone wants it, didn't want to
 > drop a link on an art post.
 
 *(Mentioning the tool only after someone asks keeps this an art post. If asked,
@@ -34,14 +34,14 @@ reply with the URL and disclose you made it.)*
 
 ---
 
-## 2. r/InternetIsBeautiful — the tool post
+## 2. r/InternetIsBeautiful, the tool post
 
 Lead with what is **different**, because "not unique" is the rule that removes
 most submissions here.
 
 **Title options:**
 
-- `You and a friend draw on the same canvas in one browser tab — no account, no download`
+- `You and a friend draw on the same canvas in one browser tab, no account, no download`
 - `A shared drawing canvas with 6,000+ coloring pages, built for kids and the adults supervising them`
 - `I built a browser canvas where a whole room draws on one picture at the same time`
 
@@ -52,7 +52,7 @@ most submissions here.
 > download, or a subscription before two people could make one dumb picture
 > together.
 >
-> Open the site and you're already drawing — nothing to sign up for. To draw
+> Open the site and you're already drawing, nothing to sign up for. To draw
 > with someone you open a room and send them the code; they're in the same
 > picture in a few seconds with no account of their own. Same canvas, live
 > cursors, real brushes (marker, pencil, watercolor, spray), layers, and a
@@ -69,19 +69,19 @@ most submissions here.
 > https://drawesome.art
 
 **Do not add:** "free demo", "check out my", "sign up to try", any comparison
-table, or a features list. If a mod asks whether it's yours — yes, say so
+table, or a features list. If a mod asks whether it's yours, yes, say so
 immediately.
 
 ---
 
-## 3. r/SideProject / r/alphaandbetausers — ask for the feedback you want
+## 3. r/SideProject / r/alphaandbetausers, ask for the feedback you want
 
-**Title:** Built a collaborative drawing canvas — I need to know if two people can actually get into a room without me explaining it
+**Title:** Built a collaborative drawing canvas: I need to know if two people can actually get into a room without me explaining it
 
 **Body:**
 
 > I've been building a browser drawing studio where people paint on the same
-> canvas in real time per room. It's free, no account, no install. It works —
+> canvas in real time per room. It's free, no account, no install. It works -
 > I've tested it across devices and the shared canvas is genuinely live.
 >
 > The problem is embarrassing: **nobody's in it.** Every room I open is empty,
@@ -94,7 +94,7 @@ immediately.
 > 2. Where did you get stuck or hesitate?
 > 3. Did anything make you think it was broken?
 >
-> Not looking for compliments — looking for the point where you'd have closed
+> Not looking for compliments, looking for the point where you'd have closed
 > the tab. I'm the maker, so tell me what's wrong with it.
 
 ---
@@ -104,14 +104,14 @@ immediately.
 For r/learntodraw, r/ArtEd, r/DrawingRequest-style threads. Only post where the
 question is actually being asked, and only if you're otherwise a participant.
 
-> Not Procreate or Clip Studio — neither does live shared canvases. For actually
+> Not Procreate or Clip Studio, neither does live shared canvases. For actually
 > drawing on one picture at the same time the free options are roughly:
 >
-> - **Drawpile** — free, open source, most powerful, has animation. Install, and
+> - **Drawpile**, free, open source, most powerful, has animation. Install, and
 >   a bit technical to set up.
-> - **Magma** (formerly aggie.io) — free tier, browser, good brushes; the paid
+> - **Magma** (formerly aggie.io), free tier, browser, good brushes; the paid
 >   tier adds layers and space.
-> - **Drawesome** — browser, no account at all, aimed at casual/kid drawing with
+> - **Drawesome**, browser, no account at all, aimed at casual/kid drawing with
 >   a shared room + coloring pages. Full disclosure: I made this one.
 >
 > If you and one friend just want to mess about, any of the three works; if you
@@ -127,9 +127,9 @@ acceptable instead of an advert.)*
 These are frequent and usually go unanswered with anything useful. Lead with the
 mechanic, not the site.
 
-> Worth knowing you don't have to do this as two halves at all — there are
+> Worth knowing you don't have to do this as two halves at all, there are
 > browser canvases where you're both on the same picture at the same time and
-> you can watch the other person's cursor work. Changes how a collab feels —
+> you can watch the other person's cursor work. Changes how a collab feels -
 > you end up riffing off each other instead of guessing.
 >
 > Free ones that do it: Magma (has a free tier), Drawpile (install, more for
@@ -138,10 +138,10 @@ mechanic, not the site.
 
 ## 4c. Reply to the recurring "is there anything like iscribble / aggie.io?" thread
 
-> aggie.io is gone — it redirects to Magma now, which is the paid-ish successor.
+> aggie.io is gone, it redirects to Magma now, which is the paid-ish successor.
 > iscribble's been dead for years. If you want live drawing with strangers in a
 > browser with nothing to install, the current free options are Magma's free
-> tier, Drawpile (install, more powerful), and Drawesome (I made this one —
+> tier, Drawpile (install, more powerful), and Drawesome (I made this one -
 > browser, no account at all, and the public rooms are always open).
 >
 > The pattern in this niche is that the free ones keep shutting down, so it's
@@ -149,38 +149,38 @@ mechanic, not the site.
 
 ---
 
-## 5. Fandom post — the format that actually spread for aggie.io
+## 5. Fandom post, the format that actually spread for aggie.io
 
-**Title:** My friend and I drew our OCs meeting for the first time — one canvas, two states
+**Title:** My friend and I drew our OCs meeting for the first time, one canvas, two states
 
 **Body:**
 
 > [attach the PNG]
 >
 > She's in Oregon, I'm in Texas. We both drew on the same picture at the same
-> time in a browser tab — I could see her cursor moving while I was lining mine.
+> time in a browser tab: I could see her cursor moving while I was lining mine.
 > My OC is on the left, hers is on the right, and we're not allowed to say which
 > of us drew the cat.
 >
-> (Drawn in Drawesome — room code + a link, no accounts for either of us.)
+> (Drawn in Drawesome, room code + a link, no accounts for either of us.)
 
 **Why this works:** it's fandom-native content with the tool as an aside. This is
-the shape every organic aggie.io post took — r/HollowKnight, r/outerwilds,
+the shape every organic aggie.io post took, r/HollowKnight, r/outerwilds,
 r/Terraria, r/fivenightsatfreddys, r/wholesomejojo.
 
 ---
 
 ## 6. The jam announcement
 
-**Always link the room, never the bare domain** — `drawesome.art` mints a fresh
+**Always link the room, never the bare domain**, `drawesome.art` mints a fresh
 private room per visitor and would scatter your audience (see `SOCIAL_PUSH.md` §1).
 
-**Title:** Drawing jam — Saturday, one canvas, everybody draws a wizard [20 min]
+**Title:** Drawing jam: Saturday, one canvas, everybody draws a wizard [20 min]
 
 **Body:**
 
 > Setting up in **Dino World** on Saturday at 7pm Central. One shared canvas, no
-> account, no install — click the link and you're painting with everyone else in
+> account, no install, click the link and you're painting with everyone else in
 > the room, live.
 >
 > https://drawesome.art/join/DINOS
@@ -190,9 +190,9 @@ private room per visitor and would scatter your audience (see `SOCIAL_PUSH.md` �
 > It's 20 minutes, and I'll post the finished picture afterwards. If nobody
 > shows up I'll have drawn a wizard alone, which is honestly also fine.
 
-*(Note the honesty — it pre-empts the "this'll be empty" objection instead of
+*(Note the honesty, it pre-empts the "this'll be empty" objection instead of
 hiding it. Announce **once**, not repeatedly. Swap `DINOS` for any stable code
-from the table in `SOCIAL_PUSH.md` §1 — but then keep using that one.)*
+from the table in `SOCIAL_PUSH.md` §1, but then keep using that one.)*
 
 ---
 
@@ -200,21 +200,21 @@ from the table in `SOCIAL_PUSH.md` §1 — but then keep using that one.)*
 
 Produce these **inside the studio** with 🎬 Timelapse and 🖼 GIF export.
 
-**A — "Two cursors, one drawing" (15s)**
+**A: "Two cursors, one drawing" (15s)**
 > Screen-record a real session with two people drawing. No talking, just the
 > timelapse. Caption: `my friend is 2,000 miles away and we're drawing on the
 > same piece of paper`. End on the finished picture, then the room code on the
 > last frame.
 
-**B — "Blank canvas fear, solved" (15s)**
+**B: "Blank canvas fear, solved" (15s)**
 > Open the coloring library, pick a page, color 3 areas, export. Caption:
-> `for anyone who freezes at a blank canvas — 6,000 of these`. No account
+> `for anyone who freezes at a blank canvas: 6,000 of these`. No account
 > shown, because there isn't one.
 
-**C — "One drawing, 5 people" (20s)**
+**C: "One drawing, 5 people" (20s)**
 > A jam timelapse. Caption: `5 people, 1 canvas, 0 accounts, 20 minutes`.
 
-**Posting rules that matter:** don't put the domain in a TikTok comment — a
+**Posting rules that matter:** don't put the domain in a TikTok comment, a
 comment containing a domain was seen accepted in-session and then silently gone
 on reload. Use the bare name in comments and the link in the bio.
 

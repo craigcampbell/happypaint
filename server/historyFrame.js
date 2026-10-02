@@ -1,25 +1,25 @@
 // Async, byte-faithful join-frame builder for the history catch-up cache.
 //
 // Rebuilding a room's gzipped join frame used to mean one synchronous
-// JSON.stringify of the whole visible history on the single realtime thread —
+// JSON.stringify of the whole visible history on the single realtime thread -
 // measured at 0.4–1.8s of event-loop stall for a cap-full room, freezing every
 // room on the box for that window (see docs/CATCHUP-IMPLEMENTATION.md). This
 // module produces BYTE-IDENTICAL output to JSON.stringify(msg) but in
 // time-budgeted slices, yielding to the event loop between them; the gzip then
 // runs on zlib's threadpool as before. Wire format, cache contract and the
-// fallback path are unchanged — only the stall is gone.
+// fallback path are unchanged, only the stall is gone.
 
 import { Gzip } from 'node:zlib';
 
 const yieldToLoop = () => new Promise((done) => setImmediate(done));
 
 // Arrays longer than this are serialized element-by-element with loop yields
-// between budgeted slices. Anything smaller (including every individual op —
+// between budgeted slices. Anything smaller (including every individual op -
 // measured ~5µs for a 6KB op) goes through one JSON.stringify call, which is
 // byte-identical: the production of a value inside JSON.stringify(parent) is
 // exactly JSON.stringify(value) (modulo undefined-in-array → null, handled by
 // the caller). A pathological single value larger than the slice budget (e.g.
-// one op carrying a multi-MB payload) still serializes in one call — op size
+// one op carrying a multi-MB payload) still serializes in one call, op size
 // is bounded by the WS message limit, so worst case stays well under budgetMs.
 const SLICE_ARRAY_MIN = 256;
 
@@ -140,7 +140,7 @@ function gzipPartsSliced(parts, { level = 6, budgetMs = 8 } = {}) {
 // turns during which live ops append to room.history (and trimHistoryFront
 // SPLICES it in place). Building from the live array would either leak ops
 // past the entry's lastOpId watermark (a joiner would then receive them twice
-// — once in the frame, once in the tail — and double-apply ink) or corrupt the
+//, once in the frame, once in the tail, and double-apply ink) or corrupt the
 // frame mid-write. The snapshot is exactly "ops ≤ lastOpId"; anything newer
 // rides the per-join tail, as before.
 export async function buildGzippedHistoryFrame({ variant, gen, hiddenGen, framesKey, msg, level = 6, budgetMs = 8 }) {
@@ -149,8 +149,8 @@ export async function buildGzippedHistoryFrame({ variant, gen, hiddenGen, frames
   // Freeze the NESTED metadata too (frames / scenes / layer stacks): the async
   // build spans many loop turns while the live structures mutate IN PLACE
   // (layer_add pushes into a live layers array, frame_duration writes a live
-  // frame). Serializing the live references tears the frame — part old, part
-  // new — and the after-the-fact key check can't always see it (an add+remove
+  // frame). Serializing the live references tears the frame, part old, part
+  // new, and the after-the-fact key check can't always see it (an add+remove
   // pair or a set-and-set-back restores the key while the bytes straddle the
   // edit). These payloads are a few KB next to the ops, so a synchronous deep
   // copy at snapshot time is cheap and makes the build's input immutable.

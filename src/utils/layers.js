@@ -3,7 +3,7 @@
 // changes. Layers are ordered bottom-to-top: index 0 paints first (lowest),
 // the last index paints last (on top).
 
-// The shared mural is a large world that everyone pans/zooms around — far bigger
+// The shared mural is a large world that everyone pans/zooms around, far bigger
 // than any one screen, so friends can spread out into their own areas and still
 // meet in the middle. Kept to a mobile-friendly memory budget (each layer is a
 // canvas of this size).
@@ -39,7 +39,7 @@ export function createLayer({ name = "Layer", visible = true, opacity = 1, locke
   };
 }
 
-// A single drawing layer by default — leaner memory on the big shared mural and
+// A single drawing layer by default, leaner memory on the big shared mural and
 // far less clutter on phones. Artists can add more layers from the panel.
 export function createDefaultLayers(width, height) {
   return [createLayer({ name: "Canvas", width, height })];
@@ -115,7 +115,7 @@ export function compositeLayerRange(context, layers, from, to) {
 
 // Snapshot of ONLY the active layer plus a lightweight structural descriptor of
 // the whole stack (ids/meta, no pixels). Used for brush/fill/shape/text undo
-// entries that only touch the active layer — ~Nx smaller than a full snapshot.
+// entries that only touch the active layer, ~Nx smaller than a full snapshot.
 export function snapshotActiveLayer(layers, activeLayerId) {
   const active = layers.find((layer) => layer.id === activeLayerId) || null;
   return {

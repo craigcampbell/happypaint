@@ -1,7 +1,7 @@
 // Plain-language safety + data page for parents/guardians. Everything stated
 // here reflects shipped behavior (anonymous-first, public-room moderation,
 // play-money only, no public people search, local-first storage, account
-// deletion). Keep it honest — do not claim features that aren't live.
+// deletion). Keep it honest, do not claim features that aren't live.
 
 const SAFETY = [
   {

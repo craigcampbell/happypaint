@@ -1,4 +1,4 @@
-# Happy Paint — Session Status & Resume Notes
+# Happy Paint: Session Status & Resume Notes
 
 _Last updated: 2026-06-16. Branch: `big-changes`. Working tree: **clean** (everything committed)._
 
@@ -6,19 +6,19 @@ This file is a handoff so we can pick up exactly where we left off after a resta
 
 ---
 
-## TL;DR — where we are
+## TL;DR, where we are
 
 A full session of feature work + a performance/bug audit + all fixes + Supabase
 wiring is **built, committed, and passing static checks** (web build+lint, mobile
-typecheck). **Nothing has been run at runtime yet** — that's the next phase.
+typecheck). **Nothing has been run at runtime yet**, that's the next phase.
 
 We just decided to set up **actual testing**. Two decisions were made right before
 the restart:
 
-1. **Test scope = "Full local pyramid"** — Vitest unit tests (web + shared mobile
+1. **Test scope = "Full local pyramid"**: Vitest unit tests (web + shared mobile
    logic) + Playwright headless web smoke + **local Supabase via Docker** for real
    auth/sync integration tests. All local, free, no accounts needed.
-2. **DigitalOcean MCP = "Yes, guide me through it"** — set up the DO MCP server +
+2. **DigitalOcean MCP = "Yes, guide me through it"**, set up the DO MCP server +
    API token in Claude Code settings so the assistant can deploy + read build logs
    later. (This is the deploy layer, separate from testing; it creates real billable
    resources, so we do it deliberately.)
@@ -62,22 +62,22 @@ Branch `big-changes`, 11 commits (newest first):
 - **Drawing**: Layer Lite, fill/shapes/text, transparent export, tiny animation
   loops (onion skin + GIF), snapshot-based replay/timelapse.
 - **Paint Spaces** locker, **Brush Studio Lite** (create/apply brushes).
-- **Economy** (Drops/Kudos wallet, store, creator dashboard) — mock, no real IAP.
+- **Economy** (Drops/Kudos wallet, store, creator dashboard), mock, no real IAP.
 - **Events** (lifecycle + voting) + **Community Brush Packs** (publish/browse/admin review).
-- **AI Assist v1** — local/deterministic (palette/prompt/brush-recipe), consent-gated.
-- **Auth/sync** — env-gated Supabase (magic link + Apple/Google OAuth), local-first
+- **AI Assist v1**, local/deterministic (palette/prompt/brush-recipe), consent-gated.
+- **Auth/sync**, env-gated Supabase (magic link + Apple/Google OAuth), local-first
   sync of drawings→`project_snapshots` & paint space→`space_assets` (last-write-wins).
   Unset env = fully local-only.
-- **Account deletion** (App Review requirement) — wipes all local stores + RPC.
+- **Account deletion** (App Review requirement), wipes all local stores + RPC.
 - **Admin** moderation queues (brush packs + AI assets).
 
 ### Key docs to read on resume
-- `kanban.md` — full feature board + status + what's deferred.
-- `performance_audit.md` — the 34-finding audit (all Critical→Low fixed).
-- `HOSTING.md` — beginner DigitalOcean + Supabase setup.
-- `DEPLOY.md` — concise deploy reference + Supabase setup section.
-- `docs/ai-policy.md` — AI consent/safety model.
-- `backend/supabase/schema.sql`, `storage.sql`, `functions/purge-account/` — backend.
+- `kanban.md`, full feature board + status + what's deferred.
+- `performance_audit.md`, the 34-finding audit (all Critical→Low fixed).
+- `HOSTING.md`, beginner DigitalOcean + Supabase setup.
+- `DEPLOY.md`, concise deploy reference + Supabase setup section.
+- `docs/ai-policy.md`: AI consent/safety model.
+- `backend/supabase/schema.sql`, `storage.sql`, `functions/purge-account/`, backend.
 
 ---
 
@@ -90,11 +90,11 @@ expect runtime bugs to surface on first real use." Testing is the next phase.
 
 ---
 
-## Resume plan — Full Local Pyramid (do these in order)
+## Resume plan: Full Local Pyramid (do these in order)
 
-### 1. Vitest unit tests (web + shared mobile logic) — start here
+### 1. Vitest unit tests (web + shared mobile logic), start here
 - `npm i -D vitest` (web root). Add `"test": "vitest run"` script.
-- Target pure logic (no DOM/canvas needed): `src/utils/` — `layers.js`, `frames.js`,
+- Target pure logic (no DOM/canvas needed): `src/utils/`, `layers.js`, `frames.js`,
   `fill.js`, `gif.js` (assert GIF89a header `GIF89a` + trailer `0x3B`), `economy.js`
   (ledger→balance, spend/credit/tip), `sync.js` (last-write-wins merge), `aiAssist.js`
   (deterministic palette/brush-recipe), `eventEngine.js` (lifecycle + one-vote),
@@ -129,14 +129,14 @@ expect runtime bugs to surface on first real use." Testing is the next phase.
   export, replay, economy/events/brush screens, account deletion, sign-in if cloud
   configured). Cross-device sync needs the local or cloud Supabase.
 
-### 5. DigitalOcean MCP setup (deploy layer — user opted in)
+### 5. DigitalOcean MCP setup (deploy layer, user opted in)
 - User wants guidance. Steps: create a DO API token (DO dashboard → API → Generate
   New Token, write scope); add the DigitalOcean MCP server to Claude Code MCP
   settings (the `update-config` skill / `.claude/settings.json` or `claude mcp add`),
   with the token as the credential.
 - Then it can: create/inspect the App Platform app, set the `VITE_SUPABASE_*`
   build-time env vars, trigger deploys, and read build/deploy logs.
-- ⚠️ Real billable, public resources — do deliberately, confirm before creating/deploying.
+- ⚠️ Real billable, public resources, do deliberately, confirm before creating/deploying.
 
 ---
 

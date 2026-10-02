@@ -1,15 +1,15 @@
-// Checkpoint worker manager — the parent side of the trusted-render process
+// Checkpoint worker manager, the parent side of the trusted-render process
 // boundary. Owns ONE bare Node child (server/checkpointRenderer.mjs) spawned
 // with a scrubbed environment (no app credentials, no PocketBase/billing
-// secrets — only what Chromium needs to launch), serializes render jobs
+// secrets, only what Chromium needs to launch), serializes render jobs
 // through it, and enforces the operational contract:
 //
 //  - DISABLED-BY-DEFAULT: constructed with no usable executable, the manager
-//    is inert — nothing spawns, submit() rejects 'disabled', and the realtime
+//    is inert, nothing spawns, submit() rejects 'disabled', and the realtime
 //    server's startup/join paths never touch it.
 //  - LAZY: the child (and Chromium inside it) starts on the FIRST job, never
 //    at server boot; an idle deployment pays nothing.
-//  - BOUNDED: one job in flight, a short queue (default 1 waiter — a second
+//  - BOUNDED: one job in flight, a short queue (default 1 waiter, a second
 //    room's build is cheaper recomputed later than queued), per-job timeout
 //    with SIGKILL + respawn, and rejection of stale/oversized IPC results.
 //  - CRASH-SAFE: an unexpected child exit rejects the in-flight job and the
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const WORKER_ENTRY = fileURLToPath(new URL('./checkpointRenderer.mjs', import.meta.url));
 // Results carry base64 PNGs + the mix pixel array; the contract caps a frame
-// at 48MiB of assets — anything larger on the wire is a renderer bug or an
+// at 48MiB of assets, anything larger on the wire is a renderer bug or an
 // attack, not a checkpoint.
 const MAX_RESULT_CHARS = 96 * 1024 * 1024;
 
@@ -60,7 +60,7 @@ export function createCheckpointWorker({
   function spawnChild() {
     stats.spawns += 1;
     // Scrubbed environment: the renderer needs a PATH, a HOME and a temp dir
-    // for Chromium — and NOTHING from the app process (PB tokens, admin key,
+    // for Chromium, and NOTHING from the app process (PB tokens, admin key,
     // billing secrets stay unreachable from the render boundary).
     const env = {
       PATH: process.env.PATH || '',
@@ -188,7 +188,7 @@ export function createCheckpointWorker({
     }
     // Requested-frame priority (phase 4): a joiner/fetch waiting on a specific
     // frame's checkpoint jumps ahead of speculative background rebuilds, but
-    // the queue stays bounded and FIFO INSIDE one priority band — an urgent
+    // the queue stays bounded and FIFO INSIDE one priority band, an urgent
     // job can never starve same-band waiters or reorder past the in-flight job.
     const prio = Number.isFinite(priority) ? priority : 0;
     return new Promise((resolve, reject) => {

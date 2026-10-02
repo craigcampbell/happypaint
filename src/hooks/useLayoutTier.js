@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 
 // Studio layout tiers. ONE definition that the JSX (panel defaults, toggles)
-// and the CSS (`src/studio-layout.css`) both follow — keep the two in sync.
+// and the CSS (`src/studio-layout.css`) both follow, keep the two in sync.
 //
-//   desktop  — wide + fine pointer (mouse / Wacom Cintiq): the tool rail is a
+//   desktop, wide + fine pointer (mouse / Wacom Cintiq): the tool rail is a
 //              docked right column that collapses to give the canvas the whole
 //              window; the studio menu is a floating popover.
-//   tablet   — the compact chrome (quick bar, rooms FAB) BUT landscape and
+//   tablet, the compact chrome (quick bar, rooms FAB) BUT landscape and
 //              ≥ 900px wide (iPad landscape, Cintiq touch-only): the tool rail
 //              is a right-hand side sheet so the canvas stays visible while
 //              picking brushes / colors.
-//   phone    — everything else compact: the tool rail is a bottom sheet.
+//   phone, everything else compact: the tool rail is a bottom sheet.
 //
 // "Compact" is the historical `(max-width: 1024px), (pointer: coarse)` rule
 // the rest of the stylesheet keys on, so every existing mobile override still

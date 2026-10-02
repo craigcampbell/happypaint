@@ -1,4 +1,4 @@
-# Artist rooms — implementation contract
+# Artist rooms, implementation contract
 
 Status: accepted implementation design, not a claim of delivery. Build after seasonal shared-file owners finish. Existing production remains untouched.
 

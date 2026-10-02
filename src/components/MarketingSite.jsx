@@ -124,7 +124,7 @@ export default function MarketingSite({ onNavigate }) {
       {rooms.length > 0 ? (
         <section className="open-rooms" id="rooms" aria-label="Open rooms you can join right now">
           <div className="open-rooms-head">
-            <p className="eyebrow">Jump in — no account needed</p>
+            <p className="eyebrow">Jump in, no account needed</p>
             <h2>Open rooms &amp; today&rsquo;s prompts</h2>
             <p className="open-rooms-sub">Pick a room and start painting with whoever shows up. New prompts every day.</p>
           </div>

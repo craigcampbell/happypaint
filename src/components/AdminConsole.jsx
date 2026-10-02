@@ -91,7 +91,7 @@ export default function AdminConsole({ onNavigate }) {
     setPackReviews(getPendingPackReviews());
     const name = entry.pack?.title || entry.target_id;
     const verb =
-      decision === "approved" ? "approved — now public in browse" : decision === "rejected" ? "rejected" : "changes requested";
+      decision === "approved" ? "approved, now public in browse" : decision === "rejected" ? "rejected" : "changes requested";
     logAction(`${name}: pack ${verb}`);
   };
 

@@ -6,12 +6,12 @@
 // and a user's risk score, and so the rules can be exercised without a server.
 //
 // Two layers of judgement:
-//   1. What the server ALREADY decided at send time — the chat audit log carries
+//   1. What the server ALREADY decided at send time, the chat audit log carries
 //      `blocked: 'severe' | 'mild'` + `terms` from server/moderation/textFilter.js.
 //      The digest just counts what was recorded; it never re-litigates it.
-//   2. What textFilter deliberately does NOT police — contact-sharing (discord /
+//   2. What textFilter deliberately does NOT police, contact-sharing (discord /
 //      snap / phone numbers), grooming-shaped phrasing, and cross-room patterns
-//      (one user touring every room) — because those are contextual, not
+//      (one user touring every room), because those are contextual, not
 //      word-level. Those are surfaced as "worth a look", never auto-actioned.
 
 // Contact-sharing / off-platform invitation shapes. Kid-safe rooms lose nothing
@@ -46,7 +46,7 @@ function clip(s) {
 
 // digestChat(entries) → a moderator-readable summary of one room's chat audit
 // tail. `entries` are the parsed audit lines ({ts, name, message, blocked,
-// terms, doodle} — see appendChatAudit in server.js), newest-last is not
+// terms, doodle}, see appendChatAudit in server.js), newest-last is not
 // assumed: everything is derived by scanning once.
 export function digestChat(entries, { flaggedLimit = 8, authorLimit = 6 } = {}) {
   const list = Array.isArray(entries) ? entries.filter(Boolean) : [];
@@ -95,7 +95,7 @@ export function digestChat(entries, { flaggedLimit = 8, authorLimit = 6 } = {}) 
         }
       }
     }
-    // An image can't be read by a word filter — a flagged doodle is context the
+    // An image can't be read by a word filter, a flagged doodle is context the
     // moderator has to look at themselves.
     if (entry.doodle && entry.blocked) why.push('flagged doodle');
     if (message && CONTACT_RE.test(message)) {
@@ -190,7 +190,7 @@ export function userRisk(user, sessions = [], { windowMs = 30 * 60 * 1000 } = {}
     score += recentRooms.size * 4;
     reasons.push(`${recentRooms.size} rooms in the last 30 min`);
   }
-  // Clearing a shared canvas is the bluntest defacement move there is — a kid
+  // Clearing a shared canvas is the bluntest defacement move there is, a kid
   // who clears five strangers' canvases is not exploring, they are wiping.
   if (clears >= 3) {
     score += Math.min(30, clears * 3);

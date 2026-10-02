@@ -1,9 +1,9 @@
-// "My rooms" — pick up where you left off. A signed-in person's own rooms,
+// "My rooms", pick up where you left off. A signed-in person's own rooms,
 // most recently touched first: rooms they own or co-host and rooms they've
 // painted in, each with its picture, whether anyone is there right now, and
 // their OWN last chat line there (never anyone else's words). Server:
-// GET /api/me/rooms (server.js myRoomsFor). Signed out — or if the server
-// can't answer — it falls back to this device's recent rooms.
+// GET /api/me/rooms (server.js myRoomsFor). Signed out, or if the server
+// can't answer, it falls back to this device's recent rooms.
 //
 // Two layouts: "grid" (the /rooms page) and "list" (the studio's Rooms modal).
 
@@ -24,8 +24,8 @@ function ago(ts) {
 function fadesIn(ms) {
   if (ms == null || ms > 7 * 86400_000) return "";
   const days = Math.floor(ms / 86400_000);
-  if (days >= 1) return `Fades in ${days}d — draw to keep it`;
-  return `Fades in ${Math.max(1, Math.floor(ms / 3600_000))}h — draw to keep it`;
+  if (days >= 1) return `Fades in ${days}d, draw to keep it`;
+  return `Fades in ${Math.max(1, Math.floor(ms / 3600_000))}h, draw to keep it`;
 }
 
 export default function MyRooms({ token = null, currentRoom = null, onJoin, variant = "grid" }) {
@@ -85,7 +85,7 @@ export default function MyRooms({ token = null, currentRoom = null, onJoin, vari
     return (
       <p className="account-note">
         {token
-          ? "No rooms yet — jump into a public room or start your own below, and it'll show up here."
+          ? "No rooms yet, jump into a public room or start your own below, and it'll show up here."
           : "Rooms you visit will show up here."}
       </p>
     );

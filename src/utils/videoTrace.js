@@ -1,5 +1,5 @@
 // Rotoscoping: trace over a video, frame by frame. The clip stays LOCAL to
-// this browser (an object URL on a hidden <video>) — it is never uploaded,
+// this browser (an object URL on a hidden <video>), it is never uploaded,
 // never shown to friends and never exported; only the drawings are. Each cel
 // shows the clip at that cel's moment in the film (its start time plus a
 // user-set offset), seeked on demand and drawn under the layers at the
@@ -19,7 +19,7 @@ export function createVideoTrace(file) {
     video.crossOrigin = "anonymous";
     const fail = () => {
       URL.revokeObjectURL(url);
-      reject(new Error("This video can't be played here — try an MP4 or WebM clip"));
+      reject(new Error("This video can't be played here, try an MP4 or WebM clip"));
     };
     video.onerror = fail;
     video.onloadedmetadata = () => {

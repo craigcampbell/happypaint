@@ -1,4 +1,4 @@
-// Brush Studio Lite — create + apply community-style brush "recipes".
+// Brush Studio Lite, create + apply community-style brush "recipes".
 //
 // A brush recipe is a small, adjustable parameter set built on top of an
 // existing base brush (marker/pencil/paint/spray/glow/eraser). The recipe is

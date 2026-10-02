@@ -1,15 +1,15 @@
 // The growing nature scene: a still life the community paints together.
 //
 // Every recorded stroke on Drawesome unlocks another part of the picture at
-// illustrative milestones. The scene is deliberately STATIC — no animation,
-// no transitions, under any motion preference — so what you see is a finished
+// illustrative milestones. The scene is deliberately STATIC, no animation,
+// no transitions, under any motion preference, so what you see is a finished
 // painting of "how much drawing has happened here so far", and a screenshot
 // taken now is pixel-identical to one taken later (until the data changes).
 //
 // Painterly means: layered pigment (washes under dry-brush over dabs), rough
 // warped edges on every silhouette, visible brush pulls, pigment splatter,
 // pencil under-drawing, and paper tooth over the whole sheet. All dabs are
-// seeded and deterministic. Nothing here is a measured saving — the meter
+// seeded and deterministic. Nothing here is a measured saving, the meter
 // below says exactly that in plain words.
 
 import { memo, useMemo } from "react";
@@ -396,7 +396,7 @@ export default function NatureScene({ strokes }) {
             </p>
           </>
         ) : (
-          <p><strong>{fmt(strokes)}</strong> recorded strokes — the whole scene is painted. 🌈</p>
+          <p><strong>{fmt(strokes)}</strong> recorded strokes, the whole scene is painted. 🌈</p>
         )}
       </div>
     </div>

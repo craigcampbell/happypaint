@@ -1188,7 +1188,7 @@ select:focus {
   }
 
   .room-prompt-chip button {
-    min-width: 44px; /* touch minimum — App.css sets the same for the other icon chrome */
+    min-width: 44px; /* touch minimum: App.css sets the same for the other icon chrome */
     min-height: 44px;
   }
 

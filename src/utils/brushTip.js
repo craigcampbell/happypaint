@@ -1,6 +1,6 @@
 // The hover cursor's tip preview: ONE dab of the selected brush, drawn at the
 // on-screen size, so you see the SHAPE you're about to lay down (bristle
-// ribbons, a stretched paint dab, an airbrush cloud, pencil tooth…) — not just a
+// ribbons, a stretched paint dab, an airbrush cloud, pencil tooth…), not just a
 // size ring. The dab itself comes from the engine's own single-dab primitive
 // (drawSingleDab → makeStrokeRenderer's emitDab, v3-first through
 // getAuthoringDab) at full pressure with a horizontal tangent and a fixed seed,
@@ -8,22 +8,22 @@
 // between renders. Only the pigment-free tools (eraser nib, spray cloud,
 // smudge pad) are drawn by hand here.
 //
-// Only re-drawn when brush / color / size / zoom change — never per pointer
-// move — so it stays off the draw hot path (see updateBrushCursor in App.jsx).
+// Only re-drawn when brush / color / size / zoom change, never per pointer
+// move, so it stays off the draw hot path (see updateBrushCursor in App.jsx).
 import { dabExtent, drawSingleDab, mulberry32, previewDabFor, SMUDGE_MASK_CELL } from "./brushes";
 import { getSoftMask } from "./brushSprites";
 
 const TWO_PI = Math.PI * 2;
 // Translucent tip so the paint underneath stays readable. Applied by App.jsx
-// as the tip canvas's CSS opacity (the engine stamps at its own flow alpha —
+// as the tip canvas's CSS opacity (the engine stamps at its own flow alpha -
 // baking a multiplier into every shape would mean re-implementing them here).
 export const BRUSH_TIP_ALPHA = 0.62;
 // The smudge engine's soft pad: the softMask sprite drawn at cell = dab size
 // x this puts its unit radius (SPRITE_UNIT px of the SPRITE_PX cell) on the
-// dab's rim — the same number makeSmudgeV3Renderer stamps with.
+// dab's rim, the same number makeSmudgeV3Renderer stamps with.
 const SMUDGE_TIP_GREY = "rgba(122,135,148,0.9)";
 
-// Widest extent of one dab as a multiple of `size` — the cursor canvas box has
+// Widest extent of one dab as a multiple of `size`, the cursor canvas box has
 // to hold the whole tip, and paint ellipses / bristle ribbons / flecks reach
 // past the nominal circle. Same number the engine's buffer pad is built from.
 export function brushTipExtent(brushId, tool) {
@@ -52,7 +52,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
   const rand = mulberry32(4242);
   if (brush === "goo") {
     // Goo lays a soft blob (the engine's soft-mask, tinted by the brush
-    // color) — show that pad as the tip.
+    // color), show that pad as the tip.
     const mask = getSoftMask();
     if (mask) {
       const cell = size * SMUDGE_MASK_CELL;
@@ -69,7 +69,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
     if (mask) {
       // Blend softens in place, so the tip is the pad itself: the engine's
       // soft-mask disc (white + alpha) tinted the neutral gray with one
-      // source-in fill — the canvas holds nothing but this tip.
+      // source-in fill, the canvas holds nothing but this tip.
       const cell = size * SMUDGE_MASK_CELL;
       ctx.drawImage(mask, cx - cell / 2, cy - cell / 2, cell, cell);
       ctx.globalCompositeOperation = "source-in";
@@ -79,7 +79,7 @@ export function drawBrushTip(ctx, { brush, tool, size, color, box, smudgeMode = 
       return;
     }
     // Drag (or the pad sprite not built yet): a neutral streak fading along
-    // the drag direction — paint travels with the finger.
+    // the drag direction, paint travels with the finger.
     const grad = ctx.createLinearGradient(cx - radius * 1.4, 0, cx + radius * 1.4, 0);
     grad.addColorStop(0, "rgba(122,135,148,0.9)");
     grad.addColorStop(1, "rgba(122,135,148,0.05)");

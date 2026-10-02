@@ -1,4 +1,4 @@
-# Production deployment — September 8, 2026
+# Production deployment: September 8, 2026
 
 The owner authorized deployment of the reviewed `codex/youth-design-refresh`
 work. The application was released at **https://drawesome.art** through the

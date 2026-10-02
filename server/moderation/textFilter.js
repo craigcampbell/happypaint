@@ -5,10 +5,10 @@
 // docs/CONTENT_MODERATION.md §4). The contract there is the source of truth.
 //
 // Design goals:
-//   1. Catch obvious evasion — leetspeak (4→a, 3→e, 1→i/l, 0→o, 5→s, @→a,
+//   1. Catch obvious evasion, leetspeak (4→a, 3→e, 1→i/l, 0→o, 5→s, @→a,
 //      $→s, !→i), diacritics, characters spaced/dotted/dashed between letters
 //      (b.a.d / b a d / b-a-d → bad), and stretched repeats (fuuuck → fuck).
-//   2. NEVER trip on innocent words that merely contain a bad substring — the
+//   2. NEVER trip on innocent words that merely contain a bad substring, the
 //      "Scunthorpe problem". This is a kids' app; a false positive on a child's
 //      real word/art is harmful. We match on whole tokens / word boundaries
 //      against the normalized string, never bare substrings.
@@ -86,7 +86,7 @@ export function normalize(s) {
 // Collapse any letter repeated 3+ times down to a single letter, defeating the
 // "stretched" evasion (fuuuck → fuck, niiigger → nigger, raaape → rape). We only
 // touch runs of 3+ so that legitimate English doublings (pass, grass, balloon,
-// committee, coffee) are untouched — no English word repeats the same letter 3
+// committee, coffee) are untouched, no English word repeats the same letter 3
 // times in a row, so this can't mangle a real word into a bad token. The output
 // is a SECONDARY string used only for matching; normalize()'s public contract
 // (and the canonical form scan() reports against) is unchanged, and whole-token
@@ -101,7 +101,7 @@ function collapseRepeats(s) {
 // input lines them up. Add new entries here; keep them in normalized form.
 //
 // SEVERE: slurs + explicit sexual terms. A hit drops the content and auto-reports.
-// Representative entries only — extend as needed. (Mildly censored in source so
+// Representative entries only, extend as needed. (Mildly censored in source so
 // the file stays readable; the matcher works on the de-censored normalized form.)
 const SEVERE = [
   'fuck',
@@ -130,7 +130,7 @@ const MILD = [
   'bitch',
   'bastard',
   'piss',
-  // NOTE: 'dick' deliberately omitted — it is also a common given name (Dick),
+  // NOTE: 'dick' deliberately omitted, it is also a common given name (Dick),
   // and the kid-safe contract requires the bare name to stay clean. Add it back
   // only with name-aware context handling.
   'bollocks',
@@ -175,9 +175,9 @@ function findAll(re, text) {
 }
 
 // scan(s): classify a string.
-//   { hit:true,  severity:'severe', terms:[...] }  — slur / explicit term
-//   { hit:true,  severity:'mild',   terms:[...] }  — light profanity only
-//   { hit:false, severity:null,     terms:[] }     — clean
+//   { hit:true,  severity:'severe', terms:[...] }, slur / explicit term
+//   { hit:true,  severity:'mild',   terms:[...] }, light profanity only
+//   { hit:false, severity:null,     terms:[] }, clean
 // Severe wins over mild when both are present.
 export function scan(s) {
   const norm = normalize(s);

@@ -1,6 +1,6 @@
 // Trusted-checkpoint CLIENT: decode, validate and install the optional
 // `history.checkpoint` baseline the server pairs with tail ops. The checkpoint
-// is acceleration data only — the retained operation history stays
+// is acceleration data only, the retained operation history stays
 // authoritative, and ANY validation failure must fall back to a full replay
 // (the App sends checkpoint_nack; see the history handler).
 //
@@ -8,17 +8,17 @@
 //  - EVERY asset is decoded, dimension-checked and hashed (PNG bytes + RGBA)
 //    and the mix state is validated BEFORE a single layer pixel is replaced;
 //  - layer assets are full-document-resolution (4000x2500) transparent PNGs
-//    installed per layer — visibility/opacity are composite-time concerns and
+//    installed per layer, visibility/opacity are composite-time concerns and
 //    are never baked into the editable pixels, so hidden layers keep theirs;
 //  - the layer-0 mix-map continuation state restores EXACTLY (data + dirty +
-//    prefetched ledger) — rebuilding it from pixels would change wet tails,
+//    prefetched ledger), rebuilding it from pixels would change wet tails,
 //    because the dirty-region cache intentionally retains stale sampled cells;
 //  - decoding runs off the paint hot path: layers decode sequentially with
 //    awaited, cancellable steps and bounded byte budgets, one shared scratch
 //    canvas, and ImageBitmaps are closed the moment they land on a layer.
 //
 // The API is renderer-agnostic so phase 4 cold-frame hydrate / raster / export
-// can reuse it: decodeCheckpoint() never touches the app's live layer stack —
+// can reuse it: decodeCheckpoint() never touches the app's live layer stack -
 // installCheckpointLayers() applies a decoded frame to any layer list whose
 // metadata it was validated against.
 
@@ -62,7 +62,7 @@ const fail = (reason, message) => {
 // What THIS bundle can verify. A stale bundle (no compile-time renderer
 // fingerprint), no WebCrypto (can't hash), no createImageBitmap (can't decode
 // off-thread) or no canvas 2d means the client must not advertise the cp
-// capability at all — the server then sends the ordinary full history.
+// capability at all, the server then sends the ordinary full history.
 export function checkpointClientSupport() {
   const version = clientCheckpointVersion();
   if (!HEX64.test(version)) return "";
@@ -157,7 +157,7 @@ const validateRect = (value) => {
 
 // Wire mix state {version,width,height,pixelsBase64,dirty,prefetched} → the
 // Uint8ClampedArray shape createMixMap().restoreState() consumes (which then
-// re-validates dimensions/length/bounds before mutating — double-gated). A
+// re-validates dimensions/length/bounds before mutating, double-gated). A
 // non-wire `data` array/view is also accepted (cold-frame hydrate sources)
 // after an exact length + per-value 0..255 integer check.
 const decodeMixState = (state) => {
@@ -211,7 +211,7 @@ const decodeFrame = async (descriptor, context) => {
     }
     if (!HEX64.test(layer.pngSha256 || "") || !HEX64.test(layer.rgbaSha256 || "")) fail("hash", "hash must be lowercase sha256 hex");
   });
-  // The paired tail must sit strictly above the watermark — a re-delivered
+  // The paired tail must sit strictly above the watermark, a re-delivered
   // prefix op would double-apply ink over the baseline. `tailLocalOps` (the
   // retained-ops path: cold-frame hydrate/raster re-decode) tolerates ops
   // with NO server opId: locally-originated strokes are appended to the
@@ -276,12 +276,12 @@ const decodeFrame = async (descriptor, context) => {
 // Decode + fully validate a checkpoint envelope against the authoritative
 // history frame metadata. Resolves { frames: [decodedFrame] } where each
 // decodedFrame is { frameId, throughOpId, layersKey, layers: [{id, bitmap}],
-// mixState }. NOTHING here mutates a live canvas — install is a separate,
+// mixState }. NOTHING here mutates a live canvas, install is a separate,
 // explicit step. Rejects with CheckpointError { reason } and releases every
 // partially decoded asset on any failure; 'canceled' means the caller's
 // isCancelled() fired (a newer baseline superseded this one) and is NOT a
 // corruption signal. (Pre-rename builds emitted the legacy 'cancelled'
-// spelling — readers accept both via src/utils/cancellation.js.)
+// spelling, readers accept both via src/utils/cancellation.js.)
 export async function decodeCheckpoint(checkpoint, options = {}) {
   const rendererVersion = options.rendererVersion ?? checkpointClientSupport();
   if (!rendererVersion || !HEX64.test(rendererVersion)) fail("unsupported", "client cannot verify checkpoints");
@@ -318,7 +318,7 @@ export async function decodeCheckpoint(checkpoint, options = {}) {
 
 // Install a decoded frame onto its live layer stack: validate the id order one
 // last time, then replace each layer's pixels with the verified full-res PNG
-// (clear + 1:1 draw — NO visibility/opacity bake, so hidden layers keep their
+// (clear + 1:1 draw: NO visibility/opacity bake, so hidden layers keep their
 // pixels and composite-time styling keeps working). Bitmaps are closed as they
 // land. Returns the number of layers installed.
 export function installCheckpointLayers(decodedFrame, liveLayers) {
@@ -346,7 +346,7 @@ export function installCheckpointLayers(decodedFrame, liveLayers) {
 // The mix-map state a FRESH replay starts from (createMixMap's birth: zeroed
 // pixels, fully dirty, no prefetch ledger). A wholesale history replay rebuilds
 // layer 0 from nothing, so the shared map must restart from the same birth
-// state — NOT keep the previous session's sampled ledger (stale cells from
+// state: NOT keep the previous session's sampled ledger (stale cells from
 // before the clear would survive in regions the replay never marks) and NOT be
 // blanket re-read at the end either (that would destroy the deliberately-stale
 // sampled cells the op-order replay just rebuilt, diverging future wet dabs
@@ -369,7 +369,7 @@ export function freshMixState() {
 // the paired op list is only safe to replay as a full baseline when it still
 // carries every checkpointed frame's WHOLE history. For each descriptor with
 // a non-zero watermark the ops must include at least one op at or below that
-// watermark — otherwise that frame's ink is a bare tail, and replaying it
+// watermark, otherwise that frame's ink is a bare tail, and replaying it
 // over a cleared canvas paints truncated art. Returns the first uncovered
 // frameId, or null when the baseline is complete (safe to ignore the
 // checkpoint and replay the ops).

@@ -1,4 +1,4 @@
-# Drawesome launch review — September 8, 2026
+# Drawesome launch review: September 8, 2026
 
 The app is ready for a small adult-led product test, not a claim of profitability
 or a broad classroom rollout. This pass spent **$0**, changed local code, and

@@ -1,4 +1,4 @@
-// The Fridge Wall — the community gallery. A Pinterest-style masonry of
+// The Fridge Wall, the community gallery. A Pinterest-style masonry of
 // drawings kids pinned from the studio: hearts (one per person), tag chips +
 // search, three sorts (daily "fresh mix" shuffle / most loved / newest), and
 // animated posts that actually move (the card cycles the post's frame PNGs
@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import { getSession } from "../utils/auth";
 
-// Same device key the studio uses for saves — hearts stick per device, and
+// Same device key the studio uses for saves, hearts stick per device, and
 // sign-in upgrades them to the account key server-side via the bearer token.
 function deviceKey() {
   try {
@@ -148,7 +148,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
   const debounceRef = useRef(null);
-  // Monotonic request id — only the newest feed response is allowed to land, so
+  // Monotonic request id, only the newest feed response is allowed to land, so
   // a slow older fetch can't overwrite a newer one (search/tag/sort race).
   const reqSeqRef = useRef(0);
 
@@ -226,10 +226,10 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       }
       throw new Error("no share sheet");
     } catch (err) {
-      if (err?.name === "AbortError") return; // user closed the sheet — not an error
+      if (err?.name === "AbortError") return; // user closed the sheet, not an error
       try {
         await navigator.clipboard.writeText(url);
-        say("Link copied — send it to a friend! 🔗");
+        say("Link copied, send it to a friend! 🔗");
       } catch {
         window.prompt("Copy this link:", url);
       }
@@ -257,7 +257,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
 
   const vote = useCallback(async (post) => {
     const on = !post.liked;
-    // Optimistic heart — snap back if the server disagrees. The spotlight card
+    // Optimistic heart, snap back if the server disagrees. The spotlight card
     // (deep-link view) holds its own copy of the post, so patch it in step.
     const patch = (updater) => {
       setPosts((prev) => prev.map((p) => (p.id === post.id ? updater(p) : p)));
@@ -280,7 +280,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       // Reverse the optimistic delta against CURRENT state (a reload may have
       // replaced the list meanwhile) rather than restoring a click-time snapshot.
       patch((p) => ({ ...p, liked: !on, votes: Math.max(0, p.votes + (on ? -1 : 1)) }));
-      say("Couldn't save that heart — try again!");
+      say("Couldn't save that heart, try again!");
     }
   }, [say]);
 
@@ -293,9 +293,9 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "reported from the wall" }),
       });
-      say(res.ok ? "Thanks — a moderator will take a look. 🛡️" : "Couldn't send the report — try again!");
+      say(res.ok ? "Thanks, a moderator will take a look. 🛡️" : "Couldn't send the report, try again!");
     } catch {
-      say("Couldn't send the report — try again!");
+      say("Couldn't send the report, try again!");
     }
   }, [say]);
 
@@ -306,7 +306,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       if (!res.ok || !data.code) throw new Error("remix failed");
       window.location.href = `/join/${data.code}`;
     } catch {
-      say("Couldn't start that remix — try again.");
+      say("Couldn't start that remix, try again.");
     }
   }, [say]);
 
@@ -330,7 +330,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       <main className="wall-main">
         <header className="wall-hero">
           <h1>🧲 The Fridge Wall</h1>
-          <p>Art by kids like you — pin yours from the studio with the 🧲 Wall button!</p>
+          <p>Art by kids like you, pin yours from the studio with the 🧲 Wall button!</p>
         </header>
 
         {spotlight ? (
@@ -349,7 +349,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
           </section>
         ) : null}
         {spotlightMissing ? (
-          <p className="wall-status">That drawing isn&rsquo;t on the wall anymore — but look at everything else! 👇</p>
+          <p className="wall-status">That drawing isn&rsquo;t on the wall anymore, but look at everything else! 👇</p>
         ) : null}
 
         <div className="wall-controls">
@@ -410,7 +410,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
           </div>
         )}
         {!loading && posts.length === 0 && (query || activeTag) ? (
-          <p className="wall-status">Nothing matches that yet — be the first to draw it! 🎨</p>
+          <p className="wall-status">Nothing matches that yet, be the first to draw it! 🎨</p>
         ) : null}
       </main>
       {toast ? <div className="wall-toast" role="status">{toast}</div> : null}

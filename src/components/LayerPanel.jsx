@@ -50,7 +50,7 @@ export default function LayerPanel({
                   aria-label={layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`}
                   title={layer.visible ? "Hide layer" : "Show layer"}
                 >
-                  {layer.visible ? "👁" : "—"}
+                  {layer.visible ? "👁" : "-"}
                 </button>
                 <button
                   type="button"

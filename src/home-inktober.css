@@ -1,9 +1,9 @@
-/* Inktober hero paper card — homepage only.
+/* Inktober hero paper card, homepage only.
  *
  * Everything here is scoped under `.home-paper-ink` (the seasonal variant of
  * the right-hand paper card in HomePage.jsx) so the rest of the homepage is
  * untouched. The lettering font is bundled locally (SIL OFL 1.1, license at
- * public/fonts/caveat/OFL.txt) — no third-party font service.
+ * public/fonts/caveat/OFL.txt), no third-party font service.
  */
 
 @font-face {
@@ -119,7 +119,7 @@
   transform: rotate(150deg);
 }
 
-/* Day chip, top-right — stamped from the server payload, never client math. */
+/* Day chip, top-right, stamped from the server payload, never client math. */
 .home-paper-ink-day {
   position: absolute;
   top: 18px;

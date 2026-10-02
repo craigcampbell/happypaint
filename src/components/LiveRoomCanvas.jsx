@@ -1,5 +1,5 @@
 // A READ-ONLY live view of a public room's mural, for the homepage. Opens a
-// spectator WebSocket (/ws?room=CODE&spectate=1) — the server streams the op
+// spectator WebSocket (/ws?room=CODE&spectate=1), the server streams the op
 // history + live ops but never registers us as a user (no presence, no count,
 // no draw rights). We replay ops onto a full-res offscreen canvas and blit it,
 // framed to the drawn content so visitors immediately see art being made.
@@ -11,7 +11,7 @@
 //   The settled initial history paints at once, then the displayed canvas is
 //   refreshed from a snapshot copy at the interval while the offscreen replay
 //   keeps pace silently. Clear / history rebuilds (moderation included)
-//   invalidate immediately. This is NOT a server-stored cache — each visitor
+//   invalidate immediately. This is NOT a server-stored cache, each visitor
 //   renders their own preview from the authoritative sanitized spectator
 //   stream; client-uploaded thumbnail images are never trusted or displayed.
 
@@ -20,7 +20,7 @@ import { prepareStrokeCommit } from "../utils/brushes";
 import { createMixMap } from "../utils/mixMap";
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from "../utils/layers";
 // The op interpreter lives in utils/opReplay now, shared byte-for-byte with
-// the production film renderer — one parity-tested replay path for both.
+// the production film renderer, one parity-tested replay path for both.
 import { applyOp } from "../utils/opReplay";
 import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
 import { sheetFullUrl } from "../utils/sheetAssets";
@@ -28,7 +28,7 @@ import { sheetFullUrl } from "../utils/sheetAssets";
 // Strokes whose end-op never arrives are committed by the idle sweep after this long.
 const STROKE_IDLE_MS = 8000;
 
-// Bounding box of drawn content (world coords), padded, clamped to the page —
+// Bounding box of drawn content (world coords), padded, clamped to the page -
 // so we frame the preview on the art instead of the whole empty mural.
 function boundsOf(ops) {
   let minX = Infinity;
@@ -74,7 +74,7 @@ export default function LiveRoomCanvas({
   onActivity,
   onSocial,
   // Moderator watch (admin "glass room"): the socket authenticates with the admin
-  // key in its FIRST frame (never the URL) and is a watcher only — the server
+  // key in its FIRST frame (never the URL) and is a watcher only, the server
   // drops anything that isn't a moderation action, so this view cannot paint or
   // chat even if the UI were wrong.
   modKey = null,
@@ -84,7 +84,7 @@ export default function LiveRoomCanvas({
   onSend,
   // Periodic thumbnail mode (homepage MAIN preview): when > 0, the settled
   // initial history still renders immediately, but later ops are replayed only
-  // onto the offscreen paper — the VISIBLE canvas is refreshed from a snapshot
+  // onto the offscreen paper, the VISIBLE canvas is refreshed from a snapshot
   // copy every snapshotIntervalMs instead of on every op. Clear / history
   // rebuilds (which is also how moderation hide/remove arrives) invalidate the
   // snapshot instantly, so removed art never lingers for a whole interval.
@@ -109,7 +109,7 @@ export default function LiveRoomCanvas({
     // Snapshot mode only: the full-res copy the visible canvas is actually
     // blitted from. `off` keeps replaying ops as they arrive (the replay
     // internals stay live), but nothing reaches the screen until the interval
-    // flush copies off → snap — so the displayed pixels are byte-frozen
+    // flush copies off → snap, so the displayed pixels are byte-frozen
     // between ticks, and a resize re-blit can never leak un-flushed ops.
     const snap = snapshotMs ? document.createElement("canvas") : null;
     if (snap) {
@@ -148,7 +148,7 @@ export default function LiveRoomCanvas({
       deferred.clear();
     };
     // Commit every still-open stroke to the paper (history replay leaves
-    // legacy strokes — ops with no end marker — open).
+    // legacy strokes, ops with no end marker, open).
     const commitAllStrokes = () => {
       for (const [id, entry] of strokes) {
         if (entry.buf) {
@@ -233,7 +233,7 @@ export default function LiveRoomCanvas({
     // Snapshot mode: copy the settled paper into the displayed snapshot and
     // repaint. Called on the interval tick (when dirty), and IMMEDIATELY on
     // history rebuilds / clear so removed art never survives for a whole
-    // interval — the one thing a periodic cache must never do.
+    // interval, the one thing a periodic cache must never do.
     const flushSnapshot = () => {
       if (!snap) return;
       snapCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -293,7 +293,7 @@ export default function LiveRoomCanvas({
 
     const scheduleReconnect = () => {
       if (closed || reconnectTimer) return;
-      // Hidden tab: don't retry at all — visibilitychange reconnects us below.
+      // Hidden tab: don't retry at all, visibilitychange reconnects us below.
       if (document.hidden) return;
       reconnectTimer = window.setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
@@ -323,27 +323,27 @@ export default function LiveRoomCanvas({
           return;
         }
         if (data.type === "history") {
-          reconnectDelay = 2500; // healthy connection — reset the backoff
+          reconnectDelay = 2500; // healthy connection, reset the backoff
           resetPaper();
           mix.markAllDirty(); // the paper was rebuilt wholesale
           lastMapRef.current = new Map();
-          dropStrokes(); // stale live buffers — the replay re-delivers their points
+          dropStrokes(); // stale live buffers, the replay re-delivers their points
           // Snapshot mode: an inline image op's <img> can decode AFTER the
-          // immediate flush below — mark dirty so the next tick picks it up.
+          // immediate flush below, mark dirty so the next tick picks it up.
           for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
           commitAllStrokes(); // legacy / cut-off strokes with no end marker
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           // History is a wholesale rebuild (initial catch-up, moderation
           // hide/remove, undo-clear): invalidate the snapshot NOW, not at the
-          // next tick — settled art must never linger after it's gone.
+          // next tick, settled art must never linger after it's gone.
           if (snap) flushSnapshot();
           else blit();
           onActivity?.((data.ops || []).length);
           if (data.ops?.length) onOps?.(data.ops);
         } else if (data.type === "op") {
           // The replay keeps pace with the room either way; only the DISPLAY
-          // differs — live mode repaints per op, snapshot mode just marks the
+          // differs, live mode repaints per op, snapshot mode just marks the
           // paper dirty for the next tick (no continual display work).
           applyOp(offCtx, data.op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
           if (snap) markSnapDirty();
@@ -353,18 +353,18 @@ export default function LiveRoomCanvas({
           loadSheet(data.sheetId);
         } else if (data.type === "clear") {
           resetPaper();
-          mix.clear(); // blank paper — empty the wet-mix mirror too
+          mix.clear(); // blank paper, empty the wet-mix mirror too
           lastMapRef.current = new Map();
           dropStrokes(); // in-progress strokes are wiped with the mural
           boundsRef.current = null;
           if (snap) flushSnapshot(); // a wipe invalidates the thumbnail at once
           else blit();
         } else if (data.type === "chat" || data.type === "chat_history" || data.type === "hype") {
-          // The room's live banter — the parent renders it over the viewport
+          // The room's live banter, the parent renders it over the viewport
           // (the conversation is the show; this canvas only paints ops).
           onSocial?.(data);
         } else if (data.type === "mod_denied") {
-          // Wrong key, no such room, too many watchers: stop — retrying would
+          // Wrong key, no such room, too many watchers: stop, retrying would
           // just hammer the server with a key that isn't going to start working.
           closed = true;
           if (reconnectTimer) window.clearTimeout(reconnectTimer);
@@ -415,7 +415,7 @@ export default function LiveRoomCanvas({
     connect();
 
     // Coming back to a tab whose socket died while hidden: reconnect right away.
-    // Snapshot mode also catches up the thumbnail — ticks were skipped while
+    // Snapshot mode also catches up the thumbnail, ticks were skipped while
     // the tab was hidden (and browsers throttle the timer anyway).
     const onVisibility = () => {
       if (closed || document.hidden) return;
@@ -426,7 +426,7 @@ export default function LiveRoomCanvas({
     document.addEventListener("visibilitychange", onVisibility);
 
     // Snapshot mode: the ONE periodic refresh. Skips hidden tabs (no one is
-    // looking — the visibility handler catches up on return) and idle stretches
+    // looking, the visibility handler catches up on return) and idle stretches
     // with no new ops (an empty room just keeps showing its placeholder).
     const snapTimer = snap
       ? window.setInterval(() => {

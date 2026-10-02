@@ -20,10 +20,10 @@ const OVER_MARGIN = 0.04;
 const OVER_SAMPLES_TO_RAISE = 16;
 
 // Pointer Events button semantics (https://www.w3.org/TR/pointerevents/):
-//   button 0 / buttons 1  — pen tip, left mouse
-//   button 2 / buttons 2  — pen barrel button, right mouse
-//   button 1 / buttons 4  — middle mouse
-//   button 5 / buttons 32 — pen eraser end (Wacom, Surface, some Android pens)
+//   button 0 / buttons 1, pen tip, left mouse
+//   button 2 / buttons 2, pen barrel button, right mouse
+//   button 1 / buttons 4, middle mouse
+//   button 5 / buttons 32, pen eraser end (Wacom, Surface, some Android pens)
 export const ERASER_BUTTON = 5;
 export const ERASER_BUTTONS_BIT = 32;
 const SECONDARY_BUTTONS_MASK = 2 | 4;
@@ -87,7 +87,7 @@ export function mapPenPressure(cal, raw) {
       cal.dirty = true;
     }
   } else if (cal.over > 0 && p < cal.ceiling - OVER_MARGIN) {
-    // The run of heavy samples ended before it counted — forget it.
+    // The run of heavy samples ended before it counted, forget it.
     cal.over = 0;
     cal.overMax = 0;
   }
@@ -100,7 +100,7 @@ export function mapPenPressure(cal, raw) {
 // The getPoint pressure seam (App.jsx): what pressure does ONE pointer sample
 // contribute to a stroke?
 //
-// A pen sample ALWAYS resolves through the adaptive band above — even when
+// A pen sample ALWAYS resolves through the adaptive band above, even when
 // its pressure is zero (including pen-down/up boundary samples). Zero must
 // not select the mouse/finger 0.65 fallback. Physical-device pressure curves
 // require device verification; synthetic events test this routing contract.
@@ -121,7 +121,7 @@ export function resetVelocityPressure(vel) {
 // Resolve one sample's stroke pressure. `event` needs pointerType / pressure /
 // timeStamp; `penCal` is the adaptive calibration (mutated by mapPenPressure)
 // and `velocity` the synthesizer state from createVelocityPressure(). Returns
-// the un-quantized 0.02..1 value — callers quantize for the wire.
+// the un-quantized 0.02..1 value, callers quantize for the wire.
 export function resolvePointPressure(event, { worldX, worldY, penCal, velocity, now }) {
   if (event.pointerType === "pen") {
     return mapPenPressure(penCal, event.pressure);
@@ -141,7 +141,7 @@ export function resolvePointPressure(event, { worldX, worldY, penCal, velocity, 
     vel.lastT = t;
   }
   // t <= lastT: the same event seen twice (cursor relay + coalesced draw
-  // replay) or an older coalesced sibling — reuse the last synthesis rather
+  // replay) or an older coalesced sibling, reuse the last synthesis rather
   // than poisoning the EMA with zero/negative dt samples.
   return vel.lastP;
 }
@@ -156,7 +156,7 @@ export function isEraserPointer(event) {
 
 // True when the contact is a "secondary" button: pen barrel button, mouse
 // right button, or mouse middle button. The studio treats these as a temporary
-// pan (hand) drag — the convention Krita / Photoshop / Procreate users expect.
+// pan (hand) drag, the convention Krita / Photoshop / Procreate users expect.
 export function isSecondaryButtonPointer(event) {
   if (!event || event.pointerType === "touch") {
     return false;

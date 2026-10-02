@@ -1,4 +1,4 @@
-# Production deployment — September 14, 2026 (Google Analytics)
+# Production deployment: September 14, 2026 (Google Analytics)
 
 The owner asked for the Google Analytics tag to be committed and released. The
 release adds the `G-9TG5C3N1YP` gtag.js snippet to the app shell and was deployed
@@ -14,7 +14,7 @@ SEO tag replacement.
 
 ## Release and rollback
 
-- Commit: `377a648` — *Add Google Analytics (gtag.js) to the site shell*,
+- Commit: `377a648`, *Add Google Analytics (gtag.js) to the site shell*,
   pushed to `origin/codex/youth-design-refresh`.
 - App image (`happypaint-app:latest`):
   `sha256:77f103a20b106a2d436e898ff333bd7d104d6633a66de4128642fbbf0cf61e98`.
@@ -54,7 +54,7 @@ credential entry, or payments were performed.
   fetches app-shell navigations network-first, so returning visitors pick the
   new HTML up. The lobby's Open Studio op count (4,019 compacted + 693 appended
   = 4,712) was unchanged across the session, i.e. no ops were written to the
-  community canvas — including during a stray synthetic input burst that was
+  community canvas, including during a stray synthetic input burst that was
   discarded before painting.
 - Public coloring catalog returned all 6,294 sheets; PocketBase health returned
   200. Checkout remained disabled.

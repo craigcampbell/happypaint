@@ -119,7 +119,7 @@ export default function ColoringSheetModal({ onClose, onApply }) {
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets — try “dinosaur”, “butterfly”…`}
+          placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets, try “dinosaur”, “butterfly”…`}
         />
 
         <div className="sheet-cats" role="tablist" aria-label="Categories">

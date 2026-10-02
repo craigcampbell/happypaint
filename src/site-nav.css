@@ -1,4 +1,4 @@
-/* Site navigation — mobile/tablet first.
+/* Site navigation, mobile/tablet first.
    Loaded LAST from main.jsx: the older nav rules in App.css / drawesome-theme.css
    are layered themes on the same header, so this file restates what it needs with
    `.site-nav …` (two-class) selectors instead of fighting them with !important.

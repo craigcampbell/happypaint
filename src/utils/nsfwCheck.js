@@ -1,6 +1,6 @@
 // One-shot NSFW classification for a user-uploaded image, reusing the same
 // worker + model the ambient room watcher uses (src/workers/nsfwWatcher.worker.js).
-// This is a best-effort CLIENT pre-check before a trace photo is broadcast —
+// This is a best-effort CLIENT pre-check before a trace photo is broadcast -
 // the real safety control is the server-side host gate. If the model can't load
 // (older/mobile device, blocked), it resolves `null` and the caller proceeds,
 // trusting the gate + the report path.

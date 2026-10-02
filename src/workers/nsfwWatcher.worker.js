@@ -1,18 +1,18 @@
-// NSFW watcher — Web Worker (ALL inference happens here, never on the main thread).
+// NSFW watcher: Web Worker (ALL inference happens here, never on the main thread).
 //
 // PERF GUARANTEE
 //   The main thread hands us a small ImageBitmap (<= maxDim px on its longest side,
 //   default 256) by transfer and gets back a single number (0..1). We do every pixel
-//   read here, on a worker, against an OffscreenCanvas — so the drawing hot path in
+//   read here, on a worker, against an OffscreenCanvas, so the drawing hot path in
 //   App.jsx never sees a getImageData call, a pixel loop, or a model. The bitmap is
 //   closed after each scan to keep memory flat.
 //
 // DETECTOR
 //   The shipped detector is NSFWJS (MobileNetV2), lazy-loaded via dynamic import
-//   the FIRST time an elected watcher scans — NEVER at startup and NEVER for
+//   the FIRST time an elected watcher scans: NEVER at startup and NEVER for
 //   non-watchers, so page load, the bundle, and the drawing path stay untouched
 //   for everyone else. The model weights are bundled with nsfwjs (no network
-//   fetch, no third-party call — fits the self-hosted / offline / kid-privacy
+//   fetch, no third-party call, fits the self-hosted / offline / kid-privacy
 //   posture). If the model can't load (old browser, backend init failure) we fall
 //   back to the dependency-free `heuristicDetect`, so a failed load can never
 //   stall moderation or touch the canvas.
@@ -22,10 +22,10 @@ import { createEvidenceGuard } from "./evidenceGuard.js";
 let canvas = null;
 let ctx = null;
 
-// Lazy detector promise — created on first scan, reused thereafter.
+// Lazy detector promise, created on first scan, reused thereafter.
 let detectorPromise = null;
 // Which detector actually produced the scores ('nsfwjs-mobilenetv2' once the
-// model loads, 'heuristic' on the fallback) — rides along with evidence so a
+// model loads, 'heuristic' on the fallback), rides along with evidence so a
 // reviewer knows what judged these pixels.
 let detectorName = "heuristic";
 
@@ -69,7 +69,7 @@ async function buildNsfwDetector() {
     await tf.ready();
   }
 
-  // Bundled MobileNetV2 — no fetch. load() runs a warmup predict; if the chosen
+  // Bundled MobileNetV2, no fetch. load() runs a warmup predict; if the chosen
   // backend is broken this throws and we retry on CPU before giving up.
   let model;
   try {
@@ -86,7 +86,7 @@ async function buildNsfwDetector() {
 
   return async (imageData) => {
     // Build the input tensor by hand (RGB, transparent->white "paper") so we never
-    // touch tf.browser.fromPixels — that path can need a DOM canvas and is flaky
+    // touch tf.browser.fromPixels, that path can need a DOM canvas and is flaky
     // in Workers. This works identically on the CPU and WebGL backends.
     const input = imageDataToTensor(tf, imageData);
     try {
@@ -153,7 +153,7 @@ function heuristicDetect(imageData) {
     const b = data[i + 2];
     const a = data[i + 3];
     if (a < 32) {
-      continue; // transparent canvas region — ignore
+      continue; // transparent canvas region, ignore
     }
     if (isSkin(r, g, b)) {
       mask[p] = 1;
@@ -277,7 +277,7 @@ async function scan(bitmap) {
 // bytes decode to pixels bit-identical to what the classifier read (JPEG q0.8
 // from the old research notes is NOT bit-identical and is only kept as an
 // option for size). The canvas is untouched since the scan that produced
-// `generation` — the guard proves it, or we drop the request.
+// `generation`, the guard proves it, or we drop the request.
 async function encodeEvidence(generation, format, quality) {
   const result = await evidenceGuard.encodeIfCurrent(generation, async () => {
     const opts =

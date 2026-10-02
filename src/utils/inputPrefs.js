@@ -1,14 +1,14 @@
 // Per-device studio input preferences: which side the tools open on
 // (handedness) and whether fingers may paint at all when a pen is in use.
 //
-//   hand   "right" (default — the tools dock / slide in on the RIGHT, the
+//   hand   "right" (default, the tools dock / slide in on the RIGHT, the
 //          layout every existing device has) | "left" (mirrored: tools on the
 //          left, floating chrome shifts the other way).
 //   touch  "auto" (fingers paint, with the pen-priority + palm heuristics) |
-//          "pen" (fingers NEVER paint — one finger is inert, two fingers still
-//          pinch / pan / twist — the Procreate "disable touch actions" model,
+//          "pen" (fingers NEVER paint, one finger is inert, two fingers still
+//          pinch / pan / twist, the Procreate "disable touch actions" model,
 //          the strongest palm rejection there is for a Pencil or a Cintiq).
-//   pressure  what pen pressure drives: "size" (default — the line thins on a
+//   pressure  what pen pressure drives: "size" (default, the line thins on a
 //          light touch, the way every brush has always behaved) | "opacity"
 //          (a light touch lays faint paint at full width) | "both" | "off"
 //          (a constant line whatever the pressure). The choice is stamped
@@ -33,7 +33,7 @@ export const DEFAULT_INPUT_PREFS = Object.freeze({
   touch: "auto",
   pressure: "size",
   penSeen: false,
-  // One-shot hint: set once the "ignored a palm — try Pen only" toast has shown.
+  // One-shot hint: set once the "ignored a palm, try Pen only" toast has shown.
   palmTipShown: false,
 });
 
@@ -49,8 +49,8 @@ export function normalizeInputPrefs(raw) {
 }
 
 // The two per-stroke flags a pressure mode stands for. Size is on unless the
-// mode says otherwise (so ops that carry no flag — every stroke ever recorded
-// — keep their taper); opacity is off unless asked for.
+// mode says otherwise (so ops that carry no flag, every stroke ever recorded
+//, keep their taper); opacity is off unless asked for.
 export function pressureFlagsFor(mode) {
   return {
     pressureSize: mode !== "opacity" && mode !== "off",

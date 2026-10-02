@@ -4,7 +4,7 @@
 // client advertises support with `gz=1` on the socket URL; anything it can't
 // inflate simply never arrives (the server falls back to text).
 //
-// Decoding is async, so every message on the socket — text included — goes
+// Decoding is async, so every message on the socket, text included, goes
 // through one ordered chain: the tail ops the server sends right after the
 // gzip frame must land AFTER the history they extend.
 

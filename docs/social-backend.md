@@ -29,7 +29,7 @@ written before the rename may still carry the legacy `cancelled`; clients
 normalize it on ingress (web `src/utils/cancellation.js`, mobile
 `src/cancellation.js`). Databases provisioned before the rename need
 `backend/supabase/migrations/20261001000000_rename_cancelled_to_canceled.sql`
-— idempotent, NOT applied to production (this backend is the legacy/optional
+- idempotent, NOT applied to production (this backend is the legacy/optional
 reference; the production app runs on PocketBase).
 
 Future economy schema should add append-only wallet records for Drops and Kudos:

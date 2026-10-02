@@ -1,4 +1,4 @@
-// Inktober artist sketchbooks — pure helpers for multi-page event books.
+// Inktober artist sketchbooks, pure helpers for multi-page event books.
 // Contract: docs/SKETCHBOOKS-CONTRACT.md.
 //
 // A sketchbook (BOOK) groups up to 31 daily-prompt pages for one event
@@ -21,7 +21,7 @@
 //     started it, and handed to an account later by
 //     POST /api/sketchbooks/claim ('guest' below).
 //
-// Everything in this file is pure data-shaping — no I/O, no room-map access —
+// Everything in this file is pure data-shaping, no I/O, no room-map access -
 // so server.js wires the same rules into REST/WS/persistence from one place.
 
 import { createHash, randomBytes } from 'crypto';
@@ -171,7 +171,7 @@ export function normalizeBook(raw) {
     event: typeof raw.event === 'string' && raw.event ? raw.event.slice(0, 40) : SKETCHBOOK_EVENT,
     ownerProfileId,
     title: typeof raw.title === 'string' && raw.title ? raw.title.slice(0, SKETCHBOOK_TITLE_MAX) : null,
-    // Public visibility is an explicit, persisted opt-in — never defaulted on.
+    // Public visibility is an explicit, persisted opt-in, never defaulted on.
     // An UNSAVED guest book is public by definition (that is how it is found on
     // the Inktober page) and carries no invites: there is no account to invite.
     public: guest ? true : raw.public === true,
@@ -207,7 +207,7 @@ export function guestBookMatchesClaim(book, claimHash) {
 
 // ---- day / prompt validation ---------------------------------------------------
 
-// `prompts` is the SERVER's verified official list (inktoberState().prompts) —
+// `prompts` is the SERVER's verified official list (inktoberState().prompts) -
 // never a client payload. Returns the canonical {day, prompt, date} or null.
 export function promptForDay(prompts, day) {
   const d = Number(day);
@@ -288,7 +288,7 @@ export function bookPublicView(book, pageInfo = {}, { owner = false } = {}) {
 }
 
 // Gallery eligibility: explicit public opt-in, not moderation-hidden, and at
-// least one visible page with REAL drawing (ops > 0) — an empty book is not
+// least one visible page with REAL drawing (ops > 0), an empty book is not
 // "new Inktober artwork" and never auto-lists.
 export function bookGalleryEligible(book, pageInfo = {}) {
   if (!book || book.public !== true || book.moderationHidden === true) return false;

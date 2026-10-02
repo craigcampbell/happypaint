@@ -1,10 +1,10 @@
-# Content Moderation + Multiple Public Rooms — Architecture Contract
+# Content Moderation + Multiple Public Rooms: Architecture Contract
 
 Status: **built + verified** on branch `content-moderation` (server: 6/6 in
 `test/harness/run.mjs`; text filter: 40/40 in `server/moderation/textFilter.test.mjs`;
 SPA build + studio smoke green). The image detector is **NSFWJS (MobileNetV2)**,
 bundled (no external fetch) and lazy-loaded in the worker only for elected
-watchers — verified loading + scoring in a real browser worker. The heuristic
+watchers, verified loading + scoring in a real browser worker. The heuristic
 remains as an automatic fallback if the model can't load. An admin-opt-in
 cloud-escalation tier is still a possible future add-on.
 This is the single source of truth for the feature. Server code, client code, the
@@ -19,7 +19,7 @@ implementation disagrees with this doc, the doc wins (or the doc is updated firs
 ## 0. Non-negotiable: the drawing experience comes first
 
 Moderation must be **invisible to the person drawing.** Every reviewer and every
-agent treats this as the top priority — a correct feature that adds jank to the
+agent treats this as the top priority, a correct feature that adds jank to the
 canvas is a failed feature.
 
 **The drawing hot path (NEVER block, read, or call into it for moderation):**
@@ -75,12 +75,12 @@ per AGENTS.md). All default safely so existing rooms keep working.
 
 Audience semantics:
 
-- **`kid_safe`** — discoverable; the only audience that auto-moderation runs in;
+- **`kid_safe`**, discoverable; the only audience that auto-moderation runs in;
   default for `MAIN` and rooms created public.
-- **`friends`** — invite-only (today's `/join/CODE` rooms). Not discoverable, not
+- **`friends`**, invite-only (today's `/join/CODE` rooms). Not discoverable, not
   auto-moderated (out of scope per "public spaces only"). This is the default for a
   lazily-created room reached by code.
-- **`adult_18`** — **defined but creation-disabled.** Real adult verification does
+- **`adult_18`**, **defined but creation-disabled.** Real adult verification does
   not exist in this stack and must not ship for a kid-directed app without legal
   review. The server **rejects** `audience:'adult_18'` on create (`403`) and never
   lists it in discovery. The gate exists so the model is complete and future-safe;
@@ -132,7 +132,7 @@ Existing protocol is in [ARCHITECTURE.md](../ARCHITECTURE.md). Additions:
 ### Client → Server
 | Type | Who | Payload | Effect |
 |---|---|---|---|
-| `flag` | any client (acted on only in `kid_safe`) | `{ kind:'image'\|'text', score, sinceOpId, toOpId, evidence? }` | record a moderation flag; corroboration may trigger Tier 1/2. `evidence` (image flags only): `{ image:dataURL, w, h, model, threshold, capturedAt }` — the frozen classifier frame, accepted only from an elected watcher, only when the flag produces a report, only as a validated small PNG/JPEG |
+| `flag` | any client (acted on only in `kid_safe`) | `{ kind:'image'\|'text', score, sinceOpId, toOpId, evidence? }` | record a moderation flag; corroboration may trigger Tier 1/2. `evidence` (image flags only): `{ image:dataURL, w, h, model, threshold, capturedAt }`, the frozen classifier frame, accepted only from an elected watcher, only when the flag produces a report, only as a validated small PNG/JPEG |
 | `mod_hide` | host/admin | `{ opIds:number[] }` | hide ops (reversible) → rebroadcast filtered history |
 | `mod_restore` | host/admin | `{ opIds:number[] }` | unhide ops → rebroadcast history |
 | `mod_remove` | host/admin | `{ opIds:number[] }` | permanently splice ops from history |
@@ -141,7 +141,7 @@ Existing protocol is in [ARCHITECTURE.md](../ARCHITECTURE.md). Additions:
 ### Server → Client
 | Type | Payload | Effect |
 |---|---|---|
-| `history` *(existing)* | `{ ops, restored? }` | full canvas rebuild — **reused** for hide/restore/remove (server sends history minus `hiddenOpIds`) |
+| `history` *(existing)* | `{ ops, restored? }` | full canvas rebuild, **reused** for hide/restore/remove (server sends history minus `hiddenOpIds`) |
 | `watcher_role` | `{ active:boolean, intervalMs, maxDim }` | start/stop local scanning |
 | `mod_alert` | `{ level:'info'\|'warn', reason, opIds?, author?, source:'auto'\|'host'\|'admin' }` | toast to **hosts + admins only**; drives the HostControlPanel moderation list |
 | `mod_state` | `{ flags:[...], hidden:[...] }` | snapshot of open flags + hidden ops for host UI (sent to hosts on connect + on change) |
@@ -183,14 +183,14 @@ In `friends` / `adult_18` rooms text moderation does **not** run.
 
 Conservative by default because false positives on a child's real art are harmful.
 
-- **Tier 1 — report + alert (single signal):** auto-create a report
+- **Tier 1, report + alert (single signal):** auto-create a report
   (`source:'auto'`) and `mod_alert` hosts + admins. **Non-destructive.** Fires on a
   single image flag or a `severe` text hit.
-- **Tier 2 — reversible hide + mute (corroborated, or severe text):** auto-hide the
+- **Tier 2, reversible hide + mute (corroborated, or severe text):** auto-hide the
   implicated ops (`hiddenOpIds`, reversible) and mute the author in chat. Triggers
   on **(≥2 independent watcher flags in a window)** OR **(1 watcher flag + 1 human
   report)** OR a `severe` drawn-text/chat hit. Host/admin sees a Restore action.
-- **Tier 3 — kick / permanent remove:** **never automatic.** A host/admin does it
+- **Tier 3, kick / permanent remove:** **never automatic.** A host/admin does it
   with one click in HostControlPanel / LiveAdmin. (A future admin opt-in may allow
   full-auto Tier 3; off by default.)
 
@@ -202,43 +202,43 @@ store gains a `source` field. Reversible by design end-to-end.
 
 ### Immutable flag evidence (frozen classifier pixels)
 
-Before this, an image-flag report carried only a score in free text — by review
+Before this, an image-flag report carried only a score in free text, by review
 time the room (and its rotating thumbnail) had moved on, so there was nothing to
 review. Now, when a watcher's scan crosses the threshold:
 
 1. The **worker** seals its scan canvas (scan generation guard) and encodes the
-   EXACT frame the classifier read as **PNG** (lossless — the stored pixels are
+   EXACT frame the classifier read as **PNG** (lossless, the stored pixels are
    bit-identical to the analyzed ones; JPEG was rejected because it is not).
    The sampling loop pauses until the encode resolves, and any encode answer
    whose generation no longer matches is dropped, so a newer frame can never be
    bound to an older score. If the encode fails or times out, the flag still
-   goes out — without pixels.
+   goes out, without pixels.
 2. The evidence rides the `flag` WS frame. The server accepts it **only** when
    the flag produces a report (Tier 1/2), **only** from a server-elected watcher
    (any client may still flag for corroboration, but pixel upload is a watcher
-   privilege — otherwise the server becomes anonymous image hosting), and
+   privilege, otherwise the server becomes anonymous image hosting), and
    **only** after hard validation: allowlisted data URL, strict base64, size
    caps (chars + decoded bytes), magic-byte sniff that must match the claimed
    type, real dimensions that must match the declared `w`/`h`, and a
    classifier-sized frame (≤ `WATCH_MAX_DIM` + margin). SVG/GIF/WEBP/URLs are
-   refused — no format spoofing, no stored XSS, no SSRF.
+   refused, no format spoofing, no stored XSS, no SSRF.
 3. Bytes are written to `DATA_DIR/.evidence/<reportId>.png|jpg` (tmp + rename;
    server-minted name, traversal-proof) with a sha256 recorded in the report
    alongside the op watermark (`sinceOpId`/`toOpId`), score, model, watcher
-   (profile id or hashed IP — never raw), `receivedAt` (server-authoritative),
+   (profile id or hashed IP, never raw), `receivedAt` (server-authoritative),
    and `trust:'client-captured'`. The report also gains `opIds`.
-4. **Trust framing:** the snapshot is client-supplied corroboration, NOT proof —
+4. **Trust framing:** the snapshot is client-supplied corroboration, NOT proof -
    a tampered client can forge pixels. The admin UI labels it exactly so and
    attributes the image to "the room canvas between op N–M", never to a person;
-   authorship stays "suspected — review required" (Tier 3 remains human-only).
+   authorship stays "suspected, review required" (Tier 3 remains human-only).
 5. **Lifecycle:** per-room cap (12) and global caps (400 files / 40 MB) evict
    the oldest evidence (the report survives, marked `dropped:'quota'`);
    report-queue eviction unlinks the file; `closeRoom` (idle or moderator
    delete) drops the room's evidence; resolved reports keep evidence 30 days
    then the file is swept (`expired:true`, text record stays); account deletion
-   nulls `evidence.watcher` for that profile — the pixels are the room's shared
+   nulls `evidence.watcher` for that profile, the pixels are the room's shared
    canvas, not the watcher's data.
-6. **Retrieval:** `GET /api/admin/evidence/:reportId` — admin key only,
+6. **Retrieval:** `GET /api/admin/evidence/:reportId`, admin key only,
    `no-store`, `nosniff`, served with the sniffed Content-Type; 404 when
    missing/refused/evicted/expired. Evidence never appears in any non-admin
    payload.
@@ -253,7 +253,7 @@ review. Now, when a watcher's scan crosses the threshold:
   signed-in clients, and sends `watcher_role`. If a watcher leaves, re-elect.
 - Flags older than the window (e.g. 30 s) are pruned. Tier 2 needs the corroboration
   rule in §5. A single client cannot, by itself, cause destructive (even reversible)
-  action unless it also has a human report — defends against a tampered client
+  action unless it also has a human report, defends against a tampered client
   spamming flags **and** against a tampered client suppressing them (other watchers
   + human reports still catch it).
 
@@ -263,7 +263,7 @@ review. Now, when a watcher's scan crosses the threshold:
 
 `/watch/<code>` + `GET /ws?room=<code>&modwatch=1` is how the owner inspects a
 room without being seen. It exists because the console's old "View room" opened
-`/join/<code>` — a real join: listed in the roster, counted in the headcount, and
+`/join/<code>`, a real join: listed in the roster, counted in the headcount, and
 holding a brush.
 
 **Invisible by construction.** A watcher socket is never added to `room.users`.
@@ -274,7 +274,7 @@ election, snapshot election, game and Draw Phone seating, and the auto-close TTL
 The room cannot observe it; only the server's own logs can.
 
 **Read-only by construction.** The socket's first frame must carry the admin key
-(`{type:'mod_auth', key}`) — never the URL, which lands in proxy/CDN access logs.
+(`{type:'mod_auth', key}`), never the URL, which lands in proxy/CDN access logs.
 Until it is authenticated the socket is bound to nothing, and it is hung up after
 5 s of silence. Once attached, its message handler is an ALLOWLIST: `clear`,
 `undo_clear`, `mod_hide`, `mod_restore`, `mod_remove`, `kick`, `mute`,
@@ -289,8 +289,8 @@ hides in private rooms, and the watcher is the owner, authenticated by key.
 Rooms that do not exist are refused rather than created, and each IP gets 8 auth
 attempts a minute.
 
-**What the room sees.** Watchers receive everything a member would — the mural,
-roster with names, chat, hype, mod alerts — because seeing it is the job. Mod
+**What the room sees.** Watchers receive everything a member would, the mural,
+roster with names, chat, hype, mod alerts, because seeing it is the job. Mod
 actions route through the same helpers hosts use (`moderateClear`,
 `moderateHideOps`, `moderateKick`, …) so a host action and an admin action can
 never drift apart, and they are attributed to the neutral `MOD_ACTOR`
@@ -306,7 +306,7 @@ the watch session.
 ## 8. Surfaces
 
 - **HostControlPanel** (`src/components/HostControlPanel.jsx`): a "Moderation"
-  section — open flags + hidden strokes with **Restore** / **Remove permanently** /
+  section, open flags + hidden strokes with **Restore** / **Remove permanently** /
   **Remove painter**; live `mod_alert` toasts.
 - **LiveAdmin** (`src/components/LiveAdmin.jsx`): moderation queue (auto-reports +
   flags + hidden ops), an `audience` column on rooms, and the public-room list.
@@ -340,13 +340,13 @@ not regress.
 
 Two suites cover the glass room (§7):
 
-- `node scripts/modwatch-verify.mjs` — raw WS against a private room: a watcher
+- `node scripts/modwatch-verify.mjs`, raw WS against a private room: a watcher
   attaches and reads the mural/roster/chat, the room sees no join beacon and still
   counts one person, a watcher's `op` and `chat` are dropped (never relayed, never
   in history), hide/restore/wipe/undo/kick land on the members, a bad key, an
   unknown room and a silent socket are refused, the public spectator path still
   refuses private rooms, and the flag reaches the reports queue.
-- `node scripts/modwatch-ui-verify.mjs` — a real browser: the key gate, the watch
+- `node scripts/modwatch-ui-verify.mjs`, a real browser: the key gate, the watch
   layout, no studio shell / brush / composer on the page, the stroke list
   attributing paint to its author, flag-and-hide and wipe reaching the painter's
   canvas, and the painter's screen showing only "a moderator". Screenshots land in

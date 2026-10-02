@@ -1,4 +1,4 @@
-// Admin gallery inspector — the moderation view over every saved artwork,
+// Admin gallery inspector, the moderation view over every saved artwork,
 // INCLUDING anonymous saves. The analytics tab can only count saves; this page
 // shows the pictures themselves, grouped per owner (device or account), with a
 // full-image lightbox and a confirmed remove. Anonymous owners are flagged up
@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 const KEY_STORAGE = "drawesome:adminkey:v1";
 
 function timeAgo(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -115,7 +115,7 @@ export default function AdminGallery({ onNavigate }) {
     }
   }, [adminKey, checkKey]);
 
-  // Poll the index every 20s, but only while the tab is actually visible —
+  // Poll the index every 20s, but only while the tab is actually visible -
   // a moderator leaving this open overnight shouldn't hammer the server.
   useEffect(() => {
     if (!authed) return undefined;
@@ -183,7 +183,7 @@ export default function AdminGallery({ onNavigate }) {
 
   // Confirmed removal: the button only ARMS the confirm dialog; the POST fires
   // after an explicit yes. On success the artwork leaves the grid and the
-  // owner's count/totals shrink in place — no full reload.
+  // owner's count/totals shrink in place, no full reload.
   const removeArtwork = async (ownerKey, item) => {
     if (!window.confirm(`Remove "${item.name || item.id}" from ${ownerKey}? This deletes the saved image for everyone.`)) return;
     const tag = `${ownerKey}/${item.id}`;
@@ -209,7 +209,7 @@ export default function AdminGallery({ onNavigate }) {
       setLightbox((lb) => (lb && lb.ownerKey === ownerKey && lb.item.id === item.id ? null : lb));
       say(`Removed. ${formatCount(data.remaining)} left for this owner.`);
     } catch {
-      say("Couldn't remove that artwork — try again.");
+      say("Couldn't remove that artwork, try again.");
     } finally {
       setRemoving("");
     }
@@ -304,7 +304,7 @@ export default function AdminGallery({ onNavigate }) {
           <div className="metric" style={{ borderColor: "#e2a63d", boxShadow: "0 0 0 2px rgba(226, 166, 61, 0.35)" }}>
             <span className="metric-num is-warn">{formatCount(t.anonymousOwners)}</span>
             <span className="metric-label">⚠ Anonymous owners</span>
-            <span className="metric-sub">no account attached — review these first</span>
+            <span className="metric-sub">no account attached, review these first</span>
           </div>
           <div className="metric">
             <span className="metric-num">{formatCount(t.accountOwners)}</span>
@@ -313,7 +313,7 @@ export default function AdminGallery({ onNavigate }) {
           </div>
         </div>
         <p className="admin-muted admin-note">
-          Anonymous saves belong to a device key, not an account — they never appear in anyone&apos;s profile and
+          Anonymous saves belong to a device key, not an account, they never appear in anyone&apos;s profile and
           this page is the only place they can be reviewed. Expand an owner to see the actual drawings.
         </p>
       </section>
@@ -321,7 +321,7 @@ export default function AdminGallery({ onNavigate }) {
       <section className="admin-section">
         <h2>
           Save feed <span className="admin-badge">{recent.length}</span>{" "}
-          <span className="admin-muted" style={{ fontSize: "0.8rem" }}>analytics stream — saves land here before the file index refreshes</span>
+          <span className="admin-muted" style={{ fontSize: "0.8rem" }}>analytics stream, saves land here before the file index refreshes</span>
         </h2>
         {recent.length === 0 ? (
           <p className="admin-empty">No saves recorded yet.</p>

@@ -173,7 +173,7 @@ export default function SiteNav({ onNavigate, current }) {
           {/* Sheet-only: the bar already carries Sign in / My account. */}
           {!session && isCloudConfigured ? (
             <a href="/signup" className="sn-save" onClick={(e) => follow(e, "/signup")}>
-              Save my art — free account
+              Save my art, free account
             </a>
           ) : null}
         </nav>
@@ -182,7 +182,7 @@ export default function SiteNav({ onNavigate, current }) {
           {/* Auth entry right beside the Draw now CTA, visible on mobile too.
               Signed in → "My account" (your rooms); signed out → one clear
               "Sign in" (never both, and hidden entirely when cloud accounts
-              aren't configured — the app stays anonymous-first). */}
+              aren't configured, the app stays anonymous-first). */}
           {session ? (
             <a href="/rooms" className="site-nav-account-cta" onClick={(event) => follow(event, "/rooms")}>
               My account

@@ -2,7 +2,7 @@
 //
 // Lets the user name a pack, pick which of their saved brush (and stamp /
 // palette / template) assets go in it, choose visibility (private / friends /
-// public — public requires review) and a remix permission, then "Submit for
+// public, public requires review) and a remix permission, then "Submit for
 // review". StudioApp owns persistence: onPublish receives the assembled pack
 // request and writes the asset_packs row + asset_moderation_queue entry.
 

@@ -1,4 +1,4 @@
-// Event Engine — the recurring-event loop (daily prompt, weekend challenge,
+// Event Engine, the recurring-event loop (daily prompt, weekend challenge,
 // voting window, gallery winner) for the Discovery surface.
 //
 // MOCK / LOCAL ONLY. No backend, no network. The shapes here deliberately mirror
@@ -7,9 +7,9 @@
 //                          starts_at, ends_at, voting_starts_at, voting_ends_at)
 //                          status lifecycle: draft → upcoming → live → voting → ended
 //   - gallery_posts      (id, event_id, title, image/thumbnail, tags, votes_count,
-//                          status, visibility) — used as the votable event entries
-//   - event_entries      (event_id, gallery_post_id) — links posts to an event
-//   - gallery_votes      (post_id, profile_id, value=1) — ONE vote per profile per
+//                          status, visibility), used as the votable event entries
+//   - event_entries      (event_id, gallery_post_id), links posts to an event
+//   - gallery_votes      (post_id, profile_id, value=1): ONE vote per profile per
 //                          post (anti-brigading; enforced in the mock helpers)
 //
 // Audience gating: only kid_safe / friends events are surfaced on the default
@@ -38,7 +38,7 @@ export function getVoteProfileId() {
 }
 
 // Read/write the set of post ids this profile has voted for (mirrors the
-// (post_id, profile_id) primary key in gallery_votes — locally we only need the
+// (post_id, profile_id) primary key in gallery_votes, locally we only need the
 // post ids for the current profile).
 export function readVotedPostIds() {
   try {
@@ -162,7 +162,7 @@ const baseEvents = [
     id: "event-daily-remix",
     title: "Daily Remix Drop",
     theme: "Turn a blank reaction card into today's mood.",
-    description: "Library prompts only. No imported memes — start from a blank card.",
+    description: "Library prompts only. No imported memes, start from a blank card.",
     tags: ["Meme remix", "Kid-safe"],
     audience: "kid_safe",
     prompt: "Turn a blank reaction card into today's mood.",
@@ -207,7 +207,7 @@ const baseEvents = [
     id: "event-color-pass",
     title: "Color Pass Cup",
     theme: "Best color pass on a shared line drawing.",
-    description: "Ended event — winner shown. Library palettes only.",
+    description: "Ended event, winner shown. Library palettes only.",
     tags: ["Coloring", "Kid-safe"],
     audience: "kid_safe",
     prompt: "Best color pass on a shared line drawing.",
@@ -218,7 +218,7 @@ const baseEvents = [
     roomCount: 7,
     entryPostIds: ["post-snack-planet"],
   },
-  // Adult event — must NEVER appear on the default discovery surface.
+  // Adult event, must NEVER appear on the default discovery surface.
   {
     id: "event-adult-hidden",
     title: "Late Night Adult Jam",

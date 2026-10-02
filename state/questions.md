@@ -1,7 +1,7 @@
 # Open questions (loop)
 - Placeholders resolved by orchestrator (skill default): 3 cycles, 5 auto-patches/day, iteration branch loop/social-growth, dev port 5173 (spec said 3000). Correct me in this file if wrong.
 
-## Loop complete (3/3 cycles) — RESOLVED 2026-09-16: owner approved moderation stance (011/012 unblocked) and CARD-008. Original questions:
+## Loop complete (3/3 cycles): RESOLVED 2026-09-16: owner approved moderation stance (011/012 unblocked) and CARD-008. Original questions:
 - CARD-011 (watchers+emotes) & CARD-012 (public spectate): minors' moderation policy owner? Blocked until decided.
 - CARD-008 (live painter counts on /rooms, effort 3): approve expanding effort gate? Pairs strongly with landed CARD-002.
 - End-to-end regression of CARD-001+013+002 on one bundle before merging PR #2.
@@ -20,7 +20,7 @@ Answers I still need:
 4. CARD-014 was verified by me (sub-agents were rate-limited that cycle). Want a second independent pass on it, alongside the end-to-end regression of cycles 1-5, before PR #2 merges?
 5. Next patch window: CARD-016 (counted watchers) first, or the ready content cards CARD-003..007?
 
-## Moderation console (built + verified 2026-09-16) — decisions I made, and what still needs you
+## Moderation console (built + verified 2026-09-16), decisions I made, and what still needs you
 
 Shipped: /admin/rooms (Room Radar), /admin/users, /admin/gallery, global block.
 Verified: 22/22 unit checks, real chat digest, urgent-report row tint, block closes
@@ -31,7 +31,7 @@ I decided these (reversible, tell me if wrong):
   console being manual and is the safe default for a defacer.
 - Blocking a guest needed a handle, so the WS auth frame now carries the device's
   random id (localStorage `drawesome:userkey:v1`). IP blocking exists as a fallback
-  key but the console does NOT block by IP by default — a school NAT would take out
+  key but the console does NOT block by IP by default, a school NAT would take out
   a whole classroom.
 - The chat synopsis is deterministic by default; no LLM call happens until you set
   MOD_SYNOPSIS_URL (optional MOD_SYNOPSIS_KEY). Nothing but flags and already-clipped
