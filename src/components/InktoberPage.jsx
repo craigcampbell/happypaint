@@ -194,9 +194,9 @@ export default function InktoberPage({ onNavigate }) {
           <p className="ink-eyebrow">Community event · October {ink?.year || fallbackPrompts.year}</p>
           <h1 id="ink-title">🖋️ Inktober at Drawesome</h1>
           <p className="ink-hero-sub">
-            One shared ink-and-pencil mural, one prompt a day, all October long. Draw in the public
-            Ink &amp; Pencil room — no account needed — and pin your piece to the Wall from the studio
-            to appear in this moderated gallery.
+            Your art, your sketchbook: one prompt a day, all October long. Keep your pages private
+            or make your book public to share your artwork here. Invite up to five artists to draw
+            with you, or drop into the anonymous shared Ink &amp; Pencil room.
           </p>
 
           {inkStatus === "loading" ? (
@@ -282,8 +282,8 @@ export default function InktoberPage({ onNavigate }) {
         <section className="ink-studios" aria-labelledby="ink-books-title">
           <h2 id="ink-books-title">Inktober sketchbooks</h2>
           <p>
-            Multi-page sketchbooks — one page per daily prompt, up to six invited artists per book.
-            Anyone can flip through; new artwork appears here automatically.
+            Public sketchbooks — one page per daily prompt, with the owner and up to five invited artists.
+            Anyone can flip through these public books; private sketchbooks never appear here.
           </p>
           <a className="ink-join-btn" href="/sketchbook" onClick={(e) => follow(e, "/sketchbook")}>
             Start your own sketchbook →
@@ -465,10 +465,10 @@ export default function InktoberPage({ onNavigate }) {
             <strong>not affiliated with or endorsed by Inktober</strong>, and we don&rsquo;t use the official logo.
           </p>
           <p>
-            Everything here is public and anonymous-friendly: no account is needed to draw or browse, the
-            gallery only shows artwork people explicitly pinned to the Wall from the studio (private rooms
-            are never published for you), and every post is covered by the same moderation — the ⚑ report
-            button on each card reaches the moderators.
+            Browsing public artwork and drawing in the shared room need no account. Your own sketchbook
+            belongs to your account and starts private. Only books you choose to make public appear here
+            automatically; Wall posts are shared separately. Private artwork is never published for you.
+            Use the report controls to reach the moderators.
           </p>
         </section>
       </main>
