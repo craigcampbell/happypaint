@@ -52,12 +52,14 @@ const NEWBIE_JWT = fakeJwt("book_newbie1");
 const QUIET_JWT = fakeJwt("book_quiet01"); // picks the PRIVATE default in the choice card
 const PRIV_JWT = fakeJwt("book_priv_own"); // API-seeded private book owner
 const ARTIE_JWT = fakeJwt("book_artie01"); // invited artist on the private book
+const CLAIM_JWT = fakeJwt("book_claim01"); // the account that SAVES a guest book
 const TOKENS = {
   [OWNER_JWT]: { id: "book_owner01", name: "Olive Owner" },
   [NEWBIE_JWT]: { id: "book_newbie1", name: "Nina Newbie" },
   [QUIET_JWT]: { id: "book_quiet01", name: "Quinn Quiet" },
   [PRIV_JWT]: { id: "book_priv_own", name: "Priya Private" },
   [ARTIE_JWT]: { id: "book_artie01", name: "Artie Artist" },
+  [CLAIM_JWT]: { id: "book_claim01", name: "Casey Claim" },
 };
 const mock = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -187,7 +189,12 @@ const run = async () => {
   check("failed visibility attempts leave the book private", stillPrivate.json?.book?.public === false);
 
   // Vite dev server with /api + /ws proxied to the real backend.
+  // VITE_WS_URL matters: without it the studio's socket helper redirects any
+  // non-8787 page to the PRODUCTION port, so a suite-hosted studio silently
+  // talks to the live server instead of this one (same setting the
+  // artist-studio suite uses).
   process.env.VITE_PB_URL = PB;
+  process.env.VITE_WS_URL = `ws://127.0.0.1:${API_PORT}/ws`;
   vite = await createViteServer({
     root: ROOT,
     logLevel: "silent",
@@ -242,6 +249,18 @@ const run = async () => {
     });
     return posts;
   };
+  // Track the UNSAVED (guest) mint calls: `POST /api/sketchbooks/guest`.
+  const trackGuestPosts = (page) => {
+    const posts = [];
+    page.on("request", (req) => {
+      if (req.method() !== "POST") return;
+      if (new URL(req.url()).pathname !== "/api/sketchbooks/guest") return;
+      let body = null;
+      try { body = req.postDataJSON(); } catch { /* not json */ }
+      posts.push(body);
+    });
+    return posts;
+  };
   const newPage = async ({ auth = null } = {}) => {
     const context = await browser.newContext();
     if (auth) {
@@ -254,28 +273,111 @@ const run = async () => {
     return page;
   };
 
-  // 1. Guest /sketchbook: honest account card, no fake identity, shared room link.
+  // 1. Guest /sketchbook: STRAIGHT into the drawing experience. No sign-in
+  //    wall: the device gets an unsaved public sketchbook page and lands in the
+  //    studio, with the save prompt on top. (This is the behaviour that
+  //    replaced the old account wall, so the old wall assertions are gone.)
   const guestStart = await newPage();
+  const guestPosts = trackGuestPosts(guestStart);
+  // Diagnostics: what the page actually asked the server, and with which key.
+  const byRoomCalls = [];
+  guestStart.on("request", (req) => {
+    if (req.url().includes("/api/sketchbooks/by-room/")) byRoomCalls.push({ url: req.url() });
+  });
+  guestStart.on("response", async (res) => {
+    if (!res.url().includes("/api/sketchbooks/by-room/")) return;
+    let body = null;
+    try { body = await res.json(); } catch { /* none */ }
+    byRoomCalls.push({ status: res.status(), body });
+  });
   await guestStart.goto(`${BASE}/sketchbook`, { waitUntil: "domcontentloaded" });
-  await guestStart.waitForSelector("text=Log in to start your sketchbook", { timeout: 15000 });
-  check("guest /sketchbook shows the sign-in card (no fake identity)", true);
-  check("guest /sketchbook keeps the anonymous shared room one tap away",
-    !!(await guestStart.$("text=shared Ink & Pencil room")));
-  await guestStart.click("text=Log in to start your sketchbook");
-  await guestStart.waitForURL((u) => u.pathname === "/signup", { timeout: 10000 });
-  const loginUrl = new URL(guestStart.url());
-  check("guest login link returns to /sketchbook after sign-in",
-    loginUrl.pathname === "/signup" && loginUrl.searchParams.get("mode") === "login"
-      && loginUrl.searchParams.get("return") === "/sketchbook", guestStart.url());
+  let guestRoom = null;
+  try {
+    await guestStart.waitForURL((u) => u.pathname.startsWith("/join/"), { timeout: 25000 });
+    guestRoom = new URL(guestStart.url()).pathname.split("/")[2];
+  } catch { /* stayed on /sketchbook */ }
+  check("guest /sketchbook goes straight into the studio (no sign-in wall)", !!guestRoom, guestStart.url());
+  check("guest entry mints an UNSAVED sketchbook for this device",
+    guestPosts.length >= 1 && typeof guestPosts[0]?.device === "string" && guestPosts[0].device.length >= 6,
+    JSON.stringify(guestPosts).slice(0, 200));
+  check("no sign-in wall is rendered on the way in",
+    !(await guestStart.$("text=Log in to start your sketchbook")));
+  const savedRaw = await guestStart.evaluate(() => window.localStorage.getItem("drawesome:guestbook:v1"));
+  let savedRec = null;
+  try { savedRec = JSON.parse(savedRaw); } catch { /* none */ }
+  check("the device keeps the one-time save token for later",
+    !!savedRec?.token && String(savedRec.token).startsWith("sbkc_") && !!savedRec?.bookId,
+    String(savedRaw).slice(0, 100));
+  let stripSeen = true;
+  try { await guestStart.waitForSelector(".skb-save-strip", { state: "attached", timeout: 20000 }); }
+  catch { stripSeen = false; }
+  const stripText = stripSeen ? ((await guestStart.textContent(".skb-save-strip")) || "") : "";
+  const diag = {
+    url: guestStart.url(),
+    banner: !!(await guestStart.$(".skb-banner-wrap")),
+    canvasStage: !!(await guestStart.$(".canvas-stage")),
+    studioShell: !!(await guestStart.$(".studio-shell")),
+    roomBar: (await guestStart.$(".room-bar, .room-bar-line")) ? true : false,
+    bodyHead: (await guestStart.evaluate(() => document.body.innerText || "")).slice(0, 200),
+    deviceKey: await guestStart.evaluate(() => window.localStorage.getItem("drawesome:userkey:v1")),
+    byRoomCalls,
+  };
+  check("the studio asks the guest to save the sketchbook, and promises no spam",
+    stripSeen && /sign up to save your sketchbook/i.test(stripText) && /don.t send spam/i.test(stripText),
+    stripSeen ? stripText.slice(0, 200) : JSON.stringify(diag).slice(0, 700));
+  const saveBtn = await guestStart.$(".skb-save-strip .skb-save-btn");
+  let saveReturn = null;
+  if (saveBtn) {
+    await saveBtn.click({ force: true }).catch(() => {});
+    try { await guestStart.waitForURL((u) => u.pathname === "/signup", { timeout: 10000 }); } catch { /* no nav */ }
+    const u = new URL(guestStart.url());
+    if (u.pathname === "/signup") saveReturn = decodeURIComponent(u.search);
+  }
+  check("the save prompt comes back to the SAME page room after sign-up",
+    !!saveReturn && saveReturn.includes("return=") && saveReturn.includes(`/join/${guestRoom}`),
+    String(saveReturn));
 
-  const guestStart2 = await newPage();
-  await guestStart2.goto(`${BASE}/sketchbook`, { waitUntil: "domcontentloaded" });
-  await guestStart2.waitForSelector("text=Sign up free", { timeout: 15000 });
-  await guestStart2.click("text=Sign up free");
-  await guestStart2.waitForURL((u) => u.pathname === "/signup", { timeout: 10000 });
-  const signupUrl = new URL(guestStart2.url());
-  check("guest signup link returns to /sketchbook after sign-up",
-    signupUrl.pathname === "/signup" && signupUrl.searchParams.get("return") === "/sketchbook", guestStart2.url());
+  // 1b. The round trip nothing else covers end to end: the SAME device (same
+  //     per-browser key) signs in, and the unsaved book is saved to the
+  //     account automatically, without the visitor doing anything else.
+  const guestDeviceKey = await guestStart.evaluate(() => window.localStorage.getItem("drawesome:userkey:v1"));
+  check("the guest studio used a real device key (the book's binding)",
+    typeof guestDeviceKey === "string" && guestDeviceKey.length >= 6, String(guestDeviceKey).slice(0, 40));
+  const trackClaimPosts = (page) => {
+    const posts = [];
+    page.on("request", (req) => {
+      if (req.method() !== "POST") return;
+      if (new URL(req.url()).pathname !== "/api/sketchbooks/claim") return;
+      let body = null;
+      try { body = req.postDataJSON(); } catch { /* not json */ }
+      posts.push(body);
+    });
+    return posts;
+  };
+  const claimPage = await newPage({ auth: authFor(CLAIM_JWT, "book_claim01", "Casey Claim", "casey@example.test") });
+  await claimPage.addInitScript((rec) => {
+    window.localStorage.setItem("drawesome:userkey:v1", rec.device);
+    window.localStorage.setItem("drawesome:guestbook:v1", JSON.stringify({ bookId: rec.bookId, token: rec.token }));
+  }, { device: guestDeviceKey, bookId: savedRec.bookId, token: savedRec.token });
+  const claims = trackClaimPosts(claimPage);
+  await claimPage.goto(`${BASE}/join/${guestRoom}`, { waitUntil: "domcontentloaded" });
+  for (let i = 0; i < 25 && claims.length === 0; i += 1) await sleep(400);
+  check("signing in on the SAME device saves the unsaved sketchbook automatically",
+    claims.length >= 1 && claims[0]?.token === savedRec.token, JSON.stringify(claims).slice(0, 160));
+  const savedBook = await api(`/api/sketchbooks/${savedRec.bookId}`, { token: CLAIM_JWT });
+  check("the book now belongs to the account and is no longer unsaved",
+    savedBook.json?.book?.owner === true && savedBook.json?.book?.unsaved === false,
+    JSON.stringify(savedBook.json?.book).slice(0, 160));
+  const roomAfterClaim = await api(`/api/sketchbooks/by-room/${guestRoom}`, { token: CLAIM_JWT });
+  check("the page is an account-owned studio the owner can draw in",
+    roomAfterClaim.json?.unsaved === false && roomAfterClaim.json?.isOwner === true
+      && roomAfterClaim.json?.canDraw === true,
+    JSON.stringify(roomAfterClaim.json).slice(0, 200));
+  for (let i = 0; i < 25 && (await claimPage.$(".skb-save-strip")); i += 1) await sleep(400);
+  check("the save prompt disappears once the book is saved",
+    !(await claimPage.$(".skb-save-strip")));
+  check("the spent save record is cleared from the device",
+    !(await claimPage.evaluate(() => window.localStorage.getItem("drawesome:guestbook:v1"))));
 
   // 2. Owner /sketchbook: GET mine auto-resume ONLY, not a single create POST.
   const ownerPage = await newPage({ auth: ownerAuth });
@@ -469,8 +571,17 @@ const run = async () => {
   await home.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
   await home.waitForSelector(".home-paper-ink", { timeout: 20000 });
   await home.click(".home-paper-ink");
-  await home.waitForURL("**/sketchbook", { timeout: 10000 });
-  check("homepage Inktober hero card opens the visitor's OWN sketchbook entry", true);
+  let homeRoom = null;
+  try {
+    await home.waitForURL((u) => u.pathname.startsWith("/join/"), { timeout: 25000 });
+    homeRoom = new URL(home.url()).pathname.split("/")[2];
+  } catch { /* stayed on the homepage */ }
+  check("homepage Inktober hero card drops the visitor straight into an unsaved sketchbook page",
+    !!homeRoom, home.url());
+  let homeStrip = true;
+  try { await home.waitForSelector(".skb-save-strip", { state: "attached", timeout: 20000 }); }
+  catch { homeStrip = false; }
+  check("the homepage entry carries the save prompt", homeStrip);
   await home.goBack();
   await home.waitForSelector(".home-inktober-shared-link", { timeout: 10000 });
   check("shared public INKTOBER room link remains on the homepage", true);
@@ -493,6 +604,31 @@ const run = async () => {
   await inkPage.click(".ink-studios .skb-card");
   await inkPage.waitForURL(`**/sketchbook/${BOOK}`, { timeout: 10000 });
   check("sketchbook card navigates to the reader", true);
+
+  // 5b. The exact path the owner asked for: tapping the PROMPT on /inktober as
+  //     a guest goes into the drawing experience on a public unsaved page, not
+  //     through an entry page or a sign-in wall.
+  const promptTap = await newPage();
+  await promptTap.goto(`${BASE}/inktober`, { waitUntil: "domcontentloaded" });
+  await promptTap.waitForSelector("text=Draw today’s page in your sketchbook →", { timeout: 20000 });
+  await promptTap.click("text=Draw today’s page in your sketchbook →");
+  let promptRoom = null;
+  try {
+    await promptTap.waitForURL((u) => u.pathname.startsWith("/join/"), { timeout: 25000 });
+    promptRoom = new URL(promptTap.url()).pathname.split("/")[2];
+  } catch { /* stayed */ }
+  check("the Inktober prompt CTA opens the drawing experience directly", !!promptRoom, promptTap.url());
+  let promptStrip = true;
+  try { await promptTap.waitForSelector(".skb-save-strip", { state: "attached", timeout: 20000 }); }
+  catch { promptStrip = false; }
+  const promptStripText = promptStrip ? ((await promptTap.textContent(".skb-save-strip")) || "") : "";
+  check("that page asks the guest to save the sketchbook (and promises no spam)",
+    promptStrip && /sign up to save your sketchbook/i.test(promptStripText) && /don.t send spam/i.test(promptStripText),
+    promptStripText.slice(0, 200));
+  await promptTap.waitForSelector(".skb-prompt-chip", { state: "attached", timeout: 20000 });
+  const promptChip = (await promptTap.textContent(".skb-prompt-chip")) || "";
+  check("the page keeps the pinned Inktober prompt chip",
+    promptChip.includes("#inktober") && promptChip.includes("Day"), promptChip.slice(0, 160));
 
   // 6. PublicWatch links a page room back to its book.
   const watch = await newPage();

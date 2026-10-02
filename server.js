@@ -10403,7 +10403,13 @@ function flipPageRoomToStudio(book, page, keepRef = true) {
   live.hostUserId = null;
   live.painters = painters;
   live.gallery = { ...defaultGallery() };
-  if (!keepRef) live.sketchbook = null;
+  // The page keeps its immutable day/prompt stamp, but the BOOK it points at
+  // can CHANGE: a merge moves a page into the account's own book, and leaving
+  // the old reference behind would point the room at the (deleted) unsaved
+  // book, so every join would fail closed as book_private.
+  live.sketchbook = keepRef
+    ? { book: book.id, day: page.day, prompt: page.prompt, date: page.date }
+    : null;
   // Everyone connected is re-roled at once: the account that just saved the
   // book draws, everybody else (including the other tabs of the same device)
   // becomes a viewer, exactly like any other artist studio.
@@ -10508,8 +10514,17 @@ function sweepUnsavedBooks(now = Date.now()) {
     try { dropBook(book); } catch { /* best effort */ }
   }
 }
-const unsavedBookSweepTimer = setInterval(() => sweepUnsavedBooks(), 3600_000);
-if (unsavedBookSweepTimer.unref) unsavedBookSweepTimer.unref();
+// A boot run + a periodic tick, so the window cannot be missed by a server
+// that restarts more often than the interval (this server restarts on every
+// deploy). SKETCHBOOK_GUEST_SWEEP_MS overrides the period; 0 disables the
+// timer (the boot run still happens), which is what an isolated test uses to
+// observe the sweep on demand instead of waiting an hour.
+const SKETCHBOOK_GUEST_SWEEP_MS = Math.max(0, Number(process.env.SKETCHBOOK_GUEST_SWEEP_MS ?? 3600_000) || 0);
+sweepUnsavedBooks();
+const unsavedBookSweepTimer = SKETCHBOOK_GUEST_SWEEP_MS > 0
+  ? setInterval(() => sweepUnsavedBooks(), SKETCHBOOK_GUEST_SWEEP_MS)
+  : null;
+if (unsavedBookSweepTimer && unsavedBookSweepTimer.unref) unsavedBookSweepTimer.unref();
 
 // The book ACL is the single source of truth for every page room's painter
 // list. Applies to live rooms (with immediate account-wide role recompute +
