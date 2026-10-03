@@ -76,14 +76,47 @@
     </script>
 
     <!-- Google tag (gtag.js), site-wide pageviews. Loaded async so it never
-         blocks the canvas; no data-seo marker, so server.js leaves it alone. -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-9TG5C3N1YP"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
+         blocks the canvas; no data-seo marker, so server.js leaves it alone.
 
-      gtag('config', 'G-9TG5C3N1YP');
+         OPT-OUT, so the owner's own traffic never counts:
+           * visit once with ?ga=off on any device and this browser is excluded
+             from every Google Analytics hit from then on (?ga=on undoes it);
+           * localhost / 127.0.0.1 / *.local hosts are always excluded;
+           * when excluded the gtag.js script is never even fetched, and the
+             ga-disable global is set as a second line of defence.
+         The flag lives in localStorage('drawesome:ga:off'), so it survives
+         reloads and applies to every page of the site. -->
+    <script>
+      (function () {
+        var GA_ID = "G-9TG5C3N1YP";
+        var OFF_KEY = "drawesome:ga:off";
+        var skip = false;
+        window.dataLayer = window.dataLayer || [];
+        function gtag() { window.dataLayer.push(arguments); }
+        window.gtag = gtag;
+        try {
+          var flag = new URLSearchParams(window.location.search).get("ga");
+          if (flag === "off" || flag === "0") window.localStorage.setItem(OFF_KEY, "1");
+          else if (flag === "on" || flag === "1") window.localStorage.removeItem(OFF_KEY);
+          var host = window.location.hostname;
+          skip = window.localStorage.getItem(OFF_KEY) === "1"
+            || host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0"
+            || host.slice(-6) === ".local";
+        } catch (err) {
+          // Storage blocked (private mode, hardened browser): measure normally
+          // rather than silently dropping every visitor into the same bucket.
+        }
+        gtag("js", new Date());
+        if (skip) {
+          window["ga-disable-" + GA_ID] = true;
+          return;
+        }
+        var s = document.createElement("script");
+        s.async = true;
+        s.src = "https://www.googletagmanager.com/gtag/js?id=" + GA_ID;
+        document.head.appendChild(s);
+        gtag("config", GA_ID);
+      })();
     </script>
   </head>
   <body>
