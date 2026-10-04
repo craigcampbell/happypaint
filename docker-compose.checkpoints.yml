@@ -9,4 +9,12 @@ services:
     environment:
       ENABLE_TRUSTED_CHECKPOINTS: "1"
       CHECKPOINT_CHROME_PATH: /usr/bin/chromium-browser
+      # A baseline render is a one-off background job that the whole room then
+      # reuses, and a large mural needs far longer than the 45s default: an
+      # isolated container measured ~17s for a 1,154-op frame, and production
+      # logged 11 worker job timeouts against 1 success, so the cache never
+      # warmed for the big rooms and every joiner replayed the full history
+      # (3,518 ops = ~70s of client-side replay). Give the single worker room
+      # to finish; the cache stays bounded and the job queue stays serialized.
+      CHECKPOINT_JOB_TIMEOUT_MS: "240000"
     shm_size: 256mb
