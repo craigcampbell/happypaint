@@ -4220,6 +4220,10 @@ button:disabled {
   }
   /* Sit the prompt chip below the fixed rooms FAB row. */
   .room-prompt-chip { top: 56px; }
+  /* The in-flow sketchbook banner is the FIRST visible strip here (the room
+     bar is hidden), so without this the fixed FAB row covers its prompt chip
+     and Prev/Next buttons. Reserve the FAB's strip above the first banner. */
+  .mp-bar + .skb-banner-wrap { padding-top: 56px; }
   .mobile-signout { width: 100%; margin-top: 8px; }
 
   .mobile-actions-grid {
@@ -4807,6 +4811,68 @@ button:disabled {
 }
 .admin-trend-grid.is-compact .admin-trend svg { height: 22px; }
 .admin-trend rect { fill: #2d6cdf; }
+.admin-trend.is-online rect { fill: #16a34a; }
+/* Admin sign-in: key + authenticator code. */
+.admin-login-field { display: grid; gap: 4px; margin: 0 0 10px; text-align: left; }
+.admin-login-field span { font-size: 0.78rem; font-weight: 800; color: #475569; }
+.admin-login-field input.is-otp { font-size: 1.4rem; letter-spacing: 0.3em; font-variant-numeric: tabular-nums; text-align: center; }
+.admin-login-link {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #2d6cdf;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  min-height: 0;
+  text-decoration: underline;
+}
+.admin-login-warn {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.admin-login-warn code { font-size: 0.78rem; }
+.admin-login-note { margin: 10px 0 0; font-size: 0.76rem; font-weight: 600; }
+/* Who's on: the time-window picker + emphasis for the headline tiles. */
+.admin-window-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.admin-window-tabs button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+.admin-window-tabs button.is-active {
+  background: #2d6cdf;
+  border-color: #2d6cdf;
+  color: #fff;
+}
+.admin-window-tabs button.is-active:hover,
+.admin-window-tabs button.is-active:focus-visible {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+  opacity: 1;
+}
+.metric.is-primary { border-color: #bfdbfe; background: #f5f9ff; }
+.metric.is-primary .metric-num { font-size: 2rem; }
+.metric-grid.is-compact { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; }
+.metric-grid.is-compact .metric { padding: 10px 12px; box-shadow: none; }
+.metric-grid.is-compact .metric-num { font-size: 1.25rem; }
 .admin-trend-label { color: #64748b; font-size: 0.72rem; font-weight: 800; }
 .admin-room-stat { display: grid; gap: 4px; }
 .admin-note { margin: 12px 0 0; font-size: 0.82rem; line-height: 1.45; }

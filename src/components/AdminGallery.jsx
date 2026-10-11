@@ -6,7 +6,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const KEY_STORAGE = "drawesome:adminkey:v1";
+import AdminLogin from "./AdminLogin";
+import { adminLogout, getAdminToken } from "../utils/adminAuth";
 
 function timeAgo(ts) {
   if (!ts) return "-";
@@ -45,16 +46,8 @@ const FILTERS = [
 ];
 
 export default function AdminGallery({ onNavigate }) {
-  const [adminKey, setAdminKey] = useState(() => {
-    try {
-      return localStorage.getItem(KEY_STORAGE) || "";
-    } catch {
-      return "";
-    }
-  });
+  const [adminKey, setAdminKey] = useState(() => getAdminToken());
   const [authed, setAuthed] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [error, setError] = useState("");
   const [owners, setOwners] = useState([]);
   const [totals, setTotals] = useState(null);
   const [recent, setRecent] = useState([]);
@@ -130,32 +123,16 @@ export default function AdminGallery({ onNavigate }) {
     };
   }, [authed, refresh]);
 
-  const login = async () => {
-    const key = keyInput.trim();
-    if (!key) return;
-    if (await checkKey(key)) {
-      try {
-        localStorage.setItem(KEY_STORAGE, key);
-      } catch {
-        // ephemeral if storage blocked
-      }
-      setAdminKey(key);
-      setAuthed(true);
-      setError("");
-    } else {
-      setError("That key didn't work. Double-check it and try again.");
-    }
+  // Sign-in lives in <AdminLogin> (key + authenticator code -> session token).
+  const onAuthed = (token) => {
+    setAdminKey(token);
+    setAuthed(true);
   };
 
   const signOut = () => {
-    try {
-      localStorage.removeItem(KEY_STORAGE);
-    } catch {
-      // ignore
-    }
+    adminLogout(adminKey);
     setAdminKey("");
     setAuthed(false);
-    setKeyInput("");
   };
 
   // Expand/collapse an owner; items (thumb + full image data URLs) are fetched
@@ -239,28 +216,12 @@ export default function AdminGallery({ onNavigate }) {
 
   if (!authed) {
     return (
-      <main className="admin-login">
-        <div className="admin-login-card">
-          <h1>🖼️ Gallery inspector</h1>
-          <p>Enter your admin key to review saved artwork.</p>
-          <input
-            type="password"
-            value={keyInput}
-            placeholder="admin key"
-            onChange={(e) => setKeyInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && login()}
-          />
-          {error ? <p className="admin-error">{error}</p> : null}
-          <div className="admin-login-actions">
-            <button type="button" onClick={() => onNavigate("/")}>
-              ← Home
-            </button>
-            <button type="button" className="primary-action" onClick={login}>
-              Unlock
-            </button>
-          </div>
-        </div>
-      </main>
+      <AdminLogin
+        title="🖼️ Gallery inspector"
+        intro="Sign in with your admin key and authenticator code to review saved artwork."
+        onNavigate={onNavigate}
+        onAuthed={onAuthed}
+      />
     );
   }
 

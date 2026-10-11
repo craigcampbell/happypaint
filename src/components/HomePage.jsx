@@ -9,7 +9,7 @@ import BrandMark from "./BrandMark";
 import InktoberInkHeading from "./InktoberInkHeading";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { HYPES } from "../utils/hypes";
-import { startGuestSketchbook } from "../utils/sketchbookApi";
+import { openSketchbookPrompt } from "../utils/sketchbookApi";
 import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../seasonal.css";
 import "../home-inktober.css";
@@ -423,19 +423,20 @@ export default function HomePage({ onNavigate }) {
   const heroGuestBusyRef = useRef(false);
   const drawInktoberToday = useCallback(async () => {
     if (heroGuestBusyRef.current) return;
-    const device = getDeviceKey();
-    if (!device) {
-      onNavigate("/join/INKTOBER");
-      return;
-    }
     heroGuestBusyRef.current = true;
     try {
-      const r = await startGuestSketchbook({ device, day: null });
+      const session = await getSession();
+      const device = getDeviceKey();
+      if (!session && !device) {
+        onNavigate("/join/INKTOBER");
+        return;
+      }
+      const r = await openSketchbookPrompt({ session, device, day: null });
       if (!r.ok || !r.json?.room) {
         onNavigate("/inktober");
         return;
       }
-      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      if (!session) saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token });
       onNavigate(`/join/${r.json.room}`);
     } catch {
       onNavigate("/inktober");

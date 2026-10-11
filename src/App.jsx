@@ -165,7 +165,7 @@ import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, 
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import SketchbookRoomBanner from "./components/SketchbookRoomBanner";
-import { startGuestSketchbook } from "./utils/sketchbookApi";
+import { openSketchbookPrompt } from "./utils/sketchbookApi";
 import { getDeviceKey, saveGuestSketchbook } from "./utils/guestSketchbook";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
@@ -3198,21 +3198,22 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const guestStartBusyRef = useRef(false);
   const handleStartOwnGuestPage = useCallback(async (day) => {
     if (guestStartBusyRef.current) return;
-    const device = getDeviceKey();
-    if (!device) {
-      showToast("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
-      return;
-    }
     guestStartBusyRef.current = true;
     try {
-      const r = await startGuestSketchbook({ device, day });
+      const session = await getSession();
+      const device = getDeviceKey();
+      if (!session && !device) {
+        showToast("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
+        return;
+      }
+      const r = await openSketchbookPrompt({ session, device, day });
       if (!r.ok || !r.json?.room) {
         showToast(r.error === "need_day" || r.error === "bad_day"
           ? "That prompt day isn't open right now. Try today's prompt or the shared Ink & Pencil room."
           : "Couldn't start your sketchbook just now. Try again in a moment.");
         return;
       }
-      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      if (!session) saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token });
       window.location.href = `/join/${r.json.room}`;
     } catch {
       showToast("Couldn't start your sketchbook just now. Try again in a moment.");

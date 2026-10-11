@@ -364,6 +364,14 @@ everything:
 - `.artworks/<key>.json`, anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json`, admin-uploaded custom sheets. `.sheet-theme.json`, today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
+- `.admin-totp.json` (2FA secret + hashed recovery codes + replay counter, see
+  `server/adminAuth.js` and RUNNING.md) and `.admin-sessions.json` (hashed
+  admin session tokens with expiry). Once the first exists, `x-admin-key` must
+  carry a session token from `POST /api/admin/login`, never the raw key.
+- `.presence.json`, site presence for /admin's "Who's on" (server/presence.js):
+  hashed device keys (ip|ua, no PII) with last-seen / last-painted /
+  last-watched stamps plus per-minute event buckets, 36h deep, so "today so
+  far" survives a deploy.
 - `.billing.json`, opaque Stripe ids, Family paid-through state, processed
   webhook ids, pending cancellation retries, and adult-attestation version,
   keyed by the PocketBase profile id. Card data and billing email never enter
@@ -373,8 +381,12 @@ Separate, large, read-only: **`coloring-library/`** (its own volume). PocketBase
 data: **`pb_data/`** (its own volume). All three folders are git-ignored.
 
 ## REST endpoints (server.js)
-`/healthz`; `/api/artworks` (CRUD, anon device key); `/api/report` (public);
-`/api/admin/*` (key-gated: rooms, reports, sheets, metrics, sheet-theme);
+`/healthz` (liveness + an aggregate `online` headcount: painters, spectators,
+sockets, devices seen in 5 min; what the host's hp* monitors read);
+`/api/artworks` (CRUD, anon device key); `/api/report` (public);
+`/api/admin/auth-mode` + `/api/admin/login` + `/api/admin/logout` (2FA session);
+`/api/admin/*` (session-gated: rooms, reports, sheets, metrics, presence
+(now / 30m / 4h / today windows), sheet-theme);
 `/api/sheets` (custom uploads); `/api/coloring-sheets` + `/today` (library);
 `/api/billing/config|me|checkout|checkout/confirm|portal|webhook` (env-gated
 Stripe Family plan); `/api/admin/billing` (non-secret billing health and retry

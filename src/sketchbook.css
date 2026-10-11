@@ -549,6 +549,37 @@
   color: #3d7a3d;
   font-weight: 800;
 }
+/* The in-studio catch-up grid (banner panel): the same day chips, padded for
+   the panel and sized as touch targets (a stylus or finger on a tablet). */
+.skb-panel .skb-days-pick {
+  padding: 0.6rem 0 0;
+}
+.skb-panel .skb-days-pick button {
+  min-width: 2.6em;
+  min-height: 40px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.skb-panel .skb-days-pick button.skb-day-has-page {
+  border-color: rgba(61, 122, 61, 0.55);
+}
+.skb-panel .skb-days-pick button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.skb-panel .skb-days-pick button[aria-current="true"] {
+  background: #2b2118;
+  color: #f5ead9;
+  border-color: #2b2118;
+}
+/* Finger-sized day chips on touch devices (iPad): 44px minimum targets. */
+@media (pointer: coarse) {
+  .skb-panel .skb-days-pick button,
+  .skb-days-catchup button,
+  .ink-phase-card .ink-catchup-days button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 .skb-reader-private-note p {
   margin: 0 0 0.8rem;
   color: rgba(43, 33, 24, 0.75);

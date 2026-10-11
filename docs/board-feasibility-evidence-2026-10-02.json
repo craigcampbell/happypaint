@@ -1,0 +1,73 @@
+{
+  "scope": "Read-only feasibility assessment; no production rooms or application code modified",
+  "source": {
+    "root": "/home/craig/Projects/happypaint",
+    "server_sha256": "dd2ec1eb12f99ec9c664b3406555abaf2160f73017d3a0fdf74cd8e489082b14",
+    "running_container_server_sha256": "dd2ec1eb12f99ec9c664b3406555abaf2160f73017d3a0fdf74cd8e489082b14",
+    "app_jsx_sha256": "9628933d0ef918e15dfd0d805eb7733eafe7aa4dfb642ef38faa26669277f442",
+    "app_jsx_lines": 13685,
+    "server_lines": 12109
+  },
+  "isolated_browser_module_probe": {
+    "kind": "actual layers.js source on an isolated blank page; not full app verification",
+    "canvas_dimensions": [4000, 2500],
+    "inside_probe_xy": [20, 20],
+    "inside_rgba": [255, 0, 0, 255],
+    "outside_probe_xy": [4010, 20],
+    "outside_rgba": [0, 0, 0, 0],
+    "active_undo_snapshot_dimensions": [4000, 2500]
+  },
+  "nominal_rgba_memory_estimates": {
+    "disclaimer": "Arithmetic estimates of 4-byte RGBA backing stores, not measured RSS or VRAM",
+    "one_layer_bytes": 40000000,
+    "one_layer_MiB": 38.14697265625,
+    "six_layers_MiB": 228.8818359375,
+    "eight_active_layer_undo_snapshots_MiB": 305.17578125,
+    "eighteen_active_layer_undo_snapshots_MiB": 686.6455078125,
+    "two_composite_caches_MiB": 76.2939453125,
+    "four_max_remote_stroke_buffers_MiB": 64,
+    "double_both_dimensions_one_layer_MiB": 152.587890625,
+    "ten_times_both_dimensions_one_layer_GiB": 3.725290298461914
+  },
+  "resource_snapshot": {
+    "observed_at": "2026-10-02T23:50:29-05:00",
+    "host_memory_total_display": "62 GiB",
+    "host_memory_available_display": "40 GiB",
+    "filesystem_free_display": "314 GiB",
+    "app_container_memory_display": "55.59 MiB",
+    "docker_memory_limit_bytes": 0,
+    "docker_nano_cpu_limit": 0,
+    "disclaimer": "One instantaneous resource snapshot, not a load or capacity benchmark"
+  },
+  "verified_board_runtime": {
+    "runtime_dotenv_present": false,
+    "container_node_version": "v24.20.0",
+    "PB_URL_is_configured": true,
+    "private_friends_rooms_require_identity_when_accounts_configured": true,
+    "ENABLE_TRUSTED_CHECKPOINTS": "1",
+    "CHECKPOINT_CHROME_PATH": "/usr/bin/chromium-browser",
+    "checkpoint_build_triggered_by_assessment": false,
+    "effective_source_defaults_not_overridden": {
+      "MAX_HISTORY": 20000,
+      "MAX_PUBLIC_HISTORY": 12000,
+      "OP_RATE_PER_SEC": 30,
+      "OP_RATE_BURST": 120,
+      "MAX_ROOM_USERS": 30,
+      "MAX_OP_DATAURL_CHARS": 8000000,
+      "OPLOG_COMPACT_OPS": 2000,
+      "CATCHUP_QUEUE_MAX_MESSAGES": 2048,
+      "CATCHUP_QUEUE_MAX_BYTES": 16777216,
+      "WS_SEND_SOFT_LIMIT_BYTES": 1048576,
+      "WS_SEND_QUEUE_MAX_MESSAGES": 2048,
+      "WS_SEND_QUEUE_MAX_BYTES": 33554432
+    }
+  },
+  "verified_container_env": {
+    "DATA_DIR": "/data",
+    "not_overridden_in_container_env": [
+      "MAX_HISTORY", "MAX_PUBLIC_HISTORY", "OP_RATE_PER_SEC", "OP_RATE_BURST",
+      "MAX_ROOM_USERS", "MAX_OP_DATAURL_CHARS", "MAX_ROOM_LAYERS", "MAX_ROOM_LAYERS_ANIM",
+      "MAX_DRAW_MESSAGE_CHARS", "CHECKPOINT_CACHE_MB", "HISTORY_CACHE_MAX_BYTES", "NODE_OPTIONS"
+    ]
+  }
+}

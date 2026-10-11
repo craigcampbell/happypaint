@@ -121,6 +121,22 @@ export function startGuestSketchbook({ device, day = null } = {}) {
   });
 }
 
+// Open a prompt in the caller's OWN book. Signed-in artists must never take
+// the guest-create -> claim path: revisiting a day that already exists there
+// otherwise opens an empty room detached by the merge. Resume the account
+// book without changing its visibility, then add/resume that day's page.
+export async function openSketchbookPrompt({ session = null, device, day = null } = {}) {
+  if (!session) return startGuestSketchbook({ device, day });
+  const book = await createOrResumeSketchbook(session, { isPublic: false });
+  if (!book.ok || !book.json?.book?.id) return book;
+  const result = await addSketchbookPage(book.json.book.id, day, session);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    json: { ...result.json, bookId: book.json.book.id, room: result.json?.page?.room },
+  };
+}
+
 // Save (claim) a device-started book under the signed-in account. The account
 // adopts the book; if it already has one for the event the unsaved pages MERGE
 // into it. 400 bad_token / 404 claim_invalid for an unknown or spent token.

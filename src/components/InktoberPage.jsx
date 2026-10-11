@@ -16,7 +16,8 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import fallbackPrompts from "../data/inktober2026.json";
-import { startGuestSketchbook } from "../utils/sketchbookApi";
+import { openSketchbookPrompt } from "../utils/sketchbookApi";
+import { getSession } from "../utils/auth";
 import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../seasonal.css";
 import "../sketchbook.css";
@@ -71,24 +72,25 @@ export default function InktoberPage({ onNavigate }) {
   const guestBusyRef = useRef(false);
   const drawPrompt = useCallback(async (day = null) => {
     if (guestBusyRef.current) return;
-    const device = getDeviceKey();
-    if (!device) {
-      say("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
-      onNavigate(`/join/${ROOM_CODE}`);
-      return;
-    }
     guestBusyRef.current = true;
     try {
-      const r = await startGuestSketchbook({ device, day });
+      const session = await getSession();
+      const device = getDeviceKey();
+      if (!session && !device) {
+        say("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
+        onNavigate(`/join/${ROOM_CODE}`);
+        return;
+      }
+      const r = await openSketchbookPrompt({ session, device, day });
       if (!r.ok || !r.json?.room) {
         say(r.error === "need_day"
           ? "Inktober hasn't started yet. You can warm up in the shared Ink & Pencil room."
           : r.error === "bad_day"
-            ? "That prompt day isn't open yet. Try today's prompt instead."
+            ? "That day isn't on the official prompt list. Try today's prompt instead."
             : "Couldn't start your sketchbook just now. Try again, or draw in the shared Ink & Pencil room.");
         return;
       }
-      saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+      if (!session) saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token });
       onNavigate(`/join/${r.json.room}`);
     } catch {
       say("Couldn't start your sketchbook just now. Try again, or draw in the shared Ink & Pencil room.");
@@ -278,6 +280,25 @@ export default function InktoberPage({ onNavigate }) {
               >
                 or draw together in the shared Ink &amp; Pencil room →
               </a>
+              {/* Catch-up: every official day is open, so a missed day is one
+                  tap away. The server stamps the page from the same list. */}
+              <div className="ink-catchup">
+                <span className="ink-catchup-label">Missed a day? Draw any prompt:</span>
+                <div className="skb-days ink-catchup-days" role="list" aria-label="Draw a prompt day">
+                  {prompts.map((p) => (
+                    <button
+                      type="button"
+                      key={p.day}
+                      role="listitem"
+                      aria-current={p.day === ink.day ? "true" : undefined}
+                      title={`Day ${p.day}, ${p.prompt}${p.day === ink.day ? " (today)" : ""}`}
+                      onClick={() => drawPrompt(p.day)}
+                    >
+                      {p.day}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           ) : null}
 

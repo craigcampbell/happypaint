@@ -93,6 +93,7 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
   const [book, setBook] = useState(null); // owner view (invites/artists), owner only
   const [panel, setPanel] = useState(""); // "" | "pages" | "invite"
   const [prompts, setPrompts] = useState([]); // official list for the add-page picker
+  const [liveDay, setLiveDay] = useState(null); // today's event day (active phase only)
   const [newInvite, setNewInvite] = useState(null); // { token, url } shown ONCE
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -190,13 +191,15 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
   }, [session, state, info?.unsaved, info?.isGuestOwner, info?.bookId]);
 
   // The owner's admin view (invites + artist ids) loads only for the owner.
+  // The device that started an UNSAVED book gets the public view (its page
+  // list), which is all the day picker needs to show which days exist.
   const refreshBook = useCallback(async (bookId) => {
     const r = await fetchSketchbook(bookId, session);
-    if (r.ok && r.json?.book?.owner) setBook(r.json.book);
+    if (r.ok && (r.json?.book?.owner || r.json?.book?.unsaved)) setBook(r.json.book);
   }, [session]);
 
   useEffect(() => {
-    if (state === "ready" && info?.isOwner) refreshBook(info.bookId);
+    if (state === "ready" && (info?.isOwner || (info?.unsaved && info?.isGuestOwner))) refreshBook(info.bookId);
     else setBook(null);
   }, [state, info, refreshBook]);
 
@@ -212,14 +215,19 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
     }
   }, [code, session, deviceKey, reportPage]);
 
-  // The official prompt list for the add-page picker, server truth, loaded
-  // lazily when the owner opens the panel.
+  // The official prompt list for the day picker, server truth, loaded
+  // lazily when the panel opens (owner OR the device that owns an unsaved
+  // book: both can add pages for days they missed).
   useEffect(() => {
     if (panel !== "pages" || prompts.length) return undefined;
     let active = true;
     fetch("/api/inktober", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (active && Array.isArray(d?.prompts)) setPrompts(d.prompts); })
+      .then((d) => {
+        if (!active || !d) return;
+        if (Array.isArray(d.prompts)) setPrompts(d.prompts);
+        setLiveDay(d.phase === "active" && Number.isInteger(d.day) ? d.day : null);
+      })
       .catch(() => { /* picker stays on the "today" default */ });
     return () => { active = false; };
   }, [panel, prompts.length]);
@@ -242,7 +250,17 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
   const promptTag = `#inktober${year ? ` ${year}` : ""}`;
   const go = (path) => onNavigate(path);
   const usedDays = new Set((book?.pages || []).map((p) => p.day));
-  const remaining = prompts.filter((p) => !usedDays.has(Number(p.day)));
+  // Which existing page a day maps to (so the picker can jump to a drawn day
+  // without re-adding it). Days without a page are added/minted on pick.
+  const roomForDay = (day) => (book?.pages || []).find((p) => p.day === Number(day))?.room || null;
+  // The catch-up picker: TODAY first (the common case), then every other
+  // official day. A missed day is one tap away; drawn days just open.
+  const todayDay = Number(liveDay);
+  const pickableDays = [...prompts].sort((a, b) => {
+    if (a.day === todayDay) return -1;
+    if (b.day === todayDay) return 1;
+    return a.day - b.day;
+  });
 
   // Unsaved (guest) book states. The SAVE strip is guest-owner + signed-out +
   // accounts-configured only; it disappears the moment the book is saved.
@@ -251,42 +269,33 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
   const showSaveStrip = guestOwner && !session && isCloudConfigured;
   const savedNotice = claiming && session && guestOwner ? "Saving your sketchbook to your account…" : "";
 
-  // The guest flow: mint/resume THIS device's unsaved book for a prompt day
-  // and jump straight into the page studio. No account, no sign-in wall.
-  const startGuestBook = async (day) => {
-    if (busy) return;
-    if (!deviceKey) {
-      say("This browser blocks local storage, so we can't keep your sketchbook. The shared Ink & Pencil room still works.");
-      return;
-    }
-    setBusy(true);
-    const r = await startGuestSketchbook({ device: deviceKey, day });
-    setBusy(false);
-    if (!r.ok || !r.json?.room) {
-      say(r.error === "need_day"
-        ? "Inktober hasn't started yet. Try the shared Ink & Pencil room meanwhile."
-        : r.error === "bad_day"
-          ? "That prompt day isn't open yet. Try today's prompt or the shared Ink & Pencil room."
-          : r.json?.message || "Couldn't start your sketchbook. Try again, or draw in the shared Ink & Pencil room.");
-      return;
-    }
-    saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the token exists only in THIS reply
-    go(`/join/${r.json.room}`);
-  };
-
+  // Open (or create) the page for a prompt day. An existing page just opens,
+  // no server round-trip; a missing day is minted: the account owner through
+  // the book's add-page endpoint, the device that owns an UNSAVED book through
+  // the guest endpoint (which resumes the same book and appends the page).
   const addPage = async (day) => {
     if (busy) return;
+    const existingRoom = day != null ? roomForDay(day) : null;
+    if (existingRoom) {
+      if (existingRoom !== code) go(`/join/${existingRoom}`);
+      setPanel("");
+      return;
+    }
     setBusy(true);
-    const r = await addSketchbookPage(info.bookId, day, session);
+    const r = guestOwner
+      ? await startGuestSketchbook({ device: deviceKey, day })
+      : await addSketchbookPage(info.bookId, day, session);
     setBusy(false);
     if (!r.ok) {
       say(r.json?.message || (r.error === "book_full" ? "This sketchbook already has all 31 pages." : "Couldn't add that page, try again."));
       return;
     }
-    const room = r.json?.page?.room;
+    const room = guestOwner ? r.json?.room : r.json?.page?.room;
+    const pageDay = r.json?.page?.day;
+    if (guestOwner && r.json?.token) saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token });
     await Promise.all([refreshBook(info.bookId), refreshInfo()]);
-    say(r.json?.resumed ? `Day ${r.json?.page?.day} already has a page.` : `Page for Day ${r.json?.page?.day} added!`);
-    if (room && !r.json?.resumed) go(`/join/${room}`);
+    say(r.json?.resumed && !guestOwner ? `Day ${pageDay} already has a page.` : `Page for Day ${pageDay} added!`);
+    if (room && room !== code) go(`/join/${room}`);
   };
 
   const mintInvite = async () => {
@@ -413,46 +422,40 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
           <span className="skb-banner-artists">{info.artistCount} of {info.maxArtists} artists</span>
         ) : null}
 
-        {info.isOwner ? (
+        {info.isOwner || guestOwner ? (
           <>
             <button
               type="button"
               onClick={() => setPanel(panel === "pages" ? "" : "pages")}
-              disabled={info.pageCount >= info.maxPages}
-              title={info.pageCount >= info.maxPages ? "All 31 prompt pages exist" : "Add a page for another prompt day"}
+              aria-expanded={panel === "pages"}
+              title="Open another prompt day: catch up on a day you missed, or revisit one you drew"
             >
-              + Add page
+              📅 Other days
             </button>
-            <button type="button" onClick={() => setPanel(panel === "invite" ? "" : "invite")}>
-              Invitations
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={toggleVisibility}
-              title={info.public === true
-                ? "Switch back to private, only you and invited artists can open the book (takes effect immediately)"
-                : "Make the book watchable by anyone with the link (asks for confirmation)"}
-            >
-              {info.public === true ? "Make private" : "Make public…"}
-            </button>
+            {info.isOwner ? (
+              <>
+                <button type="button" onClick={() => setPanel(panel === "invite" ? "" : "invite")}>
+                  Invitations
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={toggleVisibility}
+                  title={info.public === true
+                    ? "Switch back to private, only you and invited artists can open the book (takes effect immediately)"
+                    : "Make the book watchable by anyone with the link (asks for confirmation)"}
+                >
+                  {info.public === true ? "Make private" : "Make public…"}
+                </button>
+              </>
+            ) : null}
           </>
-        ) : unsaved && !guestOwner ? (
-          // Someone else's unsaved page: only THEIR device draws here. Offer
-          // the guest flow, so this visitor gets their own book in one tap.
-          // (The device that owns the book skips this: they draw here.)
-          <span className="skb-own-cta">
-            <button
-              type="button"
-              className="skb-banner-primary skb-own-btn"
-              disabled={busy}
-              onClick={() => startGuestBook(info.day)}
-            >
-              {busy ? "Starting your page…" : "Draw your own page for this prompt →"}
-            </button>
-            <span className="skb-own-note">
-              Only the artist on this page can draw here. You can start your own sketchbook with the same prompt, no account needed.
-            </span>
+        ) : unsaved ? (
+          // Someone else's unsaved page: only THEIR device draws here. The
+          // studio's watch-only note (App.jsx) carries the one-tap
+          // start-your-own door, so the banner only states the fact once.
+          <span className="skb-own-note">
+            Only the artist on this page can draw here.
           </span>
         ) : !guestOwner ? (
           <span className="skb-own-cta">
@@ -466,19 +469,27 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
         ) : null}
       </div>
 
-      {info.isOwner && panel === "pages" ? (
-        <div className="skb-panel" aria-label="Add a sketchbook page">
-          <h3>Add a page</h3>
+      {(info.isOwner || guestOwner) && panel === "pages" ? (
+        <div className="skb-panel" aria-label="Open another prompt day">
+          <h3>Prompt days</h3>
           <p className="skb-panel-note">
-            One page per official prompt day, the day &amp; prompt are stamped by the server and never change.
+            One page per official prompt day. Missed a day? Pick it here to catch up: the day &amp; prompt
+            are stamped by the server and never change. Days you already drew just open.
           </p>
           <div className="skb-panel-row">
-            <button type="button" className="skb-banner-primary" disabled={busy} onClick={() => addPage(null)}>
-              Add today&rsquo;s page
-            </button>
-            {remaining.length > 0 ? (
+            {liveDay != null ? (
+              <button
+                type="button"
+                className="skb-banner-primary"
+                disabled={busy || liveDay === info.day}
+                onClick={() => addPage(liveDay)}
+              >
+                {liveDay === info.day ? "You're on today's page" : `Open today's page (Day ${liveDay})`}
+              </button>
+            ) : null}
+            {pickableDays.length > 0 ? (
               <>
-                <label htmlFor="skb-day-pick">or pick a day:</label>
+                <label htmlFor="skb-day-pick">{liveDay != null ? "or pick a day:" : "Pick a day:"}</label>
                 <select
                   id="skb-day-pick"
                   defaultValue=""
@@ -486,13 +497,35 @@ export default function SketchbookRoomBanner({ roomCode, session = null, onNavig
                   onChange={(e) => { if (e.target.value) addPage(Number(e.target.value)); }}
                 >
                   <option value="" disabled>Choose…</option>
-                  {remaining.map((p) => (
-                    <option key={p.day} value={p.day}>Day {p.day}, {p.prompt}</option>
+                  {pickableDays.map((p) => (
+                    <option key={p.day} value={p.day} disabled={p.day === info.day}>
+                      {p.day === todayDay ? "Today · " : ""}Day {p.day}, {p.prompt}{usedDays.has(p.day) ? " ✓" : ""}
+                    </option>
                   ))}
                 </select>
               </>
             ) : null}
           </div>
+          {prompts.length > 0 ? (
+            <div className="skb-days skb-days-pick" role="list" aria-label="All prompt days">
+              {prompts.map((p) => (
+                <button
+                  type="button"
+                  key={p.day}
+                  role="listitem"
+                  disabled={busy || p.day === info.day}
+                  aria-current={p.day === info.day ? "true" : undefined}
+                  className={usedDays.has(p.day) ? "skb-day-has-page" : ""}
+                  title={`Day ${p.day}, ${p.prompt}${usedDays.has(p.day) ? " (page exists)" : ""}${p.day === todayDay ? " (today)" : ""}`}
+                  onClick={() => addPage(p.day)}
+                >
+                  {usedDays.has(p.day) ? <span className="skb-day-dot" aria-label="has a page">●</span> : null} {p.day}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="skb-panel-note">Loading the prompt list…</p>
+          )}
         </div>
       ) : null}
 

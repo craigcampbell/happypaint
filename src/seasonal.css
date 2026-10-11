@@ -257,6 +257,41 @@
 }
 .ink-join-btn:hover { background: #ddd0fe; }
 
+/* Catch-up strip inside the active hero card: every official prompt day is
+   one tap (a missed day gets its own page; the server stamps the prompt).
+   Dark-card colours; the chips reuse the reader's .skb-days layout. */
+.ink-catchup {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(196, 181, 253, 0.25);
+}
+.ink-catchup-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #cdbffa;
+}
+.ink-phase-card .ink-catchup-days {
+  padding: 0;
+}
+.ink-phase-card .ink-catchup-days button {
+  min-width: 2.6em;
+  min-height: 40px;
+  color: #f3eeff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(196, 181, 253, 0.45);
+}
+.ink-phase-card .ink-catchup-days button:hover {
+  background: rgba(196, 181, 253, 0.3);
+}
+.ink-phase-card .ink-catchup-days button[aria-current="true"] {
+  background: #c4b5fd;
+  color: #241442;
+  border-color: #c4b5fd;
+}
+
 .ink-live {
   margin-top: 16px;
 }

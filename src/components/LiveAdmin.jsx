@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-const KEY_STORAGE = "drawesome:adminkey:v1";
+import AdminLogin from "./AdminLogin";
+import { adminLogout, getAdminToken } from "../utils/adminAuth";
 
 function formatUptime(s) {
   if (s < 60) return `${s}s`;
@@ -93,6 +94,48 @@ function TrendBars({ rows, nowHour, hours = 48, field = "joins", label, height =
       </span>
     </div>
   );
+}
+
+// ---- Presence windows -------------------------------------------------------
+// /api/admin/presence returns live state plus four windows (server/presence.js):
+// distinct devices / painters / watchers and minute-bucketed event totals, each
+// with a re-binned series [views, arrivals, joins, strokes, chats, peakOnline].
+const WINDOWS = [
+  { id: "live", label: "Right now" },
+  { id: "m30", label: "Last 30 min" },
+  { id: "h4", label: "Last 4 hours" },
+  { id: "today", label: "Today so far" },
+];
+const P_FIELD = { views: 0, arrivals: 1, joins: 2, strokes: 3, chats: 4, peak: 5 };
+function PresenceBars({ win, field, label, height = 30, tone }) {
+  const rows = win?.series?.rows || [];
+  const values = rows.map((r) => Number(r[P_FIELD[field]]) || 0);
+  const max = Math.max(1, ...values);
+  const isPeak = field === "peak";
+  const total = isPeak ? Math.max(0, ...values) : values.reduce((a, b) => a + b, 0);
+  const stepMin = Math.max(1, Math.round((win?.series?.stepMs || 60000) / 60000));
+  return (
+    <div
+      className={`admin-trend${tone ? ` is-${tone}` : ""}`}
+      title={`${label}: ${isPeak ? `high-water mark ${total}` : `${total.toLocaleString()} in this window`} · one bar = ${stepMin} min`}
+    >
+      <svg viewBox={`0 0 ${Math.max(1, values.length) * 3} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+        {values.map((v, i) => (
+          <rect key={i} x={i * 3} y={height - (v / max) * height} width={2.2} height={(v / max) * height} />
+        ))}
+      </svg>
+      <span className="admin-trend-label">
+        {label} · {isPeak ? `peak ${total}` : total.toLocaleString()} · {stepMin}m bars
+      </span>
+    </div>
+  );
+}
+// Midnight in the admin's own timezone, so "today so far" means their day,
+// not the server's UTC day (the daily table below is UTC, and says so).
+function localMidnight() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
 }
 
 // The room's latest baked thumbnail (see sweepRoomThumbs in server.js). It is
@@ -189,22 +232,16 @@ function EvidenceNote({ ev }) {
 }
 
 export default function LiveAdmin({ onNavigate }) {
-  const [adminKey, setAdminKey] = useState(() => {
-    try {
-      return localStorage.getItem(KEY_STORAGE) || "";
-    } catch {
-      return "";
-    }
-  });
+  const [adminKey, setAdminKey] = useState(() => getAdminToken());
   const [authed, setAuthed] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [error, setError] = useState("");
   const [rooms, setRooms] = useState([]);
   const [reports, setReports] = useState([]);
   const [sheets, setSheets] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [billing, setBilling] = useState(null);
+  const [presence, setPresence] = useState(null);
+  const [windowId, setWindowId] = useState("live");
   const [page, setPage] = useState("overview");
   const [uploading, setUploading] = useState(false);
   // Cross-room chat feed (policing): newest lines of every room's audit log.
@@ -230,15 +267,16 @@ export default function LiveAdmin({ onNavigate }) {
     if (!adminKey) return;
     try {
       const chatUrl = `/api/admin/chat?limit=300&room=${encodeURIComponent(chatRoom)}&q=${encodeURIComponent(chatQuery)}&blocked=${chatBlockedOnly ? 1 : 0}`;
-      const [r1, r2, r3, r4, r5, r6] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
         fetch(bust("/api/admin/rooms"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/reports"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/analytics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/metrics"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust("/api/admin/billing"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust(chatUrl), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
+        fetch(bust(`/api/admin/presence?todayStart=${localMidnight()}`), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
-      if ([r1, r2, r3, r4, r5, r6].some((response) => response.status === 401)) {
+      if ([r1, r2, r3, r4, r5, r6, r7].some((response) => response.status === 401)) {
         setAuthed(false);
         return;
       }
@@ -248,14 +286,18 @@ export default function LiveAdmin({ onNavigate }) {
       const d4 = r4.ok ? await r4.json() : null;
       const d5 = r5.ok ? await r5.json() : null;
       const d6 = r6.ok ? await r6.json() : null;
+      const d7 = r7.ok ? await r7.json() : null;
       setRooms(Array.isArray(d1.rooms) ? d1.rooms : []);
       setReports(Array.isArray(d2.reports) ? d2.reports : []);
       if (d3) setAnalytics(d3);
       if (d4) setMetrics(d4);
       if (d5) setBilling(d5);
       if (d6) setChatFeed({ chat: Array.isArray(d6.chat) ? d6.chat : [], rooms: Array.isArray(d6.rooms) ? d6.rooms : [], blocked24h: Number(d6.blocked24h) || 0, total: Number(d6.total) || 0 });
+      if (d7 && d7.now && d7.windows) setPresence(d7);
       setAuthed(true);
-      const s = await fetch(bust("/api/sheets"), { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      // The admin header keeps this console's own polling out of the visitor
+      // counts (server-side presence skips requests that carry the key).
+      const s = await fetch(bust("/api/sheets"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }).then((r) => r.json()).catch(() => null);
       if (s) setSheets(Array.isArray(s.sheets) ? s.sheets : []);
     } catch {
       // leave as-is on a transient error
@@ -313,32 +355,16 @@ export default function LiveAdmin({ onNavigate }) {
     return () => window.clearInterval(timer);
   }, [authed, refresh]);
 
-  const login = async () => {
-    const key = keyInput.trim();
-    if (!key) return;
-    if (await checkKey(key)) {
-      try {
-        localStorage.setItem(KEY_STORAGE, key);
-      } catch {
-        // ephemeral if storage blocked
-      }
-      setAdminKey(key);
-      setAuthed(true);
-      setError("");
-    } else {
-      setError("That key didn't work. Double-check it and try again.");
-    }
+  // Sign-in lives in <AdminLogin> (key + authenticator code -> session token).
+  const onAuthed = (token) => {
+    setAdminKey(token);
+    setAuthed(true);
   };
 
   const signOut = () => {
-    try {
-      localStorage.removeItem(KEY_STORAGE);
-    } catch {
-      // ignore
-    }
+    adminLogout(adminKey);
     setAdminKey("");
     setAuthed(false);
-    setKeyInput("");
   };
 
   const clearRoom = async (id) => {
@@ -383,30 +409,7 @@ export default function LiveAdmin({ onNavigate }) {
   const watchRoom = (id) => window.open(`/watch/${id}`, "_blank", "noopener");
 
   if (!authed) {
-    return (
-      <main className="admin-login">
-        <div className="admin-login-card">
-          <h1>🛡️ Drawesome Admin</h1>
-          <p>Enter your admin key to continue.</p>
-          <input
-            type="password"
-            value={keyInput}
-            placeholder="admin key"
-            onChange={(e) => setKeyInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && login()}
-          />
-          {error ? <p className="admin-error">{error}</p> : null}
-          <div className="admin-login-actions">
-            <button type="button" onClick={() => onNavigate("/")}>
-              ← Home
-            </button>
-            <button type="button" className="primary-action" onClick={login}>
-              Unlock
-            </button>
-          </div>
-        </div>
-      </main>
-    );
+    return <AdminLogin onNavigate={onNavigate} onAuthed={onAuthed} />;
   }
 
   const openReports = reports.filter((r) => r.status === "open");
@@ -425,6 +428,10 @@ export default function LiveAdmin({ onNavigate }) {
   const joinsByDay = Object.fromEntries(seriesDayTotals(series.site, "joins", 30));
   const strokesByDay = Object.fromEntries(seriesDayTotals(series.site, "strokes", 30));
   const chatRoomOptions = Array.from(new Set([...(chatFeed.rooms || []), ...rooms.map((r) => r.id)])).sort();
+  // Presence: live headcount + the window the admin picked (falls back to 30m
+  // if the server ever omits one, so the tiles never render undefined).
+  const live = presence?.now || {};
+  const win = presence?.windows?.[windowId] || presence?.windows?.m30 || {};
 
   return (
     <main className="admin-portal">
@@ -472,27 +479,139 @@ export default function LiveAdmin({ onNavigate }) {
 
       {page === "overview" ? (
         <>
+      <section className="admin-section admin-presence">
+        <h2>
+          Who&apos;s on{" "}
+          <span className="admin-muted" style={{ fontSize: "0.8rem" }}>
+            {presence ? `live · updated ${clock(presence.now.at)}` : "loading…"}
+          </span>
+        </h2>
+        <div className="admin-window-tabs" role="tablist" aria-label="Time window">
+          {WINDOWS.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              role="tab"
+              aria-selected={windowId === w.id}
+              className={windowId === w.id ? "is-active" : ""}
+              onClick={() => setWindowId(w.id)}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+        {!presence ? (
+          <p className="admin-empty">Waiting for the first presence snapshot.</p>
+        ) : windowId === "live" ? (
+          <>
+            <div className="metric-grid">
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(live.painters)}</span>
+                <span className="metric-label">Painting now</span>
+                <span className="metric-sub">
+                  {formatCount(live.active)} active · {formatCount(live.idle)} idle (no stroke or chat in 60s)
+                </span>
+              </div>
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(live.spectators)}</span>
+                <span className="metric-label">Watching now</span>
+                <span className="metric-sub">read-only mural viewers</span>
+              </div>
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(live.visitors)}</span>
+                <span className="metric-label">On the site</span>
+                <span className="metric-sub">devices seen in the last 5 min</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(live.sockets)}</span>
+                <span className="metric-label">Open sockets</span>
+                <span className="metric-sub">
+                  {formatCount(live.notifiers)} mention watchers · {formatCount(live.modWatchers)} staff
+                </span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(presence.peakUsers)}</span>
+                <span className="metric-label">Record painters</span>
+                <span className="metric-sub">{presence.peakAt ? `all-time, set ${timeAgo(presence.peakAt)}` : "no traffic yet"}</span>
+              </div>
+            </div>
+            <div className="admin-trend-grid">
+              <PresenceBars win={presence.windows.h4} field="peak" label="Online, last 4h" tone="online" />
+              <PresenceBars win={presence.windows.h4} field="arrivals" label="Visits, last 4h" />
+              <PresenceBars win={presence.windows.h4} field="strokes" label="Strokes, last 4h" />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="metric-grid">
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(win.visitors)}</span>
+                <span className="metric-label">Visitors</span>
+                <span className="metric-sub">distinct devices, any page</span>
+              </div>
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(win.arrivals)}</span>
+                <span className="metric-label">Visits</span>
+                <span className="metric-sub">arrivals, a return after 30 quiet min counts again</span>
+              </div>
+              <div className="metric is-primary">
+                <span className="metric-num">{formatCount(win.painters)}</span>
+                <span className="metric-label">Painted</span>
+                <span className="metric-sub">devices that were in a room</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(win.watchers)}</span>
+                <span className="metric-label">Watched</span>
+                <span className="metric-sub">devices that spectated a mural</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(win.peak)}</span>
+                <span className="metric-label">Peak online</span>
+                <span className="metric-sub">most painters + watchers at once</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(win.views)}</span>
+                <span className="metric-label">Page loads</span>
+                <span className="metric-sub">HTML pages served, bots excluded</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(win.joins)}</span>
+                <span className="metric-label">Room joins</span>
+                <span className="metric-sub">one per room entered</span>
+              </div>
+              <div className="metric">
+                <span className="metric-num">{formatCount(win.strokes)}</span>
+                <span className="metric-label">Strokes</span>
+                <span className="metric-sub">{formatCount(win.chats)} chats</span>
+              </div>
+            </div>
+            <div className="admin-trend-grid">
+              <PresenceBars win={win} field="peak" label="Online" tone="online" />
+              <PresenceBars win={win} field="arrivals" label="Visits" />
+              <PresenceBars win={win} field="views" label="Page loads" />
+              <PresenceBars win={win} field="strokes" label="Strokes" />
+            </div>
+            {windowId === "today" ? (
+              <p className="admin-muted admin-note">
+                Today = since {clock(win.since)} ({presence.windows.today.label === "UTC day" ? "UTC midnight" : "your local midnight"}).
+                The daily table further down uses UTC days, so its &quot;today&quot; row can differ.
+              </p>
+            ) : null}
+          </>
+        )}
+        <p className="admin-muted admin-note">
+          <strong>Painting</strong> is a member socket inside a room. <strong>Watching</strong> is a read-only mural viewer
+          (homepage, /live). <strong>Visitors</strong> counts distinct devices (one per browser + network) that made any request
+          at all, so people reading the Wall or the coloring library are included even though they never open a socket. A
+          tab left open in the background keeps polling, so &quot;on the site&quot; can run a little high; painting and
+          watching never do.
+        </p>
+      </section>
+
       {metrics ? (
         <section className="admin-section">
-          <h2>Live metrics</h2>
-          <div className="metric-grid">
-            <div className="metric">
-              <span className="metric-num">{metrics.users.total}</span>
-              <span className="metric-label">Connected</span>
-              <span className="metric-sub">
-                {metrics.users.active} active · {metrics.users.inactive} idle
-              </span>
-            </div>
-            <div className="metric">
-              <span className="metric-num">{metrics.peakUsers ?? 0}</span>
-              <span className="metric-label">Peak online</span>
-              <span className="metric-sub">{metrics.peakAt ? `record ${timeAgo(metrics.peakAt)}` : "no traffic yet"}</span>
-            </div>
-            <div className="metric">
-              <span className="metric-num">{metrics.rooms}</span>
-              <span className="metric-label">Rooms</span>
-              <span className="metric-sub">{metrics.strokes.toLocaleString()} strokes</span>
-            </div>
+          <h2>Server health</h2>
+          <div className="metric-grid is-compact">
             <div className="metric">
               <span className="metric-num">
                 {metrics.memory.rssMB}
@@ -528,95 +647,22 @@ export default function LiveAdmin({ onNavigate }) {
             <div className="metric">
               <span className="metric-num">{formatUptime(metrics.uptimeSec)}</span>
               <span className="metric-label">Uptime</span>
-              <span className="metric-sub">{metrics.connections} sockets</span>
-            </div>
-            <div className="metric">
-              <span className="metric-num">{metrics.reports.open}</span>
-              <span className="metric-label">Open reports</span>
-              <span className="metric-sub">{metrics.reports.total} total</span>
-            </div>
-            <div className="metric">
-              <span className="metric-num">{metrics.sheets}</span>
-              <span className="metric-label">Sheets</span>
               <span className="metric-sub">Node {metrics.node}</span>
             </div>
-          </div>
-        </section>
-      ) : null}
-
-      <section className="admin-section">
-        <h2>Traffic <span className="admin-muted" style={{ fontSize: "0.8rem" }}>server-side, last 14 days</span></h2>
-        {traffic.length === 0 ? (
-          <p className="admin-empty">No page loads counted yet (this counter started with this deploy).</p>
-        ) : (
-          <div className="admin-traffic">
-            <div className="admin-traffic-row admin-traffic-head">
-              <span>Day</span>
-              <span>Page loads</span>
-              <span>Visitors</span>
-              <span>Room joins</span>
-              <span>Strokes</span>
-              <span>Where they landed</span>
-            </div>
-            {traffic.slice(0, 14).map((day) => (
-              <div key={day.day} className="admin-traffic-row">
-                <span>{day.day}</span>
-                <span>{formatCount(day.views)}</span>
-                <span>{formatCount(day.uniques)}</span>
-                <span>{formatCount(joinsByDay[day.day] || 0)}</span>
-                <span>{formatCount(strokesByDay[day.day] || 0)}</span>
-                <span className="admin-muted">
-                  {Object.entries(day.routes || {})
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([route, n]) => `${route} ${n}`)
-                    .join(" · ") || "-"}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="admin-trend-grid">
-          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="views" label="Page loads" />
-          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="joins" label="Room joins" />
-          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="peak" label="Peak online" />
-        </div>
-        <p className="admin-muted admin-note">
-          Why this won&apos;t match Google Analytics: GA counts only visitors whose browser ran its script (content blockers,
-          Safari and consent settings drop a large share), while these page loads are every HTML page this server sent to a
-          non-bot browser. &quot;Visitors&quot; here is one per device per day, GA&apos;s &quot;users&quot; is per cookie. And the
-          Users tab counts <em>room joins</em>, one per room entered, so one visitor hopping through three rooms is three
-          sessions there, and someone who only reads the homepage or the Wall is none.
-        </p>
-      </section>
-
-      {billing ? (
-        <section className="admin-section">
-          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : billing.mode === "paused" ? "checkout paused" : "check setup"}</span></h2>
-          <div className="metric-grid">
             <div className="metric">
-              <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : billing.mode === "paused" ? "Paused" : "Off"}</span>
-              <span className="metric-label">Checkout</span>
-              <span className="metric-sub">{billing.mode === "misconfigured" ? billing.validationError || "configuration failed" : billing.mode === "disabled" ? "anonymous features unaffected" : billing.mode === "paused" ? "existing billing still works" : "catalog verified"}</span>
+              <span className="metric-num">{formatCount(metrics.rooms)}</span>
+              <span className="metric-label">Rooms in memory</span>
+              <span className="metric-sub">{formatCount(metrics.strokes)} strokes held</span>
             </div>
             <div className="metric">
-              <span className="metric-num">{formatCount(billing.activeFamilies)}</span>
-              <span className="metric-label">Active families</span>
-              <span className="metric-sub">{formatCount(billing.cancelAtPeriodEnd)} ending at period close</span>
+              <span className={`metric-num ${metrics.reports.open ? "is-warn" : ""}`}>{formatCount(metrics.reports.open)}</span>
+              <span className="metric-label">Open reports</span>
+              <span className="metric-sub">{formatCount(metrics.reports.total)} total</span>
             </div>
             <div className="metric">
-              <span className={`metric-num ${billing.needsAttention ? "is-warn" : "is-ok"}`}>{formatCount(billing.needsAttention)}</span>
-              <span className="metric-label">Need attention</span>
-              <span className="metric-sub">past due or otherwise inactive</span>
-            </div>
-            <div className="metric">
-              <span className={`metric-num ${billing.pendingCancellations ? "is-warn" : "is-ok"}`}>{formatCount(billing.pendingCancellations)}</span>
-              <span className="metric-label">Deletion retries</span>
-              <span className="metric-sub">{formatCount(billing.pendingCheckouts)} checkouts in progress</span>
-            </div>
-            <div className="metric">
-              <span className="metric-num">{formatCount(billing.processedEvents)}</span>
-              <span className="metric-label">Webhook events</span>
-              <span className="metric-sub">last {timeAgo(billing.lastStripeEventAt)}</span>
+              <span className="metric-num">{formatCount(metrics.sheets)}</span>
+              <span className="metric-label">Uploaded sheets</span>
+              <span className="metric-sub">admin coloring sheets</span>
             </div>
           </div>
         </section>
@@ -722,6 +768,84 @@ export default function LiveAdmin({ onNavigate }) {
           </div>
         )}
       </section>
+
+      <section className="admin-section">
+        <h2>Daily history <span className="admin-muted" style={{ fontSize: "0.8rem" }}>server-side, UTC days, last 14 days</span></h2>
+        {traffic.length === 0 ? (
+          <p className="admin-empty">No page loads counted yet (this counter started with this deploy).</p>
+        ) : (
+          <div className="admin-traffic">
+            <div className="admin-traffic-row admin-traffic-head">
+              <span>Day</span>
+              <span>Page loads</span>
+              <span>Visitors</span>
+              <span>Room joins</span>
+              <span>Strokes</span>
+              <span>Where they landed</span>
+            </div>
+            {traffic.slice(0, 14).map((day) => (
+              <div key={day.day} className="admin-traffic-row">
+                <span>{day.day}</span>
+                <span>{formatCount(day.views)}</span>
+                <span>{formatCount(day.uniques)}</span>
+                <span>{formatCount(joinsByDay[day.day] || 0)}</span>
+                <span>{formatCount(strokesByDay[day.day] || 0)}</span>
+                <span className="admin-muted">
+                  {Object.entries(day.routes || {})
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([route, n]) => `${route} ${n}`)
+                    .join(" · ") || "-"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="admin-trend-grid">
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="views" label="Page loads" />
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="joins" label="Room joins" />
+          <TrendBars rows={series.site} nowHour={series.hour} hours={168} field="peak" label="Peak online" />
+        </div>
+        <p className="admin-muted admin-note">
+          Why this won&apos;t match Google Analytics: GA counts only visitors whose browser ran its script (content blockers,
+          Safari and consent settings drop a large share), while these page loads are every HTML page this server sent to a
+          non-bot browser. &quot;Visitors&quot; here is one per device per day, GA&apos;s &quot;users&quot; is per cookie. And the
+          Users tab counts <em>room joins</em>, one per room entered, so one visitor hopping through three rooms is three
+          sessions there, and someone who only reads the homepage or the Wall is none.
+        </p>
+      </section>
+
+      {billing ? (
+        <section className="admin-section">
+          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : billing.mode === "paused" ? "checkout paused" : "check setup"}</span></h2>
+          <div className="metric-grid">
+            <div className="metric">
+              <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : billing.mode === "paused" ? "Paused" : "Off"}</span>
+              <span className="metric-label">Checkout</span>
+              <span className="metric-sub">{billing.mode === "misconfigured" ? billing.validationError || "configuration failed" : billing.mode === "disabled" ? "anonymous features unaffected" : billing.mode === "paused" ? "existing billing still works" : "catalog verified"}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{formatCount(billing.activeFamilies)}</span>
+              <span className="metric-label">Active families</span>
+              <span className="metric-sub">{formatCount(billing.cancelAtPeriodEnd)} ending at period close</span>
+            </div>
+            <div className="metric">
+              <span className={`metric-num ${billing.needsAttention ? "is-warn" : "is-ok"}`}>{formatCount(billing.needsAttention)}</span>
+              <span className="metric-label">Need attention</span>
+              <span className="metric-sub">past due or otherwise inactive</span>
+            </div>
+            <div className="metric">
+              <span className={`metric-num ${billing.pendingCancellations ? "is-warn" : "is-ok"}`}>{formatCount(billing.pendingCancellations)}</span>
+              <span className="metric-label">Deletion retries</span>
+              <span className="metric-sub">{formatCount(billing.pendingCheckouts)} checkouts in progress</span>
+            </div>
+            <div className="metric">
+              <span className="metric-num">{formatCount(billing.processedEvents)}</span>
+              <span className="metric-label">Webhook events</span>
+              <span className="metric-sub">last {timeAgo(billing.lastStripeEventAt)}</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
         </>
       ) : null}

@@ -21,7 +21,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
-import { fetchSketchbook, addSketchbookPage, setSketchbookVisibility, startGuestSketchbook } from "../utils/sketchbookApi";
+import { fetchSketchbook, fetchSketchbookByRoom, addSketchbookPage, setSketchbookVisibility, startGuestSketchbook, openSketchbookPrompt } from "../utils/sketchbookApi";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { getDeviceKey, saveGuestSketchbook } from "../utils/guestSketchbook";
 import "../sketchbook.css";
@@ -30,11 +30,14 @@ const LiveRoomCanvas = lazy(() => import("./LiveRoomCanvas"));
 
 export default function SketchbookPage({ bookId, onNavigate }) {
   const [book, setBook] = useState(null);
+  const [guestOwner, setGuestOwner] = useState(false);
   const [status, setStatus] = useState("loading"); // loading | ready | missing | error
   const [selected, setSelected] = useState(0); // index into book.pages
   const [session, setSession] = useState(undefined);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showDayPicker, setShowDayPicker] = useState(false); // owner catch-up picker
+  const [prompts, setPrompts] = useState([]); // official list (lazy)
   const toastTimer = useRef(null);
   const seqRef = useRef(0);
 
@@ -54,12 +57,18 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   const load = useCallback(async (sess) => {
     const seq = (seqRef.current += 1);
     setStatus("loading");
+    setGuestOwner(false);
     const r = await fetchSketchbook(bookId, sess || null);
     if (seq !== seqRef.current) return;
     // 404 is deliberately ambiguous: the book is missing, OR it is private
     // and the caller isn't on the team. The denial card covers both.
     if (r.status === 404) { setBook(null); setStatus("missing"); return; }
     if (!r.ok || !r.json?.book) { setBook(null); setStatus("error"); return; }
+    if (r.json.book.unsaved && r.json.book.pages?.[0]) {
+      const identity = await fetchSketchbookByRoom(r.json.book.pages[0].room, sess || null, getDeviceKey());
+      if (seq !== seqRef.current) return;
+      setGuestOwner(identity.ok && identity.json?.bookId === bookId && identity.json?.isGuestOwner === true);
+    }
     setBook(r.json.book);
     setStatus("ready");
     setSelected((cur) => {
@@ -83,6 +92,18 @@ export default function SketchbookPage({ bookId, onNavigate }) {
     setSelected(lastDrawn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, book?.id]);
+
+  // The official prompt list for the owner's catch-up picker, loaded lazily
+  // the first time the picker opens (server truth, never the bundled copy).
+  useEffect(() => {
+    if (!showDayPicker || prompts.length) return undefined;
+    let active = true;
+    fetch("/api/inktober", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (active && Array.isArray(d?.prompts)) setPrompts(d.prompts); })
+      .catch(() => { /* the picker shows its loading note; the studio banner still works */ });
+    return () => { active = false; };
+  }, [showDayPicker, prompts.length]);
 
   if (status === "loading" || session === undefined) {
     return (
@@ -136,6 +157,7 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   const pages = book.pages || [];
   const page = pages[selected] || null;
   const isOwner = book.owner === true;
+  const canManagePages = isOwner || guestOwner;
   const isPublic = book.public === true;
   // An UNSAVED (guest) book: no owner exists yet, so owner controls never
   // show. The notice explains what "not saved" means without ever implying
@@ -147,12 +169,12 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   const startOwnGuestBook = async () => {
     if (busy) return;
     const device = getDeviceKey();
-    if (!device) {
+    if (!session && !device) {
       say("This browser blocks local storage, so we can't keep a sketchbook here.");
       return;
     }
     setBusy(true);
-    const r = await startGuestSketchbook({ device });
+    const r = await openSketchbookPrompt({ session, device });
     setBusy(false);
     if (!r.ok || !r.json?.room) {
       say(r.error === "need_day"
@@ -160,14 +182,16 @@ export default function SketchbookPage({ bookId, onNavigate }) {
         : "Couldn't start your sketchbook just now. Try again in a moment.");
       return;
     }
-    saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token }); // the one-time save token exists only in THIS reply
+    if (!session) saveGuestSketchbook({ bookId: r.json.bookId, token: r.json.token });
     onNavigate(`/join/${r.json.room}`);
   };
 
   const addTodayPage = async () => {
     if (busy) return;
     setBusy(true);
-    const r = await addSketchbookPage(book.id, null, session);
+    const r = guestOwner
+      ? await startGuestSketchbook({ device: getDeviceKey(), day: null })
+      : await addSketchbookPage(book.id, null, session);
     setBusy(false);
     if (!r.ok) {
       say(r.json?.message || "Couldn't add a page, pick a day in your studio banner instead.");
@@ -175,6 +199,24 @@ export default function SketchbookPage({ bookId, onNavigate }) {
     }
     await load(session);
     say(r.json?.resumed ? "That page already exists." : "Page added!");
+  };
+
+  // Catch-up: the owner adds a page for ANY official day (one they missed)
+  // and lands straight in its studio. The server stamps the prompt.
+  const addDayPage = async (day) => {
+    if (busy || !day) return;
+    setBusy(true);
+    const r = guestOwner
+      ? await startGuestSketchbook({ device: getDeviceKey(), day })
+      : await addSketchbookPage(book.id, day, session);
+    setBusy(false);
+    if (!r.ok) {
+      say(r.json?.message || "Couldn't add that page, try again.");
+      return;
+    }
+    const room = r.json?.page?.room;
+    if (room) { onNavigate(`/join/${room}`); return; }
+    await load(session);
   };
 
   // Owner visibility toggle. Going PUBLIC needs an explicit confirm (the
@@ -320,8 +362,19 @@ export default function SketchbookPage({ bookId, onNavigate }) {
             <button type="button" className="ink-join-btn" onClick={() => onNavigate("/sketchbook")}>
               Start your own sketchbook →
             </button>
-            {isOwner && book.pageCount < book.maxPages ? (
-              <button type="button" disabled={busy} onClick={addTodayPage}>+ Add today&rsquo;s page</button>
+            {canManagePages && book.pageCount < book.maxPages ? (
+              <>
+                <button type="button" disabled={busy} onClick={addTodayPage}>+ Add today&rsquo;s page</button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-expanded={showDayPicker}
+                  onClick={() => setShowDayPicker((v) => !v)}
+                  title="Add a page for a day you missed"
+                >
+                  📅 Catch up on a day…
+                </button>
+              </>
             ) : null}
             {isOwner ? (
               <button
@@ -336,6 +389,29 @@ export default function SketchbookPage({ bookId, onNavigate }) {
               </button>
             ) : null}
           </div>
+
+          {canManagePages && showDayPicker ? (
+            <div className="skb-days skb-days-catchup" role="list" aria-label="Add a page for a prompt day">
+              {prompts.length === 0 ? (
+                <span className="skb-reader-meta">Loading the prompt list…</span>
+              ) : prompts.map((p) => {
+                const existing = pages.findIndex((pg) => pg.day === p.day);
+                return (
+                  <button
+                    type="button"
+                    key={p.day}
+                    role="listitem"
+                    disabled={busy}
+                    className={existing >= 0 ? "skb-day-has-page" : ""}
+                    title={`Day ${p.day}, ${p.prompt}${existing >= 0 ? " (page exists, opens it)" : " (adds a page)"}`}
+                    onClick={() => (existing >= 0 ? setSelected(existing) : addDayPage(p.day))}
+                  >
+                    {existing >= 0 ? <span className="skb-day-dot" aria-label="has a page">●</span> : null} {p.day}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </>
       ) : (
         <div className="skb-reader-empty">

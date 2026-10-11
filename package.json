@@ -18,8 +18,8 @@
     "express": "^5.2.1",
     "mp4-muxer": "^5.2.2",
     "nsfwjs": "^4.3.0",
-    "pocketbase": "^0.27.0",
     "playwright-core": "1.61.1",
+    "pocketbase": "^0.27.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "stripe": "^22.6.1",
@@ -36,6 +36,7 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
     "playwright": "^1.61.1",
+    "qrcode": "^1.5.4",
     "sharp": "^0.35.4",
     "vite": "^8.0.16"
   }

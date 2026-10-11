@@ -22,6 +22,8 @@ import { promises as dnsPromises } from 'dns';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { buildGzippedHistoryFrame } from './server/historyFrame.js';
 import { createCatchup } from './server/catchup.js';
+import { createPresence, KIND_PAGE, KIND_PAINT, KIND_WATCH, F_VIEWS, F_JOINS, F_STROKES, F_CHATS } from './server/presence.js';
+import { createAdminAuth } from './server/adminAuth.js';
 import { createCheckpointService } from './server/checkpoints.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
@@ -291,6 +293,26 @@ app.use((_req, res, next) => {
   res.set('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
   next();
 });
+
+// ---- Site presence (who is on the site, now / 30m / 4h / today) -----------
+// Every browser GET from a non-bot, non-admin client marks its device as seen
+// (server/presence.js). This is what lets /admin count people reading the
+// homepage, the Wall or the coloring library, who never open a socket. Hashed
+// device key only (ip|ua), same privacy level as the daily traffic uniques.
+const presence = createPresence({ dataDir: DATA_DIR });
+const PRESENCE_SKIP_PATH = /^\/(?:api\/admin|admin|watch|healthz|coloring-sheets\/|assets\/|robots\.txt|sitemap\.xml)/;
+const PRESENCE_SKIP_FILE = /\.(?:m?js|css|map|json|webmanifest|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf|wasm|mp[34]|webm|wav)$/i;
+app.use((req, _res, next) => {
+  if (req.get('x-admin-key')) {
+    // A valid key marks this device as staff: the console's own polling and
+    // the moderator's browsing are then left out of every visitor count.
+    if (isAdmin(req)) presence.markStaff(presence.hash(clientIp(req), String(req.get('user-agent') || '')));
+  } else if (req.method === 'GET' && !PRESENCE_SKIP_PATH.test(req.path) && !PRESENCE_SKIP_FILE.test(req.path)) {
+    const ua = String(req.get('user-agent') || '');
+    if (ua && !BOT_UA.test(ua)) presence.mark(presence.hash(clientIp(req), ua), KIND_PAGE);
+  }
+  next();
+});
 let shuttingDown = false;
 let shutdownPersistenceFailed = false;
 // Existing requests finish normally; keep-alive clients must retry new work on
@@ -512,6 +534,26 @@ function connectedUserTotal() {
   rooms.forEach((room) => { n += room.users.size; });
   return n;
 }
+// Painters + read-only spectators: everyone with a live window onto a room.
+function onlineTotal() {
+  let n = 0;
+  rooms.forEach((room) => { n += room.users.size + (room.spectators ? room.spectators.size : 0); });
+  return n;
+}
+// Every 30s, keep long-lived sockets "seen" in the presence windows (a kid who
+// has painted for two hours straight is still on the site) and record the
+// minute's concurrent high-water mark even when nobody joins or leaves.
+function sweepPresence() {
+  wss.clients.forEach((ws) => {
+    if (!ws.visitorHash || ws.readyState !== 1) return;
+    if (ws.isSpectator) presence.mark(ws.visitorHash, KIND_WATCH);
+    else if (ws.userId) presence.mark(ws.visitorHash, KIND_PAINT);
+    else if (ws.isNotifier) presence.mark(ws.visitorHash, KIND_PAGE);
+  });
+  presence.notePeak(onlineTotal());
+}
+const presenceSweep = setInterval(sweepPresence, 30_000);
+if (presenceSweep.unref) presenceSweep.unref();
 function trimSeries() {
   const oldest = Math.floor(Date.now() / HOUR_MS) - SERIES_HOURS;
   const prune = (bag) => { for (const key of Object.keys(bag)) if (Number(key) < oldest) delete bag[key]; };
@@ -590,6 +632,7 @@ function recordPageView(req) {
     if (seen.size <= UNIQUE_SET_CAP) analytics.uniqueHashes[day] = [...seen];
   }
   seriesBump(null, SERIES_VIEWS, 1);
+  presence.count(F_VIEWS);
   scheduleAnalyticsPersist();
 }
 function trimTraffic() {
@@ -823,6 +866,8 @@ function analyticsStartSession(roomId, user, req) {
   else analytics.totals.anonymousSessions += 1;
   if (country) bumpBag(analytics.countries, country);
   seriesBump(roomId, SERIES_JOINS, 1, Math.max(1, rooms.get(roomId)?.users.size || 0), Math.max(1, connectedUserTotal()));
+  presence.count(F_JOINS);
+  presence.notePeak(onlineTotal());
 
   const userRecord = ensureAnalyticsUser(user);
   userRecord.sessions += 1;
@@ -930,6 +975,7 @@ function analyticsRecordDraw(roomId, user, op) {
     bumpBag(session.brushes, brush);
     analytics.totals.strokes += 1;
     seriesBump(roomId, SERIES_STROKES, 1);
+    presence.count(F_STROKES);
     bumpBag(analytics.brushes, brush);
     roomRecord.strokes += 1;
     bumpBag(roomRecord.brushes, brush);
@@ -951,6 +997,7 @@ function analyticsRecordChat(roomId, user) {
   analytics.totals.chats += 1;
   roomRecord.chats += 1;
   seriesBump(roomId, SERIES_CHATS, 1);
+  presence.count(F_CHATS);
   if (userRecord) {
     userRecord.chats += 1;
     userRecord.lastSeen = session.lastSeen;
@@ -4334,6 +4381,9 @@ wss.on('connection', async (ws, req) => {
     ws.close(1008, 'bad room');
     return;
   }
+  // Presence key for this socket (server/presence.js): the device behind it,
+  // never the person. Marked on join/spectate and re-marked by sweepPresence.
+  ws.visitorHash = presence.hash(rawClientIp(req), req.headers['user-agent'] || '');
   // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
   // everything else, old builds, the test harness by default, gets text.
   ws.acceptsGzip = url.searchParams.get('gz') === '1';
@@ -4389,6 +4439,7 @@ wss.on('connection', async (ws, req) => {
     });
     ws.on('close', unwatchAll);
     ws.on('error', unwatchAll);
+    presence.mark(ws.visitorHash, KIND_PAGE);
     ws.send(JSON.stringify({ type: 'notify_ready' }));
     return;
   }
@@ -4450,6 +4501,8 @@ wss.on('connection', async (ws, req) => {
     live.spectators.add(ws);
     ws.isSpectator = true;
     ws.roomId = roomId;
+    presence.mark(ws.visitorHash, KIND_WATCH);
+    presence.notePeak(onlineTotal());
     ws.send(JSON.stringify({
       type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
       roomId, spectator: true, locked: !!live.locked, roomTitle: live.title || null, audience: live.audience,
@@ -4501,6 +4554,8 @@ wss.on('connection', async (ws, req) => {
   // lands in proxy/CDN access logs and browser history, the same leak class the
   // HTTP admin guard avoids by taking a header.
   if (url.searchParams.get('modwatch') === '1') {
+    ws.isModWatch = true; // staff glass-room socket: never counted as a visitor
+    presence.markStaff(ws.visitorHash);
     let watched = null; // the live room, once the key has checked out
     const deny = (reason) => {
       try {
@@ -4525,7 +4580,7 @@ wss.on('connection', async (ws, req) => {
         if (data.type !== 'mod_auth') return;
         // The key is short, so guessing has to cost something even over a socket.
         if (!rateOk(`modauth:${rawClientIp(req)}`, 8, 60_000)) return deny('rate_limited');
-        if (typeof data.key !== 'string' || !adminKeyMatches(data.key)) return deny('bad_key');
+        if (typeof data.key !== 'string' || !adminCredentialValid(data.key)) return deny('bad_key');
         // Watch rooms that EXIST: a probe must never lazily materialize one. The
         // key has already checked out here, so a DORMANT room (saved on disk, not
         // in memory, every private room after a restart) is loaded for the
@@ -4889,6 +4944,7 @@ wss.on('connection', async (ws, req) => {
     if (pageBook && isGuestBook(pageBook)) user.canPaint = guestOwnsBook(pageBook, deviceKey);
   }
   notePeak();
+  presence.mark(ws.visitorHash, KIND_PAINT);
   analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
   ws.userId = id;
@@ -7869,10 +7925,21 @@ function adminKeyMatches(key) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Two-factor admin sessions (server/adminAuth.js). Once .admin-totp.json is
+// enrolled, the raw key alone opens nothing: the console signs in with key +
+// authenticator code and carries the issued session token in x-admin-key.
+// Unenrolled (dev checkout, test harness) keeps accepting the raw key.
+const adminAuth = createAdminAuth({ dataDir: DATA_DIR });
+function adminCredentialValid(value) {
+  if (!value || typeof value !== 'string') return false;
+  if (adminAuth.sessionValid(value)) return true;
+  return !adminAuth.enrolled() && adminKeyMatches(value);
+}
+
 function isAdmin(req) {
   // Header only, never a query param, which would land the key in proxy/CDN
   // access logs and browser history (same leak class as tokens in WS URLs).
-  return adminKeyMatches(req.get('x-admin-key'));
+  return adminCredentialValid(req.get('x-admin-key'));
 }
 function adminGuard(req, res) {
   res.set('Cache-Control', 'no-store');
@@ -8111,9 +8178,46 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, sketchbooksScrubbed, evidenceScrubbed });
 });
 
+// Public: does signing in need an authenticator code? (Reveals only that 2FA
+// is on, which an attacker learns from the login form anyway.)
+app.get('/api/admin/auth-mode', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const s = adminAuth.status();
+  res.json({ totp: s.totp, sessionHours: s.sessionHours });
+});
+
+// Key + code -> session token. Rate limited per IP: six tries per quarter
+// hour, which makes guessing a 6-digit code (1 in 10^6 per try, codes rotate
+// every 30s) a non-starter while leaving room for a fat-fingered admin.
+app.post('/api/admin/login', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`adminlogin:${clientIp(req)}`, 6, 15 * 60_000)) {
+    res.status(429).json({ error: 'rate_limited' });
+    return;
+  }
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const result = adminAuth.login({
+    key: typeof body.key === 'string' ? body.key.trim() : '',
+    code: typeof body.code === 'string' ? body.code : '',
+    keyMatches: adminKeyMatches,
+  });
+  if (!result.ok) {
+    res.status(401).json({ error: result.reason });
+    return;
+  }
+  res.json({ token: result.token, expiresAt: result.expiresAt, method: result.method, recoveryLeft: result.recoveryLeft ?? null });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  adminAuth.revoke(req.get('x-admin-key'));
+  res.json({ ok: true });
+});
+
 app.get('/api/admin/check', (req, res) => {
   if (!adminGuard(req, res)) return;
-  res.json({ ok: true });
+  const session = adminAuth.sessionValid(req.get('x-admin-key'));
+  res.json({ ok: true, totp: adminAuth.enrolled(), expiresAt: session ? session.expiresAt : null });
 });
 
 app.get('/api/admin/billing', async (req, res) => {
@@ -11582,6 +11686,69 @@ function dropRoomChatDoodles(room) {
 
 // ---- Live metrics (admin) -------------------------------------------------
 const serverStart = Date.now();
+// What is happening on the site this instant, from live server state. Painters
+// are member sockets inside rooms (active = drew/moved/chatted in the last
+// minute), spectators are read-only viewers, notifiers are idle mention
+// watchers, and `visitors` is distinct devices seen in the last 5 minutes by
+// any request at all (homepage, Wall, coloring library, API polls, sockets).
+function liveHeadcount() {
+  const now = Date.now();
+  const ACTIVE_MS = 60000;
+  let painters = 0;
+  let active = 0;
+  let spectators = 0;
+  let notifiers = 0;
+  let modWatchers = 0;
+  rooms.forEach((room) => {
+    room.users.forEach((u) => {
+      painters += 1;
+      if (now - (u.lastActivity || 0) < ACTIVE_MS) active += 1;
+    });
+    spectators += room.spectators ? room.spectators.size : 0;
+  });
+  wss.clients.forEach((ws) => {
+    if (ws.isNotifier) notifiers += 1;
+    else if (ws.isModWatch) modWatchers += 1;
+  });
+  const seen = presence.visitorsSince(now - 5 * 60000);
+  return {
+    at: now,
+    painters,
+    active,
+    idle: painters - active,
+    spectators,
+    notifiers,
+    modWatchers,
+    sockets: wss.clients.size,
+    visitors: seen.visitors,
+  };
+}
+
+// Presence windows for the admin Overview: right now (live state), plus
+// distinct visitors / painters / watchers and event totals for the last 30
+// minutes, 4 hours and "today so far". `today` is the admin's LOCAL midnight,
+// sent as ?todayStart=<ms> (falls back to the UTC day), clamped to the 36h we
+// retain. Each window carries a re-binned sparkline series.
+app.get('/api/admin/presence', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const now = Date.now();
+  const requested = Number(req.query.todayStart);
+  const utcMidnight = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const todayStart = Number.isFinite(requested) && requested > now - 36 * 3600000 && requested <= now ? requested : utcMidnight;
+  res.json({
+    now: liveHeadcount(),
+    peakUsers,
+    peakAt,
+    windows: {
+      live: presence.window(now - 5 * 60000, 5, now),
+      m30: presence.window(now - 30 * 60000, 30, now),
+      h4: presence.window(now - 4 * 3600000, 48, now),
+      today: { ...presence.window(todayStart, 48, now), label: todayStart === utcMidnight && requested !== utcMidnight ? 'UTC day' : 'local day' },
+    },
+    store: presence.stats(),
+  });
+});
+
 app.get('/api/admin/metrics', (req, res) => {
   if (!adminGuard(req, res)) return;
   const now = Date.now();
@@ -11752,7 +11919,26 @@ app.post('/api/admin/sheet-theme', (req, res) => {
 });
 
 // ---- Static host ----------------------------------------------------------
-app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
+// Public liveness probe (docker healthcheck, the hp* monitors on the host).
+// `online` is an aggregate headcount with no identities: painters inside
+// rooms, read-only spectators, open sockets, and distinct devices that made
+// any request in the last 5 minutes. This replaces guessing from the public
+// lobby list, which only ever saw listed kid-safe rooms.
+app.get('/healthz', (_req, res) => {
+  const live = liveHeadcount();
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    rooms: rooms.size,
+    online: {
+      painting: live.painters,
+      active: live.active,
+      watching: live.spectators,
+      sockets: live.sockets,
+      visitors5m: live.visitors,
+    },
+  });
+});
 
 // ---- Route-aware <head> (the SPA's "linker pass") -------------------------
 // The built shell is one HTML file, but the tags that matter to crawlers and
@@ -12097,6 +12283,8 @@ async function shutdown() {
     analyticsPersistTimer = null;
     persistAnalyticsNow();
     persistPeak();
+    presence.persistNow(); // keep "today so far" across a deploy
+    adminAuth.persistNow(); // admin sessions outlive the restart too
     if (shutdownPersistenceFailed) throw new Error('A room save failed during shutdown.');
     clearTimeout(deadline);
     process.exit(0);
