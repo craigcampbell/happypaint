@@ -69,6 +69,26 @@ Code rollback (do NOT restore the data backup):
 The next rebuild would roll forward again unless the source is also deliberately
 reverted. Evidence: /home/craig/.hermes/cache/scratch/drawesome-discovery-release/.
 
+## Integration-review follow-up
+
+Application commit 9f1aa657fa8968fe648e1536069808864afd1a52 is now live.
+Image: sha256:5da969322a3ead928c8bf62a0cf2b1212739ba67dbe6662f3c2bc4809c064aea.
+Server SHA-256: a16113aeeb4c44b3d7f127eb1a9127eef497dc5de471bf99a59de08a04516d37.
+
+Legacy studio settings now preserve non-Inktober event associations. Shared-studio
+publication uses event-aware consent and server-authoritative event receipts.
+Retraction retries the original anonymous device capability after account sign-in,
+without permitting account-key spoofing. Artwork detail pages also expose the
+ownership-checked withdrawal action; Inktober receipts were already present.
+
+Lint/build, backend integration and both browser suites passed again. Two receipt
+regression tests passed. Live health, server hash, all 50 public asset byte matches,
+unchanged database/tunnel and preservation of the original sitemap were verified.
+Backup: /home/craig/Backups/drawesome/discovery-followup-9f1aa65.
+Rollback to the initial discovery release by tagging
+`happypaint-app:pre-discovery-followup-9f1aa65` as `happypaint-app:latest`, then
+running the same app-only no-build recreate command above. Do not restore data.
+
 ## Scope remaining
 
 Invitations are curated in src/data/communityEvents.js, not auto-discovered trends.
