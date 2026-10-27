@@ -112,6 +112,8 @@ try {
   });
   await check('sensitive Wall spotlight and feed have no hearts, remix, competitive sorting', async () => {
     await goto('/wall/wp_qa_fixture_tribute'); await page.locator('.wall-spotlight .wall-card').waitFor();
+    await page.getByRole('heading', { name: 'Manage your drawing' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Unpublish my drawing' }).count(), 1);
     assert.equal(await page.locator('.wall-spotlight .wall-heart, .wall-spotlight .wall-remix-btn, .wall-sorts').count(), 0);
     for (const card of await page.locator('.wall-card').all()) if ((await card.innerText()).includes(tribute.title)) assert.equal(await card.locator('.wall-heart, .wall-remix-btn').count(), 0);
   });

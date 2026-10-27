@@ -12,6 +12,7 @@ import SiteNav from "./SiteNav";
 import { getSession } from "../utils/auth";
 import { getCommunityEvent } from "../data/communityEvents";
 import { DiscoveryLink } from "./DiscoveryPage";
+import EventSharingReceipt from "./EventSharingReceipt";
 
 // Same device key the studio uses for saves, hearts stick per device, and
 // sign-in upgrades them to the account key server-side via the bearer token.
@@ -334,6 +335,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
             </button>
           </section>
         ) : null}
+        {initialPostId ? <EventSharingReceipt key={initialPostId} postId={initialPostId} onRemoved={(id) => { setSpotlight(null); setSpotlightMissing(true); setPosts((items) => items.filter((post) => post.id !== id)); }} /> : null}
         {spotlightMissing ? (
           <p className="wall-status">That drawing isn&rsquo;t on the wall anymore, but look at everything else! 👇</p>
         ) : null}

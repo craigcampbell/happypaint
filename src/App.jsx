@@ -13598,7 +13598,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           draft={wallPostDraft}
           defaultArtist={nameDraft || mp.self?.name || ""}
           room={initialLocal ? null : roomId}
-          eventId={drawingEvent?.id || ""}
+          eventId={drawingEvent?.id || mp.roomProfile?.event?.id || seasonalEvent?.id || (seasonalEvent?.room === "INKTOBER" ? "inktober-2026" : "")}
           remixSource={drawingEvent?.sensitive ? null : remixSource}
           onClose={() => setWallPostDraft(null)}
           onPosted={({ id, event }) => {

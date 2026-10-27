@@ -131,7 +131,7 @@ try {
   assert.equal((await api('/api/rooms/gallery?event=draw-for-rhoam')).data.total, 0);
   assert.equal((await api(`/api/rooms/${code}/publish`, { event: 'little-joys' }, 'other_token')).status, 403);
   assert.equal((await api(`/api/rooms/${code}/publish`, { event: 'unknown' }, 'owner_token')).status, 400);
-  const published = await api(`/api/rooms/${code}/publish`, {}, 'owner_token');
+  const published = await api(`/api/rooms/${code}/publish`, { inktober: false }, 'owner_token');
   assert.equal(published.data.event, 'draw-for-rhoam');
   assert.equal((await api('/api/rooms/gallery?event=draw-for-rhoam')).data.rooms[0].code, code);
   await sleep(2800); // room metadata write-behind

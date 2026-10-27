@@ -3,9 +3,9 @@ import { getSession } from "../utils/auth";
 
 // The same receipt works for seasonal and ongoing invitations. Ownership is
 // checked by the server; a URL parameter alone never authorizes withdrawal.
-export default function EventSharingReceipt({ onRemoved }) {
+export default function EventSharingReceipt({ onRemoved, postId = "" }) {
   const [id, setId] = useState(() => {
-    const value = new URLSearchParams(window.location.search).get("post") || "";
+    const value = postId || new URLSearchParams(window.location.search).get("post") || "";
     return /^wp_[A-Za-z0-9_-]{1,60}$/.test(value) ? value : "";
   });
   const [message, setMessage] = useState("");
@@ -19,7 +19,11 @@ export default function EventSharingReceipt({ onRemoved }) {
       try { userKey = localStorage.getItem("drawesome:userkey:v1") || ""; } catch { /* unavailable */ }
       const headers = { "Content-Type": "application/json" };
       if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
-      const response = await fetch(`/api/wall/${encodeURIComponent(id)}/unpublish`, { method: "POST", headers, body: JSON.stringify({ userKey }) });
+      let response = await fetch(`/api/wall/${encodeURIComponent(id)}/unpublish`, { method: "POST", headers, body: JSON.stringify({ userKey }) });
+      // Later sign-in does not transfer anonymous posts to the account.
+      if ([401, 403].includes(response.status) && session?.access_token && userKey && !userKey.startsWith("pb_")) {
+        response = await fetch(`/api/wall/${encodeURIComponent(id)}/unpublish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userKey }) });
+      }
       if (!response.ok) throw new Error("owner_required");
       const verify = await fetch(`/api/wall/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (verify.status !== 404) throw new Error("not_verified");
@@ -28,5 +32,5 @@ export default function EventSharingReceipt({ onRemoved }) {
     } catch { setMessage("We couldn’t confirm removal. Use the same device or account that shared this drawing and try again."); }
     finally { setBusy(false); }
   };
-  return <>{id ? <section className="discovery-receipt" aria-labelledby="receipt-title"><h2 id="receipt-title">Your sharing receipt</h2><p>This link was returned after sharing. Open it to see the public drawing.</p><a href={`/wall/${encodeURIComponent(id)}`}>View shared drawing →</a><p>Changed your mind? The device or account that shared it can remove it from public discovery.</p><button type="button" disabled={busy} onClick={remove}>{busy ? "Removing…" : "Unpublish my drawing"}</button></section> : null}{message ? <p role="status">{message}</p> : null}</>;
+  return <>{id ? <section className="discovery-receipt" aria-labelledby="receipt-title"><h2 id="receipt-title">{postId ? "Manage your drawing" : "Your sharing receipt"}</h2><p>{postId ? "If you shared this drawing, you can remove it using the original device or account." : "This link was returned after sharing. Open it to see the public drawing."}</p><a href={`/wall/${encodeURIComponent(id)}`}>View shared drawing →</a><p>Changed your mind? The device or account that shared it can remove it from public discovery.</p><button type="button" disabled={busy} onClick={remove}>{busy ? "Removing…" : "Unpublish my drawing"}</button></section> : null}{message ? <p role="status">{message}</p> : null}</>;
 }

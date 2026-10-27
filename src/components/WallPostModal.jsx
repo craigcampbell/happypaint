@@ -76,7 +76,7 @@ export default function WallPostModal({ draft, defaultArtist, room, eventId = ""
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.id) {
-        onPosted({ id: data.id, event: event?.id || null });
+        onPosted({ id: data.id, event: data.event || null });
         return;
       }
       if (data.error === "language") {

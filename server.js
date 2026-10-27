@@ -9667,7 +9667,7 @@ app.post('/api/wall', async (req, res) => {
   writeFileAtomic(wallFramesFile(meta.id), JSON.stringify(frames));
   persistWallMeta(meta);
   wallPosts.set(meta.id, meta);
-  res.json({ ok: true, id: meta.id });
+  res.json({ ok: true, id: meta.id, event: meta.event });
 });
 
 // The voter identity is SERVER-DERIVED: a signed-in account, else the request
@@ -10202,7 +10202,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     return res.status(400).json({ error: 'bad_event' });
   }
   const event = Object.hasOwn(body, 'event') ? body.event
-    : (typeof body.inktober === 'boolean' ? (body.inktober ? INKTOBER_EVENT : null)
+    : (typeof body.inktober === 'boolean' ? (body.inktober ? INKTOBER_EVENT : (gallery.event !== INKTOBER_EVENT ? gallery.event : null))
       : (gallery.event || (room.inktober ? INKTOBER_EVENT : null)));
   let converted = false;
   const fields = validateArtistFields({ title: room.title, description: body.description, tags: body.tags }, scan);
