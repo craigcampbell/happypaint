@@ -9143,8 +9143,8 @@ function deleteWallPost(id) {
 //   unset (bare `node server.js`, a host-level cloudflared) → loopback and
 //       private-range peers only. A request arriving from a public address is
 //       never believed, which is the "someone found the droplet IP" case.
-// If the named host cannot be resolved (the tunnel profile is not running) the
-// private-range rule applies, so a host-level tunnel keeps working.
+// Configured hosts fail closed while DNS is unavailable, including startup.
+// The private-range compatibility rule applies ONLY when no hosts are configured.
 const TRUSTED_PROXY_HOSTS = String(process.env.TRUSTED_PROXY_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
 const TRUSTED_PROXY_REFRESH_MS = 15_000;
 let trustedProxyIps = new Set();
@@ -9180,7 +9180,7 @@ if (TRUSTED_PROXY_HOSTS.length) {
   setInterval(refreshTrustedProxies, TRUSTED_PROXY_REFRESH_MS).unref?.();
 }
 function peerIsTrustedProxy(peer) {
-  if (TRUSTED_PROXY_HOSTS.length && trustedProxyIps.size) {
+  if (TRUSTED_PROXY_HOSTS.length) {
     if (trustedProxyIps.has(peer)) return true;
     // An unknown peer claiming to be the tunnel: it may have just restarted on
     // a new address, look again soon rather than waiting out the timer.
