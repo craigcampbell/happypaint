@@ -33,6 +33,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import "./artist-rooms.css";
+import { COMMUNITY_EVENTS, getCommunityEvent } from "../data/communityEvents";
+import { isCloudConfigured } from "../utils/auth";
+import { DiscoveryLink, DiscoveryTabs } from "./DiscoveryPage";
 
 // Client-side bounds mirror the contract's "plain text, bounded lengths/counts".
 // The server enforces its own limits and moderation; these keep the UI honest
@@ -45,7 +48,7 @@ const GALLERY_LIMITS = {
   pageMax: 60,
 };
 
-const EVENTS = [{ id: "inktober-2026", label: "Inktober 2026" }];
+const EVENTS = COMMUNITY_EVENTS.map((event) => ({ id: event.id, label: event.title }));
 
 // Deep links: /gallery?q=&tag=&event= pre-select the filters (the Inktober
 // page links here with ?event=inktober-2026). Read once at mount; values are
@@ -56,7 +59,7 @@ function readInitialFilters() {
     return {
       q: (p.get("q") || "").slice(0, 80),
       tag: (p.get("tag") || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, GALLERY_LIMITS.tagLength),
-      event: (p.get("event") || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40),
+      event: getCommunityEvent(p.get("event"))?.id || "",
     };
   } catch {
     return { q: "", tag: "", event: "" };
@@ -173,11 +176,11 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
   // ------------------------------ create form -------------------------------
   const token = session?.access_token || null;
   const unverified = Boolean(session) && (session.verified === false || session.user?.verified === false);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(() => new URLSearchParams(window.location.search).get("create") === "1");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tagsInput, setTagsInput] = useState("");
-  const [inktober, setInktober] = useState(false);
+  const [createEvent, setCreateEvent] = useState(initialFilters.event);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
   const [created, setCreated] = useState(null); // { code, title }
@@ -199,7 +202,8 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
           title: title.trim().slice(0, GALLERY_LIMITS.title),
           description: description.trim().slice(0, GALLERY_LIMITS.description),
           tags: parseTags(tagsInput),
-          inktober: Boolean(inktober),
+          event: createEvent || null,
+          inktober: createEvent === "inktober-2026",
         }),
       });
       const payload = await res.json().catch(() => null);
@@ -212,7 +216,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
         setTitle("");
         setDescription("");
         setTagsInput("");
-        setInktober(false);
+        setCreateEvent("");
       } else {
         setCreateError("The server answered but didn't return a room code. Try again.");
       }
@@ -229,9 +233,10 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
 
   return (
     <div className="site-page artist-gallery-page">
-      <SiteNav onNavigate={onNavigate} current="/gallery" />
+      <SiteNav onNavigate={onNavigate} current="/studios" />
       <main className="site-page-body artist-gallery">
         <h1>Artist studios</h1>
+        <DiscoveryTabs onNavigate={onNavigate} active="studios" />
         <p className="site-lead">
           Public studios run by individual artists. Anyone can watch; only the
           artist and the painters they approve can draw.
@@ -370,21 +375,9 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
                       {room.ops > 0 ? ` · ${room.ops} brush strokes` : ""}
                     </p>
                     <div className="ag-card-actions">
-                      <button
-                        type="button"
-                        className="primary-action"
-                        onClick={() => onNavigate(`/join/${room.code}`)}
-                      >
-                        Visit studio →
-                      </button>
+                      <DiscoveryLink className="primary-action" href={`/join/${encodeURIComponent(room.code)}`} onNavigate={onNavigate}>Visit studio →</DiscoveryLink>
                       {room.canWatch ? (
-                        <button
-                          type="button"
-                          className="ag-watch"
-                          onClick={() => onNavigate(`/live/${room.code}`)}
-                        >
-                          Watch live
-                        </button>
+                        <DiscoveryLink className="ag-watch" href={`/live/${encodeURIComponent(room.code)}`} onNavigate={onNavigate}>Watch studio</DiscoveryLink>
                       ) : null}
                     </div>
                   </article>
@@ -407,9 +400,9 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
           <h2 id="ag-create-title">Start your own artist studio</h2>
           {!session ? (
             <p className="ag-signin-note">
-              Creating an artist studio needs a verified account, we never fake
-              an identity. Sign in, then come back here to open yours. Drawing in
-              the commons stays free and anonymous, as always.
+              Creating a hosted artist studio needs a verified account.
+              {isCloudConfigured ? <> <DiscoveryLink href={`/signup?mode=login&return=${encodeURIComponent(`/studios?${new URLSearchParams({ ...(createEvent ? { event: createEvent } : {}), create: "1" })}`)}`} onNavigate={onNavigate}>Sign in and return to your studio setup →</DiscoveryLink></> : " Accounts aren’t available on this installation."}
+              {" "}<DiscoveryLink href={createEvent ? `/draw?event=${encodeURIComponent(createEvent)}` : "/draw"} onNavigate={onNavigate}>Draw on your own without an account →</DiscoveryLink>
             </p>
           ) : unverified ? (
             <p className="ag-signin-note" role="status">
@@ -480,18 +473,13 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
                 placeholder="landscape, pixel-art, cats"
                 onChange={(e) => setTagsInput(e.target.value)}
               />
-              <label className="ag-inktober-opt">
-                <input
-                  type="checkbox"
-                  checked={inktober}
-                  onChange={(e) => setInktober(e.target.checked)}
-                />
-                <span>
-                  Join Inktober 2026, during October this studio uses ink &amp;
-                  pencil tools only, with the day’s prompt from the official
-                  challenge. Your mural is never wiped when the prompt changes.
-                </span>
-              </label>
+              <label htmlFor="ag-create-event">Community event (optional)</label>
+              <select id="ag-create-event" value={createEvent} onChange={(e) => setCreateEvent(e.target.value)}>
+                <option value="">No event</option>
+                {EVENTS.map((event) => <option key={event.id} value={event.id}>{event.label}</option>)}
+              </select>
+              {createEvent === "inktober-2026" ? <p>During October, this studio uses ink &amp; pencil tools and the daily Inktober prompt. Your mural is not wiped when the prompt changes.</p> : null}
+              {getCommunityEvent(createEvent)?.sensitive ? <p>A space for kindness, not competition. Joining an event does not publish your studio or its artwork.</p> : null}
               {createError ? (
                 <p className="ag-form-error" role="alert">{createError}</p>
               ) : null}

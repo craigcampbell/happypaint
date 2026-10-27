@@ -32,6 +32,9 @@ import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
+import { COMMUNITY_EVENTS, getCommunityEvent } from './src/data/communityEvents.js';
+import { getDiscoverySeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
+import { renderDiscoveryLanding } from './server/discoverySeo.js';
 import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
 import {
   ARTIST_AUDIENCE, ARTIST_VIEWER_ALLOWLIST, ARTIST_MANAGE_HOST_ONLY,
@@ -9221,6 +9224,14 @@ function sanitizeWallTag(raw) {
     .slice(0, 24);
 }
 
+function wallPublished(meta) {
+  return !!meta && !meta.hidden && !meta.unpublished;
+}
+
+function wallSensitive(meta) {
+  return getCommunityEvent(meta.event)?.sensitive === true;
+}
+
 function publicWallPost(meta, viewerHash) {
   const parent = meta.parentPostId ? wallPosts.get(meta.parentPostId) : null;
   return {
@@ -9228,7 +9239,7 @@ function publicWallPost(meta, viewerHash) {
     title: meta.title,
     tags: meta.tags,
     artist: meta.artist,
-    votes: Object.keys(meta.votedBy || {}).length,
+    votes: wallSensitive(meta) ? 0 : Object.keys(meta.votedBy || {}).length,
     frames: meta.frameCount,
     durationMs: meta.durationMs,
     createdAt: meta.createdAt,
@@ -9238,11 +9249,13 @@ function publicWallPost(meta, viewerHash) {
     eventDay: meta.eventDay != null ? meta.eventDay : null,
     eventPrompt: meta.eventPrompt || null,
     challenge: meta.challenge || null, // gallery date stamp (DAILY / active-October INKTOBER)
-    liked: viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
-    allowRemix: meta.allowRemix === true,
+    liked: !wallSensitive(meta) && viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
+    sensitive: wallSensitive(meta),
+    allowVote: !wallSensitive(meta),
+    allowRemix: !wallSensitive(meta) && meta.allowRemix === true,
     parentPostId: meta.parentPostId || null,
     rootPostId: meta.rootPostId || null,
-    parent: parent && !parent.hidden ? { id: parent.id, title: parent.title } : null,
+    parent: wallPublished(parent) ? { id: parent.id, title: parent.title } : null,
   };
 }
 
@@ -9269,7 +9282,7 @@ app.get('/api/daily', (_req, res) => {
   const c = dailyChallenge();
   let entries = 0;
   for (const p of wallPosts.values()) {
-    if (!p.hidden && p.challenge === c.date) entries += 1;
+    if (wallPublished(p) && p.challenge === c.date) entries += 1;
   }
   res.json({ ...c, entries });
 });
@@ -9278,6 +9291,11 @@ app.get('/api/daily', (_req, res) => {
 // The derived event state, identical to the WS handshake `event` and the
 // seasonal_prompt broadcast. UTC rollover keeps the shared room prompt
 // consistent worldwide; before October this is a warm-up (no false day stamp).
+app.get('/api/community-events', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ events: COMMUNITY_EVENTS });
+});
+
 app.get('/api/inktober', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(ensureInktoberFresh()); // phase flips on contact, not the next tick
@@ -9401,7 +9419,7 @@ app.get('/api/wall', async (req, res) => {
   const event = /^[a-z0-9][a-z0-9-]{0,40}$/.test(String(req.query.event || '')) ? String(req.query.event) : null;
   const eventDay = /^\d{1,2}$/.test(String(req.query.day || '')) ? Number(req.query.day) : null;
 
-  let list = [...wallPosts.values()].filter((p) => !p.hidden);
+  let list = [...wallPosts.values()].filter(wallPublished);
   if (challenge) list = list.filter((p) => p.challenge === challenge);
   if (event) list = list.filter((p) => p.event === event);
   if (eventDay != null && eventDay >= 1 && eventDay <= 31) list = list.filter((p) => p.eventDay === eventDay);
@@ -9414,6 +9432,8 @@ app.get('/api/wall', async (req, res) => {
     });
   }
   if (sort === 'top') {
+    // Sensitive invitations are never competitive, even in the global feed.
+    list = list.filter((p) => !wallSensitive(p));
     list.sort((a, b) => Object.keys(b.votedBy || {}).length - Object.keys(a.votedBy || {}).length || b.createdAt - a.createdAt);
   } else if (sort === 'new') {
     list.sort((a, b) => b.createdAt - a.createdAt);
@@ -9425,18 +9445,18 @@ app.get('/api/wall', async (req, res) => {
   // Popular tags power the chip row client-side (from the WHOLE wall, not the page).
   const tagCounts = {};
   for (const p of wallPosts.values()) {
-    if (p.hidden) continue;
+    if (!wallPublished(p)) continue;
     for (const t of p.tags) tagCounts[t] = (tagCounts[t] || 0) + 1;
   }
   const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t]) => t);
   res.json({ posts, total, topTags });
 });
 
-// Frames are immutable once posted, serve decoded bytes with long caching.
+// Frame pixels are immutable once posted; publication consent is retractable.
 app.get('/api/wall/:id/frame/:n', (req, res) => {
   const meta = wallPosts.get(req.params.id);
   const n = Number(req.params.n);
-  if (!meta || meta.hidden || !Number.isInteger(n) || n < 0 || n >= meta.frameCount) {
+  if (!wallPublished(meta) || !Number.isInteger(n) || n < 0 || n >= meta.frameCount) {
     return res.status(404).json({ error: 'not found' });
   }
   let frames;
@@ -9455,7 +9475,9 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
   res.set('Content-Type', decoded.mime);
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', "default-src 'none'; sandbox");
-  res.set('Cache-Control', 'public, max-age=86400, immutable');
+  // Pixels are immutable, but publication consent can be withdrawn. Never
+  // let a shared/browser cache keep serving a retracted image.
+  res.set('Cache-Control', 'no-store');
   res.send(decoded.buffer);
 });
 
@@ -9464,7 +9486,7 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
 app.get('/api/wall/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const meta = wallPosts.get(req.params.id);
-  if (!meta || meta.hidden) return res.status(404).json({ error: 'not found' });
+  if (!wallPublished(meta)) return res.status(404).json({ error: 'not found' });
   const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${clientIp(req)}`));
   res.json({ post: publicWallPost(meta, viewerHash) });
 });
@@ -9474,7 +9496,7 @@ app.get('/api/wall/:id', async (req, res) => {
 app.post('/api/wall/:id/remix-room', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const source = wallPosts.get(req.params.id);
-  if (!source || source.hidden || source.allowRemix !== true) {
+  if (!wallPublished(source) || wallSensitive(source) || source.allowRemix !== true) {
     return res.status(404).json({ error: 'not_remixable' });
   }
   const ip = clientIp(req);
@@ -9496,24 +9518,18 @@ app.post('/api/wall/:id/remix-room', (req, res) => {
   res.json({ code, remixSource: room.remixSource });
 });
 
-// Is this profileId the verified owner or an approved painter of an
-// Inktober-opted-in artist studio? Live rooms first, then the persisted file
-//, an offline studio's wall posts still stamp, but ONLY for its people.
-function artistRoomInktoberFor(code, profileId) {
-  if (!code || !profileId) return false;
-  const pid = String(profileId);
-  const live = rooms.get(code);
-  if (live) {
-    return isArtistRoom(live) && live.inktober === true
-      && (live.ownerProfileId === pid || (live.painters || []).includes(pid));
+// Automatic studio association requires verified owner/painter membership,
+// including offline studios. Explicit invitations do not claim studio origin.
+function artistRoomEventFor(code, profileId) {
+  if (!code || !profileId) return null;
+  let studio = rooms.get(code);
+  if (!studio) {
+    try { studio = JSON.parse(readFileSync(roomFile(code), 'utf8')); }
+    catch { return null; }
   }
-  try {
-    const data = JSON.parse(readFileSync(roomFile(code), 'utf8'));
-    if (!data || data.audience !== ARTIST_AUDIENCE || data.inktober !== true) return false;
-    return data.ownerProfileId === pid || normalizePainters(data.painters).includes(pid);
-  } catch {
-    return false;
-  }
+  if (!isArtistRoom(studio) || (studio.ownerProfileId !== String(profileId)
+      && !normalizePainters(studio.painters).includes(String(profileId)))) return null;
+  return getCommunityEvent(normalizeGallery(studio.gallery).event || (studio.inktober ? INKTOBER_EVENT : null));
 }
 
 app.post('/api/wall', async (req, res) => {
@@ -9529,6 +9545,11 @@ app.post('/api/wall', async (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const body = req.body || {};
+  const explicitEvent = Object.hasOwn(body, 'event') ? getCommunityEvent(body.event) : null;
+  // Null is the legacy/no-selection sentinel, not an invitation id.
+  if (Object.hasOwn(body, 'event') && body.event !== null && (!explicitEvent || !explicitEvent.acceptsContributions)) {
+    return res.status(400).json({ error: 'bad_event' });
+  }
   const token = bearerToken(req); // one verification serves attribution AND the byline
   const title = String(body.title || 'My drawing').replace(/\s+/g, ' ').trim().slice(0, 60) || 'My drawing';
   const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
@@ -9564,12 +9585,16 @@ app.post('/api/wall', async (req, res) => {
       }
     }
   }
-  const inktoberPost = roomName === INKTOBER_ROOM
-    || artistRoomInktoberFor(roomName, wallIdentity && wallIdentity.profileId);
-  const inkState = inktoberPost ? ensureInktoberFresh() : null;
+  const studioEvent = artistRoomEventFor(roomName, wallIdentity && wallIdentity.profileId);
+  const inktoberPost = roomName === INKTOBER_ROOM || studioEvent?.id === INKTOBER_EVENT;
+  // An explicit invitation is participation, never proof of room/medium origin.
+  // Room checks above remain authoritative for private work and automatic stamps.
+  const contributionEvent = explicitEvent || studioEvent || (inktoberPost ? getCommunityEvent(INKTOBER_EVENT) : null);
+  const inkParticipation = contributionEvent?.id === INKTOBER_EVENT;
+  const inkState = inkParticipation ? ensureInktoberFresh() : null;
   const inkIdx = tags.indexOf('inktober');
   if (inkIdx >= 0) tags.splice(inkIdx, 1);
-  if (inktoberPost) tags.push('inktober');
+  if (inkParticipation) tags.push('inktober');
   const frames = Array.isArray(body.frames) ? body.frames.slice(0, WALL_FRAME_LIMIT) : [];
   const durationMs = Math.min(2000, Math.max(80, Number(body.durationMs) || 400));
   // Every frame must decode to a real raster image (magic-byte checked). This
@@ -9597,7 +9622,7 @@ app.post('/api/wall', async (req, res) => {
   const requestedParentId = safeWallId(body.parentPostId);
   if (requestedParentId) {
     parentPost = wallPosts.get(requestedParentId) || null;
-    if (!parentPost || parentPost.hidden || parentPost.allowRemix !== true) {
+    if (!wallPublished(parentPost) || wallSensitive(parentPost) || parentPost.allowRemix !== true) {
       return res.status(400).json({ error: 'invalid_remix_source' });
     }
   }
@@ -9629,12 +9654,12 @@ app.post('/api/wall', async (req, res) => {
     durationMs,
     reports: 0,
     hidden: false,
-    challenge: challengeDate || (inktoberPost && inkState.phase === 'active' ? inkState.date : null), // 'YYYY-MM-DD' from the DAILY room, or active-October INKTOBER
+    challenge: challengeDate || (inkParticipation && inkState.phase === 'active' ? inkState.date : null), // 'YYYY-MM-DD' from the DAILY room, or active-October INKTOBER
     // Seasonal event stamp (server-assigned; null for ordinary posts).
-    event: inktoberPost ? INKTOBER_EVENT : null,
-    eventDay: inktoberPost && inkState.phase === 'active' ? inkState.day : null,
-    eventPrompt: inktoberPost ? inkState.prompt : null,
-    allowRemix: body.allowRemix === true,
+    event: contributionEvent?.id || null,
+    eventDay: inkParticipation && inkState.phase === 'active' ? inkState.day : null,
+    eventPrompt: inkParticipation ? inkState.prompt : (contributionEvent?.prompt || null),
+    allowRemix: contributionEvent?.sensitive !== true && body.allowRemix === true,
     parentPostId: parentPost?.id || null,
     rootPostId: parentPost ? (parentPost.rootPostId || parentPost.id) : null,
   };
@@ -9666,9 +9691,10 @@ app.post('/api/wall/:id/vote', async (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const meta = wallPosts.get(req.params.id);
-  if (!meta || meta.hidden) {
+  if (!wallPublished(meta)) {
     return res.status(404).json({ error: 'not found' });
   }
+  if (wallSensitive(meta)) return res.status(403).json({ error: 'voting_disabled' });
   const hash = wallVoterHash(voterId);
   meta.votedBy = meta.votedBy || {};
   const on = req.body?.on !== false;
@@ -9716,6 +9742,21 @@ app.post('/api/wall/:id/report', (req, res) => {
     source: 'user',
   });
   res.json({ ok: true });
+});
+
+// Owner retraction is durable and distinct from a moderation hide. There is
+// deliberately no public republish endpoint; sharing again needs fresh consent.
+app.post('/api/wall/:id/unpublish', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const key = await resolveArtOwner(req);
+  if (!key) return res.status(401).json({ error: 'auth_required' });
+  const meta = wallPosts.get(req.params.id);
+  if (!meta) return res.status(404).json({ error: 'not found' });
+  if (meta.ownerKey !== key) return res.status(403).json({ error: 'not_yours' });
+  const withdrawn = { ...meta, unpublished: true };
+  persistWallMeta(withdrawn);
+  wallPosts.set(meta.id, withdrawn);
+  res.json({ ok: true, id: meta.id });
 });
 
 // A kid (or their parent, same device/account) can always take their art down.
@@ -10017,6 +10058,9 @@ app.post('/api/rooms', async (req, res) => {
   // moderation pipeline, and a per-account quota so storage stays bounded.
   let artistFields = null;
   if (audience === ARTIST_AUDIENCE) {
+    if (Object.hasOwn(body, 'event') && body.event !== null && !getCommunityEvent(body.event)) {
+      return res.status(400).json({ error: 'bad_event' });
+    }
     artistFields = validateArtistFields({ title: body.title, description: body.description, tags: body.tags }, scan);
     if (!artistFields.ok) {
       return res.status(400).json({ error: artistFields.error, message: artistFields.message });
@@ -10039,9 +10083,10 @@ app.post('/api/rooms', async (req, res) => {
     // Creating a studio does NOT list it, publishing is a separate explicit
     // action. The description/tags ride along as the pre-filled draft.
     room.painters = [];
-    room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags };
-    // Inktober eligibility is separate from gallery publication.
-    room.inktober = body.inktober === true;
+    const event = Object.hasOwn(body, 'event') ? body.event : (body.inktober === true ? INKTOBER_EVENT : null);
+    room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags, event };
+    // Compatibility flag retains Inktober's canvas/prompt behavior, not publication.
+    room.inktober = event === INKTOBER_EVENT;
   }
   if (mode === 'storybook') {
     room.title = room.title || 'Our Story';
@@ -10080,6 +10125,7 @@ function publishInfo(room, code) {
     description: gallery.description,
     tags: gallery.tags,
     inktober: room.inktober === true,
+    event: gallery.event || (room.inktober ? INKTOBER_EVENT : null),
     publishedAt: gallery.publishedAt,
     moderationHidden: gallery.moderationHidden,
     painters: Array.isArray(room.painters) ? room.painters : [],
@@ -10152,6 +10198,12 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     return res.status(403).json({ error: 'moderation_hidden', message: 'Moderators have hidden this studio from the gallery.' });
   }
   const body = req.body || {};
+  if (Object.hasOwn(body, 'event') && body.event !== null && !getCommunityEvent(body.event)) {
+    return res.status(400).json({ error: 'bad_event' });
+  }
+  const event = Object.hasOwn(body, 'event') ? body.event
+    : (typeof body.inktober === 'boolean' ? (body.inktober ? INKTOBER_EVENT : null)
+      : (gallery.event || (room.inktober ? INKTOBER_EVENT : null)));
   let converted = false;
   const fields = validateArtistFields({ title: room.title, description: body.description, tags: body.tags }, scan);
   if (!fields.ok) {
@@ -10187,7 +10239,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     });
     converted = true;
   }
-  if (typeof body.inktober === 'boolean') room.inktober = body.inktober;
+  room.inktober = event === INKTOBER_EVENT;
   if (converted) {
     broadcast(id, { type: 'room_profile', audience: room.audience, roomProfile: roomProfileFor(room, room.inktober ? inktoberState() : null) });
   }
@@ -10197,7 +10249,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     description: fields.description,
     tags: fields.tags,
     publishedAt: gallery.publishedAt || new Date().toISOString(),
-    event: room.inktober ? INKTOBER_EVENT : null,
+    event,
   };
   persistRoom(id);
   res.json(publishInfo(room, id));
@@ -10287,7 +10339,7 @@ function artistGalleryEntries() {
       tags: gallery.tags,
       users: room.users.size,
       ops: room.history.length,
-      event: room.inktober ? INKTOBER_EVENT : null,
+      event: gallery.event || (room.inktober ? INKTOBER_EVENT : null),
       publishedAt: gallery.publishedAt || '',
     });
   });
@@ -10302,7 +10354,7 @@ function artistGalleryEntries() {
       tags: gallery.tags,
       users: 0,
       ops: Number.isFinite(meta.opCount) ? meta.opCount : 0,
-      event: meta.inktober ? INKTOBER_EVENT : gallery.event,
+      event: gallery.event || (meta.inktober ? INKTOBER_EVENT : null),
       publishedAt: gallery.publishedAt || '',
     });
   }
@@ -12077,6 +12129,8 @@ const FAQ_JSON_LD = {
 // Head overrides for one request path, or null for the untouched default shell.
 function seoOverridesFor(reqPath) {
   const path = reqPath.replace(/\/+$/, '') || '/';
+  const discovery = getDiscoverySeo(path);
+  if (discovery) return { ...discovery, url: `${SITE_ORIGIN}${discovery.path}` };
   // The admin glass-room: never a landing page. robots.txt disallows the whole
   // /watch/ prefix; this keeps the <head> honest for anything that ignores that
   // (and stops the room's code leaking into a canonical tag).
@@ -12095,11 +12149,11 @@ function seoOverridesFor(reqPath) {
   const wallMatch = /^\/wall\/([A-Za-z0-9_-]{1,64})$/.exec(path);
   if (wallMatch) {
     const post = wallPosts.get(wallMatch[1]);
-    if (post && !post.hidden) {
-      const hearts = Object.keys(post.votedBy || {}).length;
+    if (wallPublished(post)) {
+      const hearts = wallSensitive(post) ? 0 : Object.keys(post.votedBy || {}).length;
       return {
         title: `“${post.title}” by ${post.artist}, the Fridge Wall`,
-        description: `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ', it moves!' : ''}. See it, heart it, or remix it live.`,
+        description: wallSensitive(post) ? 'A freely shared community tribute on Drawesome. View this drawing and the invitation to participate.' : `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ', it moves!' : ''}. See it, heart it, or remix it live.`,
         url: `${SITE_ORIGIN}/wall/${post.id}`,
         image: `${SITE_ORIGIN}/api/wall/${post.id}/frame/0`,
         type: 'article',
@@ -12162,13 +12216,25 @@ app.get('/sitemap.xml', (_req, res) => {
   const urls = [];
   const add = (loc, changefreq, priority) => urls.push({ loc, changefreq, priority });
   add(`${SITE_ORIGIN}/`, 'daily', '1.0');
-  for (const p of Object.keys(PAGE_META)) add(`${SITE_ORIGIN}${p}`, p === '/wall' || p === '/rooms' ? 'hourly' : 'weekly', '0.8');
-  const posts = [...wallPosts.values()].filter((p) => !p.hidden).sort((a, b) => b.createdAt - a.createdAt).slice(0, 500);
+  for (const p of new Set([...Object.keys(PAGE_META), ...DISCOVERY_PATHS])) add(`${SITE_ORIGIN}${p}`, p === '/wall' || p === '/rooms' ? 'hourly' : 'weekly', '0.8');
+  const posts = [...wallPosts.values()].filter(wallPublished).sort((a, b) => b.createdAt - a.createdAt).slice(0, 500);
   for (const p of posts) add(`${SITE_ORIGIN}/wall/${p.id}`, 'weekly', '0.5');
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
     .map((u) => `  <url><loc>${escapeHtml(u.loc)}</loc><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`)
     .join('\n')}\n</urlset>\n`;
   res.type('application/xml').setHeader('Cache-Control', 'public, max-age=3600').send(xml);
+});
+
+// These paths are capability/moderator surfaces, never discovery landings.
+// This prefix check cannot match API routes and performs no private lookup.
+app.use((req, res, next) => {
+  const path = req.path.replace(/\/+$/, '') || '/';
+  const invalidEvent = path.startsWith('/events/') && !getDiscoverySeo(path);
+  if (invalidEvent || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    if (invalidEvent) res.status(404);
+  }
+  next();
 });
 
 const distPath = join(__dirname, 'dist');
@@ -12215,7 +12281,10 @@ if (existsSync(distPath)) {
     }
     recordPageView(req); // server-side traffic, the number to reconcile GA against
     const over = seoOverridesFor(req.path);
-    res.type('html').send(over ? renderShell(shellHtml, over) : shellHtml);
+    let html = over ? renderShell(shellHtml, over) : shellHtml;
+    const landing = renderDiscoveryLanding(req.path, [...wallPosts.values()].filter(wallPublished));
+    if (landing) html = html.replace(/<div id="root">[\s\S]*?<\/div>/, () => `<div id="root">${landing}</div>`);
+    res.type('html').send(html);
   });
 } else {
   app.use((_req, res) => res.status(503).send('Build missing. Run `npm run build` first.'));

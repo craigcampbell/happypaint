@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getSession } from "../utils/auth";
+import { getCommunityEvent } from "../data/communityEvents";
 
 function deviceKey() {
   try {
@@ -15,7 +16,9 @@ function deviceKey() {
   }
 }
 
-export default function WallPostModal({ draft, defaultArtist, room, remixSource, onClose, onPosted }) {
+export default function WallPostModal({ draft, defaultArtist, room, eventId = "", remixSource, onClose, onPosted }) {
+  const event = getCommunityEvent(eventId);
+  const [confirmed, setConfirmed] = useState(false);
   const [title, setTitle] = useState("My drawing");
   const [artist, setArtist] = useState(defaultArtist || "");
   const [tags, setTags] = useState([]);
@@ -46,7 +49,7 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
   };
 
   const post = async () => {
-    if (posting) return;
+    if (posting || !confirmed || (eventId && !event)) return;
     setPosting(true);
     setError("");
     try {
@@ -66,15 +69,16 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
           // Which room this was drawn in, posts from the DAILY room join
           // today's challenge gallery on the homepage.
           room: room || null,
-          allowRemix,
-          parentPostId: remixSource?.id || null,
+          event: event?.id || null,
+          allowRemix: event?.sensitive ? false : allowRemix,
+          parentPostId: event?.sensitive ? null : remixSource?.id || null,
         }),
       });
-      if (res.ok) {
-        onPosted();
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.id) {
+        onPosted({ id: data.id, event: event?.id || null });
         return;
       }
-      const data = await res.json().catch(() => ({}));
       if (data.error === "language") {
         setError("Some of those words can't go on the wall, try different ones! 💛");
       } else if (res.status === 429) {
@@ -167,23 +171,29 @@ export default function WallPostModal({ draft, defaultArtist, room, remixSource,
           </div>
         </div>
 
-        {remixSource ? (
+        {remixSource && !event?.sensitive ? (
           <p className="wall-post-remix-note">🧬 This will be linked as a remix of “{remixSource.title}”.</p>
         ) : null}
-        <label className="wall-post-remix-toggle">
+        {!event?.sensitive ? <label className="wall-post-remix-toggle">
           <input
             type="checkbox"
             checked={allowRemix}
             onChange={(event) => setAllowRemix(event.target.checked)}
           />
           Let other artists remix this drawing
+        </label> : <p>Remixing is off for this tribute.</p>}
+
+        <p>{event ? `This picture will appear publicly in ${event.title} and on the Fridge Wall.` : "This picture will appear publicly on the Fridge Wall."} Anyone can view or save it. {room ? "This publishes a picture of the shared room." : "Your private canvas stays private."}</p>
+        <label className="wall-post-remix-toggle">
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+          I want to publish this picture publicly
         </label>
 
         {error ? <p className="wall-post-error" role="alert">{error}</p> : null}
 
         <div className="wall-post-actions">
           <span className="wall-post-note">Everyone can see art on the wall. 🌍</span>
-          <button type="button" className="primary-action" onClick={post} disabled={posting}>
+          <button type="button" className="primary-action" onClick={post} disabled={posting || !confirmed || Boolean(eventId && !event)}>
             {posting ? "Pinning…" : "Pin it! 🧲"}
           </button>
         </div>

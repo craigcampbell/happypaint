@@ -1,0 +1,11 @@
+.event-drawing-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 18px; background:#fff9ed; color:#382c26; border-bottom:1px solid #e9deca; flex-shrink:0; }
+.event-drawing-banner p { margin:4px 0; font-size:14px; }
+.event-drawing-banner small { color:#685c50; }
+.event-drawing-banner button { flex-shrink:0; border:1px solid #bfa781; border-radius:12px; padding:10px 14px; background:#fff; color:inherit; cursor:pointer; }
+.studio-shell[data-local="true"] .mp-invite,
+.studio-shell[data-local="true"] .fab-invite,
+.studio-shell[data-local="true"] .mp-chat-invite { display:none; }
+@media (max-width:1024px), (pointer:coarse) {
+  .event-drawing-banner { padding-top:60px; align-items:flex-start; flex-wrap:wrap; }
+  .event-drawing-banner p { font-size:13px; }
+}

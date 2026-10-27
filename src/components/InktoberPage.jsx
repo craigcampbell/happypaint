@@ -15,6 +15,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
+import { BookCards, DiscoveryTabs } from "./DiscoveryPage";
+import EventSharingReceipt from "./EventSharingReceipt";
 import fallbackPrompts from "../data/inktober2026.json";
 import { openSketchbookPrompt } from "../utils/sketchbookApi";
 import { getSession } from "../utils/auth";
@@ -217,24 +219,28 @@ export default function InktoberPage({ onNavigate }) {
   const selectedPrompt = day !== "all" ? prompts.find((p) => String(p.day) === day) : null;
 
   const emptyMessage = () => {
-    if (phase === "upcoming") return "No Inktober art yet, the event hasn't started. Get ready! 🖋️";
-    if (day !== "all") return `No art for Day ${day} yet, be the first to draw it!`;
-    if (phase === "ended") return "No gallery posts were kept from this year's event.";
-    return "No Inktober art yet, be the first to post from the Ink & Pencil room!";
+    if (phase === "upcoming") return "No separate Wall posts yet. You can explore public sketchbooks above or try a prompt.";
+    if (day !== "all") return `No separate Wall posts for Day ${day} yet. Sketchbook pages appear in the books above.`;
+    if (phase === "ended") return "No separate Wall posts are available. Public sketchbooks can still be explored above.";
+    return "No separate Wall posts yet. Explore the public sketchbooks above, or draw a prompt at your own pace.";
   };
 
   return (
     <div className="ink-page">
       <SiteNav onNavigate={onNavigate} current="/inktober" />
       <main className="ink-main ink-page" aria-labelledby="ink-title">
+        <DiscoveryTabs active="events" onNavigate={onNavigate} />
+        <EventSharingReceipt onRemoved={(id) => setPosts((items) => items.filter((post) => post.id !== id))} />
         <section className="ink-hero">
           <p className="ink-eyebrow">Community event · October {ink?.year || fallbackPrompts.year}</p>
           <h1 id="ink-title">🖋️ Inktober at Drawesome</h1>
           <p className="ink-hero-sub">
-            Your art, your sketchbook: one prompt a day, all October long. Keep your pages private
-            or make your book public to share your artwork here. Invite up to five artists to draw
-            with you, or drop into the anonymous shared Ink &amp; Pencil room.
+            One prompt a day, at your own pace. Start a drawing just for you, then share a finished
+            picture if you choose. You can also keep a sketchbook or draw on the shared Ink &amp; Pencil canvas.
           </p>
+
+          <p><a className="ink-join-btn" href={`/draw?event=inktober-2026${ink?.prompt ? `&prompt=${encodeURIComponent(ink.prompt)}` : ""}`} onClick={(e) => follow(e, e.currentTarget.getAttribute("href"))}>Draw my own, privately →</a></p>
+          <p className="discovery-note">Your own canvas stays on this device. Guest sketchbooks below are public; account-owned sketchbooks have separate visibility controls.</p>
 
           {inkStatus === "loading" ? (
             <div className="ink-phase-card"><p className="ink-phase-prompt"><strong>Checking the event…</strong></p></div>
@@ -354,30 +360,11 @@ export default function InktoberPage({ onNavigate }) {
             </div>
           ) : null}
           {booksStatus === "ready" && books.length === 0 ? (
-            <p className="ink-status">No sketchbooks have artwork yet, yours could be the first.</p>
+            <p className="ink-status">No public sketchbooks are listed right now. You can still start your own.</p>
           ) : null}
           {books.length > 0 ? (
             <>
-              <div className="skb-card-grid">
-                {books.map((b) => (
-                  <button
-                    type="button"
-                    key={b.id}
-                    className="skb-card"
-                    onClick={() => onNavigate(`/sketchbook/${b.id}`)}
-                    aria-label={`Flip through ${b.title || "an Inktober sketchbook"}`}
-                  >
-                    <span className="skb-card-title">{b.title || "Inktober sketchbook"}</span>
-                    {b.unsaved === true ? <span className="skb-badge skb-badge-unsaved skb-card-unsaved">✏️ Not saved yet</span> : null}
-                    <span className="skb-card-days">
-                      {b.days.slice(0, 8).map((d) => <span key={d}>Day {d}</span>)}
-                    </span>
-                    <span className="skb-card-meta">
-                      {b.drawnPages} page{b.drawnPages === 1 ? "" : "s"} drawn · {b.artistCount} artist{b.artistCount === 1 ? "" : "s"}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <BookCards books={books} onNavigate={onNavigate} />
               {books.length < booksTotal ? (
                 <button
                   type="button"
@@ -428,8 +415,8 @@ export default function InktoberPage({ onNavigate }) {
           ) : null}
           <a
             className="ink-card-link ink-studios-more"
-            href={`/gallery?event=${EVENT_ID}`}
-            onClick={(e) => follow(e, `/gallery?event=${EVENT_ID}`)}
+            href={`/studios?event=${EVENT_ID}`}
+            onClick={(e) => follow(e, `/studios?event=${EVENT_ID}`)}
           >
             Browse all Inktober artist studios →
           </a>
@@ -437,7 +424,7 @@ export default function InktoberPage({ onNavigate }) {
 
         <section className="ink-gallery" aria-labelledby="ink-gallery-title">
           <div className="ink-controls" id="ink-prompts">
-            <h2 id="ink-gallery-title" style={{ margin: 0, fontSize: "1.2rem", flexBasis: "100%" }}>Event gallery</h2>
+            <h2 id="ink-gallery-title" style={{ margin: 0, fontSize: "1.2rem", flexBasis: "100%" }}>Shared Wall drawings</h2>
             <label htmlFor="ink-day-filter">Prompt day</label>
             <select id="ink-day-filter" value={day} onChange={(e) => setDay(e.target.value)}>
               <option value="all">All days</option>

@@ -1,4 +1,6 @@
-// The Fridge Wall, the community gallery. A Pinterest-style masonry of
+// The Fridge Wall, the chronological community gallery. Legacy routes remain.
+// Animation is opt-in; sensitive event contributions never expose voting or remix.
+// Historical notes: A Pinterest-style masonry of
 // drawings kids pinned from the studio: hearts (one per person), tag chips +
 // search, three sorts (daily "fresh mix" shuffle / most loved / newest), and
 // animated posts that actually move (the card cycles the post's frame PNGs
@@ -8,6 +10,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import { getSession } from "../utils/auth";
+import { getCommunityEvent } from "../data/communityEvents";
+import { DiscoveryLink } from "./DiscoveryPage";
 
 // Same device key the studio uses for saves, hearts stick per device, and
 // sign-in upgrades them to the account key server-side via the bearer token.
@@ -30,43 +34,22 @@ const CTA_MESSAGES = [
   { emoji: "✨", line: "Your art belongs up here too.", action: "Make something" },
 ];
 
-// One animated card. Frames are served as immutable URLs; we preload them all
-// once, then cycle with an interval only while the card is on screen (the
-// IntersectionObserver keeps a wall of GIF-like posts from burning battery).
+// Static first; animation loads frames only after an explicit play action.
 function WallCard({ post, onVote, onReport, onRemix, onShare }) {
+  const sensitive = getCommunityEvent(post.event)?.sensitive === true;
+  const [playing, setPlaying] = useState(false);
   const [frame, setFrame] = useState(0);
-  const [visible, setVisible] = useState(false);
-  const rootRef = useRef(null);
-
   useEffect(() => {
-    const node = rootRef.current;
-    if (!node || post.frames <= 1) return undefined;
-    const io = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { threshold: 0.2 });
-    io.observe(node);
-    return () => io.disconnect();
-  }, [post.frames]);
-
-  useEffect(() => {
-    if (!visible || post.frames <= 1) return undefined;
-    const id = window.setInterval(
-      () => setFrame((f) => (f + 1) % post.frames),
-      Math.max(120, post.durationMs || 400),
-    );
-    return () => window.clearInterval(id);
-  }, [visible, post.frames, post.durationMs]);
-
-  // Preload every frame once so cycling never flickers through empty images.
-  useEffect(() => {
-    if (post.frames <= 1) return;
-    for (let i = 1; i < post.frames; i += 1) {
-      const img = new Image();
-      img.src = `/api/wall/${post.id}/frame/${i}`;
-    }
-  }, [post.id, post.frames]);
+    if (!playing || post.frames <= 1) return undefined;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) setFrame((value) => (value + 1) % post.frames);
+    }, Math.max(120, post.durationMs || 400));
+    return () => window.clearInterval(timer);
+  }, [playing, post.frames, post.durationMs]);
 
   return (
-    <figure className="wall-card" ref={rootRef}>
-      <div className="wall-art">
+    <figure className="wall-card">
+      <a className="wall-art" href={`/wall/${encodeURIComponent(post.id)}`}>
         <img
           src={`/api/wall/${post.id}/frame/${frame}`}
           alt={post.title}
@@ -74,11 +57,12 @@ function WallCard({ post, onVote, onReport, onRemix, onShare }) {
           draggable={false}
         />
         {post.frames > 1 ? <span className="wall-anim-badge" title="Animated!">🎬</span> : null}
-      </div>
+      </a>
       <figcaption>
+        {post.frames > 1 ? <button type="button" aria-pressed={playing} onClick={() => setPlaying((value) => !value)}>{playing ? "Pause animation" : "Play animation"}</button> : null}
         <div className="wall-caption-row">
           <strong className="wall-title">{post.title}</strong>
-          <button
+          {!sensitive ? <button
             type="button"
             className={`wall-heart${post.liked ? " is-liked" : ""}`}
             onClick={() => onVote(post)}
@@ -86,8 +70,9 @@ function WallCard({ post, onVote, onReport, onRemix, onShare }) {
             aria-label={post.liked ? "Remove your heart" : "Love this drawing"}
           >
             {post.liked ? "❤️" : "🤍"} {post.votes > 0 ? post.votes : ""}
-          </button>
+          </button> : null}
         </div>
+        {getCommunityEvent(post.event) ? <a href={getCommunityEvent(post.event).path}>{getCommunityEvent(post.event).title}</a> : null}
         <div className="wall-meta">
           <span className="wall-artist">by {post.artist}</span>
           <span className="wall-meta-actions">
@@ -99,7 +84,7 @@ function WallCard({ post, onVote, onReport, onRemix, onShare }) {
             </button>
           </span>
         </div>
-        {post.parentPostId ? (
+        {!sensitive && post.parentPostId ? (
           <p className="wall-remix-line">
             🧬 {post.parent ? `Remixed from “${post.parent.title}”` : "Remixed from an unavailable source"}
           </p>
@@ -111,7 +96,7 @@ function WallCard({ post, onVote, onReport, onRemix, onShare }) {
             ))}
           </div>
         ) : null}
-        {post.allowRemix ? (
+        {!sensitive && post.allowRemix ? (
           <button type="button" className="wall-remix-btn" onClick={() => onRemix(post)}>
             Remix this 🧬
           </button>
@@ -127,7 +112,7 @@ function CtaCard({ index, onNavigate }) {
     <div className="wall-card wall-cta">
       <span className="wall-cta-emoji" aria-hidden="true">{msg.emoji}</span>
       <p>{msg.line}</p>
-      <button type="button" className="primary-action" onClick={() => onNavigate("/join/MAIN")}>
+      <button type="button" className="primary-action" onClick={() => onNavigate("/draw")}>
         {msg.action} 🖌️
       </button>
     </div>
@@ -144,7 +129,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState("");
-  const [sort, setSort] = useState("fresh");
+  const sort = "new";
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
   const debounceRef = useRef(null);
@@ -184,7 +169,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
   }, []);
 
   useEffect(() => {
-    load("", "", "fresh");
+    load("", "", "new");
     return () => {
       window.clearTimeout(toastTimer.current);
       window.clearTimeout(debounceRef.current);
@@ -249,13 +234,10 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
     setActiveTag(next);
     load(query, next, sort);
   };
-  const onSort = (s) => {
-    window.clearTimeout(debounceRef.current);
-    setSort(s);
-    load(query, activeTag, s);
-  };
+
 
   const vote = useCallback(async (post) => {
+    if (getCommunityEvent(post.event)?.sensitive) return;
     const on = !post.liked;
     // Optimistic heart, snap back if the server disagrees. The spotlight card
     // (deep-link view) holds its own copy of the post, so patch it in step.
@@ -300,6 +282,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
   }, [say]);
 
   const remix = useCallback(async (post) => {
+    if (getCommunityEvent(post.event)?.sensitive) return;
     try {
       const res = await fetch(`/api/wall/${encodeURIComponent(post.id)}/remix-room`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
@@ -313,6 +296,8 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
   // Mix CTA cards into the masonry: one up top when the wall is thin, then
   // one roughly every 7 posts.
   const cells = useMemo(() => {
+    if (getCommunityEvent(spotlight?.event)?.sensitive) return posts.filter((post) => post.event === spotlight.event).map((post) => ({ post }));
+    if (posts.some((post) => getCommunityEvent(post.event)?.sensitive)) return posts.map((post) => ({ post }));
     const out = [];
     let ctaIndex = 0;
     if (posts.length < 4) out.push({ cta: ctaIndex++ });
@@ -322,15 +307,16 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
     });
     if (posts.length >= 4 && posts.length % 7 !== 0) out.push({ cta: ctaIndex++ });
     return out;
-  }, [posts]);
+  }, [posts, spotlight]);
 
   return (
     <div className="wall-page">
       <SiteNav onNavigate={onNavigate} current="/wall" />
       <main className="wall-main">
         <header className="wall-hero">
-          <h1>🧲 The Fridge Wall</h1>
-          <p>Art by kids like you, pin yours from the studio with the 🧲 Wall button!</p>
+          <h1>{getCommunityEvent(spotlight?.event)?.sensitive ? "Drawings shared with care" : "🧲 The Fridge Wall"}</h1>
+          <p>Drawings shared by the community, shown newest first. Sharing is always optional.</p>
+          <DiscoveryLink href="/gallery" onNavigate={onNavigate}>Discover artwork, studios &amp; events →</DiscoveryLink>
         </header>
 
         {spotlight ? (
@@ -361,23 +347,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
             placeholder={`Search ${total.toLocaleString()} drawings…`}
             aria-label="Search the wall"
           />
-          <div className="wall-sorts" role="group" aria-label="Sort the wall">
-            {[
-              ["fresh", "🎲 Fresh mix"],
-              ["top", "❤️ Most loved"],
-              ["new", "✨ Newest"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                className={sort === key ? "is-active" : ""}
-                onClick={() => onSort(key)}
-                aria-pressed={sort === key}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+
         </div>
 
         {topTags.length ? (

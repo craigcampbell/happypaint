@@ -131,6 +131,8 @@ function mergeByStamp(localList, remoteList) {
   for (const remote of remoteList) {
     if (!remote?.id) continue;
     const local = byId.get(remote.id);
+    // Browser-only consent survives pull/merge, including a remote ID collision.
+    if (local?.localOnly === true) continue;
     if (!local || localStamp(remote) > localStamp(local)) {
       byId.set(remote.id, remote);
     }
@@ -141,6 +143,8 @@ function mergeByStamp(localList, remoteList) {
 // ---- PocketBase upsert (no native upsert; find-then-create/update) ----
 
 async function upsertSnapshot(pb, item, profileId, nowIso) {
+  // Enforce at the network boundary, not only in the local drawing component.
+  if (item?.localOnly === true) return;
   const data = galleryToFields(item, profileId, nowIso);
   let existing = null;
   try {

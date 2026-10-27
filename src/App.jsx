@@ -160,6 +160,8 @@ import CanvasChat from "./components/CanvasChat";
 import { HYPES } from "./utils/hypes";
 import { evictPageImage } from "./utils/pageImageCache";
 import WallPostModal from "./components/WallPostModal";
+import EventDrawingBanner from "./components/EventDrawingBanner";
+import { getCommunityEvent } from "./data/communityEvents";
 import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops, scenePassMs, sceneRuntimeMs } from "./utils/filmPlan";
 import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, renderSoundtrackSlice } from "./utils/soundtrack";
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
@@ -644,7 +646,8 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
   }
 }
 
-export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) {
+export default function StudioApp({ initialJoinCode = "", initialPrompt = "", initialLocal = false, initialEvent = "" }) {
+  const drawingEvent = initialLocal ? getCommunityEvent(initialEvent) : null;
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
   const overlayCanvasRef = useRef(null);
@@ -821,7 +824,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Everyone in the same room draws together. A friend's strokes land on a
   // dedicated offscreen "remote" canvas that is blitted on top of the local
   // layer composite, so remote art never touches the local layer/undo system.
-  const roomId = (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
+  const roomId = initialLocal
+    ? `local:${drawingEvent?.id || "private"}`
+    : (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
   const legacyDraftPurgedRef = useRef(false); // one-shot cleanup of the migrated legacy blob
   const mobileProfileRef = useRef(null); // scroll target for the mobile notifications/profile
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
@@ -1200,7 +1205,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Only ever true for the FIRST join of this room instance. A later reconnect
   // (or a scene switch) re-runs the handshake, and throwing a curtain over
   // someone mid-drawing would be worse than the blank canvas this fixes.
-  const [joinCurtain, setJoinCurtain] = useState(true);
+  const [joinCurtain, setJoinCurtain] = useState(!initialLocal);
   // Today's drawing prompt for this room (sent in the 'connected' payload),
   // shown as a dismissible chip over the canvas top.
   const [roomPrompt, setRoomPrompt] = useState(null);
@@ -3112,6 +3117,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     const previewCanvas = await composeCanvas({ width: 400, height: 300 });
     const item = {
       id: makeId("gallery"),
+      localOnly: initialLocal,
       name: `Drawesome ${todayName()}`,
       layer: await canvasToDataUrl(fullCanvas),
       textureId: selectedTexture,
@@ -3132,8 +3138,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     setStatus("Saved to gallery");
     signalNaturalAdBreak("gallery_save");
     // Best-effort cloud push (debounced; no-op when signed out / local-only).
-    schedulePush();
-  }, [composeCanvas, persistGallery, selectedTexture]);
+    if (!initialLocal) schedulePush();
+  }, [composeCanvas, persistGallery, selectedTexture, initialLocal]);
 
   // Account gate for every export/share path (product UX gate, not DRM):
   // exports leave the device, so they need a signed-in account. Anonymous
@@ -3231,7 +3237,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const requestClear = useCallback(() => {
     const game = gameRef.current;
     const drawerScrap = roomGameRef.current && game?.phase === "playing" && game?.drawerId === myUserIdRef.current;
-    if (roomAnimationRef.current || activeFrameIndexRef.current !== 0 || drawerScrap) {
+    if (initialLocal || roomAnimationRef.current || activeFrameIndexRef.current !== 0 || drawerScrap) {
       setShowClearConfirm(true);
       return;
     }
@@ -3242,7 +3248,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     mpRef.current?.sendWipeRequest?.();
     // The phone/tablet sheet would cover the countdown and its Cancel.
     if (layoutTierRef.current !== "desktop") setToolsOpen(false);
-  }, [showToast]);
+  }, [showToast, initialLocal]);
 
   const closeStepBackPreview = useCallback(() => {
     if (stepBackUrlRef.current) {
@@ -3575,8 +3581,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // Instagram, X). The sheet renders an invite card from the current art so
   // Instagram, which has no share URL and drops text, still gets the invite.
   const shareRoomLink = useCallback(() => {
+    if (initialLocal) {
+      showToast("This drawing is just for you. Use the Wall preview to share a finished picture, not a room.");
+      return;
+    }
     setShowShareInvite(true);
-  }, []);
+  }, [initialLocal, showToast]);
 
   const getInviteArt = useCallback(() => composeCanvas({ width: 1280, height: 800 }), [composeCanvas]);
 
@@ -7200,7 +7210,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           files: [file],
           title: "Watch my drawing come together! 🎨",
           text: `I made this on Drawesome${promptBit}, watch it draw itself!`,
-          url: `${window.location.origin}/join/${roomId}`,
+          url: initialLocal ? `${window.location.origin}/draw` : `${window.location.origin}/join/${roomId}`,
         };
         const outcome = await shareFile(file, shareData);
         if (outcome === "shared") {
@@ -7224,7 +7234,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         setIsExportingTimelapse(false);
       }
     },
-    [gateExport, isExportingTimelapse, roomId, roomPrompt, seasonalEvent],
+    [gateExport, isExportingTimelapse, roomId, roomPrompt, seasonalEvent, initialLocal],
   );
 
   // Complete a prepared share from a FRESH tap (the replay player's ready
@@ -7270,9 +7280,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     paintSpaceAssetsRef.current = next;
     setPaintSpaceAssets(next);
     // Best-effort cloud push (debounced; no-op when signed out / local-only).
-    schedulePush();
+    if (!initialLocal) schedulePush();
     return true;
-  }, []);
+  }, [initialLocal]);
 
   const saveStickerToSpace = useCallback(async () => {
     commitLayersToFrame();
@@ -9845,7 +9855,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     handleMpMessageRef.current = handleMpMessage;
   }, [handleMpMessage]);
 
-  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token, authSettled);
+  const mp = useMultiplayer(roomId, handleMpMessage, session?.access_token, authSettled && !initialLocal);
 
   // Join curtain: the socket is up. The handshake and the history frame that
   // hydrate the canvas still have to land (steps 2 and 3, in handleMpMessage).
@@ -9874,6 +9884,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   // bearer token comes from the live session, never stored; server error
   // messages surface verbatim (moderation wording, ownership, rate limits).
   const artistApiFetch = useCallback(async (path, { token, method = "GET", body } = {}) => {
+    if (initialLocal) throw new Error("Local drawings are not shared rooms.");
     const res = await fetch(path, {
       method,
       headers: {
@@ -9895,7 +9906,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       throw new Error(message);
     }
     return json;
-  }, []);
+  }, [initialLocal]);
 
   const artistLoadPublishInfo = useCallback(
     ({ roomCode, token }) => artistApiFetch(`/api/rooms/${encodeURIComponent(roomCode)}/artist`, { token }),
@@ -9948,7 +9959,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selfName re-reads storage after joins/renames land new keys
     [roomId, selfName],
   );
-  useMentionWatcher(watchList, (mention) => {
+  useMentionWatcher(initialLocal ? [] : watchList, (mention) => {
     setNotifications(addNotification(mention));
   });
   const unreadNotifs = notifications.filter((n) => !n.read).length;
@@ -10209,7 +10220,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   }, [loadSheets]);
 
   const applySheet = useCallback((id) => {
-    mpRef.current?.sendSheet?.(id || null); // clears room-wide if you're a host / unowned room
+    if (initialLocal) {
+      setSheetId(id || null);
+      loadSheetImage(id || null);
+    } else mpRef.current?.sendSheet?.(id || null); // shared room mutation
     if (!id) {
       // Always remove the sheet from YOUR OWN view immediately, even if the
       // server (host-gated in owned rooms) doesn't clear it for everyone, so a
@@ -10218,7 +10232,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       loadSheetImage(null);
       showToast("Coloring sheet removed");
     }
-  }, [loadSheetImage, showToast]);
+  }, [loadSheetImage, showToast, initialLocal]);
 
   // Apply a library sheet from the modal. Picking a sheet starts a fresh page,
   // so if there's existing art (or a sheet) we confirm, then wipe + set.
@@ -10228,6 +10242,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       // Artist-studio watchers: a sheet wipe/set is a shared mutation.
       if (paintGate("coloring sheets")) return;
       const hasContent = Boolean(sheetId) || historyCount > 0;
+      if (initialLocal) {
+        if (hasContent && !window.confirm("Start a fresh page with this coloring sheet? It clears your local canvas.")) return;
+        if (hasContent) clearCanvas();
+        setSheetId(`lib:${sheet.id}`);
+        loadSheetImage(`lib:${sheet.id}`);
+        setShowSheetModal(false);
+        return;
+      }
       // Over existing art a fresh sheet is a WIPE, so it takes Clear's road:
       // the server counts down (or asks the room) and sets the sheet as the
       // canvas clears. Flipbooks keep the old confirm-and-clear.
@@ -10249,7 +10271,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
       setShowSheetModal(false);
       showToast(`Coloring sheet: ${sheet.title}`);
     },
-    [sheetId, historyCount, paintGate, showToast],
+    [sheetId, historyCount, paintGate, showToast, initialLocal, clearCanvas, loadSheetImage],
   );
 
   // Load any saved profile (name/color) once.
@@ -10302,7 +10324,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
 
     let cancelled = false;
     (async () => {
-      if (accountKey && deviceKey && token) {
+      if (!initialLocal && accountKey && deviceKey && token) {
         await migrateDeviceArtToAccount(deviceKey, token);
       }
       if (!cancelled) {
@@ -10312,7 +10334,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
     return () => {
       cancelled = true;
     };
-  }, [session, loadMyDrawings]);
+  }, [session, loadMyDrawings, initialLocal]);
 
   // Save the profile and push it to the room.
   const saveProfile = useCallback(
@@ -10724,7 +10746,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         setSession(session || null);
         setAuthSettled(true);
       }
-      if (session) {
+      if (session && !initialLocal) {
         await startSync(session);
         await refreshFromLocal();
       } else {
@@ -11138,6 +11160,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   const inviteFriends = shareRoomLink;
 
   const submitReport = async () => {
+    if (initialLocal) {
+      setShowReport(false);
+      showToast("This private drawing is not a shared room.");
+      return;
+    }
     try {
       await fetch("/api/report", {
         method: "POST",
@@ -11172,6 +11199,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
   return (
     <main
       className={`studio-shell${toolsOpen ? " rail-open" : ""}${layoutTier === "desktop" && !toolsOpen ? " rail-collapsed" : ""}`}
+      data-local={initialLocal ? "true" : undefined}
       data-layout={layoutTier}
       data-hand={inputPrefs.hand}
       translate="no"
@@ -11196,7 +11224,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
           aria-hidden={!desktopHeaderOpen}
         >
           <div className="topbar-brand">
-            <p className="eyebrow">Open studio / live</p>
+            <p className="eyebrow">{initialLocal ? "Private drawing / on this device" : "Open studio / live"}</p>
             <h1><BrandMark /></h1>
           </div>
           <div className="topbar-actions">
@@ -11227,7 +11255,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 event.target.value = "";
               }}
             />
-            <button type="button" className="primary-action" onClick={saveToServer} disabled={savingArt}>
+            <button type="button" className="primary-action" onClick={initialLocal ? saveToGallery : saveToServer} disabled={savingArt}>
               {savingArt ? "Saving…" : "💾 Save"}
             </button>
             <button
@@ -11342,9 +11370,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             onClick={() => setShowLobby(true)}
             title="Switch rooms, hop between your rooms, browse, or start a new one"
           >
-            {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
+            {initialLocal ? "Just you" : roomTitle || `Room ${roomId}`} <span aria-hidden="true">⌄</span>
           </button>
-          <span className="mp-count">{mp.connected ? `${mp.users.length} painting together` : "Connecting…"}</span>
+          <span className="mp-count">{initialLocal ? "Not shared" : mp.connected ? `${mp.users.length} painting together` : "Connecting…"}</span>
           <div className="mp-avatars">
             {mp.users.slice(0, 8).map((u) => (
               <span
@@ -11551,6 +11579,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
             ) : null}
           </div>
         </div>
+
+        {initialLocal ? <EventDrawingBanner event={drawingEvent} prompt={initialPrompt} onShare={openWallPost} /> : null}
 
         {/* Inktober sketchbook page rooms: the pinned prompt banner lives
             IN-FLOW between the room bar and the canvas stage, so it is
@@ -12262,7 +12292,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                   <span>2</span> Draw right on the canvas
                 </li>
                 <li>
-                  <span>3</span> Invite friends to draw live
+                  <span>3</span> {initialLocal ? "Keep it private, or share a picture when ready" : "Invite friends to draw live"}
                 </li>
               </ol>
               <button type="button" className="primary-action welcome-go" onClick={dismissWelcome}>
@@ -12337,9 +12367,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 <div className="mp-chat-room">
                   <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
                   <button type="button" className="mp-chat-room-switch" onClick={() => setShowLobby(true)} title="Switch rooms">
-                    {roomTitle ? roomTitle : `Room ${roomId}`} <span aria-hidden="true">⌄</span>
+                    {initialLocal ? "Just you" : roomTitle || `Room ${roomId}`} <span aria-hidden="true">⌄</span>
                   </button>
-                  <span className="mp-chat-room-count">{mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
+                  <span className="mp-chat-room-count">{initialLocal ? "Not shared" : mp.connected ? `${mp.users.length} painting` : "Connecting…"}</span>
                   <button type="button" className="mp-chat-invite" onClick={inviteFriends}>
                     Invite friends
                   </button>
@@ -12542,7 +12572,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
                 🖼 GIF
               </button>
             ) : null}
-            <button type="button" className="primary-action" onClick={saveToServer} disabled={savingArt}>
+            <button type="button" className="primary-action" onClick={initialLocal ? saveToGallery : saveToServer} disabled={savingArt}>
               {savingArt ? "Saving…" : "💾 Save"}
             </button>
             <button
@@ -13550,7 +13580,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
       ) : null}
 
-      {showShareInvite ? (
+      {showShareInvite && !initialLocal ? (
         <ShareInviteSheet
           roomId={roomId}
           roomTitle={roomTitle}
@@ -13567,12 +13597,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "" }) 
         <WallPostModal
           draft={wallPostDraft}
           defaultArtist={nameDraft || mp.self?.name || ""}
-          room={roomId}
-          remixSource={remixSource}
+          room={initialLocal ? null : roomId}
+          eventId={drawingEvent?.id || ""}
+          remixSource={drawingEvent?.sensitive ? null : remixSource}
           onClose={() => setWallPostDraft(null)}
-          onPosted={() => {
+          onPosted={({ id, event }) => {
             setWallPostDraft(null);
-            showToast(roomId === "DAILY" ? "In today's gallery! 🗓️ It's on the homepage" : "On the wall! 🧲 See it at drawesome.art/wall");
+            const destination = getCommunityEvent(event);
+            navigateToPath(destination ? `${destination.path}?post=${encodeURIComponent(id)}` : `/wall/${encodeURIComponent(id)}`);
           }}
         />
       ) : null}

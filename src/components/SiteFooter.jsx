@@ -15,6 +15,10 @@ export default function SiteFooter({ onNavigate }) {
     {
       title: "Draw",
       links: [
+        { href: "/draw", label: "Draw my own" },
+        { href: "/gallery", label: "Discover artwork" },
+        { href: "/studios", label: "Artist studios" },
+        { href: "/events", label: "Community events" },
         { href: "/studio", label: "Public canvas" },
         { href: "/rooms", label: "Live rooms" },
         { href: "/join/DAILY", label: "Today's challenge" },
