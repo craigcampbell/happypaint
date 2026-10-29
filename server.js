@@ -35,6 +35,7 @@ import { dailyChallenge } from './server/dailyChallenges.js';
 import { COMMUNITY_EVENTS, getCommunityEvent } from './src/data/communityEvents.js';
 import { getDiscoverySeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
 import { renderDiscoveryLanding } from './server/discoverySeo.js';
+import { createCurator } from './server/curator.js';
 import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
 import {
   ARTIST_AUDIENCE, ARTIST_VIEWER_ALLOWLIST, ARTIST_MANAGE_HOST_ONLY,
@@ -7271,6 +7272,8 @@ async function resolveArtOwner(req) {
   return key;
 }
 
+const curator = createCurator({ dataDir: DATA_DIR });
+curator.registerRoutes(app, adminGuard);
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
 economy.registerRoutes(app);
@@ -12282,7 +12285,7 @@ if (existsSync(distPath)) {
     recordPageView(req); // server-side traffic, the number to reconcile GA against
     const over = seoOverridesFor(req.path);
     let html = over ? renderShell(shellHtml, over) : shellHtml;
-    const landing = renderDiscoveryLanding(req.path, [...wallPosts.values()].filter(wallPublished));
+    const landing = renderDiscoveryLanding(req.path, [...wallPosts.values()].filter(wallPublished), curator.published().pages);
     if (landing) html = html.replace(/<div id="root">[\s\S]*?<\/div>/, () => `<div id="root">${landing}</div>`);
     res.type('html').send(html);
   });

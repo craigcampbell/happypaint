@@ -17,6 +17,7 @@ const FaqPage = lazy(() => import("./components/FaqPage"));
 const LiveAdmin = lazy(() => import("./components/LiveAdmin"));
 const RoomRadar = lazy(() => import("./components/RoomRadar"));
 const AdminUsers = lazy(() => import("./components/AdminUsers"));
+const AdminCurator = lazy(() => import("./components/AdminCurator"));
 const AdminGallery = lazy(() => import("./components/AdminGallery"));
 const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const PublicWatch = lazy(() => import("./components/PublicWatch"));
@@ -120,7 +121,9 @@ export default function Router() {
     // Three consoles, three pages: the original overview (/admin), the room
     // radar (/admin/rooms) and the user + gallery inspectors. Each is its own
     // lazy chunk so a moderator only pays for the page they open.
-    if (path.startsWith("/admin/rooms")) {
+    if (path === "/admin/curator") {
+      page = <AdminCurator onNavigate={navigate} />;
+    } else if (path.startsWith("/admin/rooms")) {
       page = <RoomRadar onNavigate={navigate} />;
     } else if (path.startsWith("/admin/users")) {
       page = <AdminUsers onNavigate={navigate} />;

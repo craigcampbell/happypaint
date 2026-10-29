@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global document, innerWidth, Node, localStorage */
+/* global document, innerWidth, Node, localStorage, getComputedStyle */
 // Discovery UI contract suite. Explicit QA fixtures, not production art or ACL evidence.
 // Runs real React components in an isolated Vite harness; never loads repo .env.
 import { createServer as httpServer } from 'node:http';
@@ -33,7 +33,7 @@ const fixture = httpServer(async (req, res) => {
   if (url.pathname.endsWith('/unpublish')) { removed = true; return send({ ok: true }); }
   if (url.pathname.includes('/frame/')) { res.writeHead(200, { 'content-type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250"><rect width="400" height="250" fill="#ece6cf"/><text x="30" y="120" fill="#333">QA fixture artwork</text></svg>'); }
   if (url.pathname === '/api/wall/wp_qa_fixture_tribute') return send(removed ? { error: 'not_found' } : { post: tribute }, removed ? 404 : 200);
-  if (url.pathname === '/api/wall') { const posts = [tribute, drawing].filter((post) => (!removed || post.id !== tribute.id) && (!url.searchParams.get('event') || post.event === url.searchParams.get('event'))); return send({ posts, total: posts.length, topTags: [] }); }
+  if (url.pathname === '/api/wall') { const query = (url.searchParams.get('q') || '').toLowerCase(); const posts = [tribute, drawing].filter((post) => (!removed || post.id !== tribute.id) && (!url.searchParams.get('event') || post.event === url.searchParams.get('event')) && (!query || `${post.title} ${post.artist} ${post.tags.join(' ')}`.toLowerCase().includes(query))); return send({ posts, total: posts.length, topTags: [] }); }
   if (url.pathname === '/api/sketchbooks') return send({ books: [book], total: 1 });
   if (url.pathname === '/api/rooms/gallery') return send({ rooms: url.searchParams.get('event') === 'inktober-2026' ? [] : [room], total: url.searchParams.get('event') === 'inktober-2026' ? 0 : 1, topTags: [] });
   if (url.pathname === '/api/rooms' && req.method === 'POST') return send({ code: 'QANEW', title: 'QA fixture created studio' });
@@ -43,10 +43,12 @@ const fixture = httpServer(async (req, res) => {
 });
 const component = (name) => JSON.stringify(join(repo, 'src/components', `${name}.jsx`));
 await writeFile(join(scratch, 'index.html'), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"/></head><body><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
-await writeFile(join(scratch, 'entry.jsx'), `${['index.css', 'App.css', 'drawesome-theme.css', 'homepage-redesign.css', 'studio-layout.css', 'quick-stroke.css', 'route-status.css', 'site-nav.css'].map((file) => `import ${JSON.stringify(join(repo, 'src', file))};`).join('\n')}
+await writeFile(join(scratch, 'entry.jsx'), `import ${JSON.stringify(join(repo, 'node_modules/@fontsource-variable/fredoka/wght.css'))};
+import ${JSON.stringify(join(repo, 'node_modules/@fontsource-variable/nunito-sans/wght.css'))};
 import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import Home from ${component('HomePage')}; import Discovery from ${component('DiscoveryPage')}; import Event from ${component('CommunityEventPage')}; import Studios from ${component('ArtistGalleryPage')}; import Ink from ${component('InktoberPage')}; import Wall from ${component('WallPage')};
+${['index.css', 'App.css', 'drawesome-theme.css', 'homepage-redesign.css', 'studio-layout.css', 'quick-stroke.css', 'route-status.css', 'site-nav.css'].map((file) => `import ${JSON.stringify(join(repo, 'src', file))};`).join('\n')}
 
 function Harness(){const [path,setPath]=useState(location.pathname);function go(href){history.pushState({},'',href);setPath(location.pathname);} const role=new URLSearchParams(location.search).get('role'); const session=role==='owner'||role==='unverified'?{access_token:'QA_FIXTURE_NOT_A_REAL_TOKEN',verified:role==='owner'}:null;
 return path==='/'?<Home onNavigate={go}/>:path==='/gallery'?<Discovery onNavigate={go}/>:path==='/events'?<Discovery initialTab="events" onNavigate={go}/>:path.startsWith('/events/')?<Event eventId={path.split('/')[2]} onNavigate={go}/>:path==='/studios'?<Studios session={session} onNavigate={go}/>:path==='/inktober'?<Ink onNavigate={go}/>:path.startsWith('/wall')?<Wall initialPostId={path.split('/')[2]||''} onNavigate={go}/>:<main><h1>QA fixture destination</h1><p>{location.pathname+location.search}</p></main>;}createRoot(document.getElementById('root')).render(<Harness/>);`);
@@ -80,11 +82,50 @@ try {
       });
     }
   }
+  await check('content-first discovery uses Drawesome fonts, compact headings and the graffiti palette', async () => {
+    for (const width of [375, 1280]) for (const path of ['/', '/gallery', '/events', '/events/draw-for-rhoam', '/events/little-joys', '/studios']) {
+      await page.setViewportSize({ width, height: 812 }); await goto(path);
+      await page.evaluate(() => document.fonts.ready);
+      const branding = await page.evaluate(() => {
+        const shell = document.querySelector('.discovery-page');
+        const heading = document.querySelector('.discovery-main h1');
+        const action = document.querySelector('.discovery-main .primary-action');
+        return {
+          headings: [...document.querySelectorAll('.discovery-main h1, .discovery-main h2, .discovery-main h3, .discovery-event h3 a')].map((node) => getComputedStyle(node).fontFamily),
+          displayLoaded: document.fonts.check('700 24px "Fredoka Variable"'),
+          bodyLoaded: document.fonts.check('400 16px "Nunito Sans Variable"'),
+          background: getComputedStyle(shell).backgroundColor,
+          ink: getComputedStyle(heading).color,
+          headingSize: parseFloat(getComputedStyle(heading).fontSize),
+          sidebarVisible: document.querySelector('.discovery-sidebar')?.getBoundingClientRect().width > 0,
+          action: getComputedStyle(action).backgroundColor,
+          accent: shell.style.getPropertyValue('--discovery-accent') || getComputedStyle(shell).getPropertyValue('--discovery-accent').trim(),
+        };
+      });
+      assert(branding.headings.every((font) => font.includes('Fredoka Variable') && !font.includes('Georgia')), JSON.stringify({ path, width, branding }));
+      assert(branding.displayLoaded && branding.bodyLoaded, 'Both self-hosted brand fonts load');
+      assert.equal(branding.background, 'rgb(255, 253, 244)');
+      assert.equal(branding.ink, 'rgb(33, 21, 45)', `${path} ${width}px heading contrast`);
+      assert.equal(branding.action, 'rgb(111, 70, 219)');
+      assert(branding.headingSize <= 32, 'No oversized marketing heading');
+      assert.equal(branding.sidebarVisible, width >= 1000);
+    }
+  });
   await check('homepage leads with real artwork then invitations; no automatic spectator sockets', async () => {
     await goto('/'); await page.getByText(drawing.title, { exact: true }).waitFor();
     assert(await page.locator('#home-art-title').evaluate((node) => node.compareDocumentPosition(document.querySelector('#home-events-title')) & Node.DOCUMENT_POSITION_FOLLOWING));
     assert.equal(await page.locator('.discovery-art-card img[loading="lazy"]').count(), 2);
     assert.equal(sockets, 0);
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert((await page.locator('.discovery-art-card').first().boundingBox()).y < 500, 'Artwork must be visible above the fold');
+    assert.equal(await page.locator('.discovery-topics a[href="/gallery?q=holiday"]').count(), 1);
+    assert.equal(await page.locator('.discovery-topics a[href="/gallery?q=birthday"]').count(), 1);
+    await page.getByRole('searchbox', { name: 'Search artwork' }).fill('holiday');
+    await page.getByRole('button', { name: 'Search artwork', exact: true }).click();
+    assert.equal(new URL(page.url()).pathname, '/gallery');
+    assert.equal(new URL(page.url()).searchParams.get('q'), 'holiday');
+    await page.waitForLoadState('networkidle');
+    assert(requests.some((request) => request.path === '/api/wall' && new URLSearchParams(request.query).get('q') === 'holiday'), 'Search reaches the real gallery transport');
   });
   await check('Artwork / Studios / Events are crawlable and active tab is explicit', async () => {
     await goto('/gallery'); assert.equal(await page.locator('nav[aria-label="Discover"] a[aria-current="page"]').innerText(), 'Artwork');

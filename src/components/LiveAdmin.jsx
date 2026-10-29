@@ -447,6 +447,7 @@ export default function LiveAdmin({ onNavigate }) {
           <button type="button" onClick={() => onNavigate("/admin/users")}>
             People
           </button>
+          <button type="button" onClick={() => onNavigate("/admin/curator")}>Curator · Page headers</button>
           <button type="button" onClick={() => onNavigate("/admin/gallery")}>
             Gallery saves
           </button>

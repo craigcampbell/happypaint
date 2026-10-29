@@ -1,3 +1,5 @@
+import CuratedHeader from './CuratedHeader';
+import useCuratorContent from '../hooks/useCuratorContent';
 // Artist gallery, the public, searchable index of artist studios
 // (audience 'artist_public') plus the verified-account studio creation form.
 // Contract: docs/ARTIST-ROOMS-CONTRACT.md.
@@ -36,6 +38,7 @@ import "./artist-rooms.css";
 import { COMMUNITY_EVENTS, getCommunityEvent } from "../data/communityEvents";
 import { isCloudConfigured } from "../utils/auth";
 import { DiscoveryLink, DiscoveryTabs } from "./DiscoveryPage";
+import { DiscoverySidebar } from "./DiscoveryBrowse";
 
 // Client-side bounds mirror the contract's "plain text, bounded lengths/counts".
 // The server enforces its own limits and moderation; these keep the UI honest
@@ -115,6 +118,7 @@ function createErrorMessage(status, payload) {
 }
 
 export default function ArtistGalleryPage({ onNavigate, session = null, pageSize = 12 }) {
+  const content = useCuratorContent('studios');
   const limit = Math.min(Math.max(1, pageSize | 0), GALLERY_LIMITS.pageMax) || 12;
 
   // ------------------------------ gallery feed ------------------------------
@@ -232,10 +236,11 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
   const hasFilters = Boolean(query || activeTag || activeEvent);
 
   return (
-    <div className="site-page artist-gallery-page">
+    <div className="site-page discovery-page artist-gallery-page">
       <SiteNav onNavigate={onNavigate} current="/studios" />
-      <main className="site-page-body artist-gallery">
-        <h1>Artist studios</h1>
+      <DiscoverySidebar onNavigate={onNavigate} current="/studios" />
+      <main className="site-page-body discovery-main artist-gallery">
+        <CuratedHeader page="studios" content={content} onNavigate={onNavigate} />
         <DiscoveryTabs onNavigate={onNavigate} active="studios" />
         <p className="site-lead">
           Public studios run by individual artists. Anyone can watch; only the

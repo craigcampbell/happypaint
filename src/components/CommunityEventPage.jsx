@@ -24,7 +24,7 @@ export default function CommunityEventPage({ onNavigate, eventId }) {
       .catch((error) => { if (error.name !== "AbortError") setStatus("error"); });
     return () => controller.abort();
   }, [event, attempt]);
-  return <div className="site-page discovery-page"><SiteNav onNavigate={onNavigate} current="/events" /><main className="discovery-main">
+  return <div className="site-page discovery-page discovery-event-page" data-sensitive={event?.sensitive ? "true" : undefined}><SiteNav onNavigate={onNavigate} current="/events" /><main className="discovery-main">
     <DiscoveryTabs active="events" onNavigate={onNavigate} />
     {!event ? <><h1>This invitation isn’t here.</h1><DiscoveryLink href="/events" onNavigate={onNavigate}>Browse community events</DiscoveryLink></> : <>
       <header className="discovery-event-hero" data-accent={event.accent}><p className="discovery-eyebrow">{event.eyebrow}</p><h1>{event.title}</h1><p className="discovery-lead">{event.description}</p><blockquote>{event.prompt}</blockquote>
