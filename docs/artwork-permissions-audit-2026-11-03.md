@@ -131,7 +131,7 @@ packaged assets instead.
 Evidence root:
 `/home/craig/.hermes/maintenance/drawesome-permissions/20261103/`.
 Built image browser evidence:
-`/home/craig/.hermes/cache/scratch/artwork-built-ui-p6TF1J/`.
+`/home/craig/.hermes/cache/scratch/artwork-built-ui-PcdPRD/`.
 Real StudioApp gallery evidence:
 `/home/craig/.hermes/cache/scratch/cloud-gallery-ui-bb5cTm/`.
 
