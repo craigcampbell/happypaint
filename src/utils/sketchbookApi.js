@@ -8,8 +8,9 @@
 
 export const SKETCHBOOK_EVENT = "inktober-2026";
 
-async function apiFetch(path, { method = "GET", session = null, body = null } = {}) {
+async function apiFetch(path, { method = "GET", session = null, body = null, deviceKey = null } = {}) {
   const headers = { "Content-Type": "application/json" };
+  if (deviceKey) headers["X-Drawesome-Device-Key"] = deviceKey;
   if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
   let res;
   try {
@@ -73,8 +74,7 @@ export function fetchSketchbookGallery(offset = 0, limit = 12) {
 // the only way the server can tell the caller "this is your device's book"
 // (unsaved/isGuestOwner/canDraw). It never widens access to anyone else.
 export function fetchSketchbookByRoom(roomCode, session = null, deviceKey = null) {
-  const dk = deviceKey ? `?dk=${encodeURIComponent(deviceKey)}` : "";
-  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}${dk}`, { session });
+  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}`, { session, deviceKey });
 }
 
 export function addSketchbookPage(bookId, day, session) {

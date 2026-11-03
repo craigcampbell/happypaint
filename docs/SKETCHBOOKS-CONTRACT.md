@@ -103,7 +103,9 @@ persistence model.
 - `POST /api/sketchbooks/:id/artists/revoke` `{ profileId }` (owner) →
   removes the artist from the WHOLE book: every page room's ACL, every live
   tab notified (`role_changed` + `paint_requested revoked`), offline page
-  files rewritten, future joins find no grant. The owner can't be removed.
+  files rewritten, future joins find no grant. In private/hidden books every
+  unauthorized tab is disconnected across all pages (book REST, room REST and
+  WS revocation share this sweep). The owner can't be removed.
 - The direct room endpoints can NOT desynchronize a page from its book:
   - `POST /api/rooms/:code/publish` and `/unpublish` on a page room →
     `409 book_managed` (listing + the Inktober flag belong to the book).
@@ -123,7 +125,24 @@ persistence model.
 - `POST /api/admin/rooms/:id/delete` on a page room first drops the book's
   page reference (no dangling, code-reserving page), then deletes the room.
 - `POST /api/wall` quoting a PRIVATE book's page room → `403 book_private`;
-  public books' pages post and attribute normally.
+  a claimed PUBLIC book requires its authenticated owner or approved artist
+  (`403 book_author_required` for viewers). Viewing is not authorship; guest
+  books retain the anonymous publication path.
+
+## Retained media and historical room cards
+- My Rooms and its thumbnail route recheck current source-book visibility and
+  membership, including cached lists; a past visit is not a current grant.
+- Trace photos, Draw Phone pages, chat doodles and retained audio recheck their
+  source book on every request. Missing parents fail closed. Ordinary anonymous
+  sheets/rooms and public guest books remain unchanged.
+- Private sheet loading uses authenticated `fetch('/api/sheets/:id', {headers:
+  {Authorization: 'Bearer …'}, cache: 'no-store'})`, then the returned inline
+  raster data URL as `Image.src`. Do not place credentials in media URLs or
+  require headers on a bare `<img src>`. Audio fetches likewise carry the account
+  bearer and use no-store; source ACL is checked again after revocation.
+- The by-room banner accepts `X-Drawesome-Device-Key` before legacy `dk`/`device`
+  query values. Existing guest-create/claim body behavior is unchanged. Invalid
+  explicit bearer credentials never fall back to guest ownership.
 
 ## WS
 - Page rooms reuse the artist_public guards untouched: viewers are limited
@@ -156,11 +175,15 @@ persistence model.
   one, and if a referenced page's room file is missing, `getRoom`
   REMATERIALIZES the page with its book-stamped shape (owner, painter ACL,
   inktober, immutable prompt metadata) instead of letting the code load as a
-  generic, ownable room (no squatting / generic-room takeover).
+  generic, ownable room (no squatting / generic-room takeover). Corrupt or
+  incomplete room metadata is reconstructed from the authoritative book even
+  when the room file exists; retained history is preserved for the owner. A
+  missing parent never delegates authorization to a stale room owner/ACL.
 - Account deletion: a deleted owner's books leave discovery
   (`public: false`, art kept, the same "unpublish, never delete" stance as
   artist studios) and the account is cut from every other book's artist
-  list, applied across all page rooms.
+  list, applied across all page rooms. Privacy transitions immediately sweep
+  unauthorized member and spectator sessions across every page.
 
 ## Frontend
 - `/sketchbook`, entry route: create/resume with sign-in recovery (the page

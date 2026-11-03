@@ -30,7 +30,9 @@ const fixture = httpServer(async (req, res) => {
   const body = Buffer.concat(chunks).toString();
   requests.push({ path: url.pathname, query: url.search, method: req.method, body });
   const send = (value, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
-  if (url.pathname.endsWith('/unpublish')) { removed = true; return send({ ok: true }); }
+  const ownsFixture = body && JSON.parse(body).userKey === 'QA_FIXTURE_DEVICE';
+  if (url.pathname.endsWith('/permissions')) return send({ canUnpublish: !!ownsFixture, canDelete: !!ownsFixture });
+  if (url.pathname.endsWith('/unpublish')) { if (!ownsFixture) return send({ error: 'forbidden' }, 403); removed = true; return send({ ok: true }); }
   if (url.pathname.includes('/frame/')) { res.writeHead(200, { 'content-type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250"><rect width="400" height="250" fill="#ece6cf"/><text x="30" y="120" fill="#333">QA fixture artwork</text></svg>'); }
   if (url.pathname === '/api/wall/wp_qa_fixture_tribute') return send(removed ? { error: 'not_found' } : { post: tribute }, removed ? 404 : 200);
   if (url.pathname === '/api/wall') { const query = (url.searchParams.get('q') || '').toLowerCase(); const posts = [tribute, drawing].filter((post) => (!removed || post.id !== tribute.id) && (!url.searchParams.get('event') || post.event === url.searchParams.get('event')) && (!query || `${post.title} ${post.artist} ${post.tags.join(' ')}`.toLowerCase().includes(query))); return send({ posts, total: posts.length, topTags: [] }); }
@@ -153,8 +155,9 @@ try {
   });
   await check('sensitive Wall spotlight and feed have no hearts, remix, competitive sorting', async () => {
     await goto('/wall/wp_qa_fixture_tribute'); await page.locator('.wall-spotlight .wall-card').waitFor();
-    await page.getByRole('heading', { name: 'Manage your drawing' }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Unpublish my drawing' }).count(), 1);
+    await page.waitForLoadState('networkidle');
+    assert.equal(await page.getByRole('heading', { name: 'Manage your drawing' }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Unpublish my drawing' }).count(), 0);
     assert.equal(await page.locator('.wall-spotlight .wall-heart, .wall-spotlight .wall-remix-btn, .wall-sorts').count(), 0);
     for (const card of await page.locator('.wall-card').all()) if ((await card.innerText()).includes(tribute.title)) assert.equal(await card.locator('.wall-heart, .wall-remix-btn').count(), 0);
   });
@@ -185,7 +188,9 @@ try {
     assert((await page.locator('.ag-signin-note').innerText()).includes('isn’t verified'));
   });
   await check('receipt explicitly unpublishes with existing device identity and verifies removal', async () => {
-    await goto('/events/draw-for-rhoam?post=wp_qa_fixture_tribute'); await page.evaluate(() => localStorage.setItem('drawesome:userkey:v1', 'QA_FIXTURE_DEVICE'));
+    await page.evaluate(() => localStorage.setItem('drawesome:userkey:v1', 'QA_FIXTURE_DEVICE'));
+    await goto('/events/draw-for-rhoam?post=wp_qa_fixture_tribute');
+    await page.getByRole('button', { name: 'Unpublish my drawing' }).waitFor();
     page.once('dialog', (dialog) => dialog.accept()); await page.getByRole('button', { name: 'Unpublish my drawing' }).click();
     await page.getByRole('status').filter({ hasText: 'no longer public' }).waitFor();
     const request = requests.find((item) => item.path.endsWith('/unpublish')); assert.equal(JSON.parse(request.body).userKey, 'QA_FIXTURE_DEVICE');

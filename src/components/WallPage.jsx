@@ -8,26 +8,12 @@
 // sparse wall invites you to add your own art instead of looking dead.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getDeviceKey as deviceKey } from "../utils/deviceIdentity";
 import SiteNav from "./SiteNav";
 import { getSession } from "../utils/auth";
 import { getCommunityEvent } from "../data/communityEvents";
 import { DiscoveryLink } from "./DiscoveryPage";
 import EventSharingReceipt from "./EventSharingReceipt";
-
-// Same device key the studio uses for saves, hearts stick per device, and
-// sign-in upgrades them to the account key server-side via the bearer token.
-function deviceKey() {
-  try {
-    let key = window.localStorage.getItem("drawesome:userkey:v1");
-    if (!key) {
-      key = "u_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      window.localStorage.setItem("drawesome:userkey:v1", key);
-    }
-    return key;
-  } catch {
-    return "";
-  }
-}
 
 const CTA_MESSAGES = [
   { emoji: "🧲", line: "This wall is missing YOUR artwork!", action: "Draw now" },
@@ -151,8 +137,6 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       const params = new URLSearchParams({ sort: sortBy, limit: "60" });
       if (q) params.set("q", q);
       if (tag) params.set("tag", tag);
-      const key = deviceKey();
-      if (key) params.set("userKey", key);
       const session = await getSession().catch(() => null);
       const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
       const res = await fetch(`/api/wall?${params}`, { headers, cache: "no-store" });
@@ -182,10 +166,9 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
     let active = true;
     (async () => {
       try {
-        const key = deviceKey();
         const session = await getSession().catch(() => null);
         const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-        const res = await fetch(`/api/wall/${encodeURIComponent(initialPostId)}${key ? `?userKey=${encodeURIComponent(key)}` : ""}`, { headers, cache: "no-store" });
+        const res = await fetch(`/api/wall/${encodeURIComponent(initialPostId)}`, { headers, cache: "no-store" });
         if (!res.ok) throw new Error("missing");
         const data = await res.json();
         if (active && data.post) setSpotlight(data.post);

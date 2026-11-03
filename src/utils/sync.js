@@ -12,7 +12,7 @@
 // status to "paused" so the AccountPanel can surface it. If the `snapshots`
 // collection doesn't exist yet, sync simply stays paused, the app is unaffected.
 
-import { getPocketBase, getProfileId } from "./auth";
+import { getPocketBase, isCloudConfigured } from "./auth";
 import { idbGetKV, idbSetKV, isIdbAvailable } from "./idb";
 
 const GALLERY_IDB_KEY = "gallery:v2";
@@ -101,7 +101,7 @@ function localStamp(record) {
 function galleryToFields(item, profileId, nowIso) {
   return {
     owner: profileId,
-    client_id: item.id,
+    client_id: item.cloudClientId || item.id,
     title: item.name || "Drawesome",
     image: item.layer || "",
     texture_id: item.textureId ?? "",
@@ -112,7 +112,9 @@ function galleryToFields(item, profileId, nowIso) {
 
 function snapshotRowToGallery(row) {
   return {
-    id: row.client_id,
+    id: `cloud:${row.owner}:${row.client_id}`,
+    cloudClientId: row.client_id,
+    cloudOwner: row.owner,
     name: row.title || "Drawesome",
     layer: row.image || "",
     textureId: row.texture_id || null,
@@ -126,124 +128,199 @@ function snapshotRowToGallery(row) {
 function mergeByStamp(localList, remoteList) {
   const byId = new Map();
   for (const item of localList) {
-    if (item?.id) byId.set(item.id, item);
+    if (item?.id) byId.set(item.cloudClientId || item.id, item);
   }
   for (const remote of remoteList) {
     if (!remote?.id) continue;
-    const local = byId.get(remote.id);
+    const key = remote.cloudClientId || remote.id;
+    const local = byId.get(key);
     // Browser-only consent survives pull/merge, including a remote ID collision.
     if (local?.localOnly === true) continue;
     if (!local || localStamp(remote) > localStamp(local)) {
-      byId.set(remote.id, remote);
+      byId.set(key, { ...local, ...remote, id: local?.id || remote.id });
     }
   }
   return Array.from(byId.values());
 }
 
-// ---- PocketBase upsert (no native upsert; find-then-create/update) ----
+// Owner tags live in the existing gallery store, so account deletion's existing
+// gallery wipe covers them. Never merge different owners solely by client id.
+let activeSession = null;
+let generation = 0;
+let pushTimer = null;
+let storageQueue = Promise.resolve();
+const galleryListeners = new Set();
 
-async function upsertSnapshot(pb, item, profileId, nowIso) {
-  // Enforce at the network boundary, not only in the local drawing component.
-  if (item?.localOnly === true) return;
-  const data = galleryToFields(item, profileId, nowIso);
-  let existing = null;
-  try {
-    existing = await pb
-      .collection(COLLECTION)
-      .getFirstListItem(`owner="${profileId}" && client_id="${item.id}"`);
-  } catch (error) {
-    if (error?.status && error.status !== 404) throw error; // a real failure
-    existing = null; // 404 = doesn't exist yet
+function notifyGallery() {
+  for (const listener of galleryListeners) {
+    try { listener(); } catch { /* observers cannot break persistence */ }
   }
-  if (existing) await pb.collection(COLLECTION).update(existing.id, data);
-  else await pb.collection(COLLECTION).create(data);
 }
 
-// ---- Push (debounced) ----
+export function onGalleryChange(listener) {
+  galleryListeners.add(listener);
+  return () => galleryListeners.delete(listener);
+}
 
-let pushTimer = null;
-let activeProfileId = null;
+// Older sync versions wrote unlabelled cloud rows with updated_at. Ownership
+// cannot safely be reconstructed: retain these bytes but quarantine them rather
+// than assigning them to the next login. Ordinary anonymous saves use createdAt.
+function ownerOf(item) {
+  return item?.cloudOwner || (item?.updated_at && item?.localOnly !== true ? "legacy-unknown" : null);
+}
 
-async function pushNow() {
+export function getVisibleGallery(items, profileId = activeSession?.profileId || null) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const owner = ownerOf(item);
+    return !owner || owner === profileId;
+  });
+}
+
+export async function readGallery() {
+  return getVisibleGallery(await readGalleryLocal());
+}
+
+function serializeStorage(work) {
+  const pending = storageQueue.then(work);
+  storageQueue = pending.catch(() => {});
+  return pending;
+}
+
+// App must use this instead of overwriting the raw shared gallery: hidden
+// account partitions and legacy quarantine survive saves/deletes in another view.
+// Capture the auth generation BEFORE any await, including anonymous writes.
+export function persistGallery(items) {
+  const epoch = generation;
+  const profileId = activeSession?.profileId || null;
+  return serializeStorage(async () => {
+    if (epoch !== generation) return false;
+    const all = await readGalleryLocal();
+    if (epoch !== generation) return false;
+    const hidden = all.filter(item => !getVisibleGallery([item], profileId).length);
+    const visible = items.filter(item => getVisibleGallery([item], profileId).length).map(item => {
+      const existing = all.find(row => row.id === item.id && ownerOf(row) === ownerOf(item));
+      // Existing anonymous/local-only art stays device-only. New signed-in saves
+      // are owned once, and editing a cloud item retains its original owner.
+      return { ...item, ...(existing?.cloudOwner ? { cloudOwner: existing.cloudOwner } :
+        !existing && profileId && item.localOnly !== true ? { cloudOwner: profileId } : {}) };
+    });
+    await writeGalleryLocal([...hidden, ...visible]);
+    notifyGallery();
+    return epoch === generation ? visible : false;
+  });
+}
+
+function isCurrent(ctx) {
+  return activeSession === ctx && ctx?.generation === generation && !ctx.controller.signal.aborted;
+}
+
+function requestOptions(ctx) {
+  // Explicit immutable auth prevents the SDK from consulting its mutable authStore
+  // after an await (or retry). Abort in-flight fetches on every auth generation.
+  return { headers: { Authorization: ctx.token }, signal: ctx.controller.signal, requestKey: null };
+}
+
+async function clientFor(ctx) {
+  if (!isCurrent(ctx)) return null;
   const pb = await getPocketBase();
-  if (!pb || !activeProfileId) return;
+  if (!isCurrent(ctx) || !pb || !pb.authStore.isValid ||
+      pb.authStore.record?.id !== ctx.profileId || pb.authStore.token !== ctx.token) return null;
+  return pb;
+}
+
+async function upsertSnapshot(pb, item, ctx, nowIso) {
+  if (!isCurrent(ctx) || item?.localOnly === true || ownerOf(item) !== ctx.profileId) return;
+  const data = galleryToFields(item, ctx.profileId, nowIso);
+  const filter = `owner=${JSON.stringify(ctx.profileId)} && client_id=${JSON.stringify(item.cloudClientId || item.id)}`;
+  let existing;
+  try {
+    existing = await pb.collection(COLLECTION).getFirstListItem(filter, requestOptions(ctx));
+  } catch (error) {
+    if (error?.status !== 404) throw error;
+  }
+  if (!isCurrent(ctx)) return;
+  if (existing && existing.owner !== ctx.profileId) throw new Error("snapshot_owner_mismatch");
+  if (existing) await pb.collection(COLLECTION).update(existing.id, data, requestOptions(ctx));
+  else await pb.collection(COLLECTION).create(data, requestOptions(ctx));
+}
+
+async function pushNow(ctx) {
+  const pb = await clientFor(ctx);
+  if (!pb) return;
   setStatus("syncing");
-  const nowIso = new Date().toISOString();
   let ok = true;
   try {
     const gallery = await readGalleryLocal();
     for (const item of gallery) {
-      try {
-        await upsertSnapshot(pb, item, activeProfileId, nowIso);
-      } catch {
-        ok = false;
-      }
+      if (!isCurrent(ctx)) return;
+      try { await upsertSnapshot(pb, item, ctx, new Date().toISOString()); }
+      catch { ok = false; }
     }
-  } catch {
-    ok = false;
-  }
-  setStatus(ok ? "synced" : "paused");
+  } catch { ok = false; }
+  if (isCurrent(ctx)) setStatus(ok ? "synced" : "paused");
 }
 
-// Schedule a debounced push from the same places local saves happen.
 export function schedulePush() {
-  if (!activeProfileId) return;
+  const ctx = activeSession;
+  if (!ctx) return;
   if (pushTimer) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     pushTimer = null;
-    pushNow().catch(() => setStatus("paused"));
+    pushNow(ctx).catch(() => { if (isCurrent(ctx)) setStatus("paused"); });
   }, PUSH_DEBOUNCE_MS);
 }
 
-// ---- Pull (on sign-in / on demand) ----
-export async function pull() {
-  const pb = await getPocketBase();
-  if (!pb || !activeProfileId) return false;
+export async function pull(ctx = activeSession) {
+  const pb = await clientFor(ctx);
+  if (!pb) return false;
   setStatus("syncing");
   let ok = true;
   try {
-    const rows = await pb.collection(COLLECTION).getFullList({ filter: `owner="${activeProfileId}"` });
-    const local = await readGalleryLocal();
-    const merged = mergeByStamp(local, rows.map(snapshotRowToGallery));
-    await writeGalleryLocal(merged);
-  } catch {
-    ok = false;
-  }
+    const rows = await pb.collection(COLLECTION).getFullList({
+      ...requestOptions(ctx), filter: `owner=${JSON.stringify(ctx.profileId)}`,
+    });
+    if (!isCurrent(ctx)) return false;
+    await serializeStorage(async () => {
+      if (!isCurrent(ctx)) return;
+      const all = await readGalleryLocal();
+      if (!isCurrent(ctx)) return;
+      const own = all.filter(item => ownerOf(item) === ctx.profileId);
+      const other = all.filter(item => ownerOf(item) !== ctx.profileId);
+      const remote = rows.filter(row => row.owner === ctx.profileId).map(snapshotRowToGallery);
+      await writeGalleryLocal([...other, ...mergeByStamp(own, remote)]);
+      if (isCurrent(ctx)) notifyGallery();
+    });
+  } catch { ok = false; }
+  if (!isCurrent(ctx)) return false;
   setStatus(ok ? "synced" : "paused");
   return ok;
 }
 
-// ---- Lifecycle ----
-
 export async function startSync(session) {
+  stopSync(); // invalidate pending starts, pulls, pushes and local store writes
+  if (!isCloudConfigured || !session?.user?.id || !session.access_token) return;
+  const ctx = {
+    profileId: session.user.id, token: session.access_token,
+    generation, controller: new AbortController(),
+  };
+  activeSession = ctx;
+  notifyGallery();
   try {
-    if (!session) {
-      stopSync();
-      return;
-    }
-    const profileId = session.user?.id || (await getProfileId());
-    if (!profileId) {
-      stopSync();
-      return;
-    }
-    activeProfileId = profileId;
-    setStatus("syncing");
-    await pull(); // pull first so we don't re-push stale rows over newer server ones
-    await pushNow();
-  } catch {
-    setStatus("paused");
-  }
+    if (!await clientFor(ctx)) return;
+    if (await pull(ctx)) await pushNow(ctx);
+  } catch { if (isCurrent(ctx)) setStatus("paused"); }
 }
 
 export function stopSync() {
-  activeProfileId = null;
-  if (pushTimer) {
-    clearTimeout(pushTimer);
-    pushTimer = null;
-  }
+  generation += 1;
+  activeSession?.controller.abort();
+  activeSession = null;
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = null;
   setStatus("signed-out");
+  notifyGallery();
 }
 
 export function isSyncing() {
-  return Boolean(activeProfileId);
+  return Boolean(activeSession);
 }
