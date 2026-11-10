@@ -1,5 +1,6 @@
 import { Component, Suspense, lazy, useCallback, useEffect, useState } from "react";
 import HomePage from "./components/HomePage";
+import { adminRoomCode } from "./utils/adminRoomCode";
 import { getCommunityEvent } from "./data/communityEvents";
 import { getPageSeo } from "./data/discoverySeo";
 
@@ -109,7 +110,7 @@ export default function Router() {
   } else if (path.startsWith("/watch")) {
     // The admin glass-room. Not a drawing route: no studio bundle, no canvas
     // tools, the watch view is read-only by construction.
-    const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+    const code = adminRoomCode(path.split("/")[2]);
     page = <RoomWatch key={`watch-${code}`} roomCode={code} onNavigate={navigate} />;
   } else if (path.startsWith("/live")) {
     // The public read-only watch page: a shareable window into one public room's

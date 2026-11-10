@@ -67,7 +67,7 @@ import { applyOp, eraserRand, replayFrameComposite, replayFrameOnto } from "./ut
 import { replayInSlices } from "./utils/replayQueue";
 import { isCanceled } from "./utils/cancellation";
 import { createSharedOpLog } from "./utils/sharedOpLog";
-import { idbDelete, idbGet, idbGetKV, idbSet, idbSetKV, isIdbAvailable } from "./utils/idb";
+import { idbDelete, idbGet, idbSet, isIdbAvailable } from "./utils/idb";
 import { getSession, hasStoredSession, onAuthStateChange, signOut } from "./utils/auth";
 import { getRecentRooms, recordRecentRoom } from "./utils/recentRooms";
 import { isInlineRaster, remoteOpImage } from "./utils/safeImage";
@@ -93,7 +93,7 @@ const HYDRATED_FRAME_BUDGET_BYTES = 240 * 1024 * 1024;
 const filmAuthHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : undefined);
 import { useMentionWatcher } from "./hooks/useMentionWatcher";
 import { addNotification, getNotifications, markAllRead, clearNotifications } from "./utils/notifications";
-import { schedulePush, startSync, stopSync } from "./utils/sync";
+import { getVisibleGallery, onGalleryChange, persistGallery, readGallery, schedulePush, startSync, stopSync } from "./utils/sync";
 import {
   addAsset,
   createAsset,
@@ -168,13 +168,14 @@ import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTr
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import SketchbookRoomBanner from "./components/SketchbookRoomBanner";
 import { openSketchbookPrompt } from "./utils/sketchbookApi";
-import { getDeviceKey, saveGuestSketchbook } from "./utils/guestSketchbook";
+import { saveGuestSketchbook } from "./utils/guestSketchbook";
 import BrushPreview from "./components/BrushPreview";
 import BrushQuickMenu from "./components/BrushQuickMenu";
 import ColorWheelPicker from "./components/ColorWheelPicker";
 import { ColorDot, SizePill } from "./components/QuickStrokeControls";
 import { loadInputPrefs, saveInputPrefs, pressureFlagsFor } from "./utils/inputPrefs";
 import { useMultiplayer } from "./hooks/useMultiplayer";
+import { getDeviceKey } from "./utils/deviceIdentity";
 import { useLayoutTier, resolveLayoutTier } from "./hooks/useLayoutTier";
 import {
   createVelocityPressure,
@@ -271,7 +272,6 @@ function bumpDrawingStreak() {
 
 const STORAGE_KEYS = {
   draft: "happypaint:draft:v3",
-  gallery: "happypaint:gallery:v2",
   studio: "happypaint:studio-pass:v1",
 };
 
@@ -304,13 +304,8 @@ function warnDraftBlobFallback(error) {
   );
 }
 
-// The gallery and Paint Space lockers now persist their full arrays in
-// IndexedDB (much larger quota than the ~5MB localStorage budget, and a quota
-// overflow rejects instead of silently dropping the save). STORAGE_KEYS.gallery
-// is kept only for one-time back-compat migration and as the private-mode
-// fallback store. Gallery items keep their base64 dataURLs; IDB swallows them
-// happily and they stay sync-ready for the backend.
-const GALLERY_IDB_KEY = "gallery:v2";
+// Gallery persistence is owned by utils/sync so hidden account partitions and
+// legacy quarantine survive every local save. Paint Space uses its own store.
 
 // Downscaled GIF size keeps exports small and quantization fast. The 4000x2500
 // canvas is 8:5, so every downscale target keeps that ratio (a 4:3 target was
@@ -616,7 +611,7 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
     return;
   }
   try {
-    const listRes = await fetch(`/api/artworks?userKey=${encodeURIComponent(deviceKey)}`, { cache: "no-store" });
+    const listRes = await fetch("/api/artworks", { cache: "no-store", headers: { "X-Drawesome-Device-Key": deviceKey } });
     if (!listRes.ok) {
       return; // leave the flag unset so a future sign-in can retry
     }
@@ -624,7 +619,7 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
     const items = Array.isArray(list?.items) ? list.items : [];
     // Oldest first so the account order matches the device order after unshift.
     for (const meta of items.slice().reverse()) {
-      const detailRes = await fetch(`/api/artworks/${meta.id}?userKey=${encodeURIComponent(deviceKey)}`, { cache: "no-store" });
+      const detailRes = await fetch(`/api/artworks/${meta.id}`, { cache: "no-store", headers: { "X-Drawesome-Device-Key": deviceKey } });
       if (!detailRes.ok) continue;
       const detail = await detailRes.json();
       if (typeof detail?.image !== "string") continue;
@@ -930,7 +925,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const userKeyRef = useRef(null);
   const deviceKeyRef = useRef(null);
   const tokenRef = useRef(null);
-  const [myDrawings, setMyDrawings] = useState([]);
+  const [myDrawingItems, setMyDrawings] = useState([]);
   const [savesMax, setSavesMax] = useState(12);
   const [showMyArt, setShowMyArt] = useState(false);
   // Which studio layout we're in (desktop / tablet / phone), see useLayoutTier.
@@ -1079,7 +1074,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const [smudgeMode, setSmudgeMode] = useState("drag");
   const [fillShape, setFillShape] = useState(false);
   const [textSize, setTextSize] = useState(64);
-  const [gallery, setGallery] = useState([]);
+  const [galleryItems, setGallery] = useState([]);
+  const gallerySessionRef = useRef(null);
+  const galleryEpochRef = useRef(0);
   const [status, setStatus] = useState("Ready");
   const statusRef = useRef("Ready");
   useEffect(() => {
@@ -1120,6 +1117,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // so the access token can ride the multiplayer socket and the host UI can read
   // identity. Room ownership/host flags are learned live from the WS server.
   const [session, setSession] = useState(null);
+  // Filter during render, not in a later effect: no previous-account artwork frame.
+  const gallery = getVisibleGallery(galleryItems, session?.user?.id || null);
+  const myDrawingKey = session?.user?.id ? `pb_${session.user.id}` : deviceKeyRef.current;
+  const myDrawings = myDrawingItems.filter(item => item.galleryKey === myDrawingKey);
   // Did this studio mount WITHOUT a stored sign-in? The guest-sketchbook claim
   // path needs it: a socket opened guest-first can't be re-authorized by a
   // client-side session lift alone, so onSaved reloads once (below); a socket
@@ -3065,50 +3066,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     markChanged("Draft restored");
   }, [applyDraftSettings, loadDraft, markChanged, paintGate, pushHistory, restoreLayersFromDraft, syncLayerState]);
 
-  // Persist the gallery array. IndexedDB when available (large quota), else
-  // localStorage. Rejects on failure so the caller can surface an honest status
-  // instead of silently dropping a saved piece.
-  const persistGallery = useCallback(async (items) => {
-    if (isIdbAvailable()) {
-      await idbSetKV(GALLERY_IDB_KEY, items);
-      return;
-    }
-    // Private-mode fallback: let QuotaExceededError surface (no silent catch).
-    window.localStorage.setItem(STORAGE_KEYS.gallery, JSON.stringify(items));
-  }, []);
-
-  // Async gallery load: IndexedDB first; if empty there but a legacy localStorage
-  // gallery exists, migrate it forward into IndexedDB and clear the localStorage
-  // copy so existing users keep their saved pieces. Falls back to localStorage
-  // when IndexedDB is unavailable. Never throws (worst case: an empty gallery).
-  const loadGallery = useCallback(async () => {
-    if (isIdbAvailable()) {
-      try {
-        const stored = await idbGetKV(GALLERY_IDB_KEY);
-        if (Array.isArray(stored)) {
-          return stored;
-        }
-        const legacy = readJson(STORAGE_KEYS.gallery, null);
-        if (Array.isArray(legacy) && legacy.length > 0) {
-          await idbSetKV(GALLERY_IDB_KEY, legacy);
-          try {
-            window.localStorage.removeItem(STORAGE_KEYS.gallery);
-          } catch {
-            // Non-fatal: leaving the legacy key just costs a little quota.
-          }
-          return legacy;
-        }
-        return [];
-      } catch {
-        const legacy = readJson(STORAGE_KEYS.gallery, []);
-        return Array.isArray(legacy) ? legacy : [];
-      }
-    }
-    const legacy = readJson(STORAGE_KEYS.gallery, []);
-    return Array.isArray(legacy) ? legacy : [];
-  }, []);
-
   const saveToGallery = useCallback(async () => {
+    const epoch = galleryEpochRef.current;
     if (layersRef.current.length === 0) {
       return;
     }
@@ -3125,21 +3084,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       createdAt: new Date().toISOString(),
     };
 
-    const next = [item, ...galleryRef.current].slice(0, MAX_GALLERY_ITEMS);
+    if (epoch !== galleryEpochRef.current) return;
+    const next = [item, ...getVisibleGallery(galleryRef.current, gallerySessionRef.current)].slice(0, MAX_GALLERY_ITEMS);
+    let saved;
     try {
-      await persistGallery(next);
+      saved = await persistGallery(next);
     } catch {
       // Honest failure: don't pretend the save worked.
       setStatus("Couldn't save gallery, storage full");
       return;
     }
-    galleryRef.current = next;
-    setGallery(next);
+    if (saved === false || epoch !== galleryEpochRef.current) return;
+    galleryRef.current = saved;
+    setGallery(saved);
     setStatus("Saved to gallery");
     signalNaturalAdBreak("gallery_save");
     // Best-effort cloud push (debounced; no-op when signed out / local-only).
     if (!initialLocal) schedulePush();
-  }, [composeCanvas, persistGallery, selectedTexture, initialLocal]);
+  }, [composeCanvas, selectedTexture, initialLocal]);
 
   // Account gate for every export/share path (product UX gate, not DRM):
   // exports leave the device, so they need a signed-in account. Anonymous
@@ -3345,18 +3307,20 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   }, []);
 
   const loadMyDrawings = useCallback(async () => {
+    const epoch = tokenRef.epoch;
     const key = userKeyRef.current;
     if (!key) {
       return;
     }
     try {
       const token = tokenRef.current;
-      const res = await fetch(`/api/artworks?userKey=${encodeURIComponent(key)}`, {
+      const res = await fetch("/api/artworks", {
         cache: "no-store",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: token ? { Authorization: `Bearer ${token}` } : { "X-Drawesome-Device-Key": key },
       });
       const data = await res.json();
-      setMyDrawings(Array.isArray(data.items) ? data.items : []);
+      if (epoch !== tokenRef.epoch || key !== userKeyRef.current || token !== tokenRef.current) return;
+      setMyDrawings(Array.isArray(data.items) ? data.items.map(item => ({ ...item, galleryKey: key })) : []);
       if (data.max) {
         setSavesMax(data.max);
       }
@@ -3366,6 +3330,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   }, []);
 
   const saveToServer = useCallback(async () => {
+    const epoch = tokenRef.epoch;
+    const token = tokenRef.current;
     const key = userKeyRef.current;
     if (!key || savingArt) {
       return;
@@ -3377,7 +3343,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       const preview = await composeCanvas({ width: 320, height: 200 });
       const image = await canvasToDataUrl(full);
       const thumb = await canvasToDataUrl(preview);
-      const token = tokenRef.current;
+      if (epoch !== tokenRef.epoch || key !== userKeyRef.current || token !== tokenRef.current) return;
       const res = await fetch("/api/artworks", {
         method: "POST",
         headers: {
@@ -3395,6 +3361,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         throw new Error("save failed");
       }
       const data = await res.json();
+      if (epoch !== tokenRef.epoch) return;
       showToast(`Saved! 🎉 (${data.count}/${data.max}), find it in 🖼️ Gallery`);
       await loadMyDrawings();
       signalNaturalAdBreak("server_save");
@@ -3437,22 +3404,24 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   }, [commitLayersToFrame, composeCanvas, renderPaper, selectedTexture, showToast]);
 
   const openDrawing = useCallback(
-    async (id) => {
+    async (id, expectedKey = userKeyRef.current) => {
+      const epoch = tokenRef.epoch;
       const key = userKeyRef.current;
-      if (!key) {
+      if (!key || expectedKey !== key) {
         return;
       }
       try {
         const token = tokenRef.current;
-        const res = await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+        const res = await fetch(`/api/artworks/${id}`, {
           cache: "no-store",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          headers: token ? { Authorization: `Bearer ${token}` } : { "X-Drawesome-Device-Key": key },
         });
         if (!res.ok) {
           throw new Error("not found");
         }
         const data = await res.json();
         const image = await createImage(data.image).catch(() => null);
+        if (epoch !== tokenRef.epoch || key !== userKeyRef.current || token !== tokenRef.current) return;
         if (!image) {
           throw new Error("decode failed");
         }
@@ -3483,20 +3452,26 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   );
 
   const deleteDrawing = useCallback(
-    async (id) => {
+    async (id, expectedKey = userKeyRef.current) => {
+      const epoch = tokenRef.epoch;
       const key = userKeyRef.current;
-      if (!key) {
+      if (!key || expectedKey !== key) {
         return;
       }
       try {
         const token = tokenRef.current;
-        await fetch(`/api/artworks/${id}?userKey=${encodeURIComponent(key)}`, {
+        await fetch(`/api/artworks/${id}`, {
           method: "DELETE",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ userKey: key }),
         });
       } catch {
         // ignore
       }
+      if (epoch !== tokenRef.epoch) return;
       await loadMyDrawings();
     },
     [loadMyDrawings],
@@ -3593,6 +3568,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // Restore a flattened gallery item onto a fresh single layer.
   const restoreGalleryItem = useCallback(
     async (item) => {
+      if (!getVisibleGallery([item], gallerySessionRef.current).length) return;
+      const epoch = galleryEpochRef.current;
       if (paintGate("pasting saved art")) return;
       if (inkOnlyRef.current) {
         setStatus("Saved art can't be pasted into the Ink & Pencil room ✒️");
@@ -3607,6 +3584,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
       const layer = createLayer({ name: "Artwork", width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
       const image = await createImage(item.layer).catch(() => null);
+      if (epoch !== galleryEpochRef.current) return;
       if (image) {
         layer.canvas.getContext("2d").drawImage(image, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       }
@@ -7006,7 +6984,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       let productionAudio = null;
       if (productionSound) {
         try {
-          const bytes = await (await fetch(`/api/audio/${encodeURIComponent(productionSound.id)}`)).arrayBuffer();
+          const bytes = await (await fetch(`/api/audio/${encodeURIComponent(productionSound.id)}`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) })).arrayBuffer();
           const decoded = await decodeSoundtrack(bytes);
           productionAudio = await renderSoundtrackSlice(decoded, 0, plan.reduce((sum, shot) => sum + shot.durationMs, 0));
         } catch {
@@ -7817,7 +7795,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         return;
       }
       // Custom admin uploads AND user trace photos come back as a data URL.
-      fetch(`/api/sheets/${id}`, { cache: "no-store" })
+      fetch(`/api/sheets/${id}`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.image) applySrc(data.image);
@@ -7839,7 +7817,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     setSoundtrack(meta);
     setSoundtrackBusy(false);
     if (!meta?.id) return;
-    fetch(`/api/audio/${encodeURIComponent(meta.id)}`, { cache: "force-cache" })
+    fetch(`/api/audio/${encodeURIComponent(meta.id)}`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) })
       .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject(new Error("audio fetch failed"))))
       .then((bytes) => decodeSoundtrack(bytes))
       .then((buffer) => {
@@ -10287,21 +10265,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // gallery key and the source for the one-time sign-in migration below; the
   // session effect picks the active key (device vs. account) and loads.
   useEffect(() => {
-    let key = null;
-    try {
-      key = window.localStorage.getItem("drawesome:userkey:v1");
-    } catch {
-      key = null;
-    }
-    if (!key) {
-      key = "u_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      try {
-        window.localStorage.setItem("drawesome:userkey:v1", key);
-      } catch {
-        // ephemeral key if storage is blocked
-      }
-    }
-    deviceKeyRef.current = key;
+    deviceKeyRef.current = getDeviceKey();
   }, []);
 
   // Flip the active gallery key on sign-in/out and load that user's art.
@@ -10700,14 +10664,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       }
     });
 
-    // Gallery + Paint Space now load async from IndexedDB (with one-time legacy
-    // localStorage migration). The UI briefly shows empty until these resolve.
-    // We mirror into the refs so the async save callbacks build on the latest
-    // committed array.
-    loadGallery().then((items) => {
-      galleryRef.current = items;
-      setGallery(items);
-    });
+    // Gallery hydration is owned by the auth-aware subscription below.
     loadPaintSpace().then((assets) => {
       paintSpaceAssetsRef.current = assets;
       setPaintSpaceAssets(assets);
@@ -10721,42 +10678,43 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- Cloud sync lifecycle (optional; no-op in local-only mode) ----
-  // Start sync on sign-in, stop on sign-out. startSync() pulls remote rows and
-  // merges them into the local stores (last-write-wins); after it resolves we
-  // re-read the (now merged) gallery + Paint Space into memory so the UI shows
-  // synced pieces. Everything is best-effort and never blocks offline use.
+  // ---- Cloud sync lifecycle (optional; anonymous gallery always works) ----
   useEffect(() => {
     let active = true;
+    let refreshVersion = 0;
+    let authVersion = 0;
     const refreshFromLocal = async () => {
-      const [items, assets] = await Promise.all([loadGallery(), loadPaintSpace()]);
-      if (!active) {
-        return;
-      }
-      galleryRef.current = items;
-      setGallery(items);
-      paintSpaceAssetsRef.current = assets;
-      setPaintSpaceAssets(assets);
+      const version = ++refreshVersion;
+      const epoch = galleryEpochRef.current;
+      const items = await readGallery();
+      if (!active || version !== refreshVersion || epoch !== galleryEpochRef.current) return;
+      const visible = getVisibleGallery(items, gallerySessionRef.current);
+      galleryRef.current = visible;
+      setGallery(visible);
     };
-    const handleSession = async (session) => {
-      // Lift the session so the access token can ride the multiplayer socket and
-      // the host UI can read identity. Re-running the socket connect on token
-      // change reconnects us with our verified identity.
-      if (active) {
-        setSession(session || null);
-        setAuthSettled(true);
-      }
-      if (session && !initialLocal) {
-        await startSync(session);
-        await refreshFromLocal();
-      } else {
-        stopSync();
-      }
+    const unsubscribeGallery = onGalleryChange(() => { void refreshFromLocal(); });
+    const handleSession = (nextSession) => {
+      if (!active) return;
+      authVersion += 1;
+      galleryEpochRef.current += 1;
+      tokenRef.epoch = (tokenRef.epoch || 0) + 1;
+      setMyDrawings([]);
+      userKeyRef.current = nextSession?.user?.id ? `pb_${nextSession.user.id}` : deviceKeyRef.current;
+      gallerySessionRef.current = nextSession?.user?.id || null;
+      // Revoke action refs in the auth callback, before React's next render.
+      tokenRef.current = nextSession?.access_token || null;
+      const visible = getVisibleGallery(galleryRef.current, gallerySessionRef.current);
+      galleryRef.current = visible;
+      setGallery(visible);
+      setSession(nextSession || null);
+      setAuthSettled(true);
+      if (nextSession && !initialLocal) void startSync(nextSession);
+      else stopSync();
+      void refreshFromLocal();
     };
-    getSession().then((session) => {
-      if (active) {
-        handleSession(session);
-      }
+    const initialAuthVersion = authVersion;
+    getSession().then((nextSession) => {
+      if (active && initialAuthVersion === authVersion) handleSession(nextSession);
     });
     // Never hold the room hostage to a slow/failed SDK load: after 5s connect
     // as whoever we are (a private room will ask to sign in, and that gate now
@@ -10771,6 +10729,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       active = false;
       window.clearTimeout(settleTimer);
       unsub();
+      unsubscribeGallery();
+      galleryEpochRef.current += 1;
+      tokenRef.epoch = (tokenRef.epoch || 0) + 1;
       stopSync();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -12208,14 +12169,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
                 <div className="myart-grid">
                   {myDrawings.map((art) => (
                     <div key={art.id} className="myart-item">
-                      <button type="button" className="myart-open" onClick={() => openDrawing(art.id)} title="Open to keep drawing">
+                      <button type="button" className="myart-open" onClick={() => openDrawing(art.id, art.galleryKey)} title="Open to keep drawing">
                         {art.thumb ? <img src={art.thumb} alt={art.name} /> : <span className="myart-noimg">🎨</span>}
                         <span>{art.name}</span>
                       </button>
                       <button
                         type="button"
                         className="myart-delete"
-                        onClick={() => deleteDrawing(art.id)}
+                        onClick={() => deleteDrawing(art.id, art.galleryKey)}
                         aria-label={`Delete ${art.name}`}
                       >
                         🗑

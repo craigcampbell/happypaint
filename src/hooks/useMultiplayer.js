@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getDeviceKey as localDeviceKey } from "../utils/deviceIdentity";
 import { orderedFrameDecoder, supportsGzipFrames } from "../utils/wsInflate";
 import { checkpointClientSupport } from "../utils/checkpointClient";
 
@@ -38,22 +39,6 @@ function resolveSocketUrl(roomId) {
     }
   }
   return `${proto}://${host}/ws?room=${encodeURIComponent(roomId)}${gz}${cp}`;
-}
-
-// The browser-local device key the wall already uses. Sent with client_info so
-// per-person actions (e.g. the keep-vote) can tell two kids on one school
-// network apart, while two tabs of the SAME browser still count once.
-function localDeviceKey() {
-  try {
-    let key = window.localStorage.getItem("drawesome:userkey:v1");
-    if (!key) {
-      key = `dk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-      window.localStorage.setItem("drawesome:userkey:v1", key);
-    }
-    return key;
-  } catch {
-    return "";
-  }
 }
 
 function clientInfoPayload() {

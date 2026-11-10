@@ -1,3 +1,4 @@
+import FeaturedRooms from './FeaturedRooms';
 import CuratedHeader from './CuratedHeader';
 import useCuratorContent from '../hooks/useCuratorContent';
 import { lazy, Suspense, useEffect, useState } from "react";
@@ -77,6 +78,7 @@ export default function DiscoveryPage({ onNavigate, initialTab = "artwork" }) {
       <DiscoveryTabs onNavigate={onNavigate} active={roomMode ? "rooms" : initialTab} />
       {!roomMode && initialTab !== "events" ? <DiscoverySearch key={query} initialQuery={query} onNavigate={onNavigate} /> : null}
       {roomMode ? <Suspense fallback={<p role="status">Loading room gallery…</p>}><RoomGallery onNavigate={onNavigate} /></Suspense> : initialTab === "events" ? <EventInvitations onNavigate={onNavigate} /> : <>
+        {!query ? <FeaturedRooms /> : null}
         {status === "loading" ? <p role="status">Finding community artwork…</p> : null}
         {status === "error" ? <div role="alert"><p>We couldn’t load the artwork just now.</p><button type="button" onClick={() => { setStatus("loading"); setAttempt((n) => n + 1); }}>Try again</button></div> : null}
         {status === "ready" ? <><section aria-labelledby="discovery-art-title"><h2 id="discovery-art-title">On the community wall</h2>{data.posts.length ? <ArtworkCards posts={data.posts} onNavigate={onNavigate} /> : <p>{query ? `No shared artwork matches “${query}” yet. Try another search or draw your own.` : "No artwork has been shared here yet. You can draw without publishing anything."}</p>}<DiscoveryLink className="discovery-text-link" href="/wall" onNavigate={onNavigate}>Explore the Fridge Wall →</DiscoveryLink></section>

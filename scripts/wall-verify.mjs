@@ -3,23 +3,22 @@
 // Drives a LOCAL isolated server with a scratch DATA_DIR.
 import { chromium } from "playwright";
 import { spawn } from "child_process";
-import { mkdirSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync } from "fs";
 import path from "path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { once } from "node:events";
 
-const ROOT = "C:/Users/Craig Campbell/Projects/happypaint";
-const SCRATCH = path.join(process.env.TEMP || "/tmp", "wall-verify-data");
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const SCRATCH = mkdtempSync(path.join(tmpdir(), "wall-verify-data-"));
 const PORT = 8921;
 const BASE = `http://localhost:${PORT}`;
 const ADMIN_KEY = "wall-test-admin-key";
 
-try { rmSync(SCRATCH, { recursive: true, force: true }); } catch { /* fresh */ }
-mkdirSync(SCRATCH, { recursive: true });
 const server = spawn(process.execPath, ["server.js"], {
   cwd: ROOT,
-  // WALL_HIDE_REPORTS=1: report auto-hide now counts DISTINCT reporters (by IP),
-  // and this local harness only has one IP, so drop the threshold to 1 to
-  // exercise the hide→admin→restore flow with a single reporter.
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, ADMIN_KEY, WALL_HIDE_REPORTS: "1" },
+  // Legacy threshold must no longer give reporters the power to hide art.
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: SCRATCH, PB_URL: "", ADMIN_KEY, WALL_HIDE_REPORTS: "1" },
   stdio: "pipe",
 });
 server.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
@@ -143,10 +142,8 @@ const run = async () => {
   const tagFeed = await res.json();
   check("tag=cat filters to the cat post", tagFeed.posts.length === 1 && tagFeed.posts[0].id === post1.id);
 
-  // 9) Reports dedup by DISTINCT reporter (CF-Connecting-IP, since the app is
-  // behind a tunnel). 3 clicks from one reporter count once; a second distinct
-  // reporter increments. With WALL_HIDE_REPORTS=1 the first distinct reporter
-  // already hides it.
+  // 9) Reports deduplicate by reporter and queue for review, not takedown.
+  // Only an authorized moderator may hide/restore the post.
   const rip = (ip) => ({ "CF-Connecting-IP": ip });
   for (let i = 0; i < 3; i += 1) {
     await jpost(`/api/wall/${post2.id}/report`, { reason: `dup ${i}` }, rip("203.0.113.7"));
@@ -154,14 +151,16 @@ const run = async () => {
   await jpost(`/api/wall/${post2.id}/report`, { reason: "distinct" }, rip("203.0.113.8"));
   res = await fetch(`${BASE}/api/wall?sort=new`);
   const afterReports = await res.json();
-  check("report auto-hides the post", !afterReports.posts.some((p) => p.id === post2.id));
+  check("reports cannot hide the post", afterReports.posts.some((p) => p.id === post2.id));
   res = await fetch(`${BASE}/api/wall/${post2.id}/frame/0`);
-  check("hidden post frames 404 too", res.status === 404);
+  check("reported post frames remain readable", res.status === 200);
   res = await fetch(`${BASE}/api/admin/wall`, { headers: { "x-admin-key": ADMIN_KEY } });
   const adminList = await res.json();
   const adminItem = adminList.items?.find((p) => p.id === post2.id);
   check("reports count DISTINCT reporters (3 dup + 1 new => 2)", adminItem?.reports === 2, `reports=${adminItem?.reports}`);
-  check("admin sees the hidden post", adminItem?.hidden === true);
+  check("reported post stays public pending review", adminItem?.hidden === false);
+  res = await jpost(`/api/admin/wall/${post2.id}/restore`, {});
+  check("strangers cannot clear moderation decisions or reports", res.status === 401 || res.status === 403);
   res = await jpost(`/api/wall/${post2.id}/restore`.replace("/api/wall/", "/api/admin/wall/"), {}, { "x-admin-key": ADMIN_KEY });
   check("admin restore -> ok", res.ok);
   res = await fetch(`${BASE}/api/admin/wall`, { headers: { "x-admin-key": ADMIN_KEY } });
@@ -206,6 +205,15 @@ const run = async () => {
   }
   res = await jpost("/api/wall", { userKey: "u_capper2", title: "Huge", frames: ["data:image/png;base64," + "A".repeat(400_000)] });
   check("oversize frame -> 400", res.status === 400);
+
+  if (process.env.WALL_API_ONLY === "1") {
+    const done = once(server, "exit"); server.kill("SIGTERM"); await done;
+    writeFileSync(path.join(SCRATCH, "api-results.json"), JSON.stringify(results, null, 2));
+    const failed = results.filter((result) => !result.ok);
+    console.log(`${results.length - failed.length}/${results.length} API checks passed. Evidence: ${SCRATCH}`);
+    if (failed.length) process.exitCode = 1;
+    return;
+  }
 
   // ---- Browser pass ---------------------------------------------------------
   const browser = await chromium.launch({ headless: true });

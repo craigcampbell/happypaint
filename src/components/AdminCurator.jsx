@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import AdminLogin from './AdminLogin';
+import AdminFeaturedRooms from './AdminFeaturedRooms';
 import CuratedHeader from './CuratedHeader';
 import { clearAdminToken, getAdminToken } from '../utils/adminAuth';
 import { CURATOR_PAGES, CURATOR_PALETTES, CURATOR_ART, CURATOR_LINKS, getCuratorDefaults, validateCuratorContent } from '../data/curatorContent';
@@ -90,5 +91,6 @@ export default function AdminCurator({ onNavigate }) {
         {dirty ? <p>Save your edits before publishing. Publishing always uses the saved draft.</p> : null}
       </form><section className="curator-preview" aria-label="Live draft preview"><h2>Live draft preview · not public</h2><div className={`site-page discovery-page ${page === 'home' ? 'artwall-home' : ''}`}><div className={`discovery-main ${page === 'home' ? 'artwall-main' : ''}`}><CuratedHeader page={page} content={content} preview /></div></div><details><summary>Currently published header</summary><div className={`site-page discovery-page ${page === 'home' ? 'artwall-home' : ''}`}><div className={`discovery-main ${page === 'home' ? 'artwall-main' : ''}`}><CuratedHeader page={page} content={entry.published} preview /></div></div></details></section></div>
     </>}
+    <AdminFeaturedRooms adminKey={token} />
   </main>;
 }

@@ -1,12 +1,45 @@
 // Admin console session (moderators only, never a kid's account).
 //
-// The console used to keep the raw admin key in localStorage forever. It now
-// keeps a short-lived session token the server issued after key + 2FA code,
-// in sessionStorage: gone when the tab closes, useless after the server-side
-// expiry, and every admin page shares it. The legacy saved key is removed on
-// first load so no copy of it lingers in the browser.
+// Raw admin keys are never stored. Per-tab transport tokens expire at the
+// server's fixed four-hour deadline. HttpOnly device + authorization cookies
+// permit safe same-origin resume in independent tabs, without exposing either
+// cookie to JavaScript. Only non-secret change notifications cross tabs.
 const SESSION_STORAGE = "drawesome:adminsession:v1";
 const LEGACY_KEY_STORAGE = "drawesome:adminkey:v1";
+let logoutPending = Promise.resolve();
+const LOGOUT_STORAGE = "drawesome:adminlogout:v1";
+let logoutBlocked = false;
+let logoutForget = false;
+let logoutGeneration = 0;
+try {
+  const pending = sessionStorage.getItem(LOGOUT_STORAGE);
+  logoutBlocked = pending !== null;
+  logoutForget = pending === "forget";
+} catch { /* in-memory guard still works when storage is blocked */ }
+function markLogout(blocked, forget = false) {
+  logoutBlocked = blocked;
+  logoutForget = forget;
+  try {
+    if (blocked) sessionStorage.setItem(LOGOUT_STORAGE, forget ? "forget" : "logout");
+    else sessionStorage.removeItem(LOGOUT_STORAGE);
+  } catch { /* keep in-memory guard */ }
+}
+export function retryAdminLogout() { return adminLogout(undefined, { forget: logoutForget }); }
+const authChanges = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("drawesome-admin-auth") : null;
+function notifyAuthChange(kind) {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("admin-auth-change", { detail: kind }));
+}
+if (authChanges) authChanges.onmessage = ({ data }) => {
+  if (data === "login" || data === "logout") {
+    if (data === "logout") clearAdminToken();
+    notifyAuthChange(data);
+  }
+};
+export function onAdminAuthChange(listener) {
+  const handler = (event) => listener(event.detail);
+  window.addEventListener("admin-auth-change", handler);
+  return () => window.removeEventListener("admin-auth-change", handler);
+}
 
 try {
   localStorage.removeItem(LEGACY_KEY_STORAGE);
@@ -20,7 +53,7 @@ export function getAdminToken() {
     if (!raw) return "";
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.token !== "string") return "";
-    if (parsed.expiresAt && Date.now() > Number(parsed.expiresAt)) {
+    if (parsed.expiresAt && Date.now() >= Number(parsed.expiresAt)) {
       sessionStorage.removeItem(SESSION_STORAGE);
       return "";
     }
@@ -46,6 +79,22 @@ export function clearAdminToken() {
   }
 }
 
+// Every new tab obtains its own header/WS token via same-origin HttpOnly
+// cookies. The remembered-device cookie alone is never enough to resume.
+export async function resumeAdminSession() {
+  await logoutPending;
+  if (logoutBlocked) return { ok: false, reason: "logout_failed" };
+  const generation = logoutGeneration;
+  try {
+    const response = await fetch("/api/admin/resume", { method: "POST", credentials: "same-origin", cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || !data.token) return { ok: false, reason: data.error, remembered: !!data.remembered };
+    if (logoutBlocked || generation !== logoutGeneration) return { ok: false, reason: "logout_failed" };
+    setAdminToken(data.token, data.expiresAt);
+    return { ...data, ok: true };
+  } catch { return { ok: false, reason: "network" }; }
+}
+
 const bust = (path) => `${path}${path.includes("?") ? "&" : "?"}_=${Date.now()}`;
 
 // Does the server require a 2FA code right now?
@@ -63,6 +112,8 @@ export async function fetchAdminAuthMode() {
 // recoveryLeft } or { ok: false, reason } (bad_key, bad_code, code_required,
 // rate_limited, network).
 export async function adminLogin(key, code) {
+  await logoutPending;
+  if (logoutBlocked) return { ok: false, reason: "logout_failed" };
   try {
     const res = await fetch(bust("/api/admin/login"), {
       method: "POST",
@@ -73,24 +124,37 @@ export async function adminLogin(key, code) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.token) return { ok: false, reason: data.error || (res.status === 429 ? "rate_limited" : "bad_key") };
     setAdminToken(data.token, data.expiresAt);
+    authChanges?.postMessage("login");
     return { ok: true, ...data };
   } catch {
     return { ok: false, reason: "network" };
   }
 }
 
-export async function adminLogout(token) {
+export function adminLogout(token, { forget = false } = {}) {
+  logoutGeneration++;
+  markLogout(true, forget);
   clearAdminToken();
-  if (!token) return;
-  try {
-    await fetch("/api/admin/logout", { method: "POST", headers: { "x-admin-key": token }, cache: "no-store" });
-  } catch {
-    // the token expires on its own
-  }
+  logoutPending = (async () => {
+    try {
+      const response = await fetch("/api/admin/logout", { method: "POST", credentials: "same-origin", headers: { "x-admin-key": token || "", "Content-Type": "application/json" }, body: JSON.stringify({ forget }), cache: "no-store" });
+      if (response.ok) {
+        markLogout(false);
+        authChanges?.postMessage("logout");
+        notifyAuthChange("logout");
+      }
+      return response.ok;
+    } catch { return false; }
+  })();
+  return logoutPending;
 }
 
 export function loginErrorText(reason) {
   switch (reason) {
+    case "logout_failed":
+      return "Sign out was not confirmed. Retry sign out before signing in again.";
+    case "unavailable":
+      return "Admin authentication is temporarily unavailable. Try again or contact the server operator.";
     case "bad_key":
       return "That admin key didn't work.";
     case "bad_code":

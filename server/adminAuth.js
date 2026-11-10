@@ -1,6 +1,6 @@
 // Admin two-factor login: admin key (something you know) + a 6-digit TOTP code
 // from an authenticator app (something you have), exchanged for a short-lived
-// session token that the console keeps in sessionStorage. Nothing here touches
+// session token; remembered devices use opaque HttpOnly cookies. Nothing here touches
 // kids' accounts or the anonymous app: it only gates /admin, /watch and
 // /api/admin/*.
 //
@@ -10,7 +10,8 @@
 //                           lastCounter }  written by scripts/admin-2fa-setup.mjs,
 //                           updated here when a code is used (replay guard) or a
 //                           recovery code is burned.
-//   .admin-sessions.json  { sessions: [[sha256(token), expiresAt, createdAt]] }
+//   .admin-sessions.json  v2: hashed devices, second-factor grants and per-tab
+//                         tokens, fixed expiries and an enrollment/key fingerprint.
 //
 // Until .admin-totp.json exists (fresh checkout, test harnesses), the raw admin
 // key still works exactly as before, so nothing fails closed on a dev box. Once
@@ -18,7 +19,7 @@
 // opens the console. ADMIN_TOTP_SECRET in the environment overrides the file's
 // secret (Docker secrets), the file still carries the mutable state.
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, chmodSync } from 'fs';
 import { join } from 'path';
 
 export const TOTP_STEP_SEC = 30;
@@ -148,160 +149,203 @@ export function writeTotpConfig(dataDir, { issuer = 'Drawesome', label = 'admin'
 
 const hashToken = (token) => createHash('sha256').update(String(token)).digest('hex');
 
-export function createAdminAuth({ dataDir, sessionHours = Number(process.env.ADMIN_SESSION_HOURS || 12), now = Date.now } = {}) {
-  const configFile = totpConfigPath(dataDir);
-  const sessionsFile = join(dataDir, '.admin-sessions.json');
-  const sessionMs = Math.max(0.25, sessionHours) * 3600_000;
-  let config = null;
-  // tokenHash -> { exp, createdAt }
-  const sessions = new Map();
+// Fixed lifetimes are policy, not an environment override. A device remembers
+// only the key check; a separate four-hour grant proves the second factor.
+export const ADMIN_AUTH_MS = 4 * 3600_000;
+export const ADMIN_DEVICE_MS = 7 * 24 * 3600_000;
 
-  function loadConfig() {
+export function createAdminAuth({ dataDir, now = Date.now, keyEpoch = () => '' } = {}) {
+  const configFile = totpConfigPath(dataDir);
+  const stateFile = join(dataDir, '.admin-sessions.json');
+  const devices = new Map();
+  const grants = new Map();
+  const sessions = new Map();
+  let config;
+  let epoch;
+  let unavailable = false;
+  let wasEnrolled = false;
+  let invalidationPending = false;
+
+  // Atomic replacement and restrictive permissions: never acknowledge a login,
+  // replay-counter consumption or revocation that failed to reach disk.
+  function atomic(file, value) {
+    const temp = `${file}.tmp`;
+    writeFileSync(temp, JSON.stringify(value), { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, file);
+  }
+  function readConfig() {
     try {
       const raw = JSON.parse(readFileSync(configFile, 'utf8'));
-      if (!raw || typeof raw !== 'object') return null;
       const secret = String(process.env.ADMIN_TOTP_SECRET || raw.secret || '').replace(/[^A-Za-z2-7]/g, '').toUpperCase();
-      if (!secret) return null;
-      return {
-        issuer: raw.issuer || 'Drawesome',
-        label: raw.label || 'admin',
-        secret,
-        createdAt: Number(raw.createdAt) || 0,
-        recovery: Array.isArray(raw.recovery) ? raw.recovery.filter((h) => typeof h === 'string') : [],
-        lastCounter: Number.isFinite(Number(raw.lastCounter)) ? Number(raw.lastCounter) : -1,
-      };
-    } catch {
-      return null;
+      if (!secret || !Number.isSafeInteger(Number(raw.lastCounter ?? -1)) || Number(raw.lastCounter ?? -1) < -1) throw new Error('invalid enrollment');
+      return { ...raw, secret, recovery: Array.isArray(raw.recovery) ? raw.recovery : [], lastCounter: Number(raw.lastCounter ?? -1) };
+    } catch (error) {
+      if (error.code === 'ENOENT' && !config && !wasEnrolled) return null;
+      throw error;
     }
   }
-
-  function saveConfig() {
-    if (!config) return;
-    try {
-      const onDisk = (() => { try { return JSON.parse(readFileSync(configFile, 'utf8')); } catch { return {}; } })();
-      writeFileSync(configFile, JSON.stringify({
-        ...onDisk,
-        version: 1,
-        issuer: config.issuer,
-        label: config.label,
-        // Never copy an env-provided secret into the file.
-        secret: onDisk.secret || (process.env.ADMIN_TOTP_SECRET ? undefined : config.secret),
-        recovery: config.recovery,
-        lastCounter: config.lastCounter,
-      }, null, 2), { mode: 0o600 });
-    } catch {
-      // A failed write only weakens the replay guard until the next save.
-    }
+  function generation(fresh) {
+    return hashToken(JSON.stringify([keyEpoch(), fresh?.secret, fresh?.createdAt, fresh?.issuer, fresh?.label]));
   }
-
-  function loadSessions() {
-    try {
-      const raw = JSON.parse(readFileSync(sessionsFile, 'utf8'));
-      const t = now();
-      for (const row of Array.isArray(raw.sessions) ? raw.sessions : []) {
-        if (!Array.isArray(row) || typeof row[0] !== 'string') continue;
-        const exp = Number(row[1]) || 0;
-        if (exp > t) sessions.set(row[0], { exp, createdAt: Number(row[2]) || 0 });
+  function persistNow() {
+    atomic(stateFile, { version: 2, enrolled: wasEnrolled, epoch, devices: [...devices], grants: [...grants], sessions: [...sessions] });
+  }
+  function refresh() {
+    let fresh;
+    try { fresh = readConfig(); } catch { unavailable = true; return false; }
+    const next = generation(fresh);
+    if (epoch && epoch !== next) {
+      devices.clear(); grants.clear(); sessions.clear();
+      invalidationPending = true;
+    }
+    epoch = next;
+    config = fresh;
+    wasEnrolled ||= !!fresh;
+    if (invalidationPending) {
+      try { persistNow(); invalidationPending = false; }
+      catch { unavailable = true; return false; }
+    }
+    unavailable = wasEnrolled && !fresh;
+    return !unavailable;
+  }
+  refresh();
+  try {
+    const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+    wasEnrolled ||= state.enrolled === true;
+    if (wasEnrolled && !config) unavailable = true;
+    // Legacy twelve-hour sessions deliberately do not migrate.
+    if (state.version === 2 && state.epoch === epoch) {
+      for (const [name, map] of [['devices', devices], ['grants', grants], ['sessions', sessions]]) {
+        for (const [hash, row] of state[name] || []) {
+          if (/^[a-f0-9]{64}$/.test(hash) && row.exp > now()) map.set(hash, row);
+        }
       }
-    } catch {
-      // none yet
     }
+  } catch { /* no valid persisted sessions */ }
+
+  function enrolled() { refresh(); return !!config || unavailable; }
+  function lookup(map, token) {
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
+    const row = map.get(hashToken(token));
+    return row && row.exp > now() ? row : null;
   }
-
-  function saveSessions() {
-    try {
-      writeFileSync(sessionsFile, JSON.stringify({ sessions: [...sessions.entries()].map(([h, s]) => [h, s.exp, s.createdAt]) }), { mode: 0o600 });
-    } catch {
-      // ignore: sessions then simply end at the next restart
-    }
+  function remembered(deviceToken) {
+    if (!refresh() || !config) return null;
+    return lookup(devices, deviceToken);
   }
-
-  function sweep() {
-    const t = now();
-    let changed = false;
-    for (const [h, s] of sessions) if (s.exp <= t) { sessions.delete(h); changed = true; }
-    if (changed) saveSessions();
+  function grantValid(hash) {
+    const grant = grants.get(hash);
+    if (!grant || grant.exp <= now()) return null;
+    if (grant.device && (!devices.has(grant.device) || devices.get(grant.device).exp <= now())) return null;
+    return grant;
   }
-
-  config = loadConfig();
-  loadSessions();
-
-  // Re-read the enrollment file when it appears or changes, so the setup
-  // script can enroll (or rotate) without a server restart.
-  let lastConfigCheck = 0;
-  function refreshConfig() {
-    const t = now();
-    if (t - lastConfigCheck < 5000) return;
-    lastConfigCheck = t;
-    const fresh = loadConfig();
-    if (!fresh) { config = null; return; }
-    if (!config || fresh.secret !== config.secret || fresh.createdAt !== config.createdAt) {
-      config = fresh;
-    } else {
-      // Keep our in-memory replay counter if it is ahead of the file's.
-      config.recovery = fresh.recovery;
-      config.lastCounter = Math.max(config.lastCounter, fresh.lastCounter);
-    }
-  }
-
-  function enrolled() {
-    refreshConfig();
-    return !!config;
-  }
-
-  function issueSession() {
-    sweep();
+  function issueSession(grantHash) {
+    const grant = grantValid(grantHash);
     const token = randomBytes(32).toString('hex');
-    const t = now();
-    sessions.set(hashToken(token), { exp: t + sessionMs, createdAt: t });
-    saveSessions();
-    return { token, expiresAt: t + sessionMs };
+    sessions.set(hashToken(token), { exp: grant.exp, grant: grantHash });
+    return { token, expiresAt: grant.exp };
   }
-
-  // `keyMatches(key)` is the server's constant-time admin-key check.
-  function login({ key, code, keyMatches }) {
-    if (!keyMatches(key)) return { ok: false, reason: 'bad_key' };
-    if (!enrolled()) return { ok: true, method: 'key', ...issueSession() };
-    const clean = String(code || '').trim();
-    if (!clean) return { ok: false, reason: 'code_required' };
-    if (/^\d{6}$/.test(clean.replace(/\s+/g, ''))) {
-      const counter = verifyTotp(config.secret, clean, { nowMs: now(), lastCounter: config.lastCounter });
-      if (counter < 0) return { ok: false, reason: 'bad_code' };
-      config.lastCounter = counter;
-      saveConfig();
-      return { ok: true, method: 'totp', ...issueSession() };
+  function sweep() {
+    for (const [hash, device] of devices) if (device.exp <= now()) devices.delete(hash);
+    for (const [hash] of grants) if (!grantValid(hash)) grants.delete(hash);
+    for (const [hash, session] of sessions) if (session.exp <= now() || !grantValid(session.grant)) sessions.delete(hash);
+  }
+  function login({ key, code, deviceToken, keyMatches }) {
+    if (!refresh()) return { ok: false, reason: 'unavailable' };
+    const device = remembered(deviceToken);
+    // Supplying a wrong key never falls back to the remembered credential.
+    if (key ? !keyMatches(key) : !device) return { ok: false, reason: 'bad_key' };
+    let method = 'key';
+    if (config) {
+      const clean = String(code || '').trim();
+      if (!clean) return { ok: false, reason: 'code_required' };
+      const next = { ...config, recovery: [...config.recovery] };
+      if (/^\d{6}$/.test(clean.replace(/\s+/g, ''))) {
+        const counter = verifyTotp(config.secret, clean, { nowMs: now(), lastCounter: config.lastCounter });
+        if (counter < 0) return { ok: false, reason: 'bad_code' };
+        next.lastCounter = counter;
+        method = 'totp';
+      } else {
+        const idx = next.recovery.findIndex((stored) => digitsEqual(stored, hashRecovery(clean)));
+        if (idx < 0) return { ok: false, reason: 'bad_code' };
+        next.recovery.splice(idx, 1);
+        method = 'recovery';
+      }
+      try {
+        const disk = JSON.parse(readFileSync(configFile, 'utf8'));
+        atomic(configFile, { ...disk, recovery: next.recovery, lastCounter: next.lastCounter });
+      } catch { return { ok: false, reason: 'unavailable' }; }
+      config = next;
     }
-    const h = hashRecovery(clean);
-    const idx = config.recovery.findIndex((stored) => digitsEqual(stored, h));
-    if (idx < 0) return { ok: false, reason: 'bad_code' };
-    config.recovery.splice(idx, 1); // one use only
-    saveConfig();
-    return { ok: true, method: 'recovery', recoveryLeft: config.recovery.length, ...issueSession() };
+    sweep();
+    const previous = [new Map(devices), new Map(grants), new Map(sessions)];
+    const t = now();
+    const rememberedToken = config ? (device ? deviceToken : randomBytes(32).toString('hex')) : null;
+    const deviceHash = rememberedToken ? hashToken(rememberedToken) : null;
+    const deviceExpiresAt = device?.exp || t + ADMIN_DEVICE_MS;
+    if (deviceHash && !device) devices.set(deviceHash, { exp: deviceExpiresAt });
+    // Reauthorization replaces the old grant for this device, never extends it.
+    for (const [hash, grant] of grants) if (deviceHash && grant.device === deviceHash) grants.delete(hash);
+    const authorizationToken = randomBytes(32).toString('hex');
+    const grantHash = hashToken(authorizationToken);
+    grants.set(grantHash, { device: deviceHash, exp: Math.min(t + ADMIN_AUTH_MS, config ? deviceExpiresAt : Infinity) });
+    const session = issueSession(grantHash);
+    try { persistNow(); } catch {
+      for (const [index, map] of [devices, grants, sessions].entries()) {
+        map.clear();
+        for (const [hash, row] of previous[index]) map.set(hash, row);
+      }
+      return { ok: false, reason: 'unavailable' };
+    }
+    return { ok: true, method, ...session, deviceToken: rememberedToken, deviceExpiresAt: config ? deviceExpiresAt : null, authorizationToken, recoveryLeft: config?.recovery.length ?? null };
   }
-
+  function resume({ deviceToken, authorizationToken }) {
+    if (!refresh()) return { ok: false, reason: 'unavailable' };
+    sweep();
+    if (!remembered(deviceToken)) return { ok: false, reason: 'key_required' };
+    const grant = lookup(grants, authorizationToken);
+    if (!grant || grant.device !== hashToken(deviceToken) || !grantValid(hashToken(authorizationToken))) return { ok: false, reason: 'code_required' };
+    // Per-tab tokens are fixed to the original grant deadline, not refreshed.
+    // Refuse excess resumes rather than evicting a token an open watch uses.
+    const grantHash = hashToken(authorizationToken);
+    if ([...sessions.values()].filter((row) => row.grant === grantHash).length >= 128) return { ok: false, reason: 'rate_limited' };
+    const result = issueSession(grantHash);
+    try { persistNow(); } catch {
+      sessions.delete(hashToken(result.token));
+      return { ok: false, reason: 'unavailable' };
+    }
+    return { ok: true, ...result };
+  }
   function sessionValid(token) {
-    if (!token || typeof token !== 'string' || token.length !== 64) return null;
-    const s = sessions.get(hashToken(token));
-    if (!s) return null;
-    if (s.exp <= now()) { sessions.delete(hashToken(token)); saveSessions(); return null; }
-    return { expiresAt: s.exp };
+    if (!refresh()) return null;
+    const session = lookup(sessions, token);
+    return session && grantValid(session.grant) ? { expiresAt: session.exp } : null;
   }
-
-  function revoke(token) {
-    if (!token) return false;
-    const had = sessions.delete(hashToken(String(token)));
-    if (had) saveSessions();
-    return had;
+  function revoke(token, { deviceToken, authorizationToken, forget = false } = {}) {
+    if (!refresh()) throw new Error('admin auth unavailable');
+    const session = lookup(sessions, token);
+    const device = lookup(devices, deviceToken);
+    const grant = lookup(grants, authorizationToken);
+    const grantHashes = new Set();
+    if (session && grantValid(session.grant)) grantHashes.add(session.grant);
+    if (grant && device && grant.device === hashToken(deviceToken)) grantHashes.add(hashToken(authorizationToken));
+    for (const hash of grantHashes) grants.delete(hash);
+    if (forget && device) {
+      const hash = hashToken(deviceToken);
+      devices.delete(hash);
+      for (const [id, row] of grants) if (row.device === hash) grants.delete(id);
+    }
+    sweep();
+    try { persistNow(); } catch (error) {
+      invalidationPending = true;
+      unavailable = true;
+      throw error;
+    }
+    return grantHashes.size > 0;
   }
-
   function status() {
-    return {
-      totp: enrolled(),
-      sessionHours: sessionMs / 3600_000,
-      recoveryLeft: config ? config.recovery.length : null,
-      sessions: sessions.size,
-    };
+    return { totp: enrolled(), sessionHours: 4, rememberDays: 7, recoveryLeft: config?.recovery.length ?? null, sessions: sessions.size };
   }
-
-  return { enrolled, login, sessionValid, revoke, status, persistNow: saveSessions, sweep };
+  return { enrolled, login, resume, remembered, sessionValid, revoke, status, persistNow, sweep };
 }

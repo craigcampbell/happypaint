@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { adminLogin, fetchAdminAuthMode, loginErrorText } from "../utils/adminAuth";
+import { adminLogin, adminLogout, fetchAdminAuthMode, loginErrorText, onAdminAuthChange, resumeAdminSession, retryAdminLogout } from "../utils/adminAuth";
 
 // The one sign-in form every admin page uses: admin key + 6-digit code from an
 // authenticator app (or a one-time recovery code). On success the server's
@@ -14,14 +14,31 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const codeRef = useRef(null);
+  const onAuthedRef = useRef(onAuthed);
+  onAuthedRef.current = onAuthed;
+  const [remembered, setRemembered] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [logoutFailed, setLogoutFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetchAdminAuthMode().then((m) => {
-      if (!cancelled) setMode(m || { totp: false });
-    });
+    const resume = async () => {
+      const [m, session] = await Promise.all([fetchAdminAuthMode(), resumeAdminSession()]);
+      if (cancelled) return;
+      setMode(m || { totp: false });
+      setRemembered(!!session.remembered);
+      setChecking(false);
+      setLogoutFailed(session.reason === "logout_failed");
+      if (session.reason === "logout_failed") setError(loginErrorText(session.reason));
+      if (session.ok) onAuthedRef.current?.(session.token, session);
+    };
+    resume();
+    const unsubscribe = onAdminAuthChange((kind) => { if (kind === "login") resume(); });
+    window.addEventListener("focus", resume);
     return () => {
       cancelled = true;
+      unsubscribe();
+      window.removeEventListener("focus", resume);
     };
   }, []);
 
@@ -29,7 +46,7 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
 
   const submit = async () => {
     const k = key.trim();
-    if (!k || busy) return;
+    if (logoutFailed || (!k && !remembered) || busy || checking) return;
     if (needsCode && !code.trim()) {
       setError(loginErrorText("code_required"));
       codeRef.current?.focus();
@@ -44,6 +61,7 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
       setCode("");
       onAuthed?.(result.token, result);
     } else {
+      if (result.reason === "bad_key") setRemembered(false);
       setError(loginErrorText(result.reason));
       if (result.reason === "bad_code") {
         setCode("");
@@ -60,8 +78,8 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
     <main className="admin-login">
       <div className="admin-login-card">
         <h1>{title}</h1>
-        <p>{intro || (needsCode ? "Enter your admin key and the code from your authenticator app." : "Enter your admin key to continue.")}</p>
-        <label className="admin-login-field">
+        <p>{checking ? "Checking saved authorization…" : intro || (remembered ? "This device is remembered. Enter a fresh authenticator code to continue." : needsCode ? "Enter your admin key and the code from your authenticator app." : "Enter your admin key to continue.")}</p>
+        {!remembered && <label className="admin-login-field">
           <span>Admin key</span>
           <input
             type="password"
@@ -71,7 +89,7 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
             onChange={(e) => setKey(e.target.value)}
             onKeyDown={onKeyDown}
           />
-        </label>
+        </label>}
         {needsCode ? (
           <label className="admin-login-field">
             <span>{recovery ? "Recovery code" : "Authenticator code"}</span>
@@ -98,22 +116,39 @@ export default function AdminLogin({ title = "🛡️ Drawesome Admin", intro, a
           </p>
         ) : null}
         {error ? <p className="admin-error">{error}</p> : null}
+        {logoutFailed ? <button type="button" disabled={busy} onClick={async () => {
+          setBusy(true);
+          const ok = await retryAdminLogout();
+          setBusy(false);
+          if (!ok) { setError(loginErrorText("logout_failed")); return; }
+          const session = await resumeAdminSession();
+          setRemembered(!!session.remembered);
+          setLogoutFailed(false);
+          setError("");
+        }}>Retry sign out</button> : null}
         {needsCode ? (
           <button type="button" className="admin-login-link" onClick={() => { setRecovery((v) => !v); setCode(""); setError(""); }}>
             {recovery ? "Use my authenticator app instead" : "Lost your phone? Use a recovery code"}
           </button>
         ) : null}
+        {remembered ? <button type="button" className="admin-login-link" disabled={busy || checking} onClick={async () => {
+          setBusy(true);
+          const ok = await adminLogout(undefined, { forget: true });
+          setBusy(false);
+          if (ok) { setRemembered(false); setCode(""); setError(""); }
+          else { setLogoutFailed(true); setError("Could not forget this device. Retry sign out to try again."); }
+        }}>Forget this device</button> : null}
         <div className="admin-login-actions">
           <button type="button" onClick={() => onNavigate?.(backTo)}>
             {backLabel}
           </button>
-          <button type="button" className="primary-action" onClick={submit} disabled={busy}>
+          <button type="button" className="primary-action" onClick={submit} disabled={busy || checking || logoutFailed}>
             {busy ? "Checking…" : action}
           </button>
         </div>
         {mode?.totp && mode.sessionHours ? (
           <p className="admin-muted admin-login-note">
-            You stay signed in for {mode.sessionHours} hours in this tab, then sign in again. Nothing is saved on this device.
+            Your admin key is remembered on this device for {mode.rememberDays || 7} days. A fresh authenticator code is required every {mode.sessionHours} hours, shared across admin pages, tabs and watch rooms.
           </p>
         ) : null}
       </div>

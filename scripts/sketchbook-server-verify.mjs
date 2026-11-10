@@ -911,25 +911,23 @@ const run = async () => {
 
   const owner11 = await connect(PRIVPAGE, { token: "artist6_token", port: PORT_RESTART });
   const artist11 = await connect(PRIVPAGE, { token: "artist4_token", port: PORT_RESTART });
-  check("page room still loads with its persisted grant (artist paints)",
-    lastOf(artist11, "connected")?.canPaint === true);
+  check("missing parent denies even a stale persisted artist grant",
+    !!lastOf(artist11, "room_blocked") && !lastOf(artist11, "connected") && !lastOf(artist11, "history"));
   const requester11 = await connect(PRIVPAGE, { token: "stranger_token", port: PORT_RESTART });
   const guest11 = await connect(PRIVPAGE, { port: PORT_RESTART });
   const spec11 = await connect(PRIVPAGE, { spectate: true, port: PORT_RESTART });
   for (const [label, client] of [["stranger", requester11], ["guest", guest11], ["spectator", spec11]]) {
     check(`missing book denies ${label} before history`, !!lastOf(client, "room_blocked") && !lastOf(client, "history") && !lastOf(client, "connected"));
   }
-  owner11.ws.send(JSON.stringify({ type: "paint_approve", targetId: lastOf(artist11, "connected")?.userId }));
-  check("WS approve with a missing book fails CLOSED (book_missing notice)",
-    !!(await waitFor(owner11, (m) => m.type === "paint_requested" && m.status === "book_missing")));
-  // Fail-closed REVOKE: the persisted grant must NOT be stripped by the
-  // direct-room fallback either.
-  owner11.ws.send(JSON.stringify({ type: "paint_revoke", targetId: lastOf(artist11, "connected")?.userId }));
-  await sleep(500);
-  check("WS revoke with a missing book fails CLOSED (grant untouched, no role flip)",
-    !artist11.msgs.some((m) => m.type === "role_changed" && m.canPaint === false));
-  check("the persisted grant still works after the refused revoke",
-    !!(await gotStroke(owner11, sendDraw(artist11, INK))));
+  check("missing parent also denies stale owner before any history",
+    !!lastOf(owner11, "room_blocked") && !lastOf(owner11, "connected") && !lastOf(owner11, "history"));
+  // Neither stale socket can edit ACLs. The inherited REST fallback must also
+  // refuse rather than rewrite the recoverable persisted grant.
+  const missingRevoke = await api(`/api/rooms/${PRIVPAGE}/painters/revoke`, { method: "POST", token: "artist6_token", port: PORT_RESTART, body: { profileId: "book_artist4" } });
+  check("room REST revoke with a missing book fails closed", missingRevoke.status === 409 && missingRevoke.json?.error === "book_missing");
+  await sleep(100);
+  check("missing-parent owner and collaborator sockets are disconnected",
+    owner11.ws.readyState === 3 && artist11.ws.readyState === 3);
   const meta11 = await waitRoomFileJson(PRIVPAGE);
   check("page file painters unchanged by the fail-closed attempts",
     (meta11.painters || []).includes("book_artist4"), JSON.stringify(meta11.painters));

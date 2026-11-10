@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import LiveRoomCanvas from "./LiveRoomCanvas";
+import { adminRoomCode } from "../utils/adminRoomCode";
 
 import AdminLogin from "./AdminLogin";
-import { getAdminToken } from "../utils/adminAuth";
+import AdminFeaturedRooms from "./AdminFeaturedRooms";
+import { clearAdminToken, getAdminToken } from "../utils/adminAuth";
 
 // One row in the stroke list. A freehand stroke arrives as many small draw ops
 // that share a strokeId, so they collapse into ONE row (which is what a
@@ -55,7 +57,7 @@ const DENY_TEXT = {
 // refused everything but a moderation action, so this is not the boundary, only
 // the honest UI in front of it.
 export default function RoomWatch({ roomCode = "", onNavigate }) {
-  const code = String(roomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+  const code = adminRoomCode(roomCode);
   const [adminKey, setAdminKey] = useState(() => getAdminToken());
   const [authed, setAuthed] = useState(false);
   const [denied, setDenied] = useState("");
@@ -172,6 +174,13 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
   }, []);
 
   const onDenied = useCallback((reason) => {
+    if (reason === "auth_expired" || reason === "bad_key") {
+      clearAdminToken();
+      setAdminKey("");
+      setAuthed(false);
+      setDenied("");
+      return;
+    }
     setDenied(reason || "denied");
   }, []);
 
@@ -461,6 +470,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
           ) : null}
         </aside>
       </div>
+      <AdminFeaturedRooms key={roomCode} roomCode={roomCode} adminKey={adminKey} />
     </main>
   );
 }
