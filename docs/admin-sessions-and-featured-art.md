@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented and locally verified in `/home/craig/Projects/happypaint-artwall-20261026`. Not committed, pushed, or deployed by this task. Do not infer deployment from this document.
+Deployed and publicly verified on 2026-11-10. Application commit `9767b76`. See [the release record](admin-feature-release-2026-11-10.md) for verification, backup and rollback details. Committed locally; not pushed by this deployment.
 
 ## Why
 
@@ -54,6 +54,6 @@ Final logs are under `/home/craig/.hermes/cache/scratch/admin-feature-final-{bui
 
 ## Release notes
 
-Use the Git worktree as the completed integration source. An early feature worker mistakenly wrote initial feature files and the DiscoveryPage insertion to the non-Git deployment source `/home/craig/Projects/happypaint`; those were copied and integrated in the worktree. That loose source is not the final implementation and must be reconciled before any future Docker build. No container was rebuilt or restarted by this task.
+Use the Git worktree as the completed integration source. An early feature worker mistakenly wrote initial feature files and the DiscoveryPage insertion to the non-Git deployment source `/home/craig/Projects/happypaint`; those were copied and integrated in the worktree. The deployment source was reconciled with the final implementation and newer live privacy fixes before the 2026-11-10 app-only deployment.
 
 Before release, retain a rollback image/data backup, deploy only the app, and verify public health, auth-mode policy, source/asset parity and unchanged sitemap. Do not use production publication or real authenticator codes as automated QA.
