@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import { drawingIdeaPath } from '../utils/drawingPrompts';
 import './discovery.css';
 import './artwall-home.css';
 import './curator.css';
@@ -29,21 +30,18 @@ const PRINTS = [
   {
     file: 'ink-cat', link: 'Sketch this cat',
     alt: 'An ink-black cat rides a giant yellow pencil across a blue sky.',
-    prompt: 'Draw a cat that gets around on a giant pencil. Where is it going?',
   },
   {
     file: 'record-monster', link: 'Sketch this DJ',
     alt: 'A red monster in headphones spins a record on a blue turntable.',
-    prompt: 'A monster is DJing its first party. Draw who shows up to dance.',
   },
   {
     file: 'sky-fish', link: 'Sketch this fish',
     alt: 'A flying blue fish delivers mail among postage-stamp clouds.',
-    prompt: 'A flying fish delivers letters to the clouds. Draw its next stop.',
   },
 ];
 
-function PromptPrints({ onNavigate, preview }) {
+function PromptPrints({ onNavigate, preview, access }) {
   const strip = useRef(null);
   const [index, setIndex] = useState(0);
   const print = PRINTS[index];
@@ -63,8 +61,8 @@ function PromptPrints({ onNavigate, preview }) {
         draggable={false} fetchPriority={i === 0 ? 'high' : 'low'} loading={i === 0 ? 'eager' : 'lazy'} />)}
     </div>
     <figcaption>
-      <HeaderLink href={`/draw?prompt=${encodeURIComponent(print.prompt)}`} onNavigate={onNavigate} preview={preview}
-        className="print-sketch">{print.link} <span aria-hidden="true">↗</span></HeaderLink>
+      <HeaderLink href={drawingIdeaPath(print.file, access === 'guest')} onNavigate={onNavigate} preview={preview}
+        className="print-sketch">{access === 'guest' ? 'Sign up to sketch' : access === 'rejected' ? 'Sign in to sketch' : print.link} <span aria-hidden="true">↗</span></HeaderLink>
       <div className="print-pager">
         <button type="button" onClick={() => turnPage(-1)} aria-label="Previous print">←</button>
         <span aria-live="polite" aria-atomic="true"><span className="print-sr">Print </span>{index + 1} / {PRINTS.length}</span>
@@ -74,7 +72,7 @@ function PromptPrints({ onNavigate, preview }) {
   </figure>;
 }
 
-function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
+function HomeMasthead({ content, onNavigate, preview, heading, id, orbit, promptAccess }) {
   return <header className="curated-header print-masthead" data-palette={content.palette} data-art={content.art}
     data-default-title={content.title === 'MAKE A\nBEAUTIFUL\nMESS.'} data-short-note={content.note.length <= 28} aria-labelledby={id}>
     <div className="print-layout">
@@ -89,20 +87,20 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
           <HeaderLink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span></HeaderLink>
           {!preview && <a href="#home-art-title" className="print-browse">Browse the wall <span aria-hidden="true">↓</span></a>}
         </div>
-        {content.ctaHref === '/draw' && <p className="print-privacy">Free private canvas · No account needed</p>}
+        {content.ctaHref === '/draw' && <p className="print-privacy">Free blank canvas · No account needed</p>}
       </div>
-      {content.art === 'ink' && <PromptPrints onNavigate={onNavigate} preview={preview} />}
+      {content.art === 'ink' && <PromptPrints onNavigate={onNavigate} preview={preview} access={promptAccess} />}
       {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
     </div>
   </header>;
 }
 
-export default function CuratedHeader({ page, content, onNavigate, preview = false }) {
+export default function CuratedHeader({ page, content, onNavigate, preview = false, promptAccess }) {
   const id = useId();
   const heading = <h1 id={id} aria-label={content.title.split('\n').join(' ')}>{content.title.split('\n').map((line, index) => <span key={index}>{line.endsWith('.') ? <>{line.slice(0, -1)}<span className="artwall-period">.</span></> : line}</span>)}</h1>;
   const orbit = <svg className="artwall-ink-play curator-orbit" viewBox="0 0 500 500" aria-hidden="true"><circle cx="250" cy="250" r="175" fill="#e9f35a" /><ellipse cx="250" cy="250" rx="225" ry="70" fill="none" stroke="currentColor" strokeWidth="9" transform="rotate(-30 250 250)" /><circle cx="400" cy="140" r="32" fill="#e7472d" /></svg>;
   if (page === 'home') return <HomeMasthead content={content} onNavigate={onNavigate}
-    preview={preview} heading={heading} id={id} orbit={orbit} />;
+    preview={preview} heading={heading} id={id} orbit={orbit} promptAccess={promptAccess} />;
 
   return <header className="discovery-heading curated-header" data-palette={content.palette} data-art={content.art} aria-labelledby={id}>
     <p className="discovery-eyebrow">{content.kicker}</p>

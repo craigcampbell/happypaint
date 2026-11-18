@@ -3,10 +3,12 @@ import HomePage from "./components/HomePage";
 import { adminRoomCode } from "./utils/adminRoomCode";
 import { getCommunityEvent } from "./data/communityEvents";
 import { getPageSeo } from "./data/discoverySeo";
+import inktober from "./data/inktober2026.json";
 
 // Visiting a guide or the homepage should not download the drawing studio,
 // its tools, billing UI, or the admin console. Each route loads when needed.
 const StudioApp = lazy(() => import("./App"));
+const PrivatePromptStudio = lazy(() => import("./components/PrivatePromptStudio"));
 const AboutPage = lazy(() => import("./components/AboutPage"));
 const PrivacyPage = lazy(() => import("./components/PrivacyPage"));
 const SignupPage = lazy(() => import("./components/SignupPage"));
@@ -98,8 +100,16 @@ export default function Router() {
   let page;
   const drawing = path === "/draw" || path.startsWith("/studio") || path.startsWith("/join");
   if (path === "/draw") {
-    const event = getCommunityEvent(new URLSearchParams(window.location.search).get("event"));
-    page = <StudioApp key={`local-${event?.id || "solo"}`} initialLocal initialEvent={event?.id || ""} initialPrompt={(new URLSearchParams(window.location.search).get("prompt") || event?.prompt || "").slice(0, 180)} />;
+    const params = new URLSearchParams(window.location.search);
+    const event = getCommunityEvent(params.get("event"));
+    const prompt = params.get("prompt") || "";
+    if (params.has("idea") || (!event && prompt.trim())) {
+      page = <PrivatePromptStudio Studio={StudioApp} idea={params.get("idea")} prompt={prompt} />;
+    } else {
+      // Only an official event prompt may override the public invitation's default.
+      const dailyInk = event?.id === "inktober-2026" && inktober.prompts.some((entry) => entry.prompt === prompt);
+      page = <StudioApp initialLocal initialEvent={event?.id || ""} initialPrompt={dailyInk ? prompt : event?.prompt || ""} />;
+    }
   } else if (path.startsWith("/studio") && !path.startsWith("/studios")) {
     const prompt = (new URLSearchParams(window.location.search).get("prompt") || "").slice(0, 180);
     page = <StudioApp key="room-MAIN" initialPrompt={prompt} />;

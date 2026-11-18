@@ -35,6 +35,7 @@ import { dailyChallenge } from './server/dailyChallenges.js';
 import { COMMUNITY_EVENTS, getCommunityEvent } from './src/data/communityEvents.js';
 import { getDiscoverySeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
 import { renderDiscoveryLanding } from './server/discoverySeo.js';
+import { drawingPrompts } from './server/drawingPrompts.js';
 import { createCurator } from './server/curator.js';
 import { createFeaturedRooms } from './server/featuredRooms.js';
 import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
@@ -9419,6 +9420,17 @@ function dailyShuffle(arr) {
   }
   return a;
 }
+
+app.get('/api/drawing-prompts', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store').vary('Authorization');
+  if (ACCOUNTS_CONFIGURED) {
+    const token = bearerToken(req);
+    if (!token) return res.status(401).json({ error: 'signin_required' });
+    if (!rateOk(`drawing-prompts:${clientIp(req)}`, 120, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+    if (!(await verifyAccessToken(token))) return res.status(401).json({ error: 'signin_required' });
+  }
+  res.json({ prompts: drawingPrompts });
+});
 
 // Feed. `sort`: fresh (daily shuffle, default) | top (hearts) | new.
 // The Daily Challenge: today's prompt, when the next one lands, and how many

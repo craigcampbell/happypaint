@@ -27,7 +27,7 @@ try {
         await page.getByRole('button', { name: 'Another idea' }).click();
         const next = await page.locator('.artwall-prompt').innerText(); assert.notEqual(first, next);
         const href = await page.getByRole('link', { name: 'Draw this idea' }).getAttribute('href');
-        assert.equal(new URL(href, base).searchParams.get('prompt'), next);
+        assert.match(new URL(href, base).searchParams.get('idea'), /^idea-\d+$/);
         await page.getByRole('link', { name: 'Draw this idea' }).click();
         await page.locator('.event-drawing-banner').waitFor();
         assert((await page.locator('.event-drawing-banner').innerText()).includes(next));

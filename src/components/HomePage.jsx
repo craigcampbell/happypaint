@@ -1,23 +1,14 @@
 import { useEffect, useState } from "react";
 import CuratedHeader from './CuratedHeader';
 import useCuratorContent from '../hooks/useCuratorContent';
+import useHomeDrawingPrompts from '../hooks/useHomeDrawingPrompts';
+import { drawingIdeaPath } from '../utils/drawingPrompts';
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import { ArtworkCards, BookCards, DiscoveryLink, EventInvitations } from "./DiscoveryPage";
 import "./discovery.css";
 import "./artwall-home.css";
 import "./print-wall.css";
-
-const IDEAS = [
-  "A very small creature with a very big idea.",
-  "A garden that only grows silly things.",
-  "The world's most impractical flying machine.",
-  "A party at the bottom of the ocean.",
-  "Your favourite sound, but as a picture.",
-  "A house for a cloud to live in.",
-  "Two colours having a conversation.",
-  "A friendly monster on its day off.",
-];
 
 function FeedNotice({ status, empty, onRetry }) {
   return <div className="artwall-feed-notice" role="status">
@@ -28,6 +19,7 @@ function FeedNotice({ status, empty, onRetry }) {
 
 export default function HomePage({ onNavigate }) {
   const content = useCuratorContent('home');
+  const prompts = useHomeDrawingPrompts();
   const [feeds, setFeeds] = useState({
     art: { status: "loading", items: [] },
     books: { status: "loading", items: [] },
@@ -61,13 +53,16 @@ export default function HomePage({ onNavigate }) {
     setFeeds((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, { ...value, status: "loading" }])));
     setAttempt((value) => value + 1);
   };
+  const selectedIdea = prompts.ideas[idea] || prompts.ideas[0];
+  const needsAccount = prompts.status === 'guest' || prompts.status === 'rejected';
   const roomCode = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
   const dailyPrompt = typeof feeds.daily.item?.prompt === "string" ? feeds.daily.item.prompt : "";
 
   return <div className="site-page discovery-page discovery-home artwall-home">
     <SiteNav onNavigate={onNavigate} current="/" />
     <main className="discovery-main artwall-main" id="main-content">
-      <CuratedHeader page="home" content={content} onNavigate={onNavigate} />
+      <CuratedHeader page="home" content={content} onNavigate={onNavigate}
+        promptAccess={prompts.status} />
 
       <section className="artwall-wall" aria-labelledby="home-art-title">
         <div className="artwall-section-heading">
@@ -86,12 +81,24 @@ export default function HomePage({ onNavigate }) {
           <h2 id="home-idea-title">What if?</h2>
         </div>
         <div className="artwall-idea-output">
-          <p className="artwall-prompt" aria-live="polite" aria-atomic="true">{IDEAS[idea]}</p>
-          <div className="artwall-idea-actions">
-            <DiscoveryLink href={`/draw?prompt=${encodeURIComponent(IDEAS[idea])}`} onNavigate={onNavigate}>Draw this idea <span aria-hidden="true">↗</span></DiscoveryLink>
-            <button type="button" onClick={() => setIdea((current) => (current + 1 + Math.floor(Math.random() * (IDEAS.length - 1))) % IDEAS.length)}>Another idea <span aria-hidden="true">↻</span></button>
-          </div>
-          <p className="artwall-small-note">Opens your own private canvas.</p>
+          {selectedIdea ? <>
+            <p className="artwall-prompt" aria-live="polite" aria-atomic="true">{selectedIdea.text}</p>
+            <div className="artwall-idea-actions">
+              <DiscoveryLink href={drawingIdeaPath(selectedIdea.id)} onNavigate={onNavigate}>Draw this idea <span aria-hidden="true">↗</span></DiscoveryLink>
+              {prompts.ideas.length > 1 && <button type="button" onClick={() => setIdea((current) => (current + 1 + Math.floor(Math.random() * (prompts.ideas.length - 1))) % prompts.ideas.length)}>Another idea <span aria-hidden="true">↻</span></button>}
+            </div>
+            <p className="artwall-small-note">Opens your own private canvas.</p>
+          </> : needsAccount ? <>
+            <p className="artwall-prompt">Pick up a private drawing prompt with a free account.</p>
+            <div className="artwall-idea-actions">
+              <DiscoveryLink href={drawingIdeaPath('idea-1', prompts.status === 'guest')} onNavigate={onNavigate}>
+                {prompts.status === 'rejected' ? 'Sign in again' : 'Sign up for a prompt'} <span aria-hidden="true">↗</span>
+              </DiscoveryLink>
+            </div>
+          </> : <div role="status">
+            <p>{prompts.status === 'error' ? 'Drawing prompts couldn’t load.' : 'Opening drawing prompts…'}</p>
+            {prompts.status === 'error' && <button type="button" onClick={prompts.retry}>Try again</button>}
+          </div>}
         </div>
       </section>
 

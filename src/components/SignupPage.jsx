@@ -36,6 +36,11 @@ export default function SignupPage({ onNavigate }) {
     const requested = new URLSearchParams(window.location.search).get("return") || "";
     return safeSignInReturn(requested);
   })();
+  const promptReturn = returnPath.startsWith("/draw?");
+  // A rejected token may still look valid to the local PocketBase store.
+  // The prompt's explicit reauthentication link opens the form in that case.
+  const reauthenticate = promptReturn && new URLSearchParams(window.location.search).get("reauth") === "1";
+  const showSignedIn = session && !reauthenticate;
   const newRoomPath = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = "";
@@ -48,7 +53,7 @@ export default function SignupPage({ onNavigate }) {
   const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
   // A guest can't enter a private room (the door asks for an account), so the
   // guest exit goes to the open studio rather than a random private code.
-  const guestPath = returnPath === "/family" ? returnPath : "/join/MAIN";
+  const guestPath = promptReturn ? "/draw" : returnPath === "/family" ? returnPath : "/join/MAIN";
   // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
   // "" until answered; signup stays disabled until one option is picked.
   const [ageBand, setAgeBand] = useState("");
@@ -105,18 +110,18 @@ export default function SignupPage({ onNavigate }) {
     <div className="site-page">
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
-        <h1>{session ? "You’re signed in" : mode === "signup" ? "Sign up, keep your art forever" : "Welcome back"}</h1>
+        <h1>{showSignedIn ? "You’re signed in" : mode === "signup" ? (promptReturn ? "Sign up for your drawing prompt" : "Sign up, keep your art forever") : "Welcome back"}</h1>
         <p className="site-lead">
-          You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find
-          it on any device.
+          {promptReturn ? "Your selected prompt opens on a private canvas after you sign in. You can also start with a blank canvas as a guest."
+            : <>You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find it on any device.</>}
         </p>
 
         <div className="signup-card">
-          {session ? (
+          {showSignedIn ? (
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
               <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/rooms")}>
-                {returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
+                {promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
               </button>
               <button type="button" className="signup-guest" onClick={() => onNavigate(newRoomPath())}>
                 ✨ Start a new private room
@@ -172,7 +177,7 @@ export default function SignupPage({ onNavigate }) {
                     </label>
                     {ageBand === "under13" ? (
                       <p className="signup-age-note">
-                        No account needed, you can draw everything as a guest! If you want art saved across
+                        You can draw on a blank canvas as a guest! If you want art saved across
                         devices, ask a parent or guardian to make the account with you. 💛
                       </p>
                     ) : null}
@@ -239,7 +244,7 @@ export default function SignupPage({ onNavigate }) {
 
               {!isCloudConfigured ? <p className="account-note compliance">{LOCAL_ONLY_MESSAGE}</p> : null}
               <button type="button" className="signup-guest" onClick={() => onNavigate(guestPath)}>
-                Keep drawing as a guest →
+                {promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
               </button>
             </>
           )}

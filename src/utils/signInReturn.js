@@ -4,6 +4,18 @@ import { getCommunityEvent } from '../data/communityEvents.js';
 export function safeSignInReturn(requested) {
   if (typeof requested !== 'string') return '';
   if (/^\/(family|rooms|join\/[A-Z0-9]{1,8}|sketchbook(?:\/(?:invite\/[A-Za-z0-9_-]{1,96}|sb_[a-f0-9]{16}))?)$/.test(requested)) return requested;
+  if (requested.startsWith('/draw?')) {
+    if (requested.includes('#') || requested.length > 2400) return '';
+    const entries = [...new URLSearchParams(requested.slice('/draw?'.length))];
+    if (entries.length !== 1) return '';
+    const [[key, value]] = entries;
+    if (key === 'idea' && /^(?:ink-cat|record-monster|sky-fish|idea-[1-8])$/.test(value)) return `/draw?idea=${value}`;
+    if (key === 'prompt' && value.trim() && value.length <= 180 &&
+        ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+      return `/draw?prompt=${encodeURIComponent(value)}`;
+    }
+    return '';
+  }
   if (!/^\/studios(?:\?[^#]*)?$/.test(requested)) return '';
   const params = new URLSearchParams(requested.split('?')[1] || '');
   for (const key of params.keys()) {
