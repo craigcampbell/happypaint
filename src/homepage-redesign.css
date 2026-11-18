@@ -70,7 +70,7 @@
 .home-hero h1,
 .home-hero-line {
   margin: 0;
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: clamp(4.25rem, 7.5vw, 7rem);
   font-weight: 690;
   letter-spacing: -0.065em;
@@ -306,7 +306,7 @@
 .home-wall-copy h2 {
   margin: 0;
   color: var(--home-ink);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: clamp(2.15rem, 4vw, 3.2rem);
   font-weight: 650;
   letter-spacing: -0.035em;
@@ -354,7 +354,7 @@
   border: 2px solid var(--home-ink);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.76);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1.45rem;
   font-weight: 800;
 }
@@ -366,7 +366,7 @@
 }
 
 .home-choice strong {
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1.06rem;
   font-weight: 650;
   line-height: 1.12;
@@ -694,7 +694,7 @@
 
 .home-grownups h2 {
   margin: 0;
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: clamp(1.8rem, 3vw, 2.5rem);
   font-weight: 650;
   line-height: 1.1;

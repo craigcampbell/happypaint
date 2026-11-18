@@ -38,6 +38,7 @@ import { renderDiscoveryLanding } from './server/discoverySeo.js';
 import { drawingPrompts } from './server/drawingPrompts.js';
 import { createCurator } from './server/curator.js';
 import { createFeaturedRooms } from './server/featuredRooms.js';
+import { createFriends, registerFriends } from './server/friends.js';
 import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
 import {
   ARTIST_AUDIENCE, ARTIST_VIEWER_ALLOWLIST, ARTIST_MANAGE_HOST_ONLY,
@@ -281,6 +282,7 @@ function resolveDataDir() {
 const DATA_DIR = resolveDataDir();
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch { /* already exists */ }
 
+const friendDirectory = createFriends(DATA_DIR);
 const app = express();
 // Nothing here is ever served from behind another Express-aware proxy we want
 // to believe blindly: client IPs come from clientIp(), which checks the peer.
@@ -4966,7 +4968,8 @@ wss.on('connection', async (ws, req) => {
   }
 
   const id = nextUserId();
-  const name = (identity && identity.displayName) || guestNameFor(room);
+  const friendNickname = identity && friendDirectory.memberName(roomId, identity.profileId);
+  const name = friendNickname || (identity && identity.displayName) || guestNameFor(room);
   const color = pick(USER_COLORS);
   const user = {
     id,
@@ -5055,6 +5058,8 @@ wss.on('connection', async (ws, req) => {
     locked: !!room.locked,
     muted: !!user.muted,
     roomTitle: room.title || null,
+    hasSheet: Boolean(room.sheetId),
+    friendNickname: Boolean(friendNickname),
     audience: room.audience,
     // Artist studios: view vs paint, plus the public room profile (gallery
     // description/tags + the server-derived event state). roomProfile is null
@@ -5509,7 +5514,12 @@ wss.on('connection', async (ws, req) => {
         if (isFlagRoom(roomId)) break; // the flag IS the room: the sheet is pinned
         // Setting the shared coloring sheet is a host decision once the room is
         // owned. Legacy unowned rooms stay open so existing behavior is unchanged.
-        if (room.ownerProfileId && !isHost(room, user)) break;
+        if (room.ownerProfileId && !isHost(room, user)) {
+          // Either artist may start their shared blank canvas with a sheet.
+          // Existing art or a sheet still goes through the usual wipe request.
+          if (room.sheetId || room.history.length || room.locked || user.muted
+              || !friendDirectory.member(roomId, user.profileId)) break;
+        }
         if (phoneActive(room)) break; // the sheet is locked while a phone game runs
         if (room.storybook?.enabled) break;
         const nextSheet = data.sheetId ? String(data.sheetId).slice(0, 200) : null;
@@ -8099,6 +8109,8 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   if (!rateOk(`scrub:${pid}`, 3, 60 * 60_000) || !rateOk(`scrub-ip:${clientIp(req)}`, 6, 60 * 60_000)) {
     return res.status(429).json({ error: 'slow_down' });
   }
+  try { friendDirectory.scrub(pid); }
+  catch { return res.status(503).json({ error: 'friends_erasure_failed' }); }
   // Resolve related sources BEFORE analytics/ACL erasure. Frozen metadata
   // also retains capture-time provenance, independent of later log retention.
   let featuredScrubbed;
@@ -9979,7 +9991,7 @@ app.post('/api/admin/wall/:id/restore', (req, res) => {
 // discovery lobby; invite-code rooms stay private ("friends") and are created
 // lazily on first WS connect, exactly as before.
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-function genRoomCode() {
+function genRoomCode(length = 6) {
   let code;
   // Sketchbook page codes are RESERVED while a book references them, even
   // when the page's room file is (temporarily) missing, so a freshly minted
@@ -9987,14 +9999,22 @@ function genRoomCode() {
   loadSketchbooks();
   do {
     code = '';
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < length; i += 1) {
       // A private room's code is its only secret from non-members, mint it like
       // every other unguessable id here, not from a predictable PRNG.
       code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
     }
-  } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)) || bookPageIndex.has(code));
+  } while (FEATURED_CODES.has(code) || rooms.has(code) || existsSync(roomFile(code)) || bookPageIndex.has(code) || friendDirectory.reserved(code));
   return code;
 }
+
+registerFriends(app, {
+  store: friendDirectory, configured: ACCOUNTS_CONFIGURED, ip: clientIp, rateOk,
+  identity: (req) => verifyAccessToken(bearerToken(req)),
+  isBlocked: (id, address) => Boolean(blockFor([`pb:${sanitizeKey(id)}`, address && `ip:${address}`])),
+  // Like an ordinary invite, the unlisted room materializes on its first join.
+  mintRoom: () => genRoomCode(8),
+});
 
 // Tiny in-memory rate limiter (per profile/IP) so room creation can't be spammed.
 const createHits = new Map();
@@ -10348,6 +10368,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
   const { id, room } = artistRoomForApi(req.params.code);
   if (!room) return res.status(404).json({ error: 'not_found' });
   if (room.ownerProfileId !== pid) return res.status(403).json({ error: 'not_owner' });
+  if (friendDirectory.reserved(id)) return res.status(409).json({ error: 'friend_room_private' });
   // Sketchbook page rooms are BOOK-managed: discovery is the book's public
   // visibility and pages never list individually, so a direct publish (which
   // would also rewrite the Inktober flag) is refused loudly, changing nothing.

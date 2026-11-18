@@ -15,7 +15,7 @@
 .artwall-home .artwall-main .artwall-section-heading h2,
 .artwall-home .artwall-main .print-together-intro h2 {
   margin: 0;
-  font: 400 clamp(2.25rem, 5vw, 4.5rem)/1.08 var(--poster-font);
+  font: 780 clamp(2.25rem, 5vw, 4.5rem)/1.08 var(--poster-font);
   letter-spacing: -.025em;
   text-transform: uppercase;
 }
@@ -147,7 +147,7 @@
 .artwall-home .artwall-main .artwall-idea-label h2 {
   margin: 0;
   color: #e9f35a;
-  font: 400 clamp(2.8rem, 5.5vw, 5.8rem)/1.04 var(--poster-font);
+  font: 780 clamp(2.8rem, 5.5vw, 5.8rem)/1.04 var(--poster-font);
   letter-spacing: -.03em;
   text-transform: uppercase;
 }

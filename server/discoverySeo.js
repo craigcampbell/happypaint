@@ -14,7 +14,8 @@ export function renderDiscoveryLanding(rawPath, posts = [], publishedContent = {
   const header = page ? (validated.ok ? validated.content : getCuratorDefaults(page)) : null;
   const event = COMMUNITY_EVENTS.find((item) => item.path === meta.path);
   const art = posts.filter((post) => !post.hidden && !post.unpublished && /^wp_[a-zA-Z0-9_-]+$/.test(post.id) && (!event || post.event === event.id)).slice(0, 12);
-  const links = '<nav aria-label="Discover Drawesome"><a href="/">Drawesome</a> · <a href="/gallery">Artwork</a> · <a href="/studios">Artist studios</a> · <a href="/events">Drawing events</a> · <a href="/rooms">Drawing rooms</a></nav>';
+  const links = '<nav aria-label="Discover Drawesome"><a href="/">Drawesome</a> · <a href="/gallery">Artwork</a> · <a href="/studios">Artist studios</a> · <a href="/events">Drawing events</a> · <a href="/rooms">Drawing rooms</a> · <a href="/friends">Friends</a></nav>';
+  if (meta.path === '/friends') return `<main class="route-status" data-discovery-landing>${links}<h1>${escape(meta.heading)}</h1><p>${escape(meta.description)}</p><p><a href="/rooms">Browse public drawing rooms</a> · <a href="/draw">Open a blank canvas</a></p><noscript>Turn on JavaScript to exchange friend codes and draw together.</noscript></main>`;
   const invitation = event
     ? `<p>${escape(event.detail)}</p>${event.sourceUrl ? `<p><a href="${escape(event.sourceUrl)}" rel="noopener noreferrer">${escape(event.sourceLabel)}</a></p>` : ''}<p><a href="/draw?event=${escape(event.id)}">Draw my own</a> · <a href="/studios?event=${escape(event.id)}">Watch participating studios</a></p>`
     : '<p>Free online drawing, coloring pages, shared canvases and drawing games. Draw anonymously, or watch a public studio before joining. Public viewing does not give permission to paint.</p><p><a href="/draw">Start your own drawing</a> · <a href="/join/MAIN">Join the shared Open Studio</a></p>';

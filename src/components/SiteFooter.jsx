@@ -20,6 +20,7 @@ export default function SiteFooter({ onNavigate }) {
         { href: "/studios", label: "Artist studios" },
         { href: "/events", label: "Community events" },
         { href: "/studio", label: "Public canvas" },
+        { href: "/friends", label: "Draw with friends" },
         { href: "/rooms", label: "Live rooms" },
         { href: "/join/DAILY", label: "Today's challenge" },
         { href: "/wall", label: "The Fridge Wall" },

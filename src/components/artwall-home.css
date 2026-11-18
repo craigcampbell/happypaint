@@ -18,8 +18,8 @@
 }
 .artwall-home .artwall-main :is(h1, h2, h3) {
   color: #181916;
-  font-family: var(--poster-font, 'Anton', Impact, sans-serif);
-  font-weight: 400;
+  font-family: var(--poster-font);
+  font-weight: 780;
   text-wrap: initial;
   letter-spacing: -.025em;
 }
@@ -43,7 +43,7 @@
   border-radius: 0;
   background: #e9f35a;
   color: #181916;
-  font: 400 1.8rem/1.2 var(--poster-font, 'Anton', Impact, sans-serif);
+  font: 780 1.8rem/1.2 var(--poster-font);
   text-decoration: none;
   box-shadow: 4px 4px 0 #181916;
   transition: transform .15s, box-shadow .15s;
@@ -67,7 +67,7 @@
 .artwall-home .artwall-feed-notice button { min-height: 44px; padding: 8px 20px; background: #181916; color: #f3efdf; border: 1px solid #181916; border-radius: 0; }
 .artwall-home .artwall-main > .artwall-idea { display: grid; grid-template-columns: .8fr 1.2fr; gap: 56px; padding: 42px; background: #e9f35a; border: 2px solid #181916; box-shadow: 7px 7px 0 #181916; }
 .artwall-home .artwall-idea h2 { font-size: clamp(2.3rem, 4.7vw, 4.5rem); line-height: 1.05; margin: 14px 0 18px; }
-.artwall-home .artwall-prompt { font: 400 clamp(1.8rem, 3.4vw, 3.2rem)/1.15 var(--poster-font, 'Anton', Impact, sans-serif); margin: 0 0 24px; min-height: 3.5em; text-wrap: pretty; }
+.artwall-home .artwall-prompt { font: 780 clamp(1.8rem, 3.4vw, 3.2rem)/1.15 var(--poster-font); margin: 0 0 24px; min-height: 3.5em; text-wrap: pretty; }
 .artwall-home .artwall-idea-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 22px; }
 .artwall-home .artwall-idea-actions button { min-height: 48px; padding: 10px 17px; border: 2px solid #181916; background: transparent; border-radius: 0; color: #181916; font-weight: 850; }
 .artwall-home .artwall-idea-actions button:hover { background: #f3efdf; }
@@ -78,7 +78,7 @@
 .artwall-home .artwall-invitations .discovery-event { padding: 20px 24px; background: transparent; border: 0; border-right: 1px solid #b8b5a5; border-radius: 0; box-shadow: none; transform: none; }
 .artwall-home .artwall-invitations .discovery-event:last-child { border-right: 0; }
 .artwall-home .artwall-invitations .discovery-event[data-accent="kindness"] { background: #e7e9df; }
-.artwall-home .artwall-invitations .discovery-event h3 a { font: 400 1.6rem/1.2 var(--poster-font, 'Anton', Impact, sans-serif); color: #181916; }
+.artwall-home .artwall-invitations .discovery-event h3 a { font: 780 1.6rem/1.2 var(--poster-font); color: #181916; }
 .artwall-home .artwall-invitations .discovery-event p { color: #181916; }
 .artwall-home .artwall-invitations .discovery-event a { min-height: 44px; display: inline-flex; align-items: center; }
 .artwall-home .artwall-books .discovery-book { background: transparent; border: 1px solid #b8b5a5; border-radius: 0; box-shadow: none; }

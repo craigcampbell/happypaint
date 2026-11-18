@@ -35,8 +35,8 @@
 }
 .site-page.artwall-home .print-masthead h1 {
   margin: 0;
-  font: 400 clamp(56px, 9.65cqw, 129px)/.97 var(--poster-font);
-  letter-spacing: -.035em;
+  font: 800 clamp(43px, 8.4cqw, 109px)/.91 var(--poster-font);
+  letter-spacing: -.04em;
   text-align: left;
   text-wrap: wrap;
   overflow-wrap: anywhere;
@@ -136,10 +136,8 @@
 @media (max-width: 706px) {
   .print-layout, .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); gap: 23px; padding: 25px 0 19px; }
   .print-masthead .print-kicker { margin-bottom: 13px; }
-  .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 15.5cqw, 87px); line-height: 1; }
-  .print-masthead[data-default-title="true"] h1 > span:nth-child(n+2) { display: inline; }
-  .print-masthead[data-default-title="true"] h1 > span:nth-child(2)::after { content: " "; }
-  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note { left: 49%; bottom: auto; top: 0; max-width: 13ch; margin: 0; }
+  .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 16.4cqw, 96px); line-height: .91; }
+  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note { left: 59%; bottom: auto; top: 2px; max-width: 13ch; margin: 0; }
   .site-page.artwall-home .print-masthead[data-default-title="false"] h1 { font-size: clamp(32px, 11cqw, 62px); }
   .print-masthead .print-deck { margin-top: 12px; font-size: 1rem; }
   .print-actions { margin-top: 13px; gap: 13px; }
@@ -180,7 +178,7 @@
 @media (max-width: 540px) {
   .site-page.artwall-home .site-nav { min-height: 55px; padding: 4px 10px; gap: 4px; }
   .site-page.artwall-home .site-brand .brand-lockup { gap: 5px; }
-  .site-page.artwall-home .site-brand .brand-name { font-size: 1.32rem; }
+  .site-page.artwall-home .site-brand .brand-name { font-size: 1.2rem; }
   .site-page.artwall-home .site-brand .brand-mark { width: 28px; height: 28px; }
   .site-page.artwall-home .site-nav .site-nav-paint { font-size: .84rem; min-height: 44px; padding-inline: 9px; }
   .site-page.artwall-home .site-nav .site-nav-toggle { border: 0; box-shadow: none; }

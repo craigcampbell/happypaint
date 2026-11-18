@@ -125,8 +125,8 @@ export default function HomePage({ onNavigate }) {
       <section className="artwall-together" aria-labelledby="home-together-title">
         <div className="print-together-intro">
           <h2 id="home-together-title">Draw together</h2>
-          <p>Pass a room code to a friend and draw on the same canvas. Younger artists should draw with people they know and an adult present.</p>
-          <DiscoveryLink href="/parents" onNavigate={onNavigate}>Activity ideas &amp; parent guide <span aria-hidden="true">↗</span></DiscoveryLink>
+          <p>Add a friend by code and meet on the same canvas. Doodle from scratch or pick a coloring sheet to fill in together.</p>
+          <DiscoveryLink href="/friends" onNavigate={onNavigate}>Find a friend <span aria-hidden="true">↗</span></DiscoveryLink>
         </div>
         <div className="artwall-together-options">
           <form className="artwall-room-form" onSubmit={(event) => {

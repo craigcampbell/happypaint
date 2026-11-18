@@ -9,6 +9,11 @@ const PAGES = {
     description: 'Draw online for free, discover community artwork, and watch artists create. Try drawing prompts, make your own doodle, or draw together. No account needed to draw.',
     heading: 'Draw online. Find inspiration. Make it your own.',
   },
+  '/friends': {
+    title: 'Draw and Color with Friends | Drawesome',
+    description: 'Exchange friend codes, meet on a shared canvas and color a page together.',
+    heading: 'Draw with friends',
+  },
   '/gallery': {
     title: 'Community Art Gallery: Drawings & Doodles | Drawesome',
     description: 'Explore drawings, doodles and public sketchbooks made on Drawesome. Find inspiration, discover artists, and join community drawing events for free.',
@@ -36,7 +41,7 @@ const PAGES = {
   },
 };
 
-export const DISCOVERY_PATHS = ['/gallery', '/studios', '/events', '/draw', ...COMMUNITY_EVENTS.filter((event) => event.path.startsWith('/events/')).map((event) => event.path)];
+export const DISCOVERY_PATHS = ['/friends', '/gallery', '/studios', '/events', '/draw', ...COMMUNITY_EVENTS.filter((event) => event.path.startsWith('/events/')).map((event) => event.path)];
 
 export function getPageSeo(rawPath) {
   const path = String(rawPath).split(/[?#]/)[0].replace(/\/+$/, '') || '/';

@@ -641,7 +641,7 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
   }
 }
 
-export default function StudioApp({ initialJoinCode = "", initialPrompt = "", initialLocal = false, initialEvent = "" }) {
+export default function StudioApp({ initialJoinCode = "", initialPrompt = "", initialLocal = false, initialEvent = "", initialColoring = false }) {
   const drawingEvent = initialLocal ? getCommunityEvent(initialEvent) : null;
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
@@ -822,6 +822,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const roomId = initialLocal
     ? `local:${drawingEvent?.id || "private"}`
     : (initialJoinCode || "MAIN").toUpperCase().slice(0, 16) || "MAIN";
+  const roomReturnPath = `/join/${roomId}${initialColoring ? "?color=1" : ""}`;
   const legacyDraftPurgedRef = useRef(false); // one-shot cleanup of the migrated legacy blob
   const mobileProfileRef = useRef(null); // scroll target for the mobile notifications/profile
   const mpRef = useRef(null); // { sendOp, sendCursor, sendClear } once the hook mounts
@@ -1231,6 +1232,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const [promptDismissed, setPromptDismissed] = useState(false);
   const [privateNoticeDismissed, setPrivateNoticeDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
+  const colorEntryRef = useRef(initialColoring ? "joining" : "");
+  useEffect(() => {
+    if (joinStep < 3 || colorEntryRef.current !== "choose") return;
+    colorEntryRef.current = "";
+    setShowSheetModal(true);
+  }, [joinStep]);
 
   // ---- Artist studios: the local mutation gate -----------------------------
   // A watcher in an artist studio must never change local canvas state, the
@@ -8399,13 +8406,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           frameTimingRef.current = normalizeFrameTiming(data.frameTiming);
           setRoomFrameTiming(frameTimingRef.current);
           myUserIdRef.current = data.userId;
+          if (colorEntryRef.current === "joining") {
+            colorEntryRef.current = data.audience === "friends" && !data.hasSheet && !data.locked
+              && !data.sketchbook && !data.inkOnly && !data.storybook && !data.phone ? "choose" : "";
+          }
           // Join curtain: the room answered. Only the history frame that
           // follows actually puts art on the canvas, so this is not "done" yet.
           setJoinStep((step) => Math.max(step, 2));
           // Re-apply a saved name/color so the artist keeps their identity
           // across reconnects (and eventually, sign-in).
           const saved = profileRef.current;
-          if (saved?.name && saved.name !== data.userName) {
+          if (!data.friendNickname && saved?.name && saved.name !== data.userName) {
             mpRef.current?.sendRename?.(saved.name, saved.color);
           }
           // Does this room have the film strip? (FLIPBOOK, or a private room
@@ -11825,7 +11836,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
                 paintStatus={mp.paintStatus}
                 onRequestAccess={() => mp.sendPaintRequest()}
                 onSignIn={() => {
-                  window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`;
+                  window.location.href = `/signup?mode=login&return=${encodeURIComponent(roomReturnPath)}`;
                 }}
               />
             ) : null}
@@ -13470,7 +13481,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
                     className="primary-action"
                     onClick={async () => {
                       await signOut();
-                      window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`;
+                      window.location.href = `/signup?mode=login&return=${encodeURIComponent(roomReturnPath)}`;
                     }}
                   >
                     Sign in again
@@ -13492,10 +13503,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
                   Under 13? Ask a grown-up to set up the room with you.
                 </p>
                 <div className="account-actions">
-                  <button type="button" className="primary-action" onClick={() => { window.location.href = `/signup?return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                  <button type="button" className="primary-action" onClick={() => { window.location.href = `/signup?return=${encodeURIComponent(roomReturnPath)}`; }}>
                     Sign up free
                   </button>
-                  <button type="button" onClick={() => { window.location.href = `/signup?mode=login&return=${encodeURIComponent(`/join/${roomId}`)}`; }}>
+                  <button type="button" onClick={() => { window.location.href = `/signup?mode=login&return=${encodeURIComponent(roomReturnPath)}`; }}>
                     I already have an account
                   </button>
                   <button type="button" onClick={() => { window.location.href = "/join/MAIN"; }}>

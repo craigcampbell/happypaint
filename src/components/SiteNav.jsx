@@ -18,7 +18,7 @@ import "../seasonal.css";
 
 // Always-visible destinations (top level at desktop, first rows in the sheet).
 const PRIMARY = [
-  { href: "/rooms", label: "Live rooms" },
+  { href: "/friends", label: "Friends" },
   { href: "/gallery", label: "Discover" },
 ];
 
@@ -28,6 +28,7 @@ const GROUPS = [
     id: "explore",
     label: "Explore",
     links: [
+      { href: "/rooms", label: "Live rooms" },
       { href: "/events", label: "Community events" },
       { href: "/studios", label: "Artist studios" },
       { href: "/wall", label: "The Wall" },

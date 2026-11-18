@@ -12,6 +12,7 @@ const PrivatePromptStudio = lazy(() => import("./components/PrivatePromptStudio"
 const AboutPage = lazy(() => import("./components/AboutPage"));
 const PrivacyPage = lazy(() => import("./components/PrivacyPage"));
 const SignupPage = lazy(() => import("./components/SignupPage"));
+const FriendsPage = lazy(() => import("./components/FriendsPage"));
 const RoomFinderPage = lazy(() => import("./components/RoomFinderPage"));
 const SafetyPage = lazy(() => import("./components/SafetyPage"));
 const ParentsPage = lazy(() => import("./components/ParentsPage"));
@@ -116,7 +117,7 @@ export default function Router() {
   } else if (path.startsWith("/join")) {
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "MAIN";
     // A new room must get a fresh canvas, socket, and undo history.
-    page = <StudioApp key={`room-${code}`} initialJoinCode={code} />;
+    page = <StudioApp key={`room-${code}`} initialJoinCode={code} initialColoring={new URLSearchParams(window.location.search).get("color") === "1"} />;
   } else if (path.startsWith("/watch")) {
     // The admin glass-room. Not a drawing route: no studio bundle, no canvas
     // tools, the watch view is read-only by construction.
@@ -157,6 +158,8 @@ export default function Router() {
     page = <PrivacyPage onNavigate={navigate} />;
   } else if (path.startsWith("/signup")) {
     page = <SignupPage onNavigate={navigate} />;
+  } else if (path === "/friends") {
+    page = <FriendsPage onNavigate={navigate} />;
   } else if (path.startsWith("/rooms")) {
     page = <RoomFinderPage onNavigate={navigate} />;
   } else if (path === "/studios") {

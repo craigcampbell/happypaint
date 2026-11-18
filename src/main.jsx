@@ -1,7 +1,5 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import '@fontsource-variable/fredoka/wght.css'
-import '@fontsource-variable/nunito-sans/wght.css'
 import Router from './Router.jsx'
 import './index.css'
 // Load shared styles once; the studio layout overrides remain after base styles.

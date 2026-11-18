@@ -37,10 +37,11 @@ Three containers, one folder, one domain:
   `tunnel`). Routes the two hostnames at the **service names** `app:8787` /
   `pocketbase:8090`.
 
-**Sign-in is OPTIONAL everywhere.** With PocketBase unconfigured (`VITE_PB_URL` /
+**Core drawing works as a guest.** With PocketBase unconfigured (`VITE_PB_URL` /
 `PB_URL` unset) the whole app runs fully local + anonymous, drawing, rooms,
-coloring sheets, play-money drops all work. Accounts only add ownership/host
-powers and cross-device gallery sync. **Every account feature is env-gated** so
+coloring sheets, play-money drops all work. On a configured deployment, private drawing prompts, invite-only rooms and
+friend lists require a verified account. Accounts also add host powers and
+cross-device gallery sync. **Every account feature is env-gated** so
 nothing breaks when unconfigured. This is the single most important invariant.
 
 ## Frontend (React + Vite)
@@ -361,6 +362,8 @@ everything:
   buffer, `opCount`/`savedAt` (the idle sweep reads these instead of parsing art).
   `.rooms/<ID>.history.json`, the op history base; `.rooms/<ID>.ops.jsonl` -
   ops appended since (see "Realtime model").
+- `.friends.json`, opt-in friend nicknames, codes, requests, and accepted pairs with
+  shared room codes. Account erasure removes the profile and its relationships.
 - `.artworks/<key>.json`, anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json`, admin-uploaded custom sheets. `.sheet-theme.json`, today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
@@ -383,6 +386,7 @@ data: **`pb_data/`** (its own volume). All three folders are git-ignored.
 ## REST endpoints (server.js)
 `/healthz` (liveness + an aggregate `online` headcount: painters, spectators,
 sockets, devices seen in 5 min; what the host's hp* monitors read);
+`/api/friends` (verified account, opt-in profile and mutual requests);
 `/api/artworks` (CRUD, anon device key); `/api/report` (public);
 `/api/admin/auth-mode` + `/api/admin/login` + `/api/admin/logout` (2FA session);
 `/api/admin/*` (session-gated: rooms, reports, sheets, metrics, presence

@@ -60,7 +60,7 @@ export default function RoomFinderPage({ onNavigate }) {
         ) : null}
 
         <h1>{session || hasRecent ? "Or find a live room" : "Find a room"}</h1>
-        <p className="site-lead">Pick a room and paint with whoever shows up. New prompts every day.</p>
+        <p className="site-lead">Pick a public room, or <a href="/friends">meet a friend on a shared canvas</a>.</p>
 
         <form
           className="finder-code"

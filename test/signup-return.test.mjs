@@ -1,12 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { safeSignInReturn } from '../src/utils/signInReturn.js';
 
-// Exercise the actual allowlist used by SignupPage, not a duplicate regex.
-const source = readFileSync(new URL('../src/components/SignupPage.jsx', import.meta.url), 'utf8');
-const pattern = source.match(/return \/(.+)\/\.test\(requested\)/)?.[1];
-assert.ok(pattern, 'SignupPage return allowlist located');
-const accepts = (path) => new RegExp(pattern).test(path);
+const accepts = path => safeSignInReturn(path) === path;
 
 test('sign-in preserves sketchbook entry and exact scoped invite return', () => {
   assert.equal(accepts('/sketchbook'), true);

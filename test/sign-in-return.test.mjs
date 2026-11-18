@@ -28,3 +28,10 @@ test('private drawing returns reject unknown ids, extra fields, controls and ove
     assert.equal(safeSignInReturn(value), '', value);
   }
 });
+
+test('friends signup returns to the friends page', () => {
+  assert.equal(safeSignInReturn('/friends'), '/friends');
+  assert.equal(safeSignInReturn('/friends?redirect=elsewhere'), '');
+  assert.equal(safeSignInReturn('/join/AB23?color=1'), '/join/AB23?color=1');
+  assert.equal(safeSignInReturn('/join/AB23?color=1&extra=1'), '');
+});

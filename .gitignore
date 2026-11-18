@@ -35,6 +35,8 @@ server.err.log
 .analytics.json
 .billing.json
 .blocked.json
+.friends.json
+.friends.json.tmp
 .sheet-theme.json
 .thumbs/
 .wall/

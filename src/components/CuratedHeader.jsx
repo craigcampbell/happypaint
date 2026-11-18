@@ -92,7 +92,7 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit, prompt
         {content.description && <p className="print-deck">{content.description}</p>}
         <div className="print-actions">
           <HeaderLink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span></HeaderLink>
-          {!preview && <a href="#home-art-title" className="print-browse">Browse the wall <span aria-hidden="true">↓</span></a>}
+          {!preview && <HeaderLink href="/friends" className="print-browse" onNavigate={onNavigate}>Draw with friends <span aria-hidden="true">↗</span></HeaderLink>}
         </div>
         {content.ctaHref === '/draw' && <p className="print-privacy">Free blank canvas · No account needed</p>}
       </div>

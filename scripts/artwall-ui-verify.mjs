@@ -20,7 +20,9 @@ try {
       await page.evaluate(() => document.fonts.ready);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${path} overflow ${width}`);
       assert.equal(await page.locator('.discovery-sidebar:visible').count(), 0);
-      assert(await page.evaluate(() => document.fonts.check('16px Anton')));
+      assert(await page.locator('main h1').first().evaluate(el =>
+        getComputedStyle(el).fontFamily.includes('Bricolage Grotesque') &&
+        [...document.fonts].some(face => face.family.includes('Bricolage Grotesque') && face.status === 'loaded')));
       if (path === '/') {
         await page.locator('.artwall-prompt').waitFor();
         const first = await page.locator('.artwall-prompt').innerText();

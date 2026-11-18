@@ -24,6 +24,8 @@ backups
 .audio
 .productions
 .blocked.json
+.friends.json
+.friends.json.tmp
 .data
 output
 .playwright-cli

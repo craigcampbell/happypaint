@@ -45,9 +45,7 @@ const fixture = httpServer(async (req, res) => {
 });
 const component = (name) => JSON.stringify(join(repo, 'src/components', `${name}.jsx`));
 await writeFile(join(scratch, 'index.html'), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"/></head><body><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
-await writeFile(join(scratch, 'entry.jsx'), `import ${JSON.stringify(join(repo, 'node_modules/@fontsource-variable/fredoka/wght.css'))};
-import ${JSON.stringify(join(repo, 'node_modules/@fontsource-variable/nunito-sans/wght.css'))};
-import React, {useState} from 'react';
+await writeFile(join(scratch, 'entry.jsx'), `import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import Home from ${component('HomePage')}; import Discovery from ${component('DiscoveryPage')}; import Event from ${component('CommunityEventPage')}; import Studios from ${component('ArtistGalleryPage')}; import Ink from ${component('InktoberPage')}; import Wall from ${component('WallPage')};
 ${['index.css', 'App.css', 'drawesome-theme.css', 'homepage-redesign.css', 'studio-layout.css', 'quick-stroke.css', 'route-status.css', 'site-nav.css'].map((file) => `import ${JSON.stringify(join(repo, 'src', file))};`).join('\n')}
@@ -94,8 +92,8 @@ try {
         const action = document.querySelector('.discovery-main .primary-action');
         return {
           headings: [...document.querySelectorAll('.discovery-main h1, .discovery-main h2, .discovery-main h3, .discovery-event h3 a')].map((node) => getComputedStyle(node).fontFamily),
-          displayLoaded: document.fonts.check('700 24px "Fredoka Variable"'),
-          bodyLoaded: document.fonts.check('400 16px "Nunito Sans Variable"'),
+          displayLoaded: document.fonts.check('700 24px "Bricolage Grotesque"'),
+          bodyLoaded: document.fonts.check('400 16px "DM Sans"'),
           background: getComputedStyle(shell).backgroundColor,
           ink: getComputedStyle(heading).color,
           headingSize: parseFloat(getComputedStyle(heading).fontSize),
@@ -104,7 +102,7 @@ try {
           accent: shell.style.getPropertyValue('--discovery-accent') || getComputedStyle(shell).getPropertyValue('--discovery-accent').trim(),
         };
       });
-      assert(branding.headings.every((font) => font.includes('Fredoka Variable') && !font.includes('Georgia')), JSON.stringify({ path, width, branding }));
+      assert(branding.headings.every((font) => font.includes('Bricolage Grotesque') && !font.includes('Georgia')), JSON.stringify({ path, width, branding }));
       assert(branding.displayLoaded && branding.bodyLoaded, 'Both self-hosted brand fonts load');
       assert.equal(branding.background, 'rgb(255, 253, 244)');
       assert.equal(branding.ink, 'rgb(33, 21, 45)', `${path} ${width}px heading contrast`);

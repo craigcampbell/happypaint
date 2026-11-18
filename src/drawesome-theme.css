@@ -20,7 +20,7 @@
 body {
   background: #f4f7fa;
   color: var(--snap-black);
-  font-family: "Nunito Sans Variable", ui-rounded, system-ui, sans-serif;
+  font-family: var(--body-font);
 }
 
 h1,
@@ -29,7 +29,7 @@ h3,
 .brand-name,
 .chip-name,
 .qb-label {
-  font-family: "Fredoka Variable", "Arial Rounded MT Bold", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   letter-spacing: 0;
 }
 
@@ -91,7 +91,7 @@ select:focus {
 
 .eyebrow {
   color: var(--snap-gray-500);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -295,7 +295,7 @@ select:focus {
 .home-headline h1 {
   margin: 0;
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 3.5rem;
   font-weight: 650;
   line-height: 0.96;
@@ -304,7 +304,7 @@ select:focus {
 .home-kicker {
   margin: 4px 0 3px;
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1.3rem;
   font-weight: 550;
 }
@@ -345,7 +345,7 @@ select:focus {
 
 .home-room-name {
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-weight: 600;
 }
 
@@ -432,7 +432,7 @@ select:focus {
 
 .home-wall-copy h2 {
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1.8rem;
   font-weight: 600;
 }
@@ -500,7 +500,7 @@ select:focus {
   gap: 9px;
   margin: 0;
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 2rem;
   font-weight: 620;
   letter-spacing: 0;
@@ -514,7 +514,7 @@ select:focus {
   border-radius: 50%;
   background: var(--brand-blue);
   color: #fff;
-  font-family: "Nunito Sans Variable", ui-rounded, sans-serif;
+  font-family: var(--body-font);
   font-size: 0.78rem;
   font-weight: 900;
 }
@@ -587,7 +587,7 @@ select:focus {
 .home-room-thumb-squiggle {
   position: absolute;
   color: rgba(16, 16, 16, 0.7);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 2.8rem;
   font-weight: 650;
   letter-spacing: 0;
@@ -668,7 +668,7 @@ select:focus {
 .home-room-card-title strong {
   min-width: 0;
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1.03rem;
   font-weight: 600;
   line-height: 1.12;
@@ -720,7 +720,7 @@ select:focus {
 .wall-hero h1,
 .safety-hero h1 {
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 2.8rem;
   font-weight: 620;
 }
@@ -902,7 +902,7 @@ select:focus {
 
 .tool-section h2 {
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: 1rem;
   font-weight: 580;
 }
@@ -1083,7 +1083,7 @@ select:focus {
 }
 
 .welcome-modal h2 {
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-weight: 620;
 }
 
@@ -1612,7 +1612,7 @@ select:focus {
 .step-back-title h2 {
   margin: 0;
   color: var(--snap-black);
-  font-family: "Fredoka Variable", ui-rounded, sans-serif;
+  font-family: var(--display-font);
   font-size: clamp(2.5rem, 6vw, 5.2rem);
   font-weight: 680;
   letter-spacing: 0;

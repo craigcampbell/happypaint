@@ -26,7 +26,7 @@ const PILLARS = [
   {
     icon: "👤",
     title: "No accounts needed, no people search",
-    body: "Kids draw as guests with fun random names. You browse rooms and art, there is no way to search for people, no follower counts, and no direct messages.",
+    body: "Kids can draw as guests. Signed-in artists can exchange an exact friend code and accept a request to draw together. Younger artists should use a guardian-managed account and share their code with people they know.",
   },
   {
     icon: "🚫",

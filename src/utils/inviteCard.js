@@ -68,8 +68,8 @@ function roundRect(ctx, x, y, w, h, r) {
 async function ensureFonts() {
   try {
     await Promise.all([
-      document.fonts?.load('700 72px "Fredoka Variable"'),
-      document.fonts?.load('700 40px "Nunito Sans Variable"'),
+      document.fonts?.load('700 72px "Bricolage Grotesque"'),
+      document.fonts?.load('700 40px "DM Sans"'),
     ]);
   } catch {
     // Fall back to the system stack, the card still reads fine.
@@ -102,8 +102,8 @@ function ensureInkFont() {
   return inkFontPromise;
 }
 
-const DISPLAY = '"Fredoka Variable", "Arial Rounded MT Bold", ui-rounded, system-ui, sans-serif';
-const BODY = '"Nunito Sans Variable", ui-rounded, system-ui, sans-serif';
+const DISPLAY = '"Bricolage Grotesque", system-ui, sans-serif';
+const BODY = '"DM Sans", system-ui, sans-serif';
 const INK_FONT = '"Inktober Share Ink", "Inktober Ink", Caveat, "Segoe Script", cursive';
 
 // Truncate a single-line label to fit maxWidth with an ellipsis.
