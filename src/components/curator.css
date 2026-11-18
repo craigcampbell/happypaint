@@ -8,11 +8,7 @@
 .curator-poster .artwall-ink-play { position: absolute; width: 26%; max-height: 100%; right: 0; top: 0; opacity: .45; z-index: -1; }
 .curator-cta { display: inline-flex; gap: 1rem; align-items: center; min-height: 44px; font-weight: 800; }
 .curator-note { font-family: var(--scribble-font, cursive); }
-/* Preserve default poster typography; custom text may use every valid character. */
-.artwall-home .curated-header[data-default-title="false"] .artwall-poster h1 { width: 100%; font-size: clamp(36px, 7vw, 96px); overflow-wrap: anywhere; }
-.artwall-home .curated-header[data-default-title="false"] .artwall-poster h1 > span { max-width: 100%; width: auto; margin-left: 0; overflow-wrap: anywhere; }
-.artwall-home .curated-header[data-default-title="false"] .artwall-margin-note { position: relative; display: block; right: auto; bottom: auto; max-width: 80%; margin: 1rem 0; }
-.curated-header :is(p, a, .artwall-margin-note) { overflow-wrap: anywhere; }
+.curated-header :is(p, a) { overflow-wrap: anywhere; }
 .curator-admin { max-width: 1500px; margin: auto; padding: 24px; color: #181916; background: #f3efdf; min-height: 100vh; }
 .curator-toolbar, .curator-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .curator-toolbar h1 { flex: 1; }
