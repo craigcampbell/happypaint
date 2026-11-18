@@ -115,15 +115,8 @@
 .site-page.artwall-home .print-sheet .print-sketch { font: 400 clamp(1.05rem, 1.7cqw, 1.45rem)/1.2 var(--scribble-font); }
 .print-note { color: #25251e; font: 400 clamp(1.05rem, 2.1cqw, 1.65rem)/1.15 var(--scribble-font); overflow-wrap: anywhere; }
 .print-sketch { flex-shrink: 0; }
-.print-strip {
-  display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
-}
-.print-strip::-webkit-scrollbar { display: none; }
-.print-strip img { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always; }
+.print-strip { touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
+.print-strip:active { cursor: grabbing; }
 .print-pager { display: flex; align-items: center; gap: 4px; font: 700 .8rem/1 ui-monospace, monospace; }
 .site-page.discovery-page.artwall-home .print-masthead .print-pager button {
   display: grid;
@@ -140,7 +133,7 @@
 .site-page.discovery-page.artwall-home .print-masthead .print-pager button:hover { background: var(--discovery-yellow); }
 .print-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-@container (max-width: 650px) {
+@media (max-width: 706px) {
   .print-layout, .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); gap: 23px; padding: 25px 0 19px; }
   .print-masthead .print-kicker { margin-bottom: 13px; }
   .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 15.5cqw, 87px); line-height: 1; }
@@ -157,6 +150,10 @@
   .print-note { font-size: 1.05rem; }
   .print-sketch { font-size: .78rem; gap: 4px; }
   .print-pager { gap: 0; }
+}
+@container (max-width: 650px) {
+  .curator-preview .print-layout { grid-template-columns: minmax(0, 1fr); }
+  .curator-preview .print-sheet { width: min(91%, 420px); justify-self: center; }
 }
 /* Match the masthead ink and paper while keeping the shared navigation behavior. */
 .site-page.artwall-home .site-nav {

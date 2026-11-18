@@ -42,23 +42,30 @@ const PRINTS = [
 ];
 
 function PromptPrints({ onNavigate, preview, access }) {
-  const strip = useRef(null);
+  const swipe = useRef(null);
   const [index, setIndex] = useState(0);
   const print = PRINTS[index];
+  const turnPage = (step) => setIndex((current) => (current + step + PRINTS.length) % PRINTS.length);
 
-  const turnPage = (step) => {
-    const next = (index + step + PRINTS.length) % PRINTS.length;
-    strip.current.scrollTo({ left: next * strip.current.clientWidth, behavior: 'instant' });
+  const startSwipe = (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    swipe.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const finishSwipe = (event) => {
+    const start = swipe.current;
+    if (!start || start.id !== event.pointerId) return;
+    swipe.current = null;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) >= 34 && Math.abs(dx) > Math.abs(dy) * 1.25) turnPage(dx < 0 ? 1 : -1);
   };
 
   return <figure className="print-sheet" aria-label="Illustrated drawing prompts">
-    <div className="print-picture print-strip" ref={strip} onScroll={({ currentTarget }) => {
-      const page = Math.round(currentTarget.scrollLeft / currentTarget.clientWidth);
-      setIndex(Math.max(0, Math.min(PRINTS.length - 1, page)));
-    }}>
-      {PRINTS.map((item, i) => <img key={item.file} src={`/home-print/${item.file}.webp`}
-        width="1120" height="896" alt={item.alt} aria-hidden={i !== index}
-        draggable={false} fetchPriority={i === 0 ? 'high' : 'low'} loading={i === 0 ? 'eager' : 'lazy'} />)}
+    <div className="print-picture print-strip" onPointerDown={startSwipe} onPointerUp={finishSwipe}
+      onLostPointerCapture={() => { swipe.current = null; }}>
+      <img src={`/home-print/${print.file}.webp`} width="1120" height="896" alt={print.alt}
+        draggable={false} fetchPriority="high" />
     </div>
     <figcaption>
       <HeaderLink href={drawingIdeaPath(print.file, access === 'guest')} onNavigate={onNavigate} preview={preview}
