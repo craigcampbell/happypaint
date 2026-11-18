@@ -22,6 +22,8 @@ import { promises as dnsPromises } from 'dns';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import { buildGzippedHistoryFrame } from './server/historyFrame.js';
 import { createCatchup } from './server/catchup.js';
+import { createPresence, KIND_PAGE, KIND_PAINT, KIND_WATCH, F_VIEWS, F_JOINS, F_STROKES, F_CHATS } from './server/presence.js';
+import { createAdminAuth } from './server/adminAuth.js';
 import { createCheckpointService } from './server/checkpoints.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
@@ -30,6 +32,11 @@ import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
+import { COMMUNITY_EVENTS, getCommunityEvent } from './src/data/communityEvents.js';
+import { getDiscoverySeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
+import { renderDiscoveryLanding } from './server/discoverySeo.js';
+import { createCurator } from './server/curator.js';
+import { createFeaturedRooms } from './server/featuredRooms.js';
 import { INKTOBER_ROOM, INKTOBER_EVENT, inktoberState, inkDrawSettingsAllowed, INK_BRUSHES } from './server/inktober.js';
 import {
   ARTIST_AUDIENCE, ARTIST_VIEWER_ALLOWLIST, ARTIST_MANAGE_HOST_ONLY,
@@ -291,6 +298,26 @@ app.use((_req, res, next) => {
   res.set('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
   next();
 });
+
+// ---- Site presence (who is on the site, now / 30m / 4h / today) -----------
+// Every browser GET from a non-bot, non-admin client marks its device as seen
+// (server/presence.js). This is what lets /admin count people reading the
+// homepage, the Wall or the coloring library, who never open a socket. Hashed
+// device key only (ip|ua), same privacy level as the daily traffic uniques.
+const presence = createPresence({ dataDir: DATA_DIR });
+const PRESENCE_SKIP_PATH = /^\/(?:api\/admin|admin|watch|healthz|coloring-sheets\/|assets\/|robots\.txt|sitemap\.xml)/;
+const PRESENCE_SKIP_FILE = /\.(?:m?js|css|map|json|webmanifest|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf|wasm|mp[34]|webm|wav)$/i;
+app.use((req, _res, next) => {
+  if (req.get('x-admin-key')) {
+    // A valid key marks this device as staff: the console's own polling and
+    // the moderator's browsing are then left out of every visitor count.
+    if (isAdmin(req)) presence.markStaff(presence.hash(clientIp(req), String(req.get('user-agent') || '')));
+  } else if (req.method === 'GET' && !PRESENCE_SKIP_PATH.test(req.path) && !PRESENCE_SKIP_FILE.test(req.path)) {
+    const ua = String(req.get('user-agent') || '');
+    if (ua && !BOT_UA.test(ua)) presence.mark(presence.hash(clientIp(req), ua), KIND_PAGE);
+  }
+  next();
+});
 let shuttingDown = false;
 let shutdownPersistenceFailed = false;
 // Existing requests finish normally; keep-alive clients must retry new work on
@@ -332,6 +359,7 @@ const wss = new WebSocketServer({
 // ---- Rooms ----------------------------------------------------------------
 // Each room keeps its connected users and a capped op history for replay.
 const rooms = new Map();
+let featuredRooms = null;
 
 // ---- Health instrumentation -----------------------------------------------
 // Event-loop delay (how late the loop is firing, the best "is the server
@@ -512,6 +540,26 @@ function connectedUserTotal() {
   rooms.forEach((room) => { n += room.users.size; });
   return n;
 }
+// Painters + read-only spectators: everyone with a live window onto a room.
+function onlineTotal() {
+  let n = 0;
+  rooms.forEach((room) => { n += room.users.size + (room.spectators ? room.spectators.size : 0); });
+  return n;
+}
+// Every 30s, keep long-lived sockets "seen" in the presence windows (a kid who
+// has painted for two hours straight is still on the site) and record the
+// minute's concurrent high-water mark even when nobody joins or leaves.
+function sweepPresence() {
+  wss.clients.forEach((ws) => {
+    if (!ws.visitorHash || ws.readyState !== 1) return;
+    if (ws.isSpectator) presence.mark(ws.visitorHash, KIND_WATCH);
+    else if (ws.userId) presence.mark(ws.visitorHash, KIND_PAINT);
+    else if (ws.isNotifier) presence.mark(ws.visitorHash, KIND_PAGE);
+  });
+  presence.notePeak(onlineTotal());
+}
+const presenceSweep = setInterval(sweepPresence, 30_000);
+if (presenceSweep.unref) presenceSweep.unref();
 function trimSeries() {
   const oldest = Math.floor(Date.now() / HOUR_MS) - SERIES_HOURS;
   const prune = (bag) => { for (const key of Object.keys(bag)) if (Number(key) < oldest) delete bag[key]; };
@@ -590,6 +638,7 @@ function recordPageView(req) {
     if (seen.size <= UNIQUE_SET_CAP) analytics.uniqueHashes[day] = [...seen];
   }
   seriesBump(null, SERIES_VIEWS, 1);
+  presence.count(F_VIEWS);
   scheduleAnalyticsPersist();
 }
 function trimTraffic() {
@@ -823,6 +872,8 @@ function analyticsStartSession(roomId, user, req) {
   else analytics.totals.anonymousSessions += 1;
   if (country) bumpBag(analytics.countries, country);
   seriesBump(roomId, SERIES_JOINS, 1, Math.max(1, rooms.get(roomId)?.users.size || 0), Math.max(1, connectedUserTotal()));
+  presence.count(F_JOINS);
+  presence.notePeak(onlineTotal());
 
   const userRecord = ensureAnalyticsUser(user);
   userRecord.sessions += 1;
@@ -930,6 +981,7 @@ function analyticsRecordDraw(roomId, user, op) {
     bumpBag(session.brushes, brush);
     analytics.totals.strokes += 1;
     seriesBump(roomId, SERIES_STROKES, 1);
+    presence.count(F_STROKES);
     bumpBag(analytics.brushes, brush);
     roomRecord.strokes += 1;
     bumpBag(roomRecord.brushes, brush);
@@ -951,6 +1003,7 @@ function analyticsRecordChat(roomId, user) {
   analytics.totals.chats += 1;
   roomRecord.chats += 1;
   seriesBump(roomId, SERIES_CHATS, 1);
+  presence.count(F_CHATS);
   if (userRecord) {
     userRecord.chats += 1;
     userRecord.lastSeen = session.lastSeen;
@@ -1217,8 +1270,13 @@ function storedRoomAudience(roomId) {
 // same lightweight probe as storedRoomAudience, for read-side book gates
 // (spectate/wall) that must decide BEFORE getRoom runs.
 function storedSketchbookRef(roomId) {
+  loadSketchbooks();
+  const reserved = bookPageIndex.get(roomId);
+  if (reserved) return { book: reserved };
   try {
-    return normalizeSketchbookRef(JSON.parse(readFileSync(roomFile(roomId), 'utf8')).sketchbook);
+    const raw = JSON.parse(readFileSync(roomFile(roomId), 'utf8')).sketchbook;
+    // A damaged non-null reference remains restricted, never an ordinary room.
+    return normalizeSketchbookRef(raw) || (raw != null ? { book: '' } : null);
   } catch {
     return null;
   }
@@ -1515,6 +1573,8 @@ function loadRoom(roomId) {
     return {
       history,
       historyOnDisk: stored.onDisk, // false → first save migrates it into .history.json
+      featuredVersion: typeof data.featuredVersion === 'string' ? data.featuredVersion : null,
+      featuredContributors: Array.isArray(data.featuredContributors) ? data.featuredContributors.filter((id) => typeof id === 'string') : [],
       sheetId: data.sheetId || null,
       // Only the opaque profile id is persisted, never a human-readable name -
       // so a deleted account leaves no identifying data on disk. Display names
@@ -1638,6 +1698,8 @@ async function saveRoomNow(roomId) {
         locked: !!room.locked,
         title: room.title || null,
         audience: room.audience || null,
+        featuredVersion: room.featuredVersion,
+        featuredContributors: Array.from(room.featuredContributors || []),
         listed: typeof room.listed === 'boolean' ? room.listed : null,
         hiddenOpIds: Array.from(room.hiddenOpIds || []),
         userSeconds: room.userSeconds || 0,
@@ -1699,8 +1761,60 @@ function schedulePersist(roomId) {
   }, 2500));
 }
 // Something other than a plain op push changed: the next save rewrites the file.
+// Only permission/moderation changes invalidate frozen selections; drawing
+// appends never call this signature with a changed generation.
+function featuredPermission(room) {
+  const gallery = normalizeGallery(room.gallery);
+  return JSON.stringify([room.audience, room.listed, !!room.sketchbook,
+    gallery.listed, gallery.moderationHidden, room.hiddenGen || 0]);
+}
+function legacyFeaturedVersion(room, code) {
+  // Legacy dormant metadata can be checked without loading or creating a room.
+  // Once materialized, this same epoch is persisted as featuredVersion. New
+  // rooms always mint random epochs, including recreation of legacy codes.
+  if (!(Number(room.createdAt) > 0)) return null;
+  return createHash('sha256').update(JSON.stringify([code, room.createdAt,
+    featuredPermission(room), Array.from(room.hiddenOpIds || []),
+    normalizeGallery(room.gallery).publishedAt])).digest('hex');
+}
+function featuredSource(code) {
+  if (!/^[A-Z0-9_-]{1,16}$/.test(code) || RETIRED_ROOM_CODES.has(code)) return null;
+  let room = rooms.get(code);
+  if (!room) {
+    // Metadata only: no getRoom(), history loading, or absent-room creation.
+    try { room = JSON.parse(readFileSync(roomFile(code), 'utf8')); } catch { return null; }
+  }
+  const gallery = normalizeGallery(room.gallery);
+  const artist = room.audience === ARTIST_AUDIENCE;
+  return { exists: true, audience: room.audience,
+    listed: artist ? gallery.listed === true : room.listed === true,
+    hidden: gallery.moderationHidden === true,
+    // The book reservation remains authoritative when dormant room metadata
+    // loses its back-reference; frozen selections must fail closed there too.
+    sketchbook: !!(storedSketchbookRef(code) || room.sketchbook),
+    published: artist && gallery.listed === true && !!gallery.publishedAt,
+    version: room.featuredVersion || legacyFeaturedVersion(room, code),
+    get profileIds() {
+      // Publication-only private provenance; public list/raster eligibility
+      // checks do not scan the analytics store.
+      return [...new Set([room.ownerProfileId, ...(room.painters || []),
+        ...(room.coHosts || []), ...Array.from(room.featuredContributors || []),
+        ...Object.entries(analytics.users).filter(([id, record]) => id.startsWith('pb:') && Object.hasOwn(record.rooms || {}, code)).map(([id]) => id.slice(3)),
+      ].filter(Boolean))];
+    } };
+}
 function persistRoom(roomId) {
   const room = rooms.get(roomId);
+  if (room) {
+    const permission = featuredPermission(room);
+    if (room.featuredPermission !== permission) {
+      // Durable removal precedes the debounced room save: crash/restore must
+      // never resurrect artwork withdrawn by privacy or moderation changes.
+      featuredRooms?.scrubSources((code) => code === roomId);
+      room.featuredVersion = randomBytes(24).toString('hex');
+      room.featuredPermission = permission;
+    }
+  }
   if (room) room.baseDirty = true;
   schedulePersist(roomId);
 }
@@ -2341,40 +2455,22 @@ function dailyPromptFor(featured) {
   return featured.prompts[day % featured.prompts.length];
 }
 
-// A sketchbook page whose room file is missing is NOT a blank canvas up for
-// grabs: the book's page list (bookPageIndex) is the reservation record, so
-// the page rematerializes with its book-stamped shape (owner, painter ACL,
-// inktober, back-reference) instead of loading as a generic, ownable room
-// under the same code. Re-entrancy-guarded: materializeSketchbookPageRoom
-// itself calls getRoom for the same code while stamping it.
-const rematerializingPages = new Set();
-function rematerializeSketchbookPage(roomId) {
-  if (rematerializingPages.has(roomId)) return false;
-  loadSketchbooks();
-  const bookId = bookPageIndex.get(roomId);
-  if (!bookId) return false;
-  const book = sketchbooks.get(bookId);
-  const page = book ? book.pages.find((p) => p.room === roomId) : null;
-  if (!page) return false;
-  rematerializingPages.add(roomId);
-  try {
-    materializeSketchbookPageRoom(book, page);
-    return true;
-  } catch {
-    return false; // best-effort, fall through to the ordinary fresh-room path
-  } finally {
-    rematerializingPages.delete(roomId);
-  }
-}
-
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    // Missing room file + a live book reference → the page rematerializes
-    // (fully stamped, already in the live map) rather than loading blank.
-    if (!existsSync(roomFile(roomId)) && rematerializeSketchbookPage(roomId)) {
-      return rooms.get(roomId);
-    }
+    // The book index is authoritative even when room metadata exists but is
+    // corrupt, incomplete or stale. Keep retained history; reconstruct only ACL
+    // and page identity before deriving the audience or sending any bytes.
+    loadSketchbooks();
+    const reservedBook = sketchbooks.get(bookPageIndex.get(roomId));
+    const reservedPage = reservedBook?.pages.find((p) => p.room === roomId);
     const saved = loadRoom(roomId);
+    saved.sketchbook = storedSketchbookRef(roomId) || saved.sketchbook;
+    if (reservedPage) {
+      stampSketchbookPageRoom(saved, reservedBook, reservedPage);
+      saved.animation = false;
+      saved.game = false;
+      saved.phone = false;
+    }
     // Audience default: the legacy MAIN room is the public hall (kid_safe); a
     // room first reached by an invite code is private (friends). A room created
     // via POST /api/rooms persists its audience, which wins here.
@@ -2418,6 +2514,8 @@ function getRoom(roomId) {
     }
     const fresh = trackHistory({
       code: roomId,
+      featuredVersion: saved.featuredVersion || legacyFeaturedVersion(saved, roomId) || randomBytes(24).toString('hex'),
+      featuredContributors: new Set(saved.featuredContributors || []),
       users: new Map(),
       history: saved.history,
       hiddenGen: 0, // bumps with every hiddenOpIds change (join cache key)
@@ -2535,7 +2633,9 @@ function getRoom(roomId) {
       createdAt: saved.fromDisk ? (saved.createdAt || 0) : Date.now(),
       lastActivity: (saved.fromDisk && saved.lastSaved) || Date.now(),
     });
+    fresh.featuredPermission = featuredPermission(fresh);
     pinFlagRoom(fresh, roomId); // a flag room's title/sheet/audience are derived, never persisted state
+    if (reservedPage) stampSketchbookPageRoom(fresh, reservedBook, reservedPage);
     rooms.set(roomId, fresh);
     const created = fresh;
     // Storybooks reuse the paged animation scene model: one scene is one page.
@@ -2792,6 +2892,7 @@ function roomLastSavedMs(roomId, data) {
 // Tear a room down: disconnect anyone in it, drop it from memory, delete its file.
 // Used by the admin "delete room" action and the idle auto-close sweep.
 function closeRoom(roomId, reason) {
+  featuredRooms?.scrubSources((code) => code === roomId);
   const room = rooms.get(roomId);
   if (room) {
     room.users.forEach((u) => {
@@ -4334,6 +4435,9 @@ wss.on('connection', async (ws, req) => {
     ws.close(1008, 'bad room');
     return;
   }
+  // Presence key for this socket (server/presence.js): the device behind it,
+  // never the person. Marked on join/spectate and re-marked by sweepPresence.
+  ws.visitorHash = presence.hash(rawClientIp(req), req.headers['user-agent'] || '');
   // Clients that can inflate a binary gzip frame (DecompressionStream) opt in;
   // everything else, old builds, the test harness by default, gets text.
   ws.acceptsGzip = url.searchParams.get('gz') === '1';
@@ -4389,6 +4493,7 @@ wss.on('connection', async (ws, req) => {
     });
     ws.on('close', unwatchAll);
     ws.on('error', unwatchAll);
+    presence.mark(ws.visitorHash, KIND_PAGE);
     ws.send(JSON.stringify({ type: 'notify_ready' }));
     return;
   }
@@ -4406,7 +4511,7 @@ wss.on('connection', async (ws, req) => {
     // surface, spectators are anonymous and can never prove book membership
     // (the book's owner/artists watch through ordinary member joins, gated
     // below). Reads the persisted back-reference without getRoom.
-    const skbRef = live ? live.sketchbook : (existsSync(roomFile(roomId)) ? storedSketchbookRef(roomId) : null);
+    const skbRef = storedSketchbookRef(roomId) || live?.sketchbook;
     if (skbRef) {
       const book = sketchbookById(skbRef.book);
       if (!book || book.moderationHidden || book.public !== true) {
@@ -4450,6 +4555,8 @@ wss.on('connection', async (ws, req) => {
     live.spectators.add(ws);
     ws.isSpectator = true;
     ws.roomId = roomId;
+    presence.mark(ws.visitorHash, KIND_WATCH);
+    presence.notePeak(onlineTotal());
     ws.send(JSON.stringify({
       type: 'connected', userId: 'spectator', userName: 'viewer', userColor: '#9aa6b2',
       roomId, spectator: true, locked: !!live.locked, roomTitle: live.title || null, audience: live.audience,
@@ -4501,7 +4608,15 @@ wss.on('connection', async (ws, req) => {
   // lands in proxy/CDN access logs and browser history, the same leak class the
   // HTTP admin guard avoids by taking a header.
   if (url.searchParams.get('modwatch') === '1') {
+    ws.isModWatch = true; // staff glass-room socket: never counted as a visitor
+    presence.markStaff(ws.visitorHash);
     let watched = null; // the live room, once the key has checked out
+    let moderatorCredential = '';
+    let credentialExpiryTimer;
+    const credentialTimer = setInterval(() => {
+      if (watched && !adminCredentialValid(moderatorCredential)) deny('auth_expired');
+    }, 1000);
+    ws.once('close', () => { clearInterval(credentialTimer); clearTimeout(credentialExpiryTimer); });
     const deny = (reason) => {
       try {
         ws.send(JSON.stringify({ type: 'mod_denied', reason }));
@@ -4525,7 +4640,7 @@ wss.on('connection', async (ws, req) => {
         if (data.type !== 'mod_auth') return;
         // The key is short, so guessing has to cost something even over a socket.
         if (!rateOk(`modauth:${rawClientIp(req)}`, 8, 60_000)) return deny('rate_limited');
-        if (typeof data.key !== 'string' || !adminKeyMatches(data.key)) return deny('bad_key');
+        if (typeof data.key !== 'string' || !adminCredentialValid(data.key)) return deny('bad_key');
         // Watch rooms that EXIST: a probe must never lazily materialize one. The
         // key has already checked out here, so a DORMANT room (saved on disk, not
         // in memory, every private room after a restart) is loaded for the
@@ -4536,6 +4651,9 @@ wss.on('connection', async (ws, req) => {
         if (!live) return deny('no_room');
         if (live.mods.size >= MAX_MOD_WATCHERS) return deny('too_many');
         clearTimeout(authTimer);
+        moderatorCredential = data.key;
+        const authorization = adminAuth.sessionValid(data.key);
+        if (authorization) credentialExpiryTimer = setTimeout(() => deny('auth_expired'), Math.max(0, authorization.expiresAt - Date.now()));
         watched = live;
         // Gate canvas traffic before the watcher joins the mod set: its
         // history catch-up is async and must stay atomically ordered.
@@ -4577,6 +4695,8 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'mod_log', entries: live.modLog.slice(0, 40) }));
         return;
       }
+
+      if (!adminCredentialValid(moderatorCredential)) return deny('auth_expired');
 
       // An attached watcher may MODERATE, never CREATE. The allowlist is the
       // enforcement: op / chat / cursor / rename / vote / game messages are
@@ -4795,7 +4915,7 @@ wss.on('connection', async (ws, req) => {
       const pid = identity && identity.profileId ? String(identity.profileId) : null;
       const teamMember = book
         ? isBookOwner(book, pid) || isBookArtist(book, pid)
-        : !!pid && (pid === room.ownerProfileId || (room.painters || []).includes(pid));
+        : false; // A missing parent cannot delegate its privacy decision to stale room ACLs.
       if (!teamMember) {
         ws.send(JSON.stringify({ type: 'room_blocked', reason: book?.moderationHidden ? 'moderation_hidden' : 'book_private' }));
         ws.close(1008, 'book not public');
@@ -4889,6 +5009,7 @@ wss.on('connection', async (ws, req) => {
     if (pageBook && isGuestBook(pageBook)) user.canPaint = guestOwnsBook(pageBook, deviceKey);
   }
   notePeak();
+  presence.mark(ws.visitorHash, KIND_PAINT);
   analyticsStartSession(roomId, user, req);
   ws.roomId = roomId;
   ws.userId = id;
@@ -5318,6 +5439,12 @@ wss.on('connection', async (ws, req) => {
           op.frameId = room.frames[0].id;
         }
         analyticsRecordDraw(roomId, user, op);
+        // Private provenance only, never added to the public op/wire payload.
+        // Keep attribution for future frozen selections even after logs trim.
+        if (user.profileId && !room.featuredContributors.has(user.profileId)) {
+          room.featuredContributors.add(user.profileId);
+          room.baseDirty = true;
+        }
         room.history.push(op);
         room.frameOpCounts.set(countKey, frameCount + 1);
         if (!multiFrame && room.history.length > historyCapFor(room)) {
@@ -6911,6 +7038,12 @@ wss.on('connection', async (ws, req) => {
           persistReports();
         }
 
+        // Owner-managed artwork is never changed by untrusted classifier claims
+        // or viewer reports (even several accounts/addresses). Preserve the review
+        // evidence above; only an authorized host/moderator can hide its strokes.
+        // Shared collaborative murals retain their existing moderation policy.
+        if (isArtistRoom(room) || room.sketchbook) break;
+
         // Tier 2: corroborated (>=2 independent flaggers, or 1 flag + 1 human
         // report) -> reversible auto-hide of the implicated ops + mute author.
         // Overlap is judged on the CLAMPED range (toOpIdEff): a forged raw
@@ -7206,12 +7339,18 @@ async function resolveArtOwner(req) {
     return sanitizeKey(`pb_${identity.profileId}`);
   }
   // No token: only allow anonymous device keys, never account keys.
-  const raw = req.body && req.body.userKey != null ? req.body.userKey : req.query.userKey;
+  const raw = req.body && req.body.userKey != null
+    ? req.body.userKey
+    : req.get('X-Drawesome-Device-Key') ?? req.query.userKey;
   const key = sanitizeKey(raw);
   if (!key || key.startsWith('pb_')) return null;
   return key;
 }
 
+const curator = createCurator({ dataDir: DATA_DIR });
+curator.registerRoutes(app, adminGuard);
+featuredRooms = createFeaturedRooms({ dataDir: DATA_DIR, getRoomEligibility: featuredSource });
+featuredRooms.registerRoutes(app, adminGuard);
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
 economy.registerRoutes(app);
@@ -7869,10 +8008,53 @@ function adminKeyMatches(key) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Two-factor admin sessions (server/adminAuth.js). Once .admin-totp.json is
+// enrolled, the raw key alone opens nothing: the console signs in with key +
+// authenticator code and carries the issued session token in x-admin-key.
+// Unenrolled (dev checkout, test harness) keeps accepting the raw key.
+const adminAuth = createAdminAuth({ dataDir: DATA_DIR, keyEpoch: () => ADMIN_KEY });
+const ADMIN_DEVICE_COOKIE = 'drawesome_admin_device';
+const ADMIN_GRANT_COOKIE = 'drawesome_admin_authorization';
+function adminCookies(req) {
+  const cookies = {};
+  for (const item of String(req.headers.cookie || '').split(';')) {
+    const at = item.indexOf('=');
+    if (at > 0) cookies[item.slice(0, at).trim()] = item.slice(at + 1).trim();
+  }
+  return { deviceToken: cookies[ADMIN_DEVICE_COOKIE], authorizationToken: cookies[ADMIN_GRANT_COOKIE] };
+}
+function adminSameOrigin(req, res, { allowKeyOnly = false, allowHeaderOnly = false } = {}) {
+  res.set('Cache-Control', 'no-store');
+  const origin = req.get('origin');
+  const site = req.get('sec-fetch-site');
+  const cookies = adminCookies(req);
+  // Non-browser raw-key harnesses are retained, but never for cookie resume.
+  if (!origin && !cookies.deviceToken && !cookies.authorizationToken && !site) {
+    if (allowKeyOnly && req.body?.key) return true;
+    if (allowHeaderOnly && adminCredentialValid(req.get('x-admin-key'))) return true;
+  }
+  try {
+    const url = new URL(origin);
+    const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+    if (url.origin === origin && url.host === req.get('host') && (url.protocol === 'https:' || (process.env.NODE_ENV !== 'production' && loopback && url.protocol === 'http:')) && (!site || site === 'same-origin')) return true;
+  } catch { /* missing or malformed origin */ }
+  res.status(403).json({ error: 'same_origin_required' });
+  return false;
+}
+function setAdminCookie(req, res, name, token, expiresAt) {
+  const devLoopback = process.env.NODE_ENV !== 'production' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(req.hostname);
+  res.cookie(name, token || '', { httpOnly: true, sameSite: 'strict', secure: !devLoopback, path: '/', expires: new Date(token ? expiresAt : 0) });
+}
+function adminCredentialValid(value) {
+  if (!value || typeof value !== 'string') return false;
+  if (adminAuth.sessionValid(value)) return true;
+  return !adminAuth.enrolled() && adminKeyMatches(value);
+}
+
 function isAdmin(req) {
   // Header only, never a query param, which would land the key in proxy/CDN
   // access logs and browser history (same leak class as tokens in WS URLs).
-  return adminKeyMatches(req.get('x-admin-key'));
+  return adminCredentialValid(req.get('x-admin-key'));
 }
 function adminGuard(req, res) {
   res.set('Cache-Control', 'no-store');
@@ -7916,6 +8098,14 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   if (!rateOk(`scrub:${pid}`, 3, 60 * 60_000) || !rateOk(`scrub-ip:${clientIp(req)}`, 6, 60 * 60_000)) {
     return res.status(429).json({ error: 'slow_down' });
   }
+  // Resolve related sources BEFORE analytics/ACL erasure. Frozen metadata
+  // also retains capture-time provenance, independent of later log retention.
+  let featuredScrubbed;
+  try {
+    const related = new Set(computeMyRooms(pid).map((room) => room.code));
+    for (const [code, room] of rooms) if (room.ownerProfileId === pid || (room.painters || []).includes(pid) || room.featuredContributors?.has(pid)) related.add(code);
+    featuredScrubbed = featuredRooms.scrubProfile(pid, related);
+  } catch { return res.status(503).json({ error: 'featured_erasure_failed' }); }
   let scrubbed = 0;
   // 1) durable audit logs
   let files = [];
@@ -7951,6 +8141,7 @@ app.post('/api/account/scrub-chat', async (req, res) => {
     // whether or not this profile has a live session there.
     const reactKey = `pb_${pid}`;
     let roomTouched = false;
+    if (room.featuredContributors?.delete(pid)) roomTouched = true;
     for (const c of room.chat || []) {
       if (c.reactions) {
         for (const [emoji, list] of Object.entries(c.reactions)) {
@@ -8054,6 +8245,10 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       let data;
       try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
       let touched = false;
+      if (Array.isArray(data.featuredContributors) && data.featuredContributors.includes(pid)) {
+        data.featuredContributors = data.featuredContributors.filter((id) => id !== pid);
+        touched = true;
+      }
       if (Array.isArray(data.painters) && data.painters.includes(pid)) {
         data.painters = data.painters.filter((p) => p !== pid);
         touched = true;
@@ -8090,7 +8285,11 @@ app.post('/api/account/scrub-chat', async (req, res) => {
         applyBookArtistsToPages(book, pid, false);
         touched = true;
       }
-      if (touched) { persistSketchbook(book); sketchbooksScrubbed += 1; }
+      if (touched) {
+        persistSketchbook(book);
+        if (book.public !== true || book.moderationHidden) closeUnauthorizedBookSessions(book);
+        sketchbooksScrubbed += 1;
+      }
     }
   } catch { /* best effort */ }
   // 7) moderation evidence identity: the frozen PIXELS are the room's shared
@@ -8108,12 +8307,69 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   }
   if (evidenceScrubbed) persistReports();
   forgetProfileTokens(pid); // the account is gone, its cached sign-in must not outlive it
-  res.json({ ok: true, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, sketchbooksScrubbed, evidenceScrubbed });
+  res.json({ ok: true, featuredScrubbed, scrubbed, analyticsScrubbed, artScrubbed, wallScrubbed, billingScrubbed, artistRoomsScrubbed, sketchbooksScrubbed, evidenceScrubbed });
+});
+
+// Public: does signing in need an authenticator code? (Reveals only that 2FA
+// is on, which an attacker learns from the login form anyway.)
+app.get('/api/admin/auth-mode', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const s = adminAuth.status();
+  res.json({ totp: s.totp, sessionHours: s.sessionHours, rememberDays: s.rememberDays });
+});
+
+// Key + code -> session token. Rate limited per IP: six tries per quarter
+// hour, which makes guessing a 6-digit code (1 in 10^6 per try, codes rotate
+// every 30s) a non-starter while leaving room for a fat-fingered admin.
+app.post('/api/admin/login', (req, res) => {
+  if (!adminSameOrigin(req, res, { allowKeyOnly: true })) return;
+  if (!rateOk(`adminlogin:${clientIp(req)}`, 6, 15 * 60_000)) {
+    res.status(429).json({ error: 'rate_limited' });
+    return;
+  }
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const result = adminAuth.login({
+    key: typeof body.key === 'string' ? body.key.trim() : '',
+    code: typeof body.code === 'string' ? body.code : '',
+    keyMatches: adminKeyMatches,
+    deviceToken: adminCookies(req).deviceToken,
+  });
+  if (!result.ok) {
+    res.status(401).json({ error: result.reason });
+    return;
+  }
+  if (result.deviceToken) {
+    setAdminCookie(req, res, ADMIN_DEVICE_COOKIE, result.deviceToken, result.deviceExpiresAt);
+    setAdminCookie(req, res, ADMIN_GRANT_COOKIE, result.authorizationToken, result.expiresAt);
+  }
+  res.json({ token: result.token, expiresAt: result.expiresAt, deviceExpiresAt: result.deviceExpiresAt, method: result.method, recoveryLeft: result.recoveryLeft ?? null });
+});
+
+// Cookie reads are deliberately POST + same-origin, not general admin auth.
+app.post('/api/admin/resume', (req, res) => {
+  if (!adminSameOrigin(req, res)) return;
+  const cookies = adminCookies(req);
+  const result = adminAuth.resume(cookies);
+  if (!result.ok) {
+    res.status(401).json({ error: result.reason, remembered: !!adminAuth.remembered(cookies.deviceToken) });
+    return;
+  }
+  res.json(result);
+});
+app.post('/api/admin/logout', (req, res) => {
+  if (!adminSameOrigin(req, res, { allowHeaderOnly: true })) return;
+  const forget = req.body?.forget === true;
+  try { adminAuth.revoke(req.get('x-admin-key'), { ...adminCookies(req), forget }); }
+  catch { res.status(503).json({ error: 'unavailable' }); return; }
+  setAdminCookie(req, res, ADMIN_GRANT_COOKIE, '', 0);
+  if (forget) setAdminCookie(req, res, ADMIN_DEVICE_COOKIE, '', 0);
+  res.json({ ok: true, forgotten: forget });
 });
 
 app.get('/api/admin/check', (req, res) => {
   if (!adminGuard(req, res)) return;
-  res.json({ ok: true });
+  const session = adminAuth.sessionValid(req.get('x-admin-key'));
+  res.json({ ok: true, totp: adminAuth.enrolled(), expiresAt: session ? session.expiresAt : null });
 });
 
 app.get('/api/admin/billing', async (req, res) => {
@@ -8917,7 +9173,6 @@ const WALL_DIR = process.env.WALL_DIR || join(DATA_DIR, '.wall');
 const MAX_WALL_POSTS = Number(process.env.MAX_WALL_POSTS || 500);
 const WALL_FRAME_LIMIT = 8;
 const WALL_FRAME_MAX_CHARS = 300_000; // ~220KB decoded per frame
-const WALL_HIDE_REPORTS = Number(process.env.WALL_HIDE_REPORTS || 3); // distinct reporters to auto-hide
 const WALL_MAX_VOTES = 100_000; // cap distinct hearts stored per post (disk bound)
 
 // Only real raster images may be posted. SVG is deliberately EXCLUDED: it is an
@@ -9031,7 +9286,7 @@ function deleteWallPost(id) {
 // the Cloudflare tunnel it is the visitor's real address; from any OTHER peer
 // (the origin reached directly by IP, another container, a future proxy) it is
 // attacker-chosen text, and every IP-keyed control, rate limits, wall votes and
-// the 3-report auto-hide, IP blocks, mod-auth throttles, would follow it. So
+// report deduplication, IP blocks, mod-auth throttles, would follow it. So
 // the header is honored only when the TCP peer is the tunnel:
 //   TRUSTED_PROXY_HOSTS=cloudflared   (compose sets this) → only the address(es)
 //       that name resolves to. Re-resolved on a timer, because a restarted
@@ -9039,8 +9294,8 @@ function deleteWallPost(id) {
 //   unset (bare `node server.js`, a host-level cloudflared) → loopback and
 //       private-range peers only. A request arriving from a public address is
 //       never believed, which is the "someone found the droplet IP" case.
-// If the named host cannot be resolved (the tunnel profile is not running) the
-// private-range rule applies, so a host-level tunnel keeps working.
+// Configured hosts fail closed while DNS is unavailable, including startup.
+// The private-range compatibility rule applies ONLY when no hosts are configured.
 const TRUSTED_PROXY_HOSTS = String(process.env.TRUSTED_PROXY_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
 const TRUSTED_PROXY_REFRESH_MS = 15_000;
 let trustedProxyIps = new Set();
@@ -9076,7 +9331,7 @@ if (TRUSTED_PROXY_HOSTS.length) {
   setInterval(refreshTrustedProxies, TRUSTED_PROXY_REFRESH_MS).unref?.();
 }
 function peerIsTrustedProxy(peer) {
-  if (TRUSTED_PROXY_HOSTS.length && trustedProxyIps.size) {
+  if (TRUSTED_PROXY_HOSTS.length) {
     if (trustedProxyIps.has(peer)) return true;
     // An unknown peer claiming to be the tunnel: it may have just restarted on
     // a new address, look again soon rather than waiting out the timer.
@@ -9117,6 +9372,14 @@ function sanitizeWallTag(raw) {
     .slice(0, 24);
 }
 
+function wallPublished(meta) {
+  return !!meta && !meta.hidden && !meta.unpublished;
+}
+
+function wallSensitive(meta) {
+  return getCommunityEvent(meta.event)?.sensitive === true;
+}
+
 function publicWallPost(meta, viewerHash) {
   const parent = meta.parentPostId ? wallPosts.get(meta.parentPostId) : null;
   return {
@@ -9124,7 +9387,7 @@ function publicWallPost(meta, viewerHash) {
     title: meta.title,
     tags: meta.tags,
     artist: meta.artist,
-    votes: Object.keys(meta.votedBy || {}).length,
+    votes: wallSensitive(meta) ? 0 : Object.keys(meta.votedBy || {}).length,
     frames: meta.frameCount,
     durationMs: meta.durationMs,
     createdAt: meta.createdAt,
@@ -9134,11 +9397,13 @@ function publicWallPost(meta, viewerHash) {
     eventDay: meta.eventDay != null ? meta.eventDay : null,
     eventPrompt: meta.eventPrompt || null,
     challenge: meta.challenge || null, // gallery date stamp (DAILY / active-October INKTOBER)
-    liked: viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
-    allowRemix: meta.allowRemix === true,
+    liked: !wallSensitive(meta) && viewerHash ? Boolean((meta.votedBy || {})[viewerHash]) : false,
+    sensitive: wallSensitive(meta),
+    allowVote: !wallSensitive(meta),
+    allowRemix: !wallSensitive(meta) && meta.allowRemix === true,
     parentPostId: meta.parentPostId || null,
     rootPostId: meta.rootPostId || null,
-    parent: parent && !parent.hidden ? { id: parent.id, title: parent.title } : null,
+    parent: wallPublished(parent) ? { id: parent.id, title: parent.title } : null,
   };
 }
 
@@ -9165,7 +9430,7 @@ app.get('/api/daily', (_req, res) => {
   const c = dailyChallenge();
   let entries = 0;
   for (const p of wallPosts.values()) {
-    if (!p.hidden && p.challenge === c.date) entries += 1;
+    if (wallPublished(p) && p.challenge === c.date) entries += 1;
   }
   res.json({ ...c, entries });
 });
@@ -9174,6 +9439,11 @@ app.get('/api/daily', (_req, res) => {
 // The derived event state, identical to the WS handshake `event` and the
 // seasonal_prompt broadcast. UTC rollover keeps the shared room prompt
 // consistent worldwide; before October this is a warm-up (no false day stamp).
+app.get('/api/community-events', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ events: COMMUNITY_EVENTS });
+});
+
 app.get('/api/inktober', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(ensureInktoberFresh()); // phase flips on contact, not the next tick
@@ -9297,7 +9567,7 @@ app.get('/api/wall', async (req, res) => {
   const event = /^[a-z0-9][a-z0-9-]{0,40}$/.test(String(req.query.event || '')) ? String(req.query.event) : null;
   const eventDay = /^\d{1,2}$/.test(String(req.query.day || '')) ? Number(req.query.day) : null;
 
-  let list = [...wallPosts.values()].filter((p) => !p.hidden);
+  let list = [...wallPosts.values()].filter(wallPublished);
   if (challenge) list = list.filter((p) => p.challenge === challenge);
   if (event) list = list.filter((p) => p.event === event);
   if (eventDay != null && eventDay >= 1 && eventDay <= 31) list = list.filter((p) => p.eventDay === eventDay);
@@ -9310,6 +9580,8 @@ app.get('/api/wall', async (req, res) => {
     });
   }
   if (sort === 'top') {
+    // Sensitive invitations are never competitive, even in the global feed.
+    list = list.filter((p) => !wallSensitive(p));
     list.sort((a, b) => Object.keys(b.votedBy || {}).length - Object.keys(a.votedBy || {}).length || b.createdAt - a.createdAt);
   } else if (sort === 'new') {
     list.sort((a, b) => b.createdAt - a.createdAt);
@@ -9321,18 +9593,18 @@ app.get('/api/wall', async (req, res) => {
   // Popular tags power the chip row client-side (from the WHOLE wall, not the page).
   const tagCounts = {};
   for (const p of wallPosts.values()) {
-    if (p.hidden) continue;
+    if (!wallPublished(p)) continue;
     for (const t of p.tags) tagCounts[t] = (tagCounts[t] || 0) + 1;
   }
   const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t]) => t);
   res.json({ posts, total, topTags });
 });
 
-// Frames are immutable once posted, serve decoded bytes with long caching.
+// Frame pixels are immutable once posted; publication consent is retractable.
 app.get('/api/wall/:id/frame/:n', (req, res) => {
   const meta = wallPosts.get(req.params.id);
   const n = Number(req.params.n);
-  if (!meta || meta.hidden || !Number.isInteger(n) || n < 0 || n >= meta.frameCount) {
+  if (!wallPublished(meta) || !Number.isInteger(n) || n < 0 || n >= meta.frameCount) {
     return res.status(404).json({ error: 'not found' });
   }
   let frames;
@@ -9351,7 +9623,9 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
   res.set('Content-Type', decoded.mime);
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', "default-src 'none'; sandbox");
-  res.set('Cache-Control', 'public, max-age=86400, immutable');
+  // Pixels are immutable, but publication consent can be withdrawn. Never
+  // let a shared/browser cache keep serving a retracted image.
+  res.set('Cache-Control', 'no-store');
   res.send(decoded.buffer);
 });
 
@@ -9360,7 +9634,7 @@ app.get('/api/wall/:id/frame/:n', (req, res) => {
 app.get('/api/wall/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const meta = wallPosts.get(req.params.id);
-  if (!meta || meta.hidden) return res.status(404).json({ error: 'not found' });
+  if (!wallPublished(meta)) return res.status(404).json({ error: 'not found' });
   const viewerHash = wallVoterHash(await wallVoterIdentity(req).catch(() => `ip:${clientIp(req)}`));
   res.json({ post: publicWallPost(meta, viewerHash) });
 });
@@ -9370,7 +9644,7 @@ app.get('/api/wall/:id', async (req, res) => {
 app.post('/api/wall/:id/remix-room', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const source = wallPosts.get(req.params.id);
-  if (!source || source.hidden || source.allowRemix !== true) {
+  if (!wallPublished(source) || wallSensitive(source) || source.allowRemix !== true) {
     return res.status(404).json({ error: 'not_remixable' });
   }
   const ip = clientIp(req);
@@ -9392,24 +9666,18 @@ app.post('/api/wall/:id/remix-room', (req, res) => {
   res.json({ code, remixSource: room.remixSource });
 });
 
-// Is this profileId the verified owner or an approved painter of an
-// Inktober-opted-in artist studio? Live rooms first, then the persisted file
-//, an offline studio's wall posts still stamp, but ONLY for its people.
-function artistRoomInktoberFor(code, profileId) {
-  if (!code || !profileId) return false;
-  const pid = String(profileId);
-  const live = rooms.get(code);
-  if (live) {
-    return isArtistRoom(live) && live.inktober === true
-      && (live.ownerProfileId === pid || (live.painters || []).includes(pid));
+// Automatic studio association requires verified owner/painter membership,
+// including offline studios. Explicit invitations do not claim studio origin.
+function artistRoomEventFor(code, profileId) {
+  if (!code || !profileId) return null;
+  let studio = rooms.get(code);
+  if (!studio) {
+    try { studio = JSON.parse(readFileSync(roomFile(code), 'utf8')); }
+    catch { return null; }
   }
-  try {
-    const data = JSON.parse(readFileSync(roomFile(code), 'utf8'));
-    if (!data || data.audience !== ARTIST_AUDIENCE || data.inktober !== true) return false;
-    return data.ownerProfileId === pid || normalizePainters(data.painters).includes(pid);
-  } catch {
-    return false;
-  }
+  if (!isArtistRoom(studio) || (studio.ownerProfileId !== String(profileId)
+      && !normalizePainters(studio.painters).includes(String(profileId)))) return null;
+  return getCommunityEvent(normalizeGallery(studio.gallery).event || (studio.inktober ? INKTOBER_EVENT : null));
 }
 
 app.post('/api/wall', async (req, res) => {
@@ -9425,6 +9693,11 @@ app.post('/api/wall', async (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const body = req.body || {};
+  const explicitEvent = Object.hasOwn(body, 'event') ? getCommunityEvent(body.event) : null;
+  // Null is the legacy/no-selection sentinel, not an invitation id.
+  if (Object.hasOwn(body, 'event') && body.event !== null && (!explicitEvent || !explicitEvent.acceptsContributions)) {
+    return res.status(400).json({ error: 'bad_event' });
+  }
   const token = bearerToken(req); // one verification serves attribution AND the byline
   const title = String(body.title || 'My drawing').replace(/\s+/g, ' ').trim().slice(0, 60) || 'My drawing';
   const rawTags = Array.isArray(body.tags) ? body.tags.slice(0, 5) : [];
@@ -9451,21 +9724,27 @@ app.post('/api/wall', async (req, res) => {
   // code, the wall is public, the book is not. Public books post fine, and
   // a missing book record fails closed (no exposure decision without it).
   if (roomName) {
-    const skbRef = (rooms.get(roomName) && rooms.get(roomName).sketchbook)
-      || (existsSync(roomFile(roomName)) ? storedSketchbookRef(roomName) : null);
+    const skbRef = storedSketchbookRef(roomName) || rooms.get(roomName)?.sketchbook;
     if (skbRef) {
       const book = sketchbookById(skbRef.book);
       if (!book || book.moderationHidden || book.public !== true) {
         return res.status(403).json({ error: 'book_private', message: 'That sketchbook is private, its pages cannot be posted to the public wall.' });
       }
+      if (!isGuestBook(book) && !isBookOwner(book, wallIdentity?.profileId) && !isBookArtist(book, wallIdentity?.profileId)) {
+        return res.status(403).json({ error: 'book_author_required', message: 'Only the owner or an approved artist may publish a sketchbook page.' });
+      }
     }
   }
-  const inktoberPost = roomName === INKTOBER_ROOM
-    || artistRoomInktoberFor(roomName, wallIdentity && wallIdentity.profileId);
-  const inkState = inktoberPost ? ensureInktoberFresh() : null;
+  const studioEvent = artistRoomEventFor(roomName, wallIdentity && wallIdentity.profileId);
+  const inktoberPost = roomName === INKTOBER_ROOM || studioEvent?.id === INKTOBER_EVENT;
+  // An explicit invitation is participation, never proof of room/medium origin.
+  // Room checks above remain authoritative for private work and automatic stamps.
+  const contributionEvent = explicitEvent || studioEvent || (inktoberPost ? getCommunityEvent(INKTOBER_EVENT) : null);
+  const inkParticipation = contributionEvent?.id === INKTOBER_EVENT;
+  const inkState = inkParticipation ? ensureInktoberFresh() : null;
   const inkIdx = tags.indexOf('inktober');
   if (inkIdx >= 0) tags.splice(inkIdx, 1);
-  if (inktoberPost) tags.push('inktober');
+  if (inkParticipation) tags.push('inktober');
   const frames = Array.isArray(body.frames) ? body.frames.slice(0, WALL_FRAME_LIMIT) : [];
   const durationMs = Math.min(2000, Math.max(80, Number(body.durationMs) || 400));
   // Every frame must decode to a real raster image (magic-byte checked). This
@@ -9493,23 +9772,15 @@ app.post('/api/wall', async (req, res) => {
   const requestedParentId = safeWallId(body.parentPostId);
   if (requestedParentId) {
     parentPost = wallPosts.get(requestedParentId) || null;
-    if (!parentPost || parentPost.hidden || parentPost.allowRemix !== true) {
+    if (!wallPublished(parentPost) || wallSensitive(parentPost) || parentPost.allowRemix !== true) {
       return res.status(400).json({ error: 'invalid_remix_source' });
     }
   }
 
   if (wallPosts.size >= MAX_WALL_POSTS) {
-    // Prune the least-loved poster older than 48h to make room; a wall full of
-    // fresh loved art rejects instead of eating someone's post silently.
-    sweepWallEventRetention(); // aged-out event posts free room first
-    const cutoff = Date.now() - 48 * 3600_000;
-    const candidates = [...wallPosts.values()].filter((p) => p.createdAt < cutoff);
-    candidates.sort((a, b) =>
-      Object.keys(a.votedBy || {}).length - Object.keys(b.votedBy || {}).length || a.createdAt - b.createdAt);
-    if (!candidates.length) {
-      return res.status(409).json({ error: 'wall_full' });
-    }
-    deleteWallPost(candidates[0].id);
+    // Capacity is not permission to delete another artist's frozen original.
+    // Explicit owner/admin deletion and scheduled event retention remain separate.
+    return res.status(409).json({ error: 'wall_full' });
   }
 
   const meta = {
@@ -9525,12 +9796,12 @@ app.post('/api/wall', async (req, res) => {
     durationMs,
     reports: 0,
     hidden: false,
-    challenge: challengeDate || (inktoberPost && inkState.phase === 'active' ? inkState.date : null), // 'YYYY-MM-DD' from the DAILY room, or active-October INKTOBER
+    challenge: challengeDate || (inkParticipation && inkState.phase === 'active' ? inkState.date : null), // 'YYYY-MM-DD' from the DAILY room, or active-October INKTOBER
     // Seasonal event stamp (server-assigned; null for ordinary posts).
-    event: inktoberPost ? INKTOBER_EVENT : null,
-    eventDay: inktoberPost && inkState.phase === 'active' ? inkState.day : null,
-    eventPrompt: inktoberPost ? inkState.prompt : null,
-    allowRemix: body.allowRemix === true,
+    event: contributionEvent?.id || null,
+    eventDay: inkParticipation && inkState.phase === 'active' ? inkState.day : null,
+    eventPrompt: inkParticipation ? inkState.prompt : (contributionEvent?.prompt || null),
+    allowRemix: contributionEvent?.sensitive !== true && body.allowRemix === true,
     parentPostId: parentPost?.id || null,
     rootPostId: parentPost ? (parentPost.rootPostId || parentPost.id) : null,
   };
@@ -9538,7 +9809,7 @@ app.post('/api/wall', async (req, res) => {
   writeFileAtomic(wallFramesFile(meta.id), JSON.stringify(frames));
   persistWallMeta(meta);
   wallPosts.set(meta.id, meta);
-  res.json({ ok: true, id: meta.id });
+  res.json({ ok: true, id: meta.id, event: meta.event });
 });
 
 // The voter identity is SERVER-DERIVED: a signed-in account, else the request
@@ -9562,9 +9833,10 @@ app.post('/api/wall/:id/vote', async (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const meta = wallPosts.get(req.params.id);
-  if (!meta || meta.hidden) {
+  if (!wallPublished(meta)) {
     return res.status(404).json({ error: 'not found' });
   }
+  if (wallSensitive(meta)) return res.status(403).json({ error: 'voting_disabled' });
   const hash = wallVoterHash(voterId);
   meta.votedBy = meta.votedBy || {};
   const on = req.body?.on !== false;
@@ -9588,23 +9860,20 @@ app.post('/api/wall/:id/report', (req, res) => {
     return res.status(429).json({ error: 'slow_down' });
   }
   const meta = wallPosts.get(req.params.id);
-  if (!meta) {
+  if (!wallPublished(meta)) {
     return res.status(404).json({ error: 'not found' });
   }
-  // Auto-hide counts DISTINCT reporters (hashed IP), not raw clicks, otherwise
-  // one person could bury any drawing by tapping report three times. Repeat
-  // reports from the same IP are ignored for both the counter and the queue.
-  meta.reportedBy = meta.reportedBy || {};
+  // A report requests moderator review; it never grants publication control.
+  // Distinct reporters are counted/deduped without letting a coordinated group
+  // take down somebody else's drawing. Only its owner or an admin may do that.
   const rhash = wallVoterHash(`report:${ip}`);
-  if (meta.reportedBy[rhash]) {
-    return res.json({ ok: true }); // already counted this reporter
+  if (meta.reportedBy?.[rhash]) {
+    return res.json({ ok: true });
   }
-  meta.reportedBy[rhash] = 1;
-  meta.reports = Object.keys(meta.reportedBy).length;
-  if (meta.reports >= WALL_HIDE_REPORTS && !meta.hidden) {
-    meta.hidden = true; // off the wall until an admin rules on it
-  }
-  persistWallMeta(meta);
+  const reportedBy = { ...meta.reportedBy, [rhash]: 1 };
+  const reported = { ...meta, reportedBy, reports: Object.keys(reportedBy).length };
+  persistWallMeta(reported);
+  wallPosts.set(meta.id, reported);
   fileReport({
     room: 'WALL',
     reason: `[wall:${meta.id}] "${meta.title}", ${String(req.body?.reason || 'reported').slice(0, 200)}`,
@@ -9612,6 +9881,37 @@ app.post('/api/wall/:id/report', (req, res) => {
     source: 'user',
   });
   res.json({ ok: true });
+});
+
+// Private capability check for the owner UI. Never disclose owner/device keys
+// in public metadata or URLs. An invalid/missing identity grants no controls.
+app.post('/api/wall/:id/permissions', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!rateOk(`wallpermissions:${clientIp(req)}`, 90, 60_000)) {
+    return res.status(429).json({ error: 'slow_down' });
+  }
+  const key = await resolveArtOwner(req);
+  const meta = wallPosts.get(req.params.id);
+  const owned = Boolean(key && meta && meta.ownerKey === key);
+  if (!meta || (!wallPublished(meta) && !owned)) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  res.json({ canUnpublish: owned, canDelete: owned });
+});
+
+// Owner retraction is durable and distinct from a moderation hide. There is
+// deliberately no public republish endpoint; sharing again needs fresh consent.
+app.post('/api/wall/:id/unpublish', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const key = await resolveArtOwner(req);
+  if (!key) return res.status(401).json({ error: 'auth_required' });
+  const meta = wallPosts.get(req.params.id);
+  if (!meta) return res.status(404).json({ error: 'not found' });
+  if (meta.ownerKey !== key) return res.status(403).json({ error: 'not_yours' });
+  const withdrawn = { ...meta, unpublished: true };
+  persistWallMeta(withdrawn);
+  wallPosts.set(meta.id, withdrawn);
+  res.json({ ok: true, id: meta.id });
 });
 
 // A kid (or their parent, same device/account) can always take their art down.
@@ -9754,7 +10054,7 @@ async function myRoomsIdentity(req, res) {
 const myRoomsCache = new Map(); // pid -> { at, rooms }
 function myRoomsFor(pid) {
   const hit = myRoomsCache.get(pid);
-  if (hit && Date.now() - hit.at < 10_000) return hit.rooms;
+  if (hit && Date.now() - hit.at < 10_000) return hit.rooms.filter((r) => canReadSourceBook(r.code, pid));
   const rooms = computeMyRooms(pid);
   if (myRoomsCache.size > 500) myRoomsCache.clear();
   myRoomsCache.set(pid, { at: Date.now(), rooms });
@@ -9810,7 +10110,7 @@ function computeMyRooms(pid) {
   const out = [];
   for (const code of codes) {
     const facts = info.get(code);
-    if (!facts) continue; // expired / deleted, nothing to continue
+    if (!facts || !canReadSourceBook(code, pid)) continue; // Current privacy wins over historical visits.
     // The person's own most recent line here (the durable log carries the
     // profileId; the tail cache keeps this to a stat per room).
     let myLastChat = null;
@@ -9913,6 +10213,9 @@ app.post('/api/rooms', async (req, res) => {
   // moderation pipeline, and a per-account quota so storage stays bounded.
   let artistFields = null;
   if (audience === ARTIST_AUDIENCE) {
+    if (Object.hasOwn(body, 'event') && body.event !== null && !getCommunityEvent(body.event)) {
+      return res.status(400).json({ error: 'bad_event' });
+    }
     artistFields = validateArtistFields({ title: body.title, description: body.description, tags: body.tags }, scan);
     if (!artistFields.ok) {
       return res.status(400).json({ error: artistFields.error, message: artistFields.message });
@@ -9935,9 +10238,10 @@ app.post('/api/rooms', async (req, res) => {
     // Creating a studio does NOT list it, publishing is a separate explicit
     // action. The description/tags ride along as the pre-filled draft.
     room.painters = [];
-    room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags };
-    // Inktober eligibility is separate from gallery publication.
-    room.inktober = body.inktober === true;
+    const event = Object.hasOwn(body, 'event') ? body.event : (body.inktober === true ? INKTOBER_EVENT : null);
+    room.gallery = { ...defaultGallery(), description: artistFields.description, tags: artistFields.tags, event };
+    // Compatibility flag retains Inktober's canvas/prompt behavior, not publication.
+    room.inktober = event === INKTOBER_EVENT;
   }
   if (mode === 'storybook') {
     room.title = room.title || 'Our Story';
@@ -9976,6 +10280,7 @@ function publishInfo(room, code) {
     description: gallery.description,
     tags: gallery.tags,
     inktober: room.inktober === true,
+    event: gallery.event || (room.inktober ? INKTOBER_EVENT : null),
     publishedAt: gallery.publishedAt,
     moderationHidden: gallery.moderationHidden,
     painters: Array.isArray(room.painters) ? room.painters : [],
@@ -10048,6 +10353,12 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     return res.status(403).json({ error: 'moderation_hidden', message: 'Moderators have hidden this studio from the gallery.' });
   }
   const body = req.body || {};
+  if (Object.hasOwn(body, 'event') && body.event !== null && !getCommunityEvent(body.event)) {
+    return res.status(400).json({ error: 'bad_event' });
+  }
+  const event = Object.hasOwn(body, 'event') ? body.event
+    : (typeof body.inktober === 'boolean' ? (body.inktober ? INKTOBER_EVENT : (gallery.event !== INKTOBER_EVENT ? gallery.event : null))
+      : (gallery.event || (room.inktober ? INKTOBER_EVENT : null)));
   let converted = false;
   const fields = validateArtistFields({ title: room.title, description: body.description, tags: body.tags }, scan);
   if (!fields.ok) {
@@ -10083,7 +10394,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     });
     converted = true;
   }
-  if (typeof body.inktober === 'boolean') room.inktober = body.inktober;
+  room.inktober = event === INKTOBER_EVENT;
   if (converted) {
     broadcast(id, { type: 'room_profile', audience: room.audience, roomProfile: roomProfileFor(room, room.inktober ? inktoberState() : null) });
   }
@@ -10093,7 +10404,7 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     description: fields.description,
     tags: fields.tags,
     publishedAt: gallery.publishedAt || new Date().toISOString(),
-    event: room.inktober ? INKTOBER_EVENT : null,
+    event,
   };
   persistRoom(id);
   res.json(publishInfo(room, id));
@@ -10183,7 +10494,7 @@ function artistGalleryEntries() {
       tags: gallery.tags,
       users: room.users.size,
       ops: room.history.length,
-      event: room.inktober ? INKTOBER_EVENT : null,
+      event: gallery.event || (room.inktober ? INKTOBER_EVENT : null),
       publishedAt: gallery.publishedAt || '',
     });
   });
@@ -10198,7 +10509,7 @@ function artistGalleryEntries() {
       tags: gallery.tags,
       users: 0,
       ops: Number.isFinite(meta.opCount) ? meta.opCount : 0,
-      event: meta.inktober ? INKTOBER_EVENT : gallery.event,
+      event: gallery.event || (meta.inktober ? INKTOBER_EVENT : null),
       publishedAt: gallery.publishedAt || '',
     });
   }
@@ -10560,12 +10871,30 @@ function applyBookArtistsToPages(book, changedPid = null, granted = null) {
       } catch { /* the next mutation retries */ }
     }
   }
+  if (book.public !== true || book.moderationHidden) closeUnauthorizedBookSessions(book);
 }
 
 function sketchbookById(raw) {
   loadSketchbooks();
   const id = String(raw || '').replace(/[^a-z0-9_]/g, '').slice(0, 24);
   return sketchbooks.get(id) || null;
+}
+
+// Retained asset ids are not privacy grants: check their SOURCE book now,
+// including reservation records when room metadata has disappeared. No account
+// requirement is added to ordinary rooms, coloring sheets or public guest books.
+function canReadSourceBook(roomId, pid) {
+  const ref = storedSketchbookRef(roomId) || rooms.get(roomId)?.sketchbook;
+  if (!ref) return true;
+  const book = sketchbookById(ref.book);
+  if (!book || !book.pages.some((p) => p.room === roomId)) return false;
+  return isBookOwner(book, pid) || isBookArtist(book, pid)
+    || (book.public === true && !book.moderationHidden);
+}
+async function canReadSourceAsset(req, roomId) {
+  if (!roomId) return false;
+  const identity = await sketchbookOptionalIdentity(req);
+  return canReadSourceBook(roomId, identity?.profileId);
 }
 
 // Optional auth for the PUBLIC read endpoints: owner/artist flags only ever
@@ -10845,9 +11174,10 @@ app.get('/api/sketchbooks/by-room/:code', async (req, res) => {
   // UNSAVED book is public and its pages are outside any account ACL, so the
   // only thing the device key decides is whether THIS caller is the one that
   // started the book (and may therefore draw on it, and save it).
-  const rawDk = String(req.query.dk || '');
+  const rawDk = String(req.get('X-Drawesome-Device-Key') ?? req.query.dk ?? req.query.device ?? '');
   const dk = /^[a-zA-Z0-9_-]{6,64}$/.test(rawDk) ? rawDk : null;
-  const guestOwner = isGuestBook(book) && !!dk && book.guest.device === dk;
+  // Invalid explicit account credentials must not fall back to device proof.
+  const guestOwner = (!bearerToken(req) || !!identity) && isGuestBook(book) && !!dk && book.guest.device === dk;
   const unsaved = isGuestBook(book);
   // A moderation-hidden book's banner is owner-only; a PRIVATE book's banner
   // is the book team's (owner + artists). Everyone else gets the same 404 a
@@ -11194,26 +11524,26 @@ app.get('/api/sheets', (_req, res) => {
   res.json({ sheets: sheets.map((s) => ({ id: s.id, name: s.name, thumb: s.thumb })) });
 });
 
-app.get('/api/sheets/:id', (req, res) => {
+app.get('/api/sheets/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   // User trace photos ride the same route (id "trace_…") so the client loader
   // needs no new branch.
   if (req.params.id.startsWith('trace_')) {
     const photo = tracePhotos.get(req.params.id);
-    if (!photo) return res.status(404).json({ error: 'not found' });
+    if (!photo || !await canReadSourceAsset(req, photo.roomId)) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Trace photo', image: photo.image });
   }
   // Draw Phone pages ride the same route (id "pp_…"), the id is an unguessable
   // token handed only to the next guesser (and, at reveal, the whole room).
   if (req.params.id.startsWith('pp_')) {
     const page = phonePages.get(req.params.id);
-    if (!page) return res.status(404).json({ error: 'not found' });
+    if (!page || !await canReadSourceAsset(req, page.roomId)) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Draw Phone page', image: page.image });
   }
   // Chat doodles too (id "cd_…"), handed out only inside the room's chat.
   if (req.params.id.startsWith('cd_')) {
     const doodle = chatDoodles.get(req.params.id);
-    if (!doodle) return res.status(404).json({ error: 'not found' });
+    if (!doodle || !await canReadSourceAsset(req, doodle.roomId)) return res.status(404).json({ error: 'not found' });
     return res.json({ id: req.params.id, name: 'Chat doodle', image: doodle.image });
   }
   const sheet = sheets.find((s) => s.id === req.params.id);
@@ -11382,10 +11712,24 @@ function sanitizeSoundtrack(value) {
     durationMs: Math.max(0, Math.min(3_600_000, Number(value.durationMs) || 0)),
   };
 }
-app.get('/api/audio/:id', (req, res) => {
+app.get('/api/audio/:id', async (req, res) => {
   const entry = soundtracks.get(String(req.params.id || ''));
   if (!entry) return res.status(404).json({ error: 'not found' });
-  res.set('Cache-Control', 'private, max-age=3600');
+  const id = String(req.params.id || '');
+  let sourceRoom = null;
+  for (const [code, room] of rooms) if (room.soundtrack?.id === id) { sourceRoom = code; break; }
+  if (!sourceRoom) {
+    try {
+      for (const file of readdirSync(ROOM_DIR).filter((f) => f.endsWith('.json') && !f.endsWith('.history.json'))) {
+        try {
+          const data = JSON.parse(readFileSync(join(ROOM_DIR, file), 'utf8'));
+          if (data.soundtrack?.id === id) { sourceRoom = file.slice(0, -5); break; }
+        } catch { /* An unreadable source does not authorize retained bytes. */ }
+      }
+    } catch { /* no rooms */ }
+  }
+  if (!await canReadSourceAsset(req, sourceRoom)) return res.status(404).json({ error: 'not found' });
+  res.set('Cache-Control', 'private, no-store');
   res.type(entry.mime);
   // `.audio` is a dot-directory: send() refuses those unless told otherwise.
   res.sendFile(entry.file, { dotfiles: 'allow' }, (err) => {
@@ -11582,6 +11926,69 @@ function dropRoomChatDoodles(room) {
 
 // ---- Live metrics (admin) -------------------------------------------------
 const serverStart = Date.now();
+// What is happening on the site this instant, from live server state. Painters
+// are member sockets inside rooms (active = drew/moved/chatted in the last
+// minute), spectators are read-only viewers, notifiers are idle mention
+// watchers, and `visitors` is distinct devices seen in the last 5 minutes by
+// any request at all (homepage, Wall, coloring library, API polls, sockets).
+function liveHeadcount() {
+  const now = Date.now();
+  const ACTIVE_MS = 60000;
+  let painters = 0;
+  let active = 0;
+  let spectators = 0;
+  let notifiers = 0;
+  let modWatchers = 0;
+  rooms.forEach((room) => {
+    room.users.forEach((u) => {
+      painters += 1;
+      if (now - (u.lastActivity || 0) < ACTIVE_MS) active += 1;
+    });
+    spectators += room.spectators ? room.spectators.size : 0;
+  });
+  wss.clients.forEach((ws) => {
+    if (ws.isNotifier) notifiers += 1;
+    else if (ws.isModWatch) modWatchers += 1;
+  });
+  const seen = presence.visitorsSince(now - 5 * 60000);
+  return {
+    at: now,
+    painters,
+    active,
+    idle: painters - active,
+    spectators,
+    notifiers,
+    modWatchers,
+    sockets: wss.clients.size,
+    visitors: seen.visitors,
+  };
+}
+
+// Presence windows for the admin Overview: right now (live state), plus
+// distinct visitors / painters / watchers and event totals for the last 30
+// minutes, 4 hours and "today so far". `today` is the admin's LOCAL midnight,
+// sent as ?todayStart=<ms> (falls back to the UTC day), clamped to the 36h we
+// retain. Each window carries a re-binned sparkline series.
+app.get('/api/admin/presence', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const now = Date.now();
+  const requested = Number(req.query.todayStart);
+  const utcMidnight = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+  const todayStart = Number.isFinite(requested) && requested > now - 36 * 3600000 && requested <= now ? requested : utcMidnight;
+  res.json({
+    now: liveHeadcount(),
+    peakUsers,
+    peakAt,
+    windows: {
+      live: presence.window(now - 5 * 60000, 5, now),
+      m30: presence.window(now - 30 * 60000, 30, now),
+      h4: presence.window(now - 4 * 3600000, 48, now),
+      today: { ...presence.window(todayStart, 48, now), label: todayStart === utcMidnight && requested !== utcMidnight ? 'UTC day' : 'local day' },
+    },
+    store: presence.stats(),
+  });
+});
+
 app.get('/api/admin/metrics', (req, res) => {
   if (!adminGuard(req, res)) return;
   const now = Date.now();
@@ -11752,7 +12159,26 @@ app.post('/api/admin/sheet-theme', (req, res) => {
 });
 
 // ---- Static host ----------------------------------------------------------
-app.get('/healthz', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
+// Public liveness probe (docker healthcheck, the hp* monitors on the host).
+// `online` is an aggregate headcount with no identities: painters inside
+// rooms, read-only spectators, open sockets, and distinct devices that made
+// any request in the last 5 minutes. This replaces guessing from the public
+// lobby list, which only ever saw listed kid-safe rooms.
+app.get('/healthz', (_req, res) => {
+  const live = liveHeadcount();
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    rooms: rooms.size,
+    online: {
+      painting: live.painters,
+      active: live.active,
+      watching: live.spectators,
+      sockets: live.sockets,
+      visitors5m: live.visitors,
+    },
+  });
+});
 
 // ---- Route-aware <head> (the SPA's "linker pass") -------------------------
 // The built shell is one HTML file, but the tags that matter to crawlers and
@@ -11891,6 +12317,8 @@ const FAQ_JSON_LD = {
 // Head overrides for one request path, or null for the untouched default shell.
 function seoOverridesFor(reqPath) {
   const path = reqPath.replace(/\/+$/, '') || '/';
+  const discovery = getDiscoverySeo(path);
+  if (discovery) return { ...discovery, url: `${SITE_ORIGIN}${discovery.path}` };
   // The admin glass-room: never a landing page. robots.txt disallows the whole
   // /watch/ prefix; this keeps the <head> honest for anything that ignores that
   // (and stops the room's code leaking into a canonical tag).
@@ -11909,11 +12337,11 @@ function seoOverridesFor(reqPath) {
   const wallMatch = /^\/wall\/([A-Za-z0-9_-]{1,64})$/.exec(path);
   if (wallMatch) {
     const post = wallPosts.get(wallMatch[1]);
-    if (post && !post.hidden) {
-      const hearts = Object.keys(post.votedBy || {}).length;
+    if (wallPublished(post)) {
+      const hearts = wallSensitive(post) ? 0 : Object.keys(post.votedBy || {}).length;
       return {
         title: `“${post.title}” by ${post.artist}, the Fridge Wall`,
-        description: `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ', it moves!' : ''}. See it, heart it, or remix it live.`,
+        description: wallSensitive(post) ? 'A freely shared community tribute on Drawesome. View this drawing and the invitation to participate.' : `A drawing on Drawesome's Fridge Wall${hearts ? ` with ${hearts} ❤️` : ''}${post.frameCount > 1 ? ', it moves!' : ''}. See it, heart it, or remix it live.`,
         url: `${SITE_ORIGIN}/wall/${post.id}`,
         image: `${SITE_ORIGIN}/api/wall/${post.id}/frame/0`,
         type: 'article',
@@ -11976,13 +12404,25 @@ app.get('/sitemap.xml', (_req, res) => {
   const urls = [];
   const add = (loc, changefreq, priority) => urls.push({ loc, changefreq, priority });
   add(`${SITE_ORIGIN}/`, 'daily', '1.0');
-  for (const p of Object.keys(PAGE_META)) add(`${SITE_ORIGIN}${p}`, p === '/wall' || p === '/rooms' ? 'hourly' : 'weekly', '0.8');
-  const posts = [...wallPosts.values()].filter((p) => !p.hidden).sort((a, b) => b.createdAt - a.createdAt).slice(0, 500);
+  for (const p of new Set([...Object.keys(PAGE_META), ...DISCOVERY_PATHS])) add(`${SITE_ORIGIN}${p}`, p === '/wall' || p === '/rooms' ? 'hourly' : 'weekly', '0.8');
+  const posts = [...wallPosts.values()].filter(wallPublished).sort((a, b) => b.createdAt - a.createdAt).slice(0, 500);
   for (const p of posts) add(`${SITE_ORIGIN}/wall/${p.id}`, 'weekly', '0.5');
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
     .map((u) => `  <url><loc>${escapeHtml(u.loc)}</loc><changefreq>${u.changefreq}</changefreq><priority>${u.priority}</priority></url>`)
     .join('\n')}\n</urlset>\n`;
   res.type('application/xml').setHeader('Cache-Control', 'public, max-age=3600').send(xml);
+});
+
+// These paths are capability/moderator surfaces, never discovery landings.
+// This prefix check cannot match API routes and performs no private lookup.
+app.use((req, res, next) => {
+  const path = req.path.replace(/\/+$/, '') || '/';
+  const invalidEvent = path.startsWith('/events/') && !getDiscoverySeo(path);
+  if (invalidEvent || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    if (invalidEvent) res.status(404);
+  }
+  next();
 });
 
 const distPath = join(__dirname, 'dist');
@@ -12029,7 +12469,10 @@ if (existsSync(distPath)) {
     }
     recordPageView(req); // server-side traffic, the number to reconcile GA against
     const over = seoOverridesFor(req.path);
-    res.type('html').send(over ? renderShell(shellHtml, over) : shellHtml);
+    let html = over ? renderShell(shellHtml, over) : shellHtml;
+    const landing = renderDiscoveryLanding(req.path, [...wallPosts.values()].filter(wallPublished), curator.published().pages);
+    if (landing) html = html.replace(/<div id="root">[\s\S]*?<\/div>/, () => `<div id="root">${landing}</div>`);
+    res.type('html').send(html);
   });
 } else {
   app.use((_req, res) => res.status(503).send('Build missing. Run `npm run build` first.'));
@@ -12097,6 +12540,8 @@ async function shutdown() {
     analyticsPersistTimer = null;
     persistAnalyticsNow();
     persistPeak();
+    presence.persistNow(); // keep "today so far" across a deploy
+    adminAuth.persistNow(); // admin sessions outlive the restart too
     if (shutdownPersistenceFailed) throw new Error('A room save failed during shutdown.');
     clearTimeout(deadline);
     process.exit(0);

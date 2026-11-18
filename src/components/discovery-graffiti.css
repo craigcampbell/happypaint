@@ -1,0 +1,19 @@
+/* Print finishing only. The shared paper/ink system lives in discovery.css.
+   Keep this import for existing consumers; no second palette or layout overrides. */
+.site-page.discovery-page .discovery-heading::after {
+  content: "";
+  display: block;
+  height: 6px;
+  margin-top: 24px;
+  background: var(--discovery-ink);
+  clip-path: polygon(0 15%, 28% 0, 64% 25%, 100% 6%, 100% 88%, 66% 76%, 30% 100%, 0 80%);
+}
+.site-page.discovery-page .discovery-book {
+  background-image: repeating-linear-gradient(90deg, transparent 0 7px, #18191620 7px 8px);
+  background-size: 12px 100%;
+  background-repeat: no-repeat;
+}
+@media (forced-colors: active) {
+  .site-page.discovery-page :is(.primary-action, .discovery-tabs a, .ag-tag-chip) { border: 2px solid ButtonText; }
+  .site-page.discovery-page .discovery-tabs a[aria-current="page"] { outline: 2px solid Highlight; }
+}

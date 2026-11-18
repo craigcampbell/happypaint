@@ -91,6 +91,8 @@ export default function LiveRoomCanvas({
   // 0 (default) = the live view, unchanged. Modwatch is always live: the admin
   // glass room is a moderation tool, not a thumbnail.
   snapshotIntervalMs = 0,
+  // Optional, on-device gallery GIF sampling; never uploads or persists pixels.
+  onReplayFrames = null,
 }) {
   const visRef = useRef(null);
   const offRef = useRef(null);
@@ -176,6 +178,25 @@ export default function LiveRoomCanvas({
       vis.height = Math.max(1, Math.round(rect.height * dpr));
     };
 
+    let previewSamples = [];
+    let previewTimer = null;
+    let previewReplaying = false;
+    let previewHasArt = false;
+    const preview = onReplayFrames ? document.createElement("canvas") : null;
+    if (preview) { preview.width = 320; preview.height = 200; }
+    const previewCtx = preview?.getContext("2d", { willReadFrequently: true });
+    const capturePreview = () => {
+      previewCtx.fillStyle = "#fff";
+      previewCtx.fillRect(0, 0, 320, 200);
+      previewCtx.drawImage(visRef.current, 0, 0, 320, 200);
+      return previewCtx.getImageData(0, 0, 320, 200);
+    };
+    const publishPreview = () => {
+      if (!preview || !previewHasArt || !visRef.current) return;
+      const final = capturePreview();
+      onReplayFrames({ poster: preview.toDataURL("image/png"), frames: [{ source: final, delayMs: 1000 }, ...previewSamples.map((source) => ({ source, delayMs: 160 })), { source: final, delayMs: 1000 }] });
+    };
+
     const blit = () => {
       const vis = visRef.current;
       if (!vis) return;
@@ -227,6 +248,10 @@ export default function LiveRoomCanvas({
           sheetRect.w * scale,
           sheetRect.h * scale,
         );
+      }
+      if (preview && !previewReplaying && previewHasArt) {
+        if (previewTimer) window.clearTimeout(previewTimer);
+        previewTimer = window.setTimeout(publishPreview, 150);
       }
     };
 
@@ -330,8 +355,21 @@ export default function LiveRoomCanvas({
           dropStrokes(); // stale live buffers, the replay re-delivers their points
           // Snapshot mode: an inline image op's <img> can decode AFTER the
           // immediate flush below, mark dirty so the next tick picks it up.
-          for (const op of data.ops || []) applyOp(offCtx, op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
+          if (preview) {
+            if (previewTimer) window.clearTimeout(previewTimer);
+            previewSamples = []; previewReplaying = true; previewHasArt = !!data.ops?.length;
+            onReplayFrames(null);
+            boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
+          }
+          const sampleEvery = Math.max(1, Math.ceil((data.ops || []).length / 10));
+          for (const [index, op] of (data.ops || []).entries()) {
+            applyOp(offCtx, op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
+            if (preview && (index + 1) % sampleEvery === 0 && previewSamples.length < 10) {
+              blit(); previewSamples.push(capturePreview());
+            }
+          }
           commitAllStrokes(); // legacy / cut-off strokes with no end marker
+          previewReplaying = false;
           // With a sheet, show the whole page; otherwise frame to the drawn content.
           boundsRef.current = hasSheet ? null : boundsOf(data.ops || []);
           // History is a wholesale rebuild (initial catch-up, moderation
@@ -345,6 +383,7 @@ export default function LiveRoomCanvas({
           // The replay keeps pace with the room either way; only the DISPLAY
           // differs, live mode repaints per op, snapshot mode just marks the
           // paper dirty for the next tick (no continual display work).
+          previewHasArt = true;
           applyOp(offCtx, data.op, lastMapRef.current, strokes, snap ? markSnapDirty : blit, mix, deferred);
           if (snap) markSnapDirty();
           else blit();
@@ -352,6 +391,8 @@ export default function LiveRoomCanvas({
         } else if (data.type === "sheet") {
           loadSheet(data.sheetId);
         } else if (data.type === "clear") {
+          if (previewTimer) window.clearTimeout(previewTimer);
+          previewSamples = []; previewHasArt = false; onReplayFrames?.(null);
           resetPaper();
           mix.clear(); // blank paper, empty the wet-mix mirror too
           lastMapRef.current = new Map();
@@ -363,7 +404,7 @@ export default function LiveRoomCanvas({
           // The room's live banter, the parent renders it over the viewport
           // (the conversation is the show; this canvas only paints ops).
           onSocial?.(data);
-        } else if (data.type === "mod_denied") {
+        } else if (data.type === "mod_denied" || data.type === "room_blocked" || data.type === "room_full") {
           // Wrong key, no such room, too many watchers: stop, retrying would
           // just hammer the server with a key that isn't going to start working.
           closed = true;
@@ -464,6 +505,7 @@ export default function LiveRoomCanvas({
     return () => {
       closed = true;
       window.clearInterval(sweep);
+      if (previewTimer) window.clearTimeout(previewTimer);
       if (snapTimer) window.clearInterval(snapTimer);
       dropStrokes();
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
@@ -475,7 +517,7 @@ export default function LiveRoomCanvas({
       }
       window.removeEventListener("resize", onResize);
     };
-  }, [roomCode, modKey, snapshotIntervalMs, onActivity, onSocial, onModState, onOps, onDenied, onSend]);
+  }, [roomCode, modKey, snapshotIntervalMs, onActivity, onSocial, onModState, onOps, onDenied, onSend, onReplayFrames]);
 
   return <canvas ref={visRef} className="live-room-canvas" aria-label="Live public room artwork" />;
 }

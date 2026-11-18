@@ -6,7 +6,7 @@
 #   docker pull node:24-alpine && docker image inspect node:24-alpine --format '{{index .RepoDigests 0}}'
 
 # ---- build the Vite SPA ----
-FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS build
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -22,7 +22,7 @@ RUN printf "VITE_PB_URL=%s\nVITE_GAM_AD_UNIT_CHAT=%s\nVITE_GAM_AD_UNIT_INTERSTIT
 RUN npm run build
 
 # ---- runtime ----
-FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runtime
 RUN apk add --no-cache su-exec
 WORKDIR /app
 ENV NODE_ENV=production
@@ -32,7 +32,10 @@ ENV DATA_DIR=/data
 # needs every interface.
 ENV HOST=0.0.0.0
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Runtime starts Node directly; do not ship npm's unused advisory-prone toolchain.
+RUN npm ci --omit=dev \
+  && rm -rf /usr/local/lib/node_modules/npm /opt/yarn-* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=build /app/dist ./dist
 COPY server.js ./server.js
 COPY server ./server

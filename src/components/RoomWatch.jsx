@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import LiveRoomCanvas from "./LiveRoomCanvas";
+import { adminRoomCode } from "../utils/adminRoomCode";
 
-const KEY_STORAGE = "drawesome:adminkey:v1";
+import AdminLogin from "./AdminLogin";
+import AdminFeaturedRooms from "./AdminFeaturedRooms";
+import { clearAdminToken, getAdminToken } from "../utils/adminAuth";
 
 // One row in the stroke list. A freehand stroke arrives as many small draw ops
 // that share a strokeId, so they collapse into ONE row (which is what a
@@ -54,17 +57,9 @@ const DENY_TEXT = {
 // refused everything but a moderation action, so this is not the boundary, only
 // the honest UI in front of it.
 export default function RoomWatch({ roomCode = "", onNavigate }) {
-  const code = String(roomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
-  const [adminKey, setAdminKey] = useState(() => {
-    try {
-      return localStorage.getItem(KEY_STORAGE) || "";
-    } catch {
-      return "";
-    }
-  });
+  const code = adminRoomCode(roomCode);
+  const [adminKey, setAdminKey] = useState(() => getAdminToken());
   const [authed, setAuthed] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [authError, setAuthError] = useState("");
   const [denied, setDenied] = useState("");
   const [room, setRoom] = useState(null);
   const [users, setUsers] = useState([]);
@@ -179,6 +174,13 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
   }, []);
 
   const onDenied = useCallback((reason) => {
+    if (reason === "auth_expired" || reason === "bad_key") {
+      clearAdminToken();
+      setAdminKey("");
+      setAuthed(false);
+      setDenied("");
+      return;
+    }
     setDenied(reason || "denied");
   }, []);
 
@@ -192,26 +194,10 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
 
   const nameOf = (userId) => namesRef.current.get(userId) || (userId === "admin" ? "a moderator" : userId || "?");
 
-  const login = async () => {
-    const key = keyInput.trim();
-    if (!key) return;
-    try {
-      const res = await fetch(bust("/api/admin/check"), { headers: { "x-admin-key": key }, cache: "no-store" });
-      if (res.ok) {
-        try {
-          localStorage.setItem(KEY_STORAGE, key);
-        } catch {
-          // ephemeral if storage is blocked
-        }
-        setAdminKey(key);
-        setAuthed(true);
-        setAuthError("");
-      } else {
-        setAuthError("That key didn't work. Double-check it and try again.");
-      }
-    } catch {
-      setAuthError("Couldn't reach the server. Try again.");
-    }
+  // Sign-in lives in <AdminLogin> (key + authenticator code -> session token).
+  const onAuthed = (token) => {
+    setAdminKey(token);
+    setAuthed(true);
   };
 
   const wipe = () => {
@@ -270,27 +256,20 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
 
   if (!authed) {
     return (
-      <main className="admin-login">
-        <div className="admin-login-card">
-          <h1>🕵️ Watch a room</h1>
-          <p>
-            Enter your admin key to open {code ? <strong>{code}</strong> : "the room"} as an invisible
-            observer. You won&apos;t be listed, counted, or announced, and this view can&apos;t draw or chat.
-          </p>
-          <input
-            type="password"
-            value={keyInput}
-            placeholder="admin key"
-            onChange={(e) => setKeyInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && login()}
-          />
-          {authError ? <p className="admin-error">{authError}</p> : null}
-          <div className="admin-login-actions">
-            <button type="button" onClick={() => onNavigate?.("/admin")}>← Console</button>
-            <button type="button" className="primary-action" onClick={login}>Watch</button>
-          </div>
-        </div>
-      </main>
+      <AdminLogin
+        title="🕵️ Watch a room"
+        intro={
+          <>
+            Sign in to open {code ? <strong>{code}</strong> : "the room"} as an invisible observer. You won&apos;t be
+            listed, counted, or announced, and this view can&apos;t draw or chat.
+          </>
+        }
+        action="Watch"
+        backLabel="← Console"
+        backTo="/admin"
+        onNavigate={onNavigate}
+        onAuthed={onAuthed}
+      />
     );
   }
 
@@ -491,6 +470,7 @@ export default function RoomWatch({ roomCode = "", onNavigate }) {
           ) : null}
         </aside>
       </div>
+      <AdminFeaturedRooms key={roomCode} roomCode={roomCode} adminKey={adminKey} />
     </main>
   );
 }

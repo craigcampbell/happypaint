@@ -15,19 +15,9 @@ export const GUEST_SKETCHBOOK_KEY = "drawesome:guestbook:v1";
 
 // The per-browser device key the WS auth frame already sends as userKey
 // (src/hooks/useMultiplayer.js). THE shared id, never invent a second one.
-// Matches the format there: created on first read, `dk_…` / `u_…` prefixed.
-export function getDeviceKey() {
-  try {
-    let key = window.localStorage.getItem("drawesome:userkey:v1");
-    if (!key) {
-      key = `dk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-      window.localStorage.setItem("drawesome:userkey:v1", key);
-    }
-    return key;
-  } catch {
-    return "";
-  }
-}
+// New keys use Web Crypto; existing stored values are opaque capabilities.
+import { getDeviceKey } from "./deviceIdentity";
+export { getDeviceKey };
 
 // The stored record: { bookId, token } | null. Tolerant of junk/legacy values.
 export function readGuestSketchbook() {

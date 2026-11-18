@@ -19,7 +19,7 @@ import "../seasonal.css";
 // Always-visible destinations (top level at desktop, first rows in the sheet).
 const PRIMARY = [
   { href: "/rooms", label: "Live rooms" },
-  { href: "/gallery", label: "Gallery" },
+  { href: "/gallery", label: "Discover" },
 ];
 
 // Grouped destinations: dropdowns at desktop, headed sections in the sheet.
@@ -28,6 +28,8 @@ const GROUPS = [
     id: "explore",
     label: "Explore",
     links: [
+      { href: "/events", label: "Community events" },
+      { href: "/studios", label: "Artist studios" },
       { href: "/wall", label: "The Wall" },
       { href: "/inktober", label: "Inktober" },
       { href: "/planet", label: "Painted Planet" },
@@ -192,9 +194,8 @@ export default function SiteNav({ onNavigate, current }) {
               Sign in
             </a>
           ) : null}
-          {/* The generic "Draw now" entry lands in the shared MAIN room (the
-              commons); a private room is still one custom code away. */}
-          <a href="/join/MAIN" className="site-nav-paint primary-action" onClick={(event) => follow(event, "/join/MAIN")}>
+          {/* Start on a local canvas. Shared rooms remain a separate choice. */}
+          <a href="/draw" className="site-nav-paint primary-action" onClick={(event) => follow(event, "/draw")}>
             <span className="site-nav-paint-dot" aria-hidden="true" />
             Draw now
           </a>

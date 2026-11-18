@@ -372,12 +372,12 @@ const run = async () => {
   );
   check("gallery card carries no PII", card && !/profileId|email|@example/i.test(JSON.stringify(card)), JSON.stringify(card));
 
-  // The real /gallery page (through the same API proxy) shows the card.
+  // The real /studios directory (through the same API proxy) shows the card.
   const galleryS = await newStudioContext(browser, null);
-  await galleryS.page.goto(`${BASE}/gallery`, { waitUntil: "domcontentloaded" });
+  await galleryS.page.goto(`${BASE}/studios`, { waitUntil: "domcontentloaded" });
   await galleryS.page.locator('text=Harbour Studies').first().waitFor({ state: "visible", timeout: 15000 }).catch(() => null);
   const galleryCardCount = await galleryS.page.locator('text=Harbour Studies').count();
-  check("the /gallery page lists the published studio", galleryCardCount >= 1, `${galleryCardCount}`);
+  check("the /studios page lists the published studio", galleryCardCount >= 1, `${galleryCardCount}`);
   await galleryS.ctx.close();
 
   // Unpublish from the same panel -> discovery gone, link still viewable.

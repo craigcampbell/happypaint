@@ -12,7 +12,8 @@
 // dark slate text keep ~12:1 contrast and stay readable next to the white rows.
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const KEY_STORAGE = "drawesome:adminkey:v1";
+import AdminLogin from "./AdminLogin";
+import { adminLogout, getAdminToken } from "../utils/adminAuth";
 const ROW_CAP = 150; // render cap: a 300+ room estate stays snappy without paging libs
 const POLL_MS = 10000;
 
@@ -122,16 +123,8 @@ function RoomThumb({ id, thumbAt, adminKey }) {
 }
 
 export default function RoomRadar({ onNavigate }) {
-  const [adminKey, setAdminKey] = useState(() => {
-    try {
-      return localStorage.getItem(KEY_STORAGE) || "";
-    } catch {
-      return "";
-    }
-  });
+  const [adminKey, setAdminKey] = useState(() => getAdminToken());
   const [authed, setAuthed] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [error, setError] = useState("");
   const [rooms, setRooms] = useState([]);
   const [totals, setTotals] = useState(null);
   const [lastFetchAt, setLastFetchAt] = useState(0);
@@ -233,32 +226,16 @@ export default function RoomRadar({ onNavigate }) {
     };
   }, [selected, adminKey]);
 
-  const login = async () => {
-    const key = keyInput.trim();
-    if (!key) return;
-    if (await checkKey(key)) {
-      try {
-        localStorage.setItem(KEY_STORAGE, key);
-      } catch {
-        // ephemeral if storage blocked
-      }
-      setAdminKey(key);
-      setAuthed(true);
-      setError("");
-    } else {
-      setError("That key didn't work. Double-check it and try again.");
-    }
+  // Sign-in lives in <AdminLogin> (key + authenticator code -> session token).
+  const onAuthed = (token) => {
+    setAdminKey(token);
+    setAuthed(true);
   };
 
   const signOut = () => {
-    try {
-      localStorage.removeItem(KEY_STORAGE);
-    } catch {
-      // ignore
-    }
+    adminLogout(adminKey);
     setAdminKey("");
     setAuthed(false);
-    setKeyInput("");
   };
 
   const clickSort = (key) => {
@@ -299,30 +276,7 @@ export default function RoomRadar({ onNavigate }) {
   }, [rooms, query, onlyPeople, onlyReports, onlyReview, audience, sort, sortAsc]);
 
   if (!authed) {
-    return (
-      <main className="admin-login">
-        <div className="admin-login-card">
-          <h1>🛡️ Drawesome Admin</h1>
-          <p>Enter your admin key to continue.</p>
-          <input
-            type="password"
-            value={keyInput}
-            placeholder="admin key"
-            onChange={(e) => setKeyInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && login()}
-          />
-          {error ? <p className="admin-error">{error}</p> : null}
-          <div className="admin-login-actions">
-            <button type="button" onClick={() => onNavigate("/")}>
-              ← Home
-            </button>
-            <button type="button" className="primary-action" onClick={login}>
-              Unlock
-            </button>
-          </div>
-        </div>
-      </main>
-    );
+    return <AdminLogin onNavigate={onNavigate} onAuthed={onAuthed} />;
   }
 
   const shown = visibleRooms.slice(0, ROW_CAP);

@@ -250,7 +250,7 @@ const run = async () => {
   const chip = bannerOk ? await owner.page.textContent(".skb-prompt-chip") : "";
   check("A: banner pins #inktober 2026 · Day 1 with the official prompt (not today)",
     chip.includes("#inktober 2026") && chip.includes("Day 1") && chip.includes(PROMPT1), chip);
-  const ownerControls = bannerOk ? await owner.page.$("text=+ Add page") : null;
+  const ownerControls = bannerOk ? await owner.page.$("text=Other days") : null;
   check("A: owner sees the add-page control", !!ownerControls);
 
   // ---- B. Draw, add a second page, separate canvases, flip back -----------
@@ -263,7 +263,7 @@ const run = async () => {
   check("B: owner's stroke lands on page 1", ops1First >= 1, `ops=${ops1First}`);
   await sleep(1500); // let the stroke's segment flush finish, then pin the count
   const ops1 = await pageOps(1);
-  await owner.page.click("text=+ Add page");
+  await owner.page.click("text=Other days");
   await owner.page.waitForSelector("#skb-day-pick", { timeout: 10000 });
   await owner.page.selectOption("#skb-day-pick", "2");
   await owner.page.waitForURL((url) => url.pathname.startsWith("/join/") && !url.pathname.endsWith(ROOM1), { timeout: 15000 });
@@ -352,7 +352,7 @@ const run = async () => {
   const ctaNote = guestBanner ? await guest.page.textContent(".skb-banner") : "";
   check("F: CTA offers private OR public (no blanket public promise) + invite-only drawing",
     /choose private or public/i.test(ctaNote) && /invite-only/i.test(ctaNote), ctaNote.slice(0, 220));
-  check("F: guest gets NO owner controls", !(await guest.page.$("text=+ Add page")) && !(await guest.page.$("text=Invitations")));
+  check("F: guest gets NO owner controls", !(await guest.page.$("text=Other days")) && !(await guest.page.$("text=Invitations")));
   const opsBeforeGuest = await waitOps(BOOK, 1, 1);
   await drawStroke(guest.page);
   await guest.page.waitForTimeout(1200);

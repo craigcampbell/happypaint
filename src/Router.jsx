@@ -1,5 +1,8 @@
 import { Component, Suspense, lazy, useCallback, useEffect, useState } from "react";
 import HomePage from "./components/HomePage";
+import { adminRoomCode } from "./utils/adminRoomCode";
+import { getCommunityEvent } from "./data/communityEvents";
+import { getPageSeo } from "./data/discoverySeo";
 
 // Visiting a guide or the homepage should not download the drawing studio,
 // its tools, billing UI, or the admin console. Each route loads when needed.
@@ -15,6 +18,7 @@ const FaqPage = lazy(() => import("./components/FaqPage"));
 const LiveAdmin = lazy(() => import("./components/LiveAdmin"));
 const RoomRadar = lazy(() => import("./components/RoomRadar"));
 const AdminUsers = lazy(() => import("./components/AdminUsers"));
+const AdminCurator = lazy(() => import("./components/AdminCurator"));
 const AdminGallery = lazy(() => import("./components/AdminGallery"));
 const RoomWatch = lazy(() => import("./components/RoomWatch"));
 const PublicWatch = lazy(() => import("./components/PublicWatch"));
@@ -25,6 +29,8 @@ const SketchbookStartPage = lazy(() => import("./components/SketchbookStartPage"
 const SketchbookInvitePage = lazy(() => import("./components/SketchbookInvitePage"));
 const PlanetPage = lazy(() => import("./components/PlanetPage"));
 const ArtistGalleryRoute = lazy(() => import("./components/ArtistGalleryRoute"));
+const DiscoveryPage = lazy(() => import("./components/DiscoveryPage"));
+const CommunityEventPage = lazy(() => import("./components/CommunityEventPage"));
 
 class RouteErrorBoundary extends Component {
   state = { failed: false };
@@ -68,9 +74,33 @@ export default function Router() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    const meta = getPageSeo(path);
+    // Dynamic artwork pages keep their server-provided share metadata on a
+    // direct load. On SPA navigation they still get their own canonical URL.
+    if (!meta) {
+      const privatePath = /^\/(?:admin|watch|join|sketchbook)(?:\/|$)/.test(path);
+      const canonical = document.querySelector('[data-seo="canonical"]');
+      canonical?.setAttribute("href", `https://drawesome.art${privatePath ? "/" : path}`);
+      return;
+    }
+    document.title = meta.title;
+    const set = (marker, attr, value) => document.querySelector(`[data-seo="${marker}"]`)?.setAttribute(attr, value);
+    set("desc", "content", meta.description);
+    set("og:title", "content", meta.title);
+    set("tw:title", "content", meta.title);
+    set("og:desc", "content", meta.description);
+    set("tw:desc", "content", meta.description);
+    set("canonical", "href", `https://drawesome.art${meta.path === "/" ? "/" : meta.path}`);
+    set("og:url", "content", `https://drawesome.art${meta.path === "/" ? "/" : meta.path}`);
+  }, [path]);
+
   let page;
-  const drawing = path.startsWith("/studio") || path.startsWith("/join");
-  if (path.startsWith("/studio")) {
+  const drawing = path === "/draw" || path.startsWith("/studio") || path.startsWith("/join");
+  if (path === "/draw") {
+    const event = getCommunityEvent(new URLSearchParams(window.location.search).get("event"));
+    page = <StudioApp key={`local-${event?.id || "solo"}`} initialLocal initialEvent={event?.id || ""} initialPrompt={(new URLSearchParams(window.location.search).get("prompt") || event?.prompt || "").slice(0, 180)} />;
+  } else if (path.startsWith("/studio") && !path.startsWith("/studios")) {
     const prompt = (new URLSearchParams(window.location.search).get("prompt") || "").slice(0, 180);
     page = <StudioApp key="room-MAIN" initialPrompt={prompt} />;
   } else if (path.startsWith("/join")) {
@@ -80,7 +110,7 @@ export default function Router() {
   } else if (path.startsWith("/watch")) {
     // The admin glass-room. Not a drawing route: no studio bundle, no canvas
     // tools, the watch view is read-only by construction.
-    const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+    const code = adminRoomCode(path.split("/")[2]);
     page = <RoomWatch key={`watch-${code}`} roomCode={code} onNavigate={navigate} />;
   } else if (path.startsWith("/live")) {
     // The public read-only watch page: a shareable window into one public room's
@@ -92,7 +122,9 @@ export default function Router() {
     // Three consoles, three pages: the original overview (/admin), the room
     // radar (/admin/rooms) and the user + gallery inspectors. Each is its own
     // lazy chunk so a moderator only pays for the page they open.
-    if (path.startsWith("/admin/rooms")) {
+    if (path === "/admin/curator") {
+      page = <AdminCurator onNavigate={navigate} />;
+    } else if (path.startsWith("/admin/rooms")) {
       page = <RoomRadar onNavigate={navigate} />;
     } else if (path.startsWith("/admin/users")) {
       page = <AdminUsers onNavigate={navigate} />;
@@ -117,10 +149,14 @@ export default function Router() {
     page = <SignupPage onNavigate={navigate} />;
   } else if (path.startsWith("/rooms")) {
     page = <RoomFinderPage onNavigate={navigate} />;
-  } else if (path.startsWith("/gallery")) {
-    // The public artist-studio index. The wrapper resolves the real auth
-    // session (guest / signed-in) and keeps it reactive for the create form.
+  } else if (path === "/studios") {
     page = <ArtistGalleryRoute onNavigate={navigate} />;
+  } else if (path.startsWith("/gallery")) {
+    page = <DiscoveryPage onNavigate={navigate} />;
+  } else if (path === "/events") {
+    page = <DiscoveryPage onNavigate={navigate} initialTab="events" />;
+  } else if (path.startsWith("/events/")) {
+    page = <CommunityEventPage onNavigate={navigate} eventId={path.split("/")[2] || ""} />;
   } else if (path.startsWith("/wall")) {
     page = <WallPage onNavigate={navigate} initialPostId={(path.split("/")[2] || "").slice(0, 64)} />;
   } else if (path.startsWith("/sketchbook/invite/")) {

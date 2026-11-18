@@ -54,6 +54,8 @@ export async function verifyAccessToken(token) {
   try {
     const res = await fetch(`${url}/api/collections/users/auth-refresh`, {
       method: 'POST',
+      // Covers headers AND body consumption; stalled auth must not hold joins open.
+      signal: AbortSignal.timeout(3000),
       headers: { Authorization: token }, // RAW token: PocketBase does not want "Bearer "
     });
     if (!res.ok) {

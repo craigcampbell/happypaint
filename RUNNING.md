@@ -45,6 +45,28 @@ the tunnel for a routine app update. Keep `ENABLE_CLIENT_SNAPSHOTS` unset;
 client-rendered catch-up snapshots remain experimental. Preserve the existing
 billing configuration; this deployment does not enable payments.
 
+## Admin sign-in (two-factor)
+
+`/admin`, `/admin/*` and `/watch/*` sign in with the admin key **and** a 6-digit
+code from an authenticator app (Google Authenticator, Authy, 1Password…). The
+server issues a session token that lives in the tab's sessionStorage for
+`ADMIN_SESSION_HOURS` (default 12) and nothing is saved on the device.
+
+```bash
+node scripts/admin-2fa-setup.mjs            # enroll (writes app_data/.admin-totp.json + a backup folder on the Desktop)
+node scripts/admin-2fa-setup.mjs --verify 123456   # check a code from the phone
+node scripts/admin-2fa-setup.mjs --status   # enrolled? recovery codes left?
+node scripts/admin-2fa-setup.mjs --rotate   # new secret + new recovery codes (old phone entry stops working)
+```
+
+The backup folder holds the QR code, the manual-entry key and ten one-time
+recovery codes (the server keeps only their hashes). Lost phone: sign in with a
+recovery code, then `--rotate` and scan again. Lost everything: `--rotate` on
+the host; shell access to the box is the last resort by design.
+
+While `.admin-totp.json` is absent (fresh checkout, verify scripts) the raw key
+alone still signs in, which is why the harness scripts keep working.
+
 ## Verify the release
 
 ```powershell
@@ -52,6 +74,11 @@ Invoke-RestMethod http://127.0.0.1:8787/healthz
 Invoke-RestMethod https://drawesome.art/healthz
 docker inspect happypaint-app-1 --format '{{.State.Health.Status}}'
 ```
+
+`/healthz` also returns `online: { painting, active, watching, sockets, visitors5m }`,
+the same headcount /admin's "Who's on" shows for "Right now". The host's
+`hpclients` / `hphealth` / `hpstatus` monitors read it (CLIENTS = painting +
+watching), so a `?` there means the running container predates this field.
 
 Also verify that the public HTML references the newly built asset filenames,
 those assets return JavaScript/CSS, and the homepage and mobile studio load in a

@@ -73,14 +73,14 @@ async function waitForServer() {
   throw new Error(`server did not start: ${stderr}`);
 }
 
-function connected(room, token = '') {
+function connected(room, token = '', expectedType = 'connected') {
   return new Promise((resolve, reject) => {
-    const suffix = token ? `&token=${encodeURIComponent(token)}` : '';
-    const ws = new WebSocket(`ws://127.0.0.1:${appPort}/ws?room=${room}${suffix}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${appPort}/ws?room=${room}`);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', token })));
     const timer = setTimeout(() => reject(new Error('websocket timeout')), 5000);
     ws.on('message', (raw) => {
       const data = JSON.parse(raw.toString());
-      if (data.type === 'connected') {
+      if (data.type === expectedType) {
         clearTimeout(timer);
         resolve({ ws, data });
       }
@@ -104,11 +104,14 @@ try {
   assert.equal(owner.data.isOwner, true);
   assert.equal(owner.data.adFree, true, 'paid owner gets an ad-free private room');
 
-  const guest = await connected('FAM123');
-  assert.equal(guest.data.adFree, true, 'anonymous invitee inherits owner entitlement');
+  const denied = await connected('FAM123', '', 'signin_required');
+  assert.equal(denied.data.reason, 'private_room', 'configured private rooms require an account');
+  denied.ws.close();
+  const guest = await connected('FAM123', 'unknown-token');
+  assert.equal(guest.data.adFree, true, 'signed-in invitee inherits owner entitlement');
 
-  const freeGuest = await connected('FREE12');
-  assert.equal(freeGuest.data.adFree, false, 'ordinary anonymous rooms remain ad-supported');
+  const freeGuest = await connected('FREE12', 'unknown-token');
+  assert.equal(freeGuest.data.adFree, false, 'ordinary signed-in private rooms remain ad-supported');
 
   const unknownPlan = await connected('OTHER1', 'unknown-token');
   assert.equal(unknownPlan.data.adFree, false, 'an unknown legacy price never grants Family');

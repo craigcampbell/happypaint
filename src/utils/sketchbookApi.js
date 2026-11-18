@@ -8,8 +8,9 @@
 
 export const SKETCHBOOK_EVENT = "inktober-2026";
 
-async function apiFetch(path, { method = "GET", session = null, body = null } = {}) {
+async function apiFetch(path, { method = "GET", session = null, body = null, deviceKey = null } = {}) {
   const headers = { "Content-Type": "application/json" };
+  if (deviceKey) headers["X-Drawesome-Device-Key"] = deviceKey;
   if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
   let res;
   try {
@@ -73,8 +74,7 @@ export function fetchSketchbookGallery(offset = 0, limit = 12) {
 // the only way the server can tell the caller "this is your device's book"
 // (unsaved/isGuestOwner/canDraw). It never widens access to anyone else.
 export function fetchSketchbookByRoom(roomCode, session = null, deviceKey = null) {
-  const dk = deviceKey ? `?dk=${encodeURIComponent(deviceKey)}` : "";
-  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}${dk}`, { session });
+  return apiFetch(`/api/sketchbooks/by-room/${encodeURIComponent(roomCode)}`, { session, deviceKey });
 }
 
 export function addSketchbookPage(bookId, day, session) {
@@ -119,6 +119,22 @@ export function startGuestSketchbook({ device, day = null } = {}) {
     method: "POST",
     body: { device, ...(day == null ? {} : { day }) },
   });
+}
+
+// Open a prompt in the caller's OWN book. Signed-in artists must never take
+// the guest-create -> claim path: revisiting a day that already exists there
+// otherwise opens an empty room detached by the merge. Resume the account
+// book without changing its visibility, then add/resume that day's page.
+export async function openSketchbookPrompt({ session = null, device, day = null } = {}) {
+  if (!session) return startGuestSketchbook({ device, day });
+  const book = await createOrResumeSketchbook(session, { isPublic: false });
+  if (!book.ok || !book.json?.book?.id) return book;
+  const result = await addSketchbookPage(book.json.book.id, day, session);
+  if (!result.ok) return result;
+  return {
+    ...result,
+    json: { ...result.json, bookId: book.json.book.id, room: result.json?.page?.room },
+  };
 }
 
 // Save (claim) a device-started book under the signed-in account. The account

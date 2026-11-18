@@ -7,6 +7,8 @@
 // no room-map access, so server.js wires the same rules into load/persist,
 // the WS guards, and the REST surface from one place.
 
+import { getCommunityEvent } from '../src/data/communityEvents.js';
+
 export const ARTIST_AUDIENCE = 'artist_public';
 
 // Bounds mirror the frontend fixtures (ArtistGalleryPage/ArtistRoomSettings):
@@ -45,7 +47,7 @@ export function normalizeGallery(raw) {
     description: typeof raw.description === 'string' ? raw.description.slice(0, ARTIST_LIMITS.description) : '',
     tags: sanitizeTags(raw.tags),
     publishedAt: typeof raw.publishedAt === 'string' && Number.isFinite(Date.parse(raw.publishedAt)) ? raw.publishedAt : null,
-    event: typeof raw.event === 'string' && raw.event ? raw.event.slice(0, 40) : null,
+    event: getCommunityEvent(raw.event)?.id || null,
     moderationHidden: raw.moderationHidden === true,
   };
 }
@@ -149,7 +151,7 @@ export function roomProfileFor(room, eventState = null) {
   return {
     description: gallery.description || '',
     tags: Array.isArray(gallery.tags) ? gallery.tags : [],
-    event: room.inktober ? eventState : null,
+    event: room.inktober ? eventState : getCommunityEvent(gallery.event),
   };
 }
 
