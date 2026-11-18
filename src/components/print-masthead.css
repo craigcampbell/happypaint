@@ -51,9 +51,10 @@
 .print-headline .print-note { display: block; margin-top: 10px; }
 .print-masthead[data-default-title="true"][data-short-note="true"] .print-note {
   position: absolute;
-  left: 24cqw;
-  bottom: 1rem;
-  max-width: 10ch;
+  left: 30cqw;
+  top: 2px;
+  margin: 0;
+  max-width: 15ch;
   transform: rotate(-7deg);
   color: #4d493c;
 }
@@ -117,7 +118,7 @@
 .print-sketch { flex-shrink: 0; }
 .print-strip { touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
 .print-strip:active { cursor: grabbing; }
-.print-pager { display: flex; align-items: center; gap: 4px; font: 700 .8rem/1 ui-monospace, monospace; }
+.print-pager { display: flex; align-items: center; white-space: nowrap; gap: 4px; font: 700 .8rem/1 ui-monospace, monospace; }
 .site-page.discovery-page.artwall-home .print-masthead .print-pager button {
   display: grid;
   place-items: center;
@@ -137,7 +138,7 @@
   .print-layout, .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); gap: 23px; padding: 25px 0 19px; }
   .print-masthead .print-kicker { margin-bottom: 13px; }
   .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 16.4cqw, 96px); line-height: .91; }
-  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note { left: 59%; bottom: auto; top: 2px; max-width: 13ch; margin: 0; }
+  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note { left: 64%; max-width: 13ch; }
   .site-page.artwall-home .print-masthead[data-default-title="false"] h1 { font-size: clamp(32px, 11cqw, 62px); }
   .print-masthead .print-deck { margin-top: 12px; font-size: 1rem; }
   .print-actions { margin-top: 13px; gap: 13px; }
@@ -183,4 +184,13 @@
   .site-page.artwall-home .site-nav .site-nav-paint { font-size: .84rem; min-height: 44px; padding-inline: 9px; }
   .site-page.artwall-home .site-nav .site-nav-toggle { border: 0; box-shadow: none; }
 }
-@media (max-width: 355px) { .site-page.artwall-home .site-brand .brand-mark { display: none; } }
+@media (max-width: 355px) {
+  .site-page.artwall-home .site-brand .brand-name { display: none; }
+  .print-sheet { width: 97%; }
+  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note {
+    position: static;
+    max-width: none;
+    margin: 6px 0 0;
+    transform: none;
+  }
+}
