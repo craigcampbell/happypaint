@@ -9,7 +9,7 @@ export const CURATOR_PALETTES = ['paper', 'acid', 'vermilion'];
 export const CURATOR_ART = ['ink', 'orbit', 'none'];
 export const CURATOR_LINKS = ['/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
 const defaults = {
-  home: { kicker: 'An open invitation to make something.', title: 'MAKE A\nBEAUTIFUL\nMESS.', description: 'A blank canvas. A wild idea. A little time to play.', note: 'no perfect lines required.', ctaLabel: 'Draw now', ctaHref: '/draw', palette: 'paper', art: 'ink' },
+  home: { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw', palette: 'acid', art: 'ink' },
   gallery: { kicker: 'Made by people. Not a perfection contest.', title: 'THE ART\nIS THE POINT.', description: 'Explore drawings shared by the community.', note: 'look a little closer.', ctaLabel: 'Make your own', ctaHref: '/draw', palette: 'paper', art: 'orbit' },
   events: { kicker: 'A reason to pick up a brush.', title: 'GOOD IDEAS.\nOPEN INVITATIONS.', description: 'Find a shared idea. Draw your own contribution.', note: 'come as you are.', ctaLabel: 'Start drawing', ctaHref: '/draw', palette: 'paper', art: 'ink' },
   studios: { kicker: 'A window into somebody’s world.', title: 'ARTIST\nSTUDIOS.', description: 'Watch public studios. Drawing stays with the artist and approved painters.', note: 'watch first. join on your terms.', ctaLabel: 'Draw privately', ctaHref: '/draw', palette: 'paper', art: 'orbit' },

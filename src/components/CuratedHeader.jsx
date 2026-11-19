@@ -1,11 +1,12 @@
 import { useId, useRef, useState } from 'react';
+import { NavInkMark } from './NavDoodles';
 import { drawingIdeaPath } from '../utils/drawingPrompts';
 import './discovery.css';
 import './artwall-home.css';
 import './curator.css';
 import './print-masthead.css';
-function HeaderLink({ href, onNavigate, preview, className, children }) {
-  return <a href={href} className={className} onClick={(event) => {
+function HeaderLink({ href, onNavigate, preview, className, children, ink }) {
+  return <a data-nav-ink={ink ? "" : undefined} href={href} className={className} onClick={(event) => {
     if (preview) { event.preventDefault(); return; }
     if (onNavigate && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onNavigate(href); }
   }}>{children}</a>;
@@ -28,27 +29,26 @@ function InkPlay() {
 
 const PRINTS = [
   {
-    file: 'ink-cat', link: 'Sketch this cat',
+    file: 'ink-cat', title: 'Pencil rider', link: 'Sketch this cat',
     alt: 'An ink-black cat rides a giant yellow pencil across a blue sky.',
   },
   {
-    file: 'record-monster', link: 'Sketch this DJ',
+    file: 'record-monster', title: 'Midnight set', link: 'Sketch this DJ',
     alt: 'A red monster in headphones spins a record on a blue turntable.',
   },
   {
-    file: 'sky-fish', link: 'Sketch this fish',
+    file: 'sky-fish', title: 'Air mail', link: 'Sketch this fish',
     alt: 'A flying blue fish delivers mail among postage-stamp clouds.',
   },
 ];
 
-function PromptPrints({ onNavigate, preview, access }) {
+function PromptPrints({ onNavigate, preview, access, index, setIndex }) {
   const swipe = useRef(null);
-  const [index, setIndex] = useState(0);
   const print = PRINTS[index];
   const turnPage = (step) => setIndex((current) => (current + step + PRINTS.length) % PRINTS.length);
 
   const startSwipe = (event) => {
-    if (!event.isPrimary || event.button !== 0) return;
+    if (!event.isPrimary || event.button !== 0 || event.currentTarget.closest('[data-drawing=on]')) return;
     swipe.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -62,14 +62,16 @@ function PromptPrints({ onNavigate, preview, access }) {
   };
 
   return <figure className="print-sheet" aria-label="Illustrated drawing prompts">
+    <div className="print-binding" aria-hidden="true" />
     <div className="print-picture print-strip" onPointerDown={startSwipe} onPointerUp={finishSwipe}
       onLostPointerCapture={() => { swipe.current = null; }}>
       <img src={`/home-print/${print.file}.webp`} width="1120" height="896" alt={print.alt}
         draggable={false} fetchPriority="high" />
     </div>
     <figcaption>
+      <div className="print-credit"><strong>{print.title}</strong>
       <HeaderLink href={drawingIdeaPath(print.file, access === 'guest')} onNavigate={onNavigate} preview={preview}
-        className="print-sketch">{access === 'guest' ? 'Sign up to sketch' : access === 'rejected' ? 'Sign in to sketch' : print.link} <span aria-hidden="true">↗</span></HeaderLink>
+        className="print-sketch">{access === 'guest' ? 'Sign up to sketch' : access === 'rejected' ? 'Sign in to sketch' : print.link} <span aria-hidden="true">↗</span></HeaderLink></div>
       <div className="print-pager">
         <button type="button" onClick={() => turnPage(-1)} aria-label="Previous print">←</button>
         <span aria-live="polite" aria-atomic="true"><span className="print-sr">Print </span>{index + 1} / {PRINTS.length}</span>
@@ -79,24 +81,32 @@ function PromptPrints({ onNavigate, preview, access }) {
   </figure>;
 }
 
+function InkFlourishes() {
+  return <svg className="masthead-ink" viewBox="0 0 1100 560" preserveAspectRatio="none" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <path className="ink-flight" d="M440 -16c-23 32-32 70-7 86 30 19 70-2 64-21-5-17-41-11-55 8-28 39 38 82 91 43 27-20 36-49 87-49" />
+    <path d="m606 43 16 7-12 12 M1012 458l7-18 8 14 16-6-7 16 12 10-19 2-5 17-7-16-17 3 10-13-10-10Z" />
+    <path d="M495 524c32-16 54-42 47-52-9-12-37 1-31 19 8 23 70 18 101-6m-17 1 19-4-8 14" />
+  </svg>;
+}
+
 function HomeMasthead({ content, onNavigate, preview, heading, id, orbit, promptAccess }) {
+  const [index, setIndex] = useState(0);
   return <header className="curated-header print-masthead" data-palette={content.palette} data-art={content.art}
-    data-default-title={content.title === 'MAKE A\nBEAUTIFUL\nMESS.'} data-short-note={content.note.length <= 28} aria-labelledby={id}>
+    data-edition={index} data-default-title={content.title === 'Draw all over\nthis page.'} aria-labelledby={id}>
     <div className="print-layout">
+      <InkFlourishes />
       <div className="print-lead">
         {content.kicker && <p className="print-kicker">{content.kicker}</p>}
-        <div className="print-headline">
-          {heading}
-          {content.note && <span className="print-note">{content.note}</span>}
-        </div>
+        <div className="print-headline">{heading}</div>
         {content.description && <p className="print-deck">{content.description}</p>}
+        {!preview && <div className="home-ink-slot" data-home-ink-tools="" />}
         <div className="print-actions">
-          <HeaderLink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span></HeaderLink>
-          {!preview && <HeaderLink href="/friends" className="print-browse" onNavigate={onNavigate}>Draw with friends <span aria-hidden="true">↗</span></HeaderLink>}
+          <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
+          {!preview && <HeaderLink ink href="/friends" className="print-browse" onNavigate={onNavigate}>Draw with friends <span aria-hidden="true">↗</span><NavInkMark kind="underline" /></HeaderLink>}
         </div>
-        {content.ctaHref === '/draw' && <p className="print-privacy">Free blank canvas · No account needed</p>}
+        {content.note && <p className="print-note">{content.note}</p>}
       </div>
-      {content.art === 'ink' && <PromptPrints onNavigate={onNavigate} preview={preview} access={promptAccess} />}
+      {content.art === 'ink' && <PromptPrints index={index} setIndex={setIndex} onNavigate={onNavigate} preview={preview} access={promptAccess} />}
       {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
     </div>
   </header>;

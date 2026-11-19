@@ -1,5 +1,6 @@
 import { Component, Suspense, lazy, useCallback, useEffect, useState } from "react";
 import HomePage from "./components/HomePage";
+import PageInkWorkspace from "./components/PageInkWorkspace";
 import { adminRoomCode } from "./utils/adminRoomCode";
 import { getCommunityEvent } from "./data/communityEvents";
 import { getPageSeo } from "./data/discoverySeo";
@@ -99,7 +100,8 @@ export default function Router() {
   }, [path]);
 
   let page;
-  const drawing = path === "/draw" || path.startsWith("/studio") || path.startsWith("/join");
+  const drawing = path === "/draw" || (path.startsWith("/studio") && !path.startsWith("/studios")) || path.startsWith("/join");
+  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar"].some(prefix => path.startsWith(prefix));
   if (path === "/draw") {
     const params = new URLSearchParams(window.location.search);
     const event = getCommunityEvent(params.get("event"));
@@ -202,7 +204,7 @@ export default function Router() {
           <a href="/">Back to Drawesome</a>
         </main>
       )}>
-        {page}
+        {pageInk ? <PageInkWorkspace>{page}</PageInkWorkspace> : page}
       </Suspense>
     </RouteErrorBoundary>
   );

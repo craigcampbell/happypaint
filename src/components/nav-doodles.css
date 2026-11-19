@@ -1,0 +1,79 @@
+.nav-ink-library {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+[data-nav-ink] {
+  position: relative;
+}
+
+/* The stroke sits inside its host, including scrollable mobile menu rows. */
+[data-nav-ink] > .nav-ink-mark {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0;
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.35;
+  transition: opacity 120ms ease-out, stroke-dashoffset 160ms ease-in;
+}
+
+.nav-ink-mark .nav-ink-afterstroke {
+  stroke-width: 1.65;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 120ms ease-in;
+}
+
+/* A paper hairline holds the pigment against both dark buttons and bright inks. */
+.nav-ink-mark use {
+  filter: drop-shadow(0 .5px .25px #fff1ca) drop-shadow(0 .5px .25px #3f301a);
+}
+
+.site-nav .sn-pop .nav-ink-mark {
+  left: 9px;
+  width: min(78%, 10.5rem);
+}
+
+[data-nav-ink]:is(:focus-visible, :active, [aria-current="page"], [aria-expanded="true"], .is-current) > .nav-ink-mark {
+  opacity: 1;
+  stroke-dashoffset: 0;
+  transition: opacity 70ms, stroke-dashoffset 360ms cubic-bezier(.3,.08,.32,1);
+}
+
+[data-nav-ink]:is(:focus-visible, :active, [aria-current="page"], [aria-expanded="true"], .is-current) > .nav-ink-mark .nav-ink-afterstroke {
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 180ms 170ms ease-out;
+}
+
+@media (hover: hover) {
+  [data-nav-ink]:hover > .nav-ink-mark {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transition: opacity 70ms, stroke-dashoffset 360ms cubic-bezier(.3,.08,.32,1);
+  }
+
+  [data-nav-ink]:hover > .nav-ink-mark .nav-ink-afterstroke {
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 180ms 170ms ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-nav-ink] > .nav-ink-mark,
+  [data-nav-ink] > .nav-ink-mark .nav-ink-afterstroke {
+    transition: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .nav-ink-library path { stroke: LinkText; }
+  .nav-ink-mark use { filter: none; }
+}

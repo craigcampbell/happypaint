@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import BrandMark from "./BrandMark";
+import { NavInkMark } from "./NavDoodles";
 import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import "../seasonal.css";
 
@@ -118,15 +119,17 @@ export default function SiteNav({ onNavigate, current }) {
     onNavigate(href);
   };
 
-  const renderLink = (link) => (
+  const renderLink = (link, kind = "underline") => (
     <a
       key={link.href}
       href={link.href}
+      data-nav-ink
       className={`sn-link${current === link.href ? " is-current" : ""}`}
       aria-current={current === link.href ? "page" : undefined}
       onClick={(e) => follow(e, link.href)}
     >
       {link.label}
+      <NavInkMark kind={kind} />
     </a>
   );
 
@@ -141,12 +144,13 @@ export default function SiteNav({ onNavigate, current }) {
           if (openGroup && !event.currentTarget.contains(event.relatedTarget)) setOpenGroup(null);
         }}
       >
-        <a href="/" className="site-brand" onClick={(e) => follow(e, "/")} aria-label="Drawesome home">
+        <a href="/" data-nav-ink aria-current={current === "/" ? "page" : undefined} className="site-brand" onClick={(e) => follow(e, "/")} aria-label="Drawesome home">
           <BrandMark />
+          <NavInkMark kind="underline" />
         </a>
 
         <nav id={menuId} className={`sn-menu${menuOpen ? " is-open" : ""}`} aria-label="Site navigation">
-          <div className="sn-primary">{PRIMARY.map(renderLink)}</div>
+          <div className="sn-primary">{PRIMARY.map((link) => renderLink(link, "oval"))}</div>
 
           {GROUPS.map((group) => {
             const isOpen = openGroup === group.id;
@@ -160,14 +164,16 @@ export default function SiteNav({ onNavigate, current }) {
                   type="button"
                   className={`sn-group-btn${hasCurrent ? " is-current" : ""}`}
                   aria-expanded={isOpen}
+                  data-nav-ink
                   aria-controls={popId}
                   onClick={() => setOpenGroup(isOpen ? null : group.id)}
                 >
                   {group.label}
+                  <NavInkMark kind="underline" />
                 </button>
                 <p className="sn-group-title">{group.label}</p>
                 <div id={popId} className="sn-pop">
-                  {group.links.map(renderLink)}
+                  {group.links.map((link) => renderLink(link))}
                 </div>
               </div>
             );
@@ -175,8 +181,9 @@ export default function SiteNav({ onNavigate, current }) {
 
           {/* Sheet-only: the bar already carries Sign in / My account. */}
           {!session && isCloudConfigured ? (
-            <a href="/signup" className="sn-save" onClick={(e) => follow(e, "/signup")}>
+            <a href="/signup" data-nav-ink className="sn-save" onClick={(e) => follow(e, "/signup")}>
               Save my art, free account
+              <NavInkMark kind="underline" />
             </a>
           ) : null}
         </nav>
@@ -187,21 +194,25 @@ export default function SiteNav({ onNavigate, current }) {
               "Sign in" (never both, and hidden entirely when cloud accounts
               aren't configured, the app stays anonymous-first). */}
           {session ? (
-            <a href="/rooms" className="site-nav-account-cta" onClick={(event) => follow(event, "/rooms")}>
+            <a href="/rooms" data-nav-ink className="site-nav-account-cta" onClick={(event) => follow(event, "/rooms")}>
               My account
+              <NavInkMark kind="oval" />
             </a>
           ) : isCloudConfigured ? (
-            <a href="/signup?mode=login" className="site-nav-signin" onClick={(event) => follow(event, "/signup?mode=login")}>
+            <a href="/signup?mode=login" data-nav-ink aria-current={current === "/signup" ? "page" : undefined} className="site-nav-signin" onClick={(event) => follow(event, "/signup?mode=login")}>
               Sign in
+              <NavInkMark kind="oval" />
             </a>
           ) : null}
           {/* Start on a local canvas. Shared rooms remain a separate choice. */}
-          <a href="/draw" className="site-nav-paint primary-action" onClick={(event) => follow(event, "/draw")}>
+          <a href="/draw" data-nav-ink className="site-nav-paint primary-action" onClick={(event) => follow(event, "/draw")}>
             <span className="site-nav-paint-dot" aria-hidden="true" />
             Draw now
+            <NavInkMark kind="rays" />
           </a>
           <button
             ref={toggleRef}
+            data-nav-ink
             type="button"
             className="site-nav-toggle"
             onClick={() => {
@@ -215,6 +226,7 @@ export default function SiteNav({ onNavigate, current }) {
             <svg className="sn-burger" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
               <path d={menuOpen ? "M6 6l12 12M18 6L6 18" : "M4 7h16M4 12h16M4 17h16"} />
             </svg>
+            <NavInkMark kind="oval" />
           </button>
         </div>
       </header>

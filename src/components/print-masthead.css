@@ -1,158 +1,118 @@
-/* The print and lettering reflow with the available page (or Curator preview). */
-.site-page.artwall-home .artwall-main {
+@font-face {
+  font-family: 'Sketchbook lettering';
+  src: url('/fonts/caveat/Caveat-latin.woff2') format('woff2');
+  font-weight: 400 700;
+  font-display: swap;
+}
+.site-page.artwall-home .artwall-main { width: 100%; margin: 0; padding-top: 0; }
+.site-page.artwall-home .artwall-main > :not(.print-masthead) {
   width: min(1280px, calc(100% - clamp(32px, 8vw, 128px)));
-  padding-top: 0;
+  margin-inline: auto;
 }
 .artwall-home .print-masthead {
+  --cover: #edf05a;
+  --back-sheet: #e55a40;
+  position: relative; isolation: isolate; overflow: clip;
+  background: var(--cover); color: #202019;
+  border-bottom: 1px solid #302e24;
   container-type: inline-size;
-  color: var(--discovery-ink);
+}
+.print-masthead[data-palette="paper"] { --cover: #f3efdf; }
+.print-masthead[data-palette="vermilion"] { --cover: #f2a593; }
+.print-masthead[data-palette="acid"][data-edition="1"] { --cover: #aacfd9; --back-sheet: #dbe850; }
+.print-masthead[data-palette="acid"][data-edition="2"] { --cover: #f1b29c; --back-sheet: #6fa7b7; }
+.print-masthead::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(#35362065 .8px, transparent 1px);
+  background-size: 6px 6px;
+  mask-image: radial-gradient(ellipse at 85% 51%, #000 6%, transparent 59%);
+}
+.print-masthead::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 9px; pointer-events: none;
+  background: var(--discovery-paper);
+  clip-path: polygon(0 55%,3% 60%,6% 45%,9% 67%,13% 38%,17% 54%,22% 30%,24% 53%,29% 40%,32% 58%,35% 31%,38% 54%,42% 43%,44% 63%,48% 36%,52% 58%,58% 44%,62% 66%,67% 42%,72% 54%,76% 32%,81% 58%,86% 38%,90% 61%,94% 42%,100% 55%,100% 100%,0 100%);
 }
 .print-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, .98fr);
-  align-items: center;
-  gap: 5%;
-  padding: clamp(26px, 3.6cqw, 50px) 0 clamp(16px, 2cqw, 28px);
+  position: relative; width: min(1300px, 90%); margin: auto;
+  display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); align-items: center;
+  column-gap: clamp(35px, 5cqw, 84px); padding-block: clamp(60px, 6.4cqw, 104px) clamp(52px, 5.5cqw, 84px);
 }
-.print-masthead:not([data-palette="paper"]) .print-layout { padding-inline: 3%; }
 .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); }
-.print-lead { min-width: 0; }
-.print-masthead .print-kicker {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0 0 18px;
-  font: 700 clamp(.68rem, 1.02cqw, .79rem)/1.4 ui-monospace, monospace;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-}
-.print-kicker::before {
-  content: "";
-  flex: 0 0 1.35em;
-  height: 1.35em;
-  background: var(--discovery-accent);
-  clip-path: polygon(45% 0,60% 0,58% 31%,83% 10%,95% 24%,70% 43%,100% 42%,100% 58%,68% 58%,92% 82%,80% 92%,57% 69%,57% 100%,40% 100%,42% 68%,18% 90%,7% 79%,30% 57%,0 58%,0 43%,31% 42%,9% 18%,22% 8%,44% 33%);
-}
+.masthead-ink { position: absolute; inset: 0; width: 100%; height: 100%; color: #2a3021; opacity: .84; pointer-events: none; }
+.masthead-ink path { vector-effect: non-scaling-stroke; }
+.print-lead { position: relative; min-width: 0; }
+.print-masthead .print-kicker { margin: 0 0 13px; font: 750 .76rem/1.5 var(--body-font); letter-spacing: .08em; text-transform: uppercase; }
 .site-page.artwall-home .print-masthead h1 {
-  margin: 0;
-  font: 800 clamp(43px, 8.4cqw, 109px)/.91 var(--poster-font);
-  letter-spacing: -.04em;
-  text-align: left;
-  text-wrap: wrap;
-  overflow-wrap: anywhere;
+  margin: 0; color: #1c2019; text-align: left; text-transform: none; text-wrap: wrap; overflow-wrap: anywhere;
+  font: 800 clamp(42px, 6.45cqw, 94px)/.94 var(--poster-font); letter-spacing: -.042em;
 }
-.print-masthead h1 > span { width: fit-content; max-width: 100%; }
-.print-masthead h1 > span:nth-child(2) {
-  color: #ce432c;
-  transform: skewX(-5deg);
-  transform-origin: left bottom;
+.print-masthead[data-default-title="true"] h1 > span:last-child {
+  position: relative; width: fit-content; margin: -.03em 0 .13em .13em;
+  font: 700 1.67em/.86 'Sketchbook lettering', cursive; letter-spacing: -.06em; color: #ad3328;
+  transform: rotate(-5deg); transform-origin: 35% 55%;
 }
-.print-headline { position: relative; }
-.print-headline .print-note { display: block; margin-top: 10px; }
-.print-masthead[data-default-title="true"][data-short-note="true"] .print-note {
-  position: absolute;
-  left: 30cqw;
-  top: 2px;
-  margin: 0;
-  max-width: 15ch;
-  transform: rotate(-7deg);
-  color: #4d493c;
+.print-masthead[data-default-title="true"] h1 .artwall-period { color: inherit; }
+.print-masthead[data-default-title="true"] h1 > span:last-child::after {
+  content: ''; position: absolute; left: 5%; right: -1%; bottom: -.02em; height: .055em;
+  background: currentColor; transform: rotate(-1.4deg); border-radius: 100%;
+  clip-path: polygon(0 55%,12% 34%,63% 2%,98% 10%,100% 43%,66% 48%,18% 89%,2% 100%);
 }
-.site-page.artwall-home .print-masthead[data-default-title="false"] h1 { font-size: clamp(36px, 6.7cqw, 84px); }
-.print-masthead[data-palette="vermilion"] h1 > span:nth-child(2) { color: #8d211c; }
-.print-masthead .print-deck {
-  max-width: 40ch;
-  margin: 20px 0 0;
-  font: 650 clamp(1rem, 1.55cqw, 1.24rem)/1.4 var(--body-font);
-}
-.print-actions { display: flex; align-items: center; gap: clamp(16px, 2cqw, 30px); flex-wrap: wrap; margin-top: 20px; }
+.print-masthead .print-deck { text-wrap: balance; max-width: 35ch; margin: clamp(20px, 2.5cqw, 34px) 0 0; color: #252820; font: 560 clamp(1rem,1.4cqw,1.25rem)/1.45 var(--body-font); }
+.home-ink-slot { min-height: 51px; margin-top: 16px; }
+.print-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; margin-top: 25px; }
 .site-page.artwall-home .print-actions .artwall-draw {
-  gap: 25px;
-  min-height: 46px;
-  padding: 8px 18px;
-  border-width: 1.5px;
-  font: 850 1.03rem/1.3 var(--body-font);
-  color: #181916;
+  min-height: 48px; padding: 10px 17px; gap: 16px; border: 1.5px solid #202019; border-radius: 3px;
+  background: #22231c; color: #fffbe9; box-shadow: 3px 3px 0 #fff8d9;
+  font: 760 1rem/1.2 var(--body-font);
 }
-.print-actions .artwall-draw span { font-size: 1.45em; }
+.print-actions .artwall-draw > span { font-size: 1.3em; }
 .site-page.artwall-home .print-browse, .site-page.artwall-home .print-sketch {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 44px;
-  color: #181916;
-  font-weight: 800;
-  text-decoration: underline;
-  text-underline-offset: 4px;
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: #22231c;
+  font: 730 .92rem/1.2 var(--body-font); text-decoration: underline; text-underline-offset: 4px;
 }
-.print-browse { font-size: .95rem; }
-.print-masthead .print-privacy { margin: 12px 0 0; font-size: .82rem; color: #47473f; }
+.print-note { margin: 14px 0 0; font: 600 1.3rem/1.15 'Sketchbook lettering', cursive; }
 .print-sheet {
-  position: relative;
-  min-width: 0;
-  margin: 9px 2% 8px;
-  padding: clamp(7px, .95cqw, 15px) clamp(7px, .95cqw, 15px) 0;
-  border: 1.5px solid #25251e;
-  background: #fbf7e7;
-  transform: rotate(2.5deg);
-  box-shadow: 5px 6px 0 #22231e;
+  position: relative; z-index: 1; width: 100%; min-width: 0; margin: 0; padding: clamp(16px,1.65cqw,25px) 12px 0;
+  border: 1.5px solid #23241c; background: #fffbee; transform: rotate(3deg); isolation: isolate;
+  box-shadow: 5px 5px 0 #292921;
 }
-.print-sheet::before {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  top: -12px;
-  left: 40%;
-  width: 20%;
-  height: clamp(19px, 2cqw, 26px);
-  transform: rotate(-7deg);
-  background: repeating-linear-gradient(91deg, #f4eeb8d9 0 3px, #dfd59ebf 4px, #f1e9b6d9 5px);
-  clip-path: polygon(1% 0,100% 2%,98% 22%,100% 37%,98% 56%,100% 76%,98% 100%,0 97%,2% 80%,0 62%,2% 44%,0 26%);
-  pointer-events: none;
+.print-sheet::before, .print-sheet::after { content: ''; position: absolute; pointer-events: none; inset: 7px 4px 6px; z-index: -1; border: 1.5px solid #282920; }
+.print-sheet::before { transform: rotate(-9deg) translate(-1%, 1%); background: var(--back-sheet); box-shadow: 2px 2px 0 #272820; }
+.print-sheet::after { inset: -1.5px; background: #fffbee; }
+.print-binding {
+  position: absolute; z-index: 2; left: 8%; right: 8%; height: 17px; top: -8px; pointer-events: none;
+  background: radial-gradient(ellipse 3px 7px at 5px 8px,#fffbeb 40%,#24261d 50% 76%,transparent 87%) 0 0 / 21px 17px repeat-x;
 }
-.print-picture { background: #a2c4ce; border: 1px solid #272820; }
-.print-picture :is(img, svg) { display: block; width: 100%; height: auto; aspect-ratio: 5 / 4; object-fit: contain; }
-.print-sheet figcaption { display: flex; align-items: center; justify-content: space-between; gap: 3px; padding: 1px 3px; }
-.site-page.artwall-home .print-sheet .print-sketch { font: 400 clamp(1.05rem, 1.7cqw, 1.45rem)/1.2 var(--scribble-font); }
-.print-note { color: #25251e; font: 400 clamp(1.05rem, 2.1cqw, 1.65rem)/1.15 var(--scribble-font); overflow-wrap: anywhere; }
-.print-sketch { flex-shrink: 0; }
+.print-picture { position: relative; border: 1px solid #35352a; background: #b5d2d5; }
+.print-picture :is(img, svg) { width: 100%; height: auto; aspect-ratio: 5/4; display: block; object-fit: contain; }
 .print-strip { touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
 .print-strip:active { cursor: grabbing; }
-.print-pager { display: flex; align-items: center; white-space: nowrap; gap: 4px; font: 700 .8rem/1 ui-monospace, monospace; }
+.print-sheet figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 4px 3px; }
+.print-credit { display: grid; min-width: 0; justify-items: start; }
+.print-credit strong { color: #22231c; font: 700 clamp(1.5rem,2.7cqw,2.55rem)/1 'Sketchbook lettering', cursive; }
+.site-page.artwall-home .print-sheet .print-sketch { font-size: .8rem; min-height: 30px; }
+.print-pager { display: flex; align-items: center; flex-shrink: 0; white-space: nowrap; gap: 4px; font: 650 .74rem/1 ui-monospace, monospace; }
 .site-page.discovery-page.artwall-home .print-masthead .print-pager button {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border: none;
-  color: var(--discovery-ink);
-  background: transparent;
-  font: 700 1.5rem/1 var(--body-font);
-  box-shadow: none;
+  display: grid; place-items: center; width: 44px; min-height: 44px; padding: 0; border: 1px solid #2b2b22;
+  border-radius: 50%; color: #25261c; background: transparent; font: 600 1.1rem/1 var(--body-font); box-shadow: none;
 }
-.site-page.discovery-page.artwall-home .print-masthead .print-pager button:hover { background: var(--discovery-yellow); }
+.site-page.discovery-page.artwall-home .print-masthead .print-pager button:hover { background: #edf05a; }
 .print-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-
-@media (max-width: 706px) {
-  .print-layout, .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); gap: 23px; padding: 25px 0 19px; }
-  .print-masthead .print-kicker { margin-bottom: 13px; }
-  .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 16.4cqw, 96px); line-height: .91; }
-  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note { left: 64%; max-width: 13ch; }
-  .site-page.artwall-home .print-masthead[data-default-title="false"] h1 { font-size: clamp(32px, 11cqw, 62px); }
-  .print-masthead .print-deck { margin-top: 12px; font-size: 1rem; }
-  .print-actions { margin-top: 13px; gap: 13px; }
-  .site-page.artwall-home .print-actions .artwall-draw { gap: 12px; padding-inline: 13px; }
-  .print-browse { font-size: .88rem; }
-  .print-masthead .print-privacy { margin-top: 9px; }
-  .print-sheet { width: min(91%, 420px); justify-self: center; margin: 6px 0 4px; transform: rotate(2deg); }
-  .print-note { font-size: 1.05rem; }
-  .print-sketch { font-size: .78rem; gap: 4px; }
-  .print-pager { gap: 0; }
-}
-@container (max-width: 650px) {
-  .curator-preview .print-layout { grid-template-columns: minmax(0, 1fr); }
-  .curator-preview .print-sheet { width: min(91%, 420px); justify-self: center; }
+@container (max-width: 700px) {
+  .print-layout { width: min(87%, 520px); grid-template-columns: minmax(0, 1fr); row-gap: 33px; padding: 32px 0 41px; }
+  .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 12.25cqw, 71px); }
+  .print-masthead .print-deck { margin-top: 19px; font-size: 1rem; }
+  .home-ink-slot { margin-top: 11px; }
+  .print-actions { gap: 6px 15px; margin-top: 14px; }
+  .site-page.artwall-home .print-actions .artwall-draw { min-height: 44px; padding: 8px 12px; gap: 8px; }
+  .site-page.artwall-home .print-browse { font-size: .86rem; gap: 4px; }
+  .print-sheet { width: 91%; max-width: 400px; justify-self: center; padding: 14px 8px 0; }
+  .print-pager { gap: 2px; font-size: .65rem; }
+  .site-page.discovery-page.artwall-home .print-masthead .print-pager button { border-color: transparent; width: 40px; }
+  .print-credit strong { font-size: 1.65rem; }
+  .print-sheet figcaption { padding-inline: 1px; }
+  .masthead-ink { height: 46%; top: 27%; }
+  .masthead-ink .ink-flight, .masthead-ink path:nth-child(2) { display: none; }
 }
 /* Match the masthead ink and paper while keeping the shared navigation behavior. */
 .site-page.artwall-home .site-nav {
@@ -184,13 +144,4 @@
   .site-page.artwall-home .site-nav .site-nav-paint { font-size: .84rem; min-height: 44px; padding-inline: 9px; }
   .site-page.artwall-home .site-nav .site-nav-toggle { border: 0; box-shadow: none; }
 }
-@media (max-width: 355px) {
-  .site-page.artwall-home .site-brand .brand-name { display: none; }
-  .print-sheet { width: 97%; }
-  .print-masthead[data-default-title="true"][data-short-note="true"] .print-note {
-    position: static;
-    max-width: none;
-    margin: 6px 0 0;
-    transform: none;
-  }
-}
+@media (max-width: 355px) { .site-page.artwall-home .site-brand .brand-name { display: none; } }
