@@ -194,7 +194,7 @@ import {
 } from "./utils/symmetry";
 import { createPaintOrchestra } from "./utils/paintOrchestra";
 import QuestPanel from "./components/QuestPanel";
-import { ChatSponsorSlot, NaturalBreakAds } from "./utils/ads";
+import { NaturalBreakAds, RoomSponsorSlot } from "./utils/ads";
 import { signalNaturalAdBreak } from "./utils/adRuntime";
 import StorybookPanel from "./components/StorybookPanel";
 import PaintOrchestraPanel from "./components/PaintOrchestraPanel";
@@ -1148,7 +1148,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // a device-owned guest book. Both drive the banner mount + watcher notice.
   const [mpSketchbookPage, setMpSketchbookPage] = useState(false);
   const [mpSketchbookUnsaved, setMpSketchbookUnsaved] = useState(false);
-  const [roomAdFree, setRoomAdFree] = useState(false);
   const [mutedSelf, setMutedSelf] = useState(false);
   // "Hide this painter": MY mute button, no host needed: locally hides a
   // user's chat, cursor, reactions and hype for this session. Client-only
@@ -8433,7 +8432,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           setIsRoomOwner(!!data.isOwner);
           setRoomLocked(!!data.locked);
           setRoomTitle(data.roomTitle || null);
-          setRoomAdFree(!!data.adFree);
           // Artist studios: paint permission is server-authoritative. True in
           // every other audience (the ref's default), false for an artist
           // room's watchers until the owner approves (role_changed).
@@ -8583,9 +8581,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           }
           break;
         }
-        case "billing_entitlement":
-          setRoomAdFree(!!data.adFree);
-          break;
         case "room_state":
           setRoomLocked(!!data.locked);
           setStatus(data.locked ? "🔒 A host locked the canvas" : "🔓 Canvas unlocked");
@@ -11168,6 +11163,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     setOrchestraVolume(volume);
   };
 
+  const adSupportedRoom = mp.connected && mp.adSupported && Boolean(roomAudience) && !roomFingerPaint;
+  const showRoomBanner = adSupportedRoom && !mpSketchbookPage && !sketchbookPage;
+
   return (
     <main
       className={`studio-shell${toolsOpen ? " rail-open" : ""}${layoutTier === "desktop" && !toolsOpen ? " rail-collapsed" : ""}`}
@@ -11176,7 +11174,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       data-hand={inputPrefs.hand}
       translate="no"
     >
-      <NaturalBreakAds enabled={!roomAdFree && Boolean(roomAudience) && !roomFingerPaint} />
+      <NaturalBreakAds enabled={adSupportedRoom} />
       <section className="studio-workspace" aria-label="Drawesome drawing studio">
         <button
           type="button"
@@ -11277,8 +11275,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           >
             🏠
           </button>
-          <button type="button" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
-            🚪 Rooms
+          <button type="button" className="room-switch-summary" onClick={() => setShowLobby(true)} title="Switch or browse rooms">
+            <span>🚪 Rooms</span>
+            {showRoomBanner && <small>Ad-supported</small>}
           </button>
           <button type="button" className="fab-invite" onClick={shareRoomLink} aria-label="Invite friends" title="Share a link to this room">
             Invite
@@ -11338,11 +11337,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           <span className={mp.connected ? "mp-dot mp-dot-on" : "mp-dot"} aria-hidden="true" />
           <button
             type="button"
-            className="mp-room mp-room-switch"
+            className="mp-room mp-room-switch room-switch-summary"
             onClick={() => setShowLobby(true)}
             title="Switch rooms, hop between your rooms, browse, or start a new one"
           >
-            {initialLocal ? "Just you" : roomTitle || `Room ${roomId}`} <span aria-hidden="true">⌄</span>
+            <span>{initialLocal ? "Just you" : roomTitle || `Room ${roomId}`} <span aria-hidden="true">⌄</span></span>
+            {showRoomBanner && <small>Ad-supported</small>}
           </button>
           <span className="mp-count">{initialLocal ? "Not shared" : mp.connected ? `${mp.users.length} painting together` : "Connecting…"}</span>
           <div className="mp-avatars">
@@ -11599,6 +11599,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           </section>
         ) : null}
 
+        {showRoomBanner && <RoomSponsorSlot />}
         <div className="canvas-stage">
           <div className={`canvas-paper${roomSymmetry.copies > 1 ? " is-symmetry" : ""}`}>
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
@@ -12333,7 +12334,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
             onReact={mp.sendChatReact}
             onHype={mp.sendHype}
             onNameTap={focusChatUser}
-            adSlot={<ChatSponsorSlot enabled={!roomAdFree && Boolean(roomAudience)} />}
             panelExtras={
               <>
                 <div className="mp-chat-room">

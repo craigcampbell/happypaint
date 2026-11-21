@@ -79,16 +79,20 @@ status. Public communal rooms remain free/ad-supported.
 Use Google Ad Manager only after the site and creatives are approved for a
 child-directed experience. Create:
 
-- a responsive display unit for the open chat panel (300x50, 300x100, 320x50);
+- a display unit for the free-room canvas banner (300x50, 300x100 or 320x50);
 - an H5 game manual interstitial unit (a limited-access format).
 
 Set their full unit paths in `VITE_GAM_AD_UNIT_CHAT` and
-`VITE_GAM_AD_UNIT_INTERSTITIAL`, then rebuild. Every GPT request is tagged as
+`VITE_GAM_AD_UNIT_INTERSTITIAL`, then rebuild. The existing `CHAT` variable now controls the
+banner above the canvas. It appears when inventory fills in a connected,
+ad-supported room. Private Family rooms, finger-paint rooms, sketchbook pages
+and local drawing skip this placement. Every GPT request is tagged as
 child-directed, under-age-of-consent, non-personalized, and restricted-data-
 processing. Empty unit paths mean the GPT script is never requested.
 
-Also set `GAM_ADS_TXT_PUBLISHER_ID` (the numeric Ad Manager network id) so the
-server serves `google.com, <id>, DIRECT, f08c47fec0942fa0` at `/ads.txt`.
+Set `GAM_ADS_TXT_PUBLISHER_ID` to the full `pub-` ID from Ad Manager so
+the server serves `google.com, <id>, DIRECT, f08c47fec0942fa0` at `/ads.txt`.
+[Google's ads.txt setup guide](https://support.google.com/admanager/answer/9422161)
 Unset, `/ads.txt` returns 404 and no inventory is claimed on the domain.
 
 Interstitials are prefetched but can display only at natural breaks after at
@@ -107,7 +111,7 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
   its owner has Family.
 - Use a Stripe test clock to exercise renewal success, payment failure, the
   past-due grace boundary, cancellation at period end, and webhook retries.
-- With Google test inventory: open chat and confirm the sponsor slot; shorten
+- With Google test inventory: join an ordinary free room and confirm the banner above the canvas; shorten
   `VITE_AD_BREAK_MINUTES` only in a local build to exercise natural breaks.
 - `node scripts/price-ads-verify.mjs`, isolated boot that asserts the served
   Family prices, the `/ads.txt` 404-when-unset / GAM-line-when-set gate, and

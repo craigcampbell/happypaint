@@ -75,6 +75,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const pingTimerRef = useRef(null);
 
   const [connected, setConnected] = useState(false);
+  const [adSupported, setAdSupported] = useState(false);
   const [users, setUsers] = useState([]);
   const [self, setSelf] = useState(null);
   const [chat, setChat] = useState([]);
@@ -98,6 +99,8 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       return;
     }
     shouldReconnectRef.current = true;
+    // Wait for this connection’s room entitlement before requesting inventory.
+    setAdSupported(false);
 
     let ws;
     try {
@@ -121,6 +124,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       // UI-level bookkeeping handled here; everything else flows to the consumer.
       switch (data.type) {
         case "connected":
+          setAdSupported(data.adFree === false);
           setSelf({ id: data.userId, name: data.userName, color: data.userColor });
           // Artist-studio handshake: paint permission + the room's public
           // profile. Other audiences send canPaint:true / roomProfile:null,
@@ -131,6 +135,9 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
           // "pending" from the previous socket must not linger.
           setPaintStatus(null);
           setPaintRequests([]);
+          break;
+        case "billing_entitlement":
+          setAdSupported(data.adFree === false);
           break;
         case "role_changed":
           // Server-authoritative paint access change (approve/revoke/promote/
@@ -448,7 +455,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendModRemove = useCallback((opIds) => send({ type: "mod_remove", opIds }), [send]);
 
   return {
-    connected, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
+    connected, adSupported, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
     sendOp, sendCheckpointNack, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendPaintRequest, sendPaintApprove, sendPaintRevoke,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,

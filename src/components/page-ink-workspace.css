@@ -1,7 +1,6 @@
 .page-ink-workspace[data-drawing="on"] { touch-action: pinch-zoom; }
 .page-ink-workspace[data-drawing="on"] :where(.site-page, main, header, section, figure, img) { user-select: none; -webkit-user-select: none; }
 .page-ink-workspace[data-drawing="on"] :where(input, textarea, [contenteditable=true]) { user-select: text; -webkit-user-select: text; }
-.page-ink-workspace[data-drawing="on"] .print-strip { touch-action: pinch-zoom; }
 @media (pointer: fine) {
   .page-ink-workspace { --page-pencil: url('/page-pencil.svg') 3 27, crosshair; cursor: var(--page-pencil); }
   .page-ink-workspace[data-drawing="on"] :where(main, header, main p, main h1, main figure, main img) { cursor: var(--page-pencil); }

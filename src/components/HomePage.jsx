@@ -61,8 +61,7 @@ export default function HomePage({ onNavigate }) {
   return <div className="site-page discovery-page discovery-home artwall-home">
     <SiteNav onNavigate={onNavigate} current="/" />
     <main className="discovery-main artwall-main" id="main-content">
-      <CuratedHeader page="home" content={content} onNavigate={onNavigate}
-        promptAccess={prompts.status} />
+      <CuratedHeader page="home" content={content} onNavigate={onNavigate} />
 
       <section className="artwall-wall" aria-labelledby="home-art-title">
         <div className="artwall-section-heading">
@@ -73,6 +72,7 @@ export default function HomePage({ onNavigate }) {
         {feeds.art.status === "ready" && feeds.art.items.length
           ? <ArtworkCards posts={feeds.art.items} onNavigate={onNavigate} />
           : <FeedNotice status={feeds.art.status} onRetry={retry} empty="The wall is quiet for now. Draw something of your own and share it whenever you like." />}
+        <div className="home-ink-slot" data-home-ink-tools="" />
       </section>
 
       <section className="artwall-idea" aria-labelledby="home-idea-title">

@@ -5,9 +5,9 @@ import { LEGACY_PAGE_META } from './legacyPageMeta.js';
 // /inktober and every old sitemap entry retain their addresses.
 const PAGES = {
   '/': {
-    title: 'Drawesome: Free Online Drawing, Doodling & Art Community',
-    description: 'Draw online for free, discover community artwork, and watch artists create. Try drawing prompts, make your own doodle, or draw together. No account needed to draw.',
-    heading: 'Draw online. Find inspiration. Make it your own.',
+    title: 'Draw Together Online for Free | Drawesome',
+    description: 'Join a random public drawing room or share a canvas with friends and family. Paint together in real time. Public rooms are free and ad-supported.',
+    heading: 'Come draw with us.',
   },
   '/friends': {
     title: 'Draw and Color with Friends | Drawesome',

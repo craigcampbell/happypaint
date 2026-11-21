@@ -10,8 +10,8 @@
   margin-inline: auto;
 }
 .artwall-home .print-masthead {
-  --cover: #edf05a;
-  --back-sheet: #e55a40;
+  --cover: #f3ef9b;
+  --back-sheet: #ef8064;
   position: relative; isolation: isolate; overflow: clip;
   background: var(--cover); color: #202019;
   border-bottom: 1px solid #302e24;
@@ -19,8 +19,6 @@
 }
 .print-masthead[data-palette="paper"] { --cover: #f3efdf; }
 .print-masthead[data-palette="vermilion"] { --cover: #f2a593; }
-.print-masthead[data-palette="acid"][data-edition="1"] { --cover: #aacfd9; --back-sheet: #dbe850; }
-.print-masthead[data-palette="acid"][data-edition="2"] { --cover: #f1b29c; --back-sheet: #6fa7b7; }
 .print-masthead::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background-image: radial-gradient(#35362065 .8px, transparent 1px);
@@ -34,8 +32,8 @@
 }
 .print-layout {
   position: relative; width: min(1300px, 90%); margin: auto;
-  display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); align-items: center;
-  column-gap: clamp(35px, 5cqw, 84px); padding-block: clamp(60px, 6.4cqw, 104px) clamp(52px, 5.5cqw, 84px);
+  display: grid; grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr); align-items: center;
+  column-gap: clamp(34px, 4.2cqw, 66px); padding-block: clamp(52px, 5.4cqw, 80px);
 }
 .print-masthead[data-art="none"] .print-layout { grid-template-columns: minmax(0, 1fr); }
 .masthead-ink { position: absolute; inset: 0; width: 100%; height: 100%; color: #2a3021; opacity: .84; pointer-events: none; }
@@ -47,8 +45,8 @@
   font: 800 clamp(42px, 6.45cqw, 94px)/.94 var(--poster-font); letter-spacing: -.042em;
 }
 .print-masthead[data-default-title="true"] h1 > span:last-child {
-  position: relative; width: fit-content; margin: -.03em 0 .13em .13em;
-  font: 700 1.67em/.86 'Sketchbook lettering', cursive; letter-spacing: -.06em; color: #ad3328;
+  position: relative; width: fit-content; margin: -.01em 0 .16em .12em;
+  font: 700 1.49em/.86 'Sketchbook lettering', cursive; letter-spacing: -.06em; color: #ad3328;
   transform: rotate(-5deg); transform-origin: 35% 55%;
 }
 .print-masthead[data-default-title="true"] h1 .artwall-period { color: inherit; }
@@ -58,7 +56,7 @@
   clip-path: polygon(0 55%,12% 34%,63% 2%,98% 10%,100% 43%,66% 48%,18% 89%,2% 100%);
 }
 .print-masthead .print-deck { text-wrap: balance; max-width: 35ch; margin: clamp(20px, 2.5cqw, 34px) 0 0; color: #252820; font: 560 clamp(1rem,1.4cqw,1.25rem)/1.45 var(--body-font); }
-.home-ink-slot { min-height: 51px; margin-top: 16px; }
+.home-ink-slot { min-height: 51px; margin-top: 18px; }
 .print-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; margin-top: 25px; }
 .site-page.artwall-home .print-actions .artwall-draw {
   min-height: 48px; padding: 10px 17px; gap: 16px; border: 1.5px solid #202019; border-radius: 3px;
@@ -66,18 +64,18 @@
   font: 760 1rem/1.2 var(--body-font);
 }
 .print-actions .artwall-draw > span { font-size: 1.3em; }
-.site-page.artwall-home .print-browse, .site-page.artwall-home .print-sketch {
+.site-page.artwall-home .print-browse {
   display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: #22231c;
   font: 730 .92rem/1.2 var(--body-font); text-decoration: underline; text-underline-offset: 4px;
 }
-.print-note { margin: 14px 0 0; font: 600 1.3rem/1.15 'Sketchbook lettering', cursive; }
+.print-note { margin: 12px 0 0; font: 600 .85rem/1.4 var(--body-font); color: #494733; }
 .print-sheet {
   position: relative; z-index: 1; width: 100%; min-width: 0; margin: 0; padding: clamp(16px,1.65cqw,25px) 12px 0;
-  border: 1.5px solid #23241c; background: #fffbee; transform: rotate(3deg); isolation: isolate;
+  border: 1.5px solid #23241c; background: #fffbee; transform: rotate(1.5deg); isolation: isolate;
   box-shadow: 5px 5px 0 #292921;
 }
 .print-sheet::before, .print-sheet::after { content: ''; position: absolute; pointer-events: none; inset: 7px 4px 6px; z-index: -1; border: 1.5px solid #282920; }
-.print-sheet::before { transform: rotate(-9deg) translate(-1%, 1%); background: var(--back-sheet); box-shadow: 2px 2px 0 #272820; }
+.print-sheet::before { transform: rotate(-4deg) translate(-.5%, 1%); background: var(--back-sheet); box-shadow: 2px 2px 0 #272820; }
 .print-sheet::after { inset: -1.5px; background: #fffbee; }
 .print-binding {
   position: absolute; z-index: 2; left: 8%; right: 8%; height: 17px; top: -8px; pointer-events: none;
@@ -85,32 +83,33 @@
 }
 .print-picture { position: relative; border: 1px solid #35352a; background: #b5d2d5; }
 .print-picture :is(img, svg) { width: 100%; height: auto; aspect-ratio: 5/4; display: block; object-fit: contain; }
-.print-strip { touch-action: pan-y pinch-zoom; user-select: none; cursor: grab; }
-.print-strip:active { cursor: grabbing; }
-.print-sheet figcaption { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 4px 3px; }
-.print-credit { display: grid; min-width: 0; justify-items: start; }
-.print-credit strong { color: #22231c; font: 700 clamp(1.5rem,2.7cqw,2.55rem)/1 'Sketchbook lettering', cursive; }
-.site-page.artwall-home .print-sheet .print-sketch { font-size: .8rem; min-height: 30px; }
-.print-pager { display: flex; align-items: center; flex-shrink: 0; white-space: nowrap; gap: 4px; font: 650 .74rem/1 ui-monospace, monospace; }
-.site-page.discovery-page.artwall-home .print-masthead .print-pager button {
-  display: grid; place-items: center; width: 44px; min-height: 44px; padding: 0; border: 1px solid #2b2b22;
-  border-radius: 50%; color: #25261c; background: transparent; font: 600 1.1rem/1 var(--body-font); box-shadow: none;
+.replay-picture {
+  display: block; width: 100%; height: auto; aspect-ratio: 3/2;
+  border: 1px solid #34372c; background: #fcf5e5; object-fit: contain;
 }
-.site-page.discovery-page.artwall-home .print-masthead .print-pager button:hover { background: #edf05a; }
-.print-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.painting-replay figcaption {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 6px 11px;
+}
+.replay-credit { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.replay-credit strong { color: #20231d; font: 700 clamp(1.6rem,2.6cqw,2.4rem)/1 'Sketchbook lettering', cursive; }
+.replay-credit span { color: #484a40; font: 650 .81rem/1.3 var(--body-font); }
+.site-page.artwall-home .artwall-main .replay-toggle {
+  display: grid; place-items: center; flex: none; width: 44px; height: 44px;
+  min-height: 44px; padding: 0; border: 1px solid #282920; border-radius: 50%;
+  background: #fffbee; color: #20221c; box-shadow: none;
+}
+.site-page.artwall-home .artwall-main .replay-toggle:hover { background: #efeea4; }
 @container (max-width: 700px) {
-  .print-layout { width: min(87%, 520px); grid-template-columns: minmax(0, 1fr); row-gap: 33px; padding: 32px 0 41px; }
+  .print-layout { width: min(90%, 540px); grid-template-columns: minmax(0, 1fr); row-gap: 23px; padding: 25px 0 32px; }
   .site-page.artwall-home .print-masthead h1 { font-size: clamp(42px, 12.25cqw, 71px); }
   .print-masthead .print-deck { margin-top: 19px; font-size: 1rem; }
   .home-ink-slot { margin-top: 11px; }
   .print-actions { gap: 6px 15px; margin-top: 14px; }
   .site-page.artwall-home .print-actions .artwall-draw { min-height: 44px; padding: 8px 12px; gap: 8px; }
   .site-page.artwall-home .print-browse { font-size: .86rem; gap: 4px; }
-  .print-sheet { width: 91%; max-width: 400px; justify-self: center; padding: 14px 8px 0; }
-  .print-pager { gap: 2px; font-size: .65rem; }
-  .site-page.discovery-page.artwall-home .print-masthead .print-pager button { border-color: transparent; width: 40px; }
-  .print-credit strong { font-size: 1.65rem; }
-  .print-sheet figcaption { padding-inline: 1px; }
+  .print-sheet { width: 97%; max-width: 465px; justify-self: center; padding: 14px 8px 0; }
+  .replay-credit { display: grid; gap: 1px; }
+  .painting-replay figcaption { padding: 5px 2px 6px; }
   .masthead-ink { height: 46%; top: 27%; }
   .masthead-ink .ink-flight, .masthead-ink path:nth-child(2) { display: none; }
 }

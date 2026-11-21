@@ -7,9 +7,10 @@ export const CURATOR_PAGES = Object.freeze({
 });
 export const CURATOR_PALETTES = ['paper', 'acid', 'vermilion'];
 export const CURATOR_ART = ['ink', 'orbit', 'none'];
-export const CURATOR_LINKS = ['/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
+export const QUICK_JOIN_PATH = '/api/rooms/quick-join';
+export const CURATOR_LINKS = [QUICK_JOIN_PATH, '/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
 const defaults = {
-  home: { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw', palette: 'acid', art: 'ink' },
+  home: { kicker: 'Multiplayer drawing', title: 'Come draw\nwith us.', description: 'Jump into a public room and draw something awesome with someone new. Or share a canvas with friends and family.', note: 'Free to join · Ad-supported rooms', ctaLabel: 'Join a random room', ctaHref: QUICK_JOIN_PATH, palette: 'acid', art: 'ink' },
   gallery: { kicker: 'Made by people. Not a perfection contest.', title: 'THE ART\nIS THE POINT.', description: 'Explore drawings shared by the community.', note: 'look a little closer.', ctaLabel: 'Make your own', ctaHref: '/draw', palette: 'paper', art: 'orbit' },
   events: { kicker: 'A reason to pick up a brush.', title: 'GOOD IDEAS.\nOPEN INVITATIONS.', description: 'Find a shared idea. Draw your own contribution.', note: 'come as you are.', ctaLabel: 'Start drawing', ctaHref: '/draw', palette: 'paper', art: 'ink' },
   studios: { kicker: 'A window into somebody’s world.', title: 'ARTIST\nSTUDIOS.', description: 'Watch public studios. Drawing stays with the artist and approved painters.', note: 'watch first. join on your terms.', ctaLabel: 'Draw privately', ctaHref: '/draw', palette: 'paper', art: 'orbit' },

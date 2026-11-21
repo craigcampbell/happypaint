@@ -1,10 +1,10 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   applyChildSafeSettings,
   BREAK_AD_UNIT,
   BREAK_MINUTES,
   breakSignals,
-  CHAT_AD_UNIT,
+  ROOM_AD_UNIT,
   ensureGpt,
 } from "./adRuntime";
 
@@ -13,39 +13,43 @@ import {
 const sessionStartedAt = Date.now();
 const sessionShownAt = [];
 
-export function ChatSponsorSlot({ enabled }) {
-  const reactId = useId();
-  const idRef = useRef(`drawesome-chat-ad-${reactId.replace(/[^a-z0-9_-]/gi, "")}`);
+export function RoomSponsorSlot() {
+  const id = `drawesome-room-ad-${useId().replace(/[^a-z0-9_-]/gi, "")}`;
+  const [filled, setFilled] = useState(false);
 
   useEffect(() => {
-    if (!enabled || !CHAT_AD_UNIT) return undefined;
+    if (!ROOM_AD_UNIT) return undefined;
     const googletag = ensureGpt();
     let slot = null;
     let disposed = false;
+    const onRender = (event) => {
+      if (!disposed && event.slot === slot) setFilled(!event.isEmpty);
+    };
     googletag.cmd.push(() => {
       if (disposed) return;
       applyChildSafeSettings(googletag);
-      slot = googletag
-        .defineSlot(CHAT_AD_UNIT, [[300, 50], [300, 100], [320, 50]], idRef.current)
+      slot = googletag.defineSlot(ROOM_AD_UNIT, [[300, 50], [300, 100], [320, 50]], id)
         ?.addService(googletag.pubads());
       if (!slot) return;
-      googletag.pubads().collapseEmptyDivs(true);
+      googletag.pubads().addEventListener("slotRenderEnded", onRender);
       googletag.enableServices();
-      googletag.display(idRef.current);
+      googletag.display(id);
     });
     return () => {
       disposed = true;
       googletag.cmd.push(() => {
-        if (slot) googletag.destroySlots([slot]);
+        if (!slot) return;
+        googletag.pubads().removeEventListener("slotRenderEnded", onRender);
+        googletag.destroySlots([slot]);
       });
     };
-  }, [enabled]);
+  }, [id]);
 
-  if (!enabled || !CHAT_AD_UNIT) return null;
+  if (!ROOM_AD_UNIT) return null;
   return (
-    <aside className="chat-sponsor" aria-label="Sponsored message">
-      <span className="chat-sponsor-label">Sponsored · <a href="/family">Family is ad-free</a></span>
-      <div id={idRef.current} className="chat-sponsor-slot" />
+    <aside className={`room-sponsor${filled ? " is-filled" : ""}`} aria-label="Advertisement">
+      <span className="room-sponsor-label">Advertisement</span>
+      <div id={id} />
     </aside>
   );
 }

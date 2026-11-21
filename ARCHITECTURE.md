@@ -51,7 +51,9 @@ nothing breaks when unconfigured. This is the single most important invariant.
 - **Route loading.** `src/Router.jsx` owns the `pathname` router and lazy-loads
   the studio and supporting pages. `src/main.jsx` loads shared styles once.
   SPA routing uses `pushState` + `popstate`; switching rooms remounts the studio.
-  The homepage's live preview loads only near the viewport in a visible tab.
+  The homepage plays a local 30-second painting replay while visible and
+  honors reduced motion. Its random-room CTA goes through
+  `/api/rooms/quick-join`, which prefers occupied, joinable public canvases.
 - **Canvas** lives in `src/utils/layers.js` (CANVAS_WIDTH 4000 × HEIGHT 2500,
   `MAX_LAYERS` 6). The viewport (`viewRef {scale,tx,ty}`) maps world→CSS px;
   pinch/wheel/hand-tool pan+zoom.

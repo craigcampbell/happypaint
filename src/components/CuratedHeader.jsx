@@ -1,6 +1,7 @@
-import { useId, useRef, useState } from 'react';
+import { useId } from 'react';
 import { NavInkMark } from './NavDoodles';
-import { drawingIdeaPath } from '../utils/drawingPrompts';
+import { QUICK_JOIN_PATH } from '../data/curatorContent';
+import PaintingReplay from './PaintingReplay';
 import './discovery.css';
 import './artwall-home.css';
 import './curator.css';
@@ -8,7 +9,7 @@ import './print-masthead.css';
 function HeaderLink({ href, onNavigate, preview, className, children, ink }) {
   return <a data-nav-ink={ink ? "" : undefined} href={href} className={className} onClick={(event) => {
     if (preview) { event.preventDefault(); return; }
-    if (onNavigate && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onNavigate(href); }
+    if (onNavigate && href !== QUICK_JOIN_PATH && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0) { event.preventDefault(); onNavigate(href); }
   }}>{children}</a>;
 }
 function InkPlay() {
@@ -26,61 +27,6 @@ function InkPlay() {
   </svg>;
 }
 
-
-const PRINTS = [
-  {
-    file: 'ink-cat', title: 'Pencil rider', link: 'Sketch this cat',
-    alt: 'An ink-black cat rides a giant yellow pencil across a blue sky.',
-  },
-  {
-    file: 'record-monster', title: 'Midnight set', link: 'Sketch this DJ',
-    alt: 'A red monster in headphones spins a record on a blue turntable.',
-  },
-  {
-    file: 'sky-fish', title: 'Air mail', link: 'Sketch this fish',
-    alt: 'A flying blue fish delivers mail among postage-stamp clouds.',
-  },
-];
-
-function PromptPrints({ onNavigate, preview, access, index, setIndex }) {
-  const swipe = useRef(null);
-  const print = PRINTS[index];
-  const turnPage = (step) => setIndex((current) => (current + step + PRINTS.length) % PRINTS.length);
-
-  const startSwipe = (event) => {
-    if (!event.isPrimary || event.button !== 0 || event.currentTarget.closest('[data-drawing=on]')) return;
-    swipe.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  const finishSwipe = (event) => {
-    const start = swipe.current;
-    if (!start || start.id !== event.pointerId) return;
-    swipe.current = null;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) >= 34 && Math.abs(dx) > Math.abs(dy) * 1.25) turnPage(dx < 0 ? 1 : -1);
-  };
-
-  return <figure className="print-sheet" aria-label="Illustrated drawing prompts">
-    <div className="print-binding" aria-hidden="true" />
-    <div className="print-picture print-strip" onPointerDown={startSwipe} onPointerUp={finishSwipe}
-      onLostPointerCapture={() => { swipe.current = null; }}>
-      <img src={`/home-print/${print.file}.webp`} width="1120" height="896" alt={print.alt}
-        draggable={false} fetchPriority="high" />
-    </div>
-    <figcaption>
-      <div className="print-credit"><strong>{print.title}</strong>
-      <HeaderLink href={drawingIdeaPath(print.file, access === 'guest')} onNavigate={onNavigate} preview={preview}
-        className="print-sketch">{access === 'guest' ? 'Sign up to sketch' : access === 'rejected' ? 'Sign in to sketch' : print.link} <span aria-hidden="true">↗</span></HeaderLink></div>
-      <div className="print-pager">
-        <button type="button" onClick={() => turnPage(-1)} aria-label="Previous print">←</button>
-        <span aria-live="polite" aria-atomic="true"><span className="print-sr">Print </span>{index + 1} / {PRINTS.length}</span>
-        <button type="button" onClick={() => turnPage(1)} aria-label="Next print">→</button>
-      </div>
-    </figcaption>
-  </figure>;
-}
-
 function InkFlourishes() {
   return <svg className="masthead-ink" viewBox="0 0 1100 560" preserveAspectRatio="none" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
     <path className="ink-flight" d="M440 -16c-23 32-32 70-7 86 30 19 70-2 64-21-5-17-41-11-55 8-28 39 38 82 91 43 27-20 36-49 87-49" />
@@ -89,35 +35,33 @@ function InkFlourishes() {
   </svg>;
 }
 
-function HomeMasthead({ content, onNavigate, preview, heading, id, orbit, promptAccess }) {
-  const [index, setIndex] = useState(0);
+function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
   return <header className="curated-header print-masthead" data-palette={content.palette} data-art={content.art}
-    data-edition={index} data-default-title={content.title === 'Draw all over\nthis page.'} aria-labelledby={id}>
+    data-default-title={content.title === 'Come draw\nwith us.'} aria-labelledby={id}>
     <div className="print-layout">
       <InkFlourishes />
       <div className="print-lead">
         {content.kicker && <p className="print-kicker">{content.kicker}</p>}
         <div className="print-headline">{heading}</div>
         {content.description && <p className="print-deck">{content.description}</p>}
-        {!preview && <div className="home-ink-slot" data-home-ink-tools="" />}
         <div className="print-actions">
           <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
-          {!preview && <HeaderLink ink href="/friends" className="print-browse" onNavigate={onNavigate}>Draw with friends <span aria-hidden="true">↗</span><NavInkMark kind="underline" /></HeaderLink>}
+          <HeaderLink ink href="/friends" className="print-browse" preview={preview} onNavigate={onNavigate}>Invite friends &amp; family<NavInkMark kind="underline" /></HeaderLink>
         </div>
         {content.note && <p className="print-note">{content.note}</p>}
       </div>
-      {content.art === 'ink' && <PromptPrints index={index} setIndex={setIndex} onNavigate={onNavigate} preview={preview} access={promptAccess} />}
+      {content.art === 'ink' && <PaintingReplay preview={preview} />}
       {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
     </div>
   </header>;
 }
 
-export default function CuratedHeader({ page, content, onNavigate, preview = false, promptAccess }) {
+export default function CuratedHeader({ page, content, onNavigate, preview = false }) {
   const id = useId();
   const heading = <h1 id={id} aria-label={content.title.split('\n').join(' ')}>{content.title.split('\n').map((line, index) => <span key={index}>{line.endsWith('.') ? <>{line.slice(0, -1)}<span className="artwall-period">.</span></> : line}</span>)}</h1>;
   const orbit = <svg className="artwall-ink-play curator-orbit" viewBox="0 0 500 500" aria-hidden="true"><circle cx="250" cy="250" r="175" fill="#e9f35a" /><ellipse cx="250" cy="250" rx="225" ry="70" fill="none" stroke="currentColor" strokeWidth="9" transform="rotate(-30 250 250)" /><circle cx="400" cy="140" r="32" fill="#e7472d" /></svg>;
   if (page === 'home') return <HomeMasthead content={content} onNavigate={onNavigate}
-    preview={preview} heading={heading} id={id} orbit={orbit} promptAccess={promptAccess} />;
+    preview={preview} heading={heading} id={id} orbit={orbit} />;
 
   return <header className="discovery-heading curated-header" data-palette={content.palette} data-art={content.art} aria-labelledby={id}>
     <p className="discovery-eyebrow">{content.kicker}</p>

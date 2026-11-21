@@ -1,4 +1,5 @@
-export const CHAT_AD_UNIT = import.meta.env.VITE_GAM_AD_UNIT_CHAT || "";
+// Keep the deployed unit path when moving the display placement out of chat.
+export const ROOM_AD_UNIT = (import.meta.env.VITE_GAM_AD_UNIT_CHAT || "").trim();
 export const BREAK_AD_UNIT = import.meta.env.VITE_GAM_AD_UNIT_INTERSTITIAL || "";
 export const BREAK_MINUTES = Math.max(1, Number(import.meta.env.VITE_AD_BREAK_MINUTES) || 10);
 export const breakSignals = new Set();

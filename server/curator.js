@@ -22,12 +22,27 @@ function validStore(stored) {
   });
 }
 
+const previousHomeCopy = [
+  { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw' },
+  { kicker: 'An open invitation to make something.', title: 'MAKE A\nBEAUTIFUL\nMESS.', description: 'A blank canvas. A wild idea. A little time to play.', note: 'no perfect lines required.', ctaLabel: 'Draw now', ctaHref: '/draw' },
+];
+
 export function createCurator({ dataDir }) {
   const file = join(dataDir, '.curator.json');
   let document = defaults();
   try {
     const stored = JSON.parse(readFileSync(file, 'utf8'));
     if (!validStore(stored)) throw new Error('Invalid Curator store');
+    // Editing another page or restoring defaults can persist an old homepage
+    // template. Replace its stock copy while retaining custom editorial text.
+    const home = stored.pages.home;
+    const defaultHome = getCuratorDefaults('home');
+    for (const key of ['draft', 'published']) {
+      const content = home[key];
+      const stockCopy = previousHomeCopy.some(template =>
+        Object.entries(template).every(([field, value]) => content[field] === value));
+      if (stockCopy) home[key] = { ...defaultHome, palette: content.palette, art: content.art };
+    }
     document = stored;
   } catch (error) {
     if (error.code !== 'ENOENT') console.warn('[curator] Invalid store; using safe defaults');

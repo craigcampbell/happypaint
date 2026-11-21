@@ -5,6 +5,7 @@
 // anyone. Reachable from the studio chat bar.
 
 import { useCallback, useEffect, useState } from "react";
+import { QUICK_JOIN_PATH } from "../data/curatorContent";
 import { getRecentRooms } from "../utils/recentRooms";
 import MyRooms from "./MyRooms";
 
@@ -110,6 +111,10 @@ export default function RoomLobby({ token, signedIn, currentRoom, onJoin, onHome
 
         <div className="ps-group lobby-section">
           <h3>Public rooms</h3>
+          <form action={QUICK_JOIN_PATH} method="post">
+            <input type="hidden" name="exclude" value={currentRoom} />
+            <button className="lobby-home" type="submit">Try another public room</button>
+          </form>
           {rooms === null ? (
             <p className="account-note">Looking for rooms…</p>
           ) : rooms.length === 0 ? (

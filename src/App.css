@@ -9014,27 +9014,45 @@ select {
 .cc-panel .mp-participant { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.14); color: #e2e8f0; }
 .cc-panel .vote-card { margin: 0 10px 6px; }
 
-.chat-sponsor {
+.room-switch-summary {
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.15;
+}
+
+.room-switch-summary small {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.room-sponsor {
   flex: none;
-  margin: 0 10px 6px;
-  min-height: 54px;
-  display: grid;
-  place-items: center;
+  height: 0;
   overflow: hidden;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  background: #f5f6f8;
+  color: #52606c;
 }
-.chat-sponsor-label {
-  width: 100%;
-  padding: 3px 8px 0;
-  color: #94a3b8;
-  font-size: 0.62rem;
-  line-height: 1.2;
-  text-align: center;
+
+.room-sponsor.is-filled {
+  height: auto;
+  padding-block: 5px 8px;
+  border-bottom: 1px solid #dce0e4;
 }
-.chat-sponsor-label a { color: #a5f3c4; }
-.chat-sponsor-slot { min-width: 300px; min-height: 50px; display: grid; place-items: center; }
+
+.room-sponsor-label {
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* On compact screens the room navigation floats at the top. Keep a filled
+   banner below that row and fully outside the paint surface. */
+.studio-shell:is([data-layout="phone"], [data-layout="tablet"]) .mp-bar + .room-sponsor.is-filled {
+  margin-top: calc(56px + env(safe-area-inset-top));
+}
 
 /* A live vote floats over the canvas when the chat panel is closed. */
 .cc-vote-floating {
@@ -9419,7 +9437,6 @@ select {
   .family-offer { grid-template-columns: 1fr; }
   .family-card { position: static; order: -1; }
   .family-hero h1 { font-size: clamp(2.55rem, 13vw, 4rem); }
-  .chat-sponsor { min-height: 54px; }
 }
 
 /* ---- Weekly event nights (homepage) ------------------------------------- */

@@ -11498,6 +11498,30 @@ app.get('/api/rooms/:code/film', async (req, res) => {
   res.json({ code, title: room.title || null, scenes: scenesMeta(room), soundtrack: room.soundtrack || null, ops: visibleHistory(room) });
 });
 
+// Match on room presence at click time. When the lobby is quiet, converge on
+// the same featured canvas so even simultaneous first arrivals can meet.
+function quickJoinRoom(req, res) {
+  res.set('Cache-Control', 'no-store');
+  const exclude = req.body?.exclude;
+  const occupied = [];
+  const empty = [];
+  for (const [code, room] of rooms) {
+    if (code === exclude || room.audience !== 'kid_safe' || !room.listed || room.locked || room.sketchbook
+      || room.gameEnabled || room.phoneEnabled || room.fingerPaint || room.users.size >= MAX_ROOM_USERS) continue;
+    // Legacy socket codes can contain punctuation or exceed the /join route's eight characters.
+    if (!/^[A-Z0-9]{1,8}$/.test(code)) continue;
+    if (room.users.size) occupied.push(code);
+    else if (FEATURED_CODES.has(code)) empty.push(code);
+  }
+  // Featured rooms are seeded in order, with Open Studio first. A painter
+  // shuffling from the studio can explore a different empty room each time.
+  const candidates = occupied.length ? occupied : empty;
+  const code = !occupied.length && !exclude ? empty[0] : pick(candidates);
+  res.redirect(req.method === 'POST' ? 303 : 302, code ? `/join/${code}` : '/rooms');
+}
+app.get('/api/rooms/quick-join', quickJoinRoom);
+app.post('/api/rooms/quick-join', express.urlencoded({ extended: false, limit: '1kb' }), quickJoinRoom);
+
 // The discovery lobby source: live, listed, kid_safe rooms only. Sanitized -
 // never participant names, chat, raw strokes, owner ids, or private rooms.
 app.get('/api/rooms/public', (_req, res) => {
