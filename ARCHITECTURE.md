@@ -313,10 +313,10 @@ token)`), returns `send*` emitters + `disconnect()`.
 - **Family entitlement**: Stripe webhooks maintain an atomic, event-deduplicated
   profile-to-subscription mapping in `.billing.json`. Access is bounded by the
   last paid-through time (plus a short configured past-due grace), reconciled
-  against Stripe, and restricted to `friends` rooms. Every invited guest in a
-  qualifying private room inherits the owner's plan without an account or
-  subscription of their own; webhook changes update already-connected guests
-  immediately. Account deletion durably queues failed Stripe
+  against Stripe. A subscriber paints ad-free in any drawing room. Every
+  invitee in a subscriber-owned `friends` room inherits ad-free painting and
+  postcard export. Entitlement changes update the connected members’ personal
+  `adFree` and room-wide `familyRoom` flags. Account deletion durably queues failed Stripe
   cancellations and retains only a short-lived one-way profile hash after
   cleanup so late webhook retries cannot recreate erased mappings.
 - **Two orthogonal trust tiers**: site-wide `ADMIN_KEY` (the `/admin` REST portal)

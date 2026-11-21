@@ -1,6 +1,6 @@
 // Throwaway verification: boot server.js with scratch DATA_DIR, then assert the
-// served billing config prices, the /ads.txt gate when unconfigured, and that the
-// /family SEO description carries the new price. Deletes scratch on exit.
+// unconfigured billing state, the /ads.txt gate when unconfigured, and that the
+// /family SEO description avoids advertising an unverified price. Deletes scratch on exit.
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,7 +26,7 @@ async function waitFor(url, ms = 15000) {
 try {
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: '8943', DATA_DIR: SCRATCH },
+    env: { ...process.env, PORT: '8943', DATA_DIR: SCRATCH, STRIPE_SECRET_KEY: '', GAM_ADS_TXT_PUBLISHER_ID: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let bootLog = '';
@@ -43,8 +43,8 @@ try {
 
   const config = await fetch('http://127.0.0.1:8943/api/billing/config').then((r) => r.json());
   console.log('billing display:', JSON.stringify(config.display), 'savings:', config.yearlySavingsPercent + '%');
-  if (config.display.monthly !== '$1.99/month' || config.display.yearly !== '$15/year') {
-    throw new Error('served prices do not match the new Family rates');
+  if (config.configured || config.display !== null) {
+    throw new Error('unconfigured billing must omit purchase prices');
   }
 
   const ads404 = await fetch('http://127.0.0.1:8943/ads.txt');
@@ -76,14 +76,9 @@ try {
   }
 
   const familyHtml = await fetch('http://127.0.0.1:8943/family').then((r) => r.text());
-  const metaOk = familyHtml.includes('$1.99 monthly or $15 yearly');
-  console.log('/family meta description carries new price:', metaOk);
-  if (!metaOk) throw new Error('/family SEO description still shows the old price');
-  if (familyHtml.includes('4.99') || familyHtml.includes('$39')) {
-    throw new Error('old price leaked into /family HTML');
+  if (!familyHtml.includes('postcard') || /\$(?:1\.99|2\.99|15)\b/.test(familyHtml)) {
+    throw new Error('Family metadata must describe benefits independently of the local catalog');
   }
-  console.log('old price absent from /family HTML: ok');
-
   console.log('PRICE-ADS VERIFY: ok');
 } finally {
   if (server) {

@@ -20,6 +20,10 @@ await writeFile(join(dataDir, '.billing.json'), JSON.stringify({
       familyProductValid: true,
       currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
     },
+    visiting_family: {
+      status: 'active', priceId: 'price_test_monthly', quantity: 1, familyProductValid: true,
+      paidThrough: Math.floor(Date.now() / 1000) + 86400,
+    },
     unknown_profile: {
       profileId: 'unknown_profile',
       status: 'active',
@@ -31,7 +35,7 @@ await writeFile(join(dataDir, '.billing.json'), JSON.stringify({
 }));
 
 const authServer = http.createServer((req, res) => {
-  const profiles = { 'parent-token': 'parent_profile', 'unknown-token': 'unknown_profile' };
+  const profiles = { 'parent-token': 'parent_profile', 'unknown-token': 'unknown_profile', 'visiting-token': 'visiting_family' };
   if (req.method === 'POST' && req.url.includes('/auth-refresh') && profiles[req.headers.authorization]) {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ record: { id: profiles[req.headers.authorization], name: 'Parent' } }));
@@ -89,6 +93,19 @@ function connected(room, token = '', expectedType = 'connected') {
   });
 }
 
+function waitForRoomBenefitEnd(ws, adFree = false) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('missing live entitlement update')), 5000);
+    ws.on('message', (raw) => {
+      const data = JSON.parse(raw.toString());
+      if (data.type === 'billing_entitlement' && data.adFree === adFree && data.familyRoom === false) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+  });
+}
+
 try {
   await waitForServer();
   const config = await fetch(`http://127.0.0.1:${appPort}/api/billing/config`).then((res) => res.json());
@@ -108,6 +125,7 @@ try {
   assert.equal(denied.data.reason, 'private_room', 'configured private rooms require an account');
   denied.ws.close();
   const guest = await connected('FAM123', 'unknown-token');
+  assert.equal(guest.data.familyRoom, true, 'room benefits apply to invitees');
   assert.equal(guest.data.adFree, true, 'signed-in invitee inherits owner entitlement');
 
   const freeGuest = await connected('FREE12', 'unknown-token');
@@ -122,7 +140,19 @@ try {
     body: JSON.stringify({ audience: 'kid_safe', listed: false, title: 'Public family test' }),
   }).then((res) => res.json());
   const publicOwner = await connected(publicRoom.code, 'parent-token');
-  assert.equal(publicOwner.data.adFree, false, 'Family never suppresses ads in public rooms');
+  assert.equal(publicOwner.data.adFree, true, 'members carry their own ad-free pass');
+  assert.equal(publicOwner.data.familyRoom, false, 'public rooms never gain private room perks');
+  const publicGuest = await connected(publicRoom.code);
+  assert.equal(publicGuest.data.adFree, false, 'a subscriber in public never suppresses ads for others');
+  publicGuest.ws.close();
+
+  const ordinaryMember = await connected('MAIN', 'parent-token');
+  assert.equal(ordinaryMember.data.adFree, true, 'subscriber visiting a communal canvas skips ads');
+  assert.equal(ordinaryMember.data.familyRoom, false);
+  const visitingFamily = await connected('FAM123', 'visiting-token');
+  const visitingPass = waitForRoomBenefitEnd(visitingFamily.ws, true);
+  const revokedPublic = waitForRoomBenefitEnd(ordinaryMember.ws);
+  const revokedInvitee = waitForRoomBenefitEnd(guest.ws);
 
   const scrub = await fetch(`http://127.0.0.1:${appPort}/api/account/scrub-chat`, {
     method: 'POST',
@@ -131,6 +161,9 @@ try {
   assert.equal(scrub.billingScrubbed.removed, true, 'account erasure removes billing mapping');
   const stored = JSON.parse(await readFile(join(dataDir, '.billing.json'), 'utf8'));
   assert.equal(stored.records.parent_profile, undefined);
+  await Promise.all([revokedPublic, revokedInvitee, visitingPass]);
+  visitingFamily.ws.close();
+  ordinaryMember.ws.close();
 
   owner.ws.close(); guest.ws.close(); freeGuest.ws.close(); unknownPlan.ws.close(); publicOwner.ws.close();
   console.log('family entitlement integration: ok');

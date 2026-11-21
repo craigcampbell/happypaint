@@ -20,7 +20,8 @@ import "../seasonal.css";
 // Always-visible destinations (top level at desktop, first rows in the sheet).
 const PRIMARY = [
   { href: "/friends", label: "Friends" },
-  { href: "/gallery", label: "Discover" },
+  { href: "/gallery", label: "Gallery" },
+  { href: "/family", label: "Family plan" },
 ];
 
 // Grouped destinations: dropdowns at desktop, headed sections in the sheet.
@@ -42,8 +43,8 @@ const GROUPS = [
     label: "For parents",
     links: [
       { href: "/parents", label: "Parent & teacher guide" },
-      { href: "/faq", label: "Safety & FAQ" },
-      { href: "/family", label: "Family plan" },
+      { href: "/safety", label: "Room safety" },
+      { href: "/faq", label: "Common questions" },
       { href: "/privacy", label: "Privacy" },
     ],
   },
@@ -136,7 +137,7 @@ export default function SiteNav({ onNavigate, current }) {
   return (
     <>
       <header
-        className={`site-nav${menuOpen ? " sn-open" : ""}`}
+        className={`site-nav public-nav${menuOpen ? " sn-open" : ""}`}
         ref={headerRef}
         onBlur={(event) => {
           // Tabbing out of an open dropdown closes it (mouse users have the

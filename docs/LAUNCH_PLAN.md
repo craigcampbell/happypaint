@@ -53,9 +53,9 @@ proposal and must not become customer-facing pricing.
 | Area | Observed state on this pass | Launch action |
 | --- | --- | --- |
 | Free experience | Anonymous drawing, private room codes, shared canvas, exports, and coloring sheets exist. Current server code can elect a temporary guest host for an unowned private room. | Prove create → invite → both draw → export on real target devices. Lead with this path. |
-| Paid plan | Family code supports adult-attested Stripe checkout, portal management, durable webhook state, and ad-free benefits inherited by guests of the subscribed owner's private room. | Preserve the $1.99/month and $15/year offer while validating it; do not add four speculative tiers. |
+| Paid plan | Family code supports adult-attested Stripe checkout, portal management, durable webhook state, and ad-free benefits inherited by guests of the subscribed owner's private room. | Validate the Family offer against the configured Stripe catalog. See MONETIZATION.md for current pricing and the legacy monthly transition. |
 | Production checkout | On September 8, `GET https://drawesome.art/api/billing/config` returned `configured:false`, with both monthly and yearly plans false. | Payments were unavailable at this check. Operator setup and Stripe test-mode lifecycle verification remain necessary; code existence is not live revenue. See `MONETIZATION.md`. |
-| Paid differentiation | The implemented Family entitlement removes ads. Guest access and ordinary hosting are already available free. | Do not describe these free features as exclusive unlocks. When ads are absent, describe any support proposition honestly; do not create interruptions just to make removal valuable. |
+| Paid differentiation | Family removes ads and adds Art postcards in subscriber-owned private rooms. Guest access and ordinary hosting are already available free. | Do not describe these free features as exclusive unlocks. When ads are absent, describe any support proposition honestly; do not create interruptions just to make removal valuable. |
 | Search foundations | The server already generates route metadata, `robots.txt`, a sitemap, and social cards. Private join links are excluded from the sitemap. | Improve useful entry-page content and inspect actual indexing; buying an SEO tool or regenerating thousands of pages is unnecessary. |
 | Measurement | Server analytics count drawing sessions, usage, saves, and operational activity. Anonymous analytics identifiers are per connection. | A connection is not a unique person. These data do not establish anonymous retention or an acquisition-to-payment funnel. Use aggregate pilot records below. |
 | Claims and trust | Privacy and Account copy now describe session statistics, public previews and deletion limits. The previous scheduled-purge claim was only a local receipt, not a server job. | Keep marketing aligned with the implemented controls; do not claim total erasure or guaranteed safety. Resolve the deletion gaps below before classroom marketing. |
@@ -239,9 +239,9 @@ Decision thresholds for this pilot:
 
 **Family plan description, only after billing is enabled and tested**
 
-> Drawesome Family is an optional subscription owned by an adult: $1.99/month or
-> $15/year. It removes advertising from your account's private rooms for everyone
-> you invite. Drawing and joining stay free; guests do not need subscriptions.
+> Drawesome Family is an optional subscription owned by an adult. See available
+> monthly and yearly prices on the Family page. Paint ad-free and invite
+> friends to a private Family room to make Art postcards together.
 > Manage or cancel renewal through the billing page. Details:
 > https://drawesome.art/family
 

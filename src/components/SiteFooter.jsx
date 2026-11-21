@@ -2,6 +2,7 @@
 // (crawlers + middle-click work), SPA-routed on plain left-click, same
 // pattern as SiteNav.
 
+import BrandMark from "./BrandMark";
 import { isCloudConfigured } from "../utils/auth";
 
 export default function SiteFooter({ onNavigate }) {
@@ -13,32 +14,34 @@ export default function SiteFooter({ onNavigate }) {
 
   const cols = [
     {
-      title: "Draw",
+      title: "At the canvas",
       links: [
-        { href: "/draw", label: "Draw my own" },
-        { href: "/gallery", label: "Discover artwork" },
-        { href: "/studios", label: "Artist studios" },
-        { href: "/events", label: "Community events" },
-        { href: "/studio", label: "Public canvas" },
-        { href: "/friends", label: "Draw with friends" },
-        { href: "/rooms", label: "Live rooms" },
-        { href: "/join/DAILY", label: "Today's challenge" },
+        { href: "/rooms", label: "Public drawing rooms" },
+        { href: "/friends", label: "Friends & room codes" },
+        { href: "/draw", label: "Solo drawing" },
+        { href: "/join/DAILY", label: "Daily challenge" },
+        { href: "/family", label: "Family & art postcards" },
+      ],
+    },
+    {
+      title: "Around the studio",
+      links: [
+        { href: "/gallery", label: "Community gallery" },
         { href: "/wall", label: "The Fridge Wall" },
+        { href: "/studios", label: "Artist studios" },
+        { href: "/events", label: "Drawing events" },
+        { href: "/planet", label: "Painted Planet" },
+        { href: "/inktober", label: "Inktober sketchbooks" },
       ],
     },
     {
-      title: "Trust",
+      title: "Help & accounts",
       links: [
+        { href: "/about", label: "About Drawesome" },
         { href: "/parents", label: "Parents & teachers" },
-        { href: "/faq", label: "Safety & FAQ" },
-        { href: "/privacy", label: "Privacy" },
-        { href: "/about", label: "About" },
-      ],
-    },
-    {
-      title: "You",
-      links: [
-        { href: "/family", label: "Drawesome Family" },
+        { href: "/safety", label: "Room safety" },
+        { href: "/faq", label: "Common questions" },
+        { href: "/privacy", label: "Privacy & data" },
         ...(isCloudConfigured ? [
           { href: "/signup", label: "Sync your gallery" },
           { href: "/signup?mode=login", label: "Log in" },
@@ -51,8 +54,8 @@ export default function SiteFooter({ onNavigate }) {
     <footer className="site-footer">
       <div className="site-footer-inner">
         <div className="site-footer-brand">
-          <strong>Drawesome</strong>
-          <p>Draw together in your browser. Free canvases, coloring pages, and shared art time.</p>
+          <a href="/" className="footer-wordmark" aria-label="Drawesome home" onClick={event => follow(event, "/")}><BrandMark /></a>
+          <p>A shared drawing studio for the friend next door and the family member a time zone away.</p>
         </div>
         {cols.map((col) => (
           <nav key={col.title} className="site-footer-col" aria-label={col.title}>
@@ -66,7 +69,7 @@ export default function SiteFooter({ onNavigate }) {
         ))}
       </div>
       <p className="site-footer-note">
-        See our <a href="/faq" onClick={(event) => follow(event, "/faq")}>safety information</a> · Report concerns in the studio · <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>
+        To flag a drawing or chat message, use Report in the studio. For help, email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>
       </p>
     </footer>
   );

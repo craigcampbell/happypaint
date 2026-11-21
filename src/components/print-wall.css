@@ -390,3 +390,46 @@
     gap: 8px;
   }
 }
+
+/* The room directory and Family postcard are two ways out of the front page. */
+.artwall-home .artwall-main > .home-room-picks { margin-block: clamp(35px, 5vw, 75px); }
+.picks-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+.artwall-home .artwall-main :is(.picks-heading, .postcard-intro) h2 {
+  margin: 0; font: 780 clamp(2.3rem, 4.5vw, 4.8rem)/.99 var(--display-font); letter-spacing: -.055em;
+}
+.picks-heading p { max-width: 55ch; margin: 12px 0 0; }
+.picks-heading a, .postcard-intro a {
+  display: inline-flex; align-items: center; gap: 12px; min-height: 44px; font-weight: 760; text-underline-offset: 5px;
+}
+.picks-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(12px, 2vw, 28px); margin-block: 22px; }
+.artwall-home .artwall-main .room-pick {
+  display: grid; grid-template-rows: auto 1fr; color: #23241c; background: #fffdf4; border: 1px solid #36372d;
+  border-radius: 4px; box-shadow: 2px 3px #36372d; text-decoration: none; overflow: hidden;
+}
+.room-pick img { width: 100%; height: auto; aspect-ratio: 2.85; object-fit: cover; }
+.room-pick div { padding: 14px clamp(14px, 1.7vw, 24px) 18px; }
+.artwall-home .artwall-main .room-pick h3 { margin: 0; font: 760 clamp(1.4rem, 2.2vw, 2.1rem)/1.07 var(--display-font); letter-spacing: -.03em; }
+.room-pick p { margin: 6px 0 0; font-size: .98rem; }
+.room-pick:hover h3 { text-decoration: underline; text-underline-offset: 3px; }
+.picks-invite { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 28px; margin-top: 26px; padding-block: 12px; border-block: 1px solid #aaa795; }
+.picks-invite .artwall-room-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.artwall-home .picks-invite label { margin: 0; }
+.picks-invite .artwall-room-form input { width: 9.2rem; }
+.picks-invite > p { margin: 0; font-size: .9rem; }
+.artwall-home .artwall-main > .home-postcards {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: center; gap: clamp(20px, 4vw, 64px);
+  padding: clamp(24px, 4vw, 60px); background: #dae8df; border-block: 1px solid #414c41;
+}
+.home-postcards img { display: block; height: auto; width: 100%; transform: rotate(1.5deg); box-shadow: 2px 5px 9px #24352538; }
+.postcard-intro .postcard-plan { margin: 0 0 12px; font-weight: 780; color: #324c3c; }
+.postcard-intro > p:not(.postcard-plan) { max-width: 41ch; margin: 18px 0 5px; }
+@media (max-width: 700px) {
+  .picks-heading { display: block; }
+  .picks-grid { grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
+  .artwall-home .artwall-main .room-pick { grid-template-rows: 1fr; grid-template-columns: 26% 1fr; align-items: stretch; }
+  .room-pick img { height: 100%; aspect-ratio: auto; }
+  .room-pick div { padding: 13px; }
+  .artwall-home .room-pick p { font-size: .92rem; line-height: 1.4; }
+  .picks-invite { gap: 6px; }
+  .artwall-home .artwall-main > .home-postcards { grid-template-columns: 1fr; }
+}

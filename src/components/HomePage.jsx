@@ -10,6 +10,12 @@ import "./discovery.css";
 import "./artwall-home.css";
 import "./print-wall.css";
 
+const roomPicks = [
+  { code: 'OCEAN', name: 'Under the Sea', image: 'ocean', idea: 'Draw a fish. Let the next painter invent its reef.' },
+  { code: 'SPACE', name: 'Outer Space', image: 'space', idea: 'Invent a planet and leave a spot for someone to land.' },
+  { code: 'CASTLE', name: 'Castles & Dragons', image: 'castles', idea: 'Build a tower together, then give it a tiny dragon.' },
+];
+
 function FeedNotice({ status, empty, onRetry }) {
   return <div className="artwall-feed-notice" role="status">
     <p>{status === "loading" ? "Opening the community's pages…" : status === "error" ? "We couldn’t load this just now. Your own canvas is still ready." : empty}</p>
@@ -63,16 +69,57 @@ export default function HomePage({ onNavigate }) {
     <main className="discovery-main artwall-main" id="main-content">
       <CuratedHeader page="home" content={content} onNavigate={onNavigate} />
 
+      <section className="home-room-picks" aria-labelledby="room-picks-title">
+        <div className="picks-heading">
+          <div>
+            <h2 id="room-picks-title">Pick a public canvas</h2>
+            <p>Everyone draws on the same page. Pick a theme and add the first line, or build on someone else’s.</p>
+          </div>
+          <DiscoveryLink href="/rooms" onNavigate={onNavigate}>Browse all rooms <span aria-hidden="true">↗</span></DiscoveryLink>
+        </div>
+        <div className="picks-grid">
+          {roomPicks.map(room => <DiscoveryLink href={'/join/' + room.code} key={room.code} onNavigate={onNavigate} className="room-pick">
+            <img src={'/preview-themes/' + room.image + '.webp'} alt="" loading="lazy" width="400" height="225" />
+            <div><h3>{room.name}</h3><p>{room.idea}</p></div>
+          </DiscoveryLink>)}
+        </div>
+        <div className="picks-invite">
+          <form className="artwall-room-form" onSubmit={(event) => {
+            event.preventDefault();
+            if (!roomCode) return;
+            if (onNavigate) onNavigate(`/join/${roomCode}`);
+            else window.location.assign(`/join/${roomCode}`);
+          }}>
+            <label htmlFor="home-room-code">Got a room code?</label>
+            <div>
+              <input id="home-room-code" value={code} onChange={(event) => setCode(event.target.value)} maxLength={8} placeholder="ROOM CODE" autoCapitalize="characters" autoComplete="off" spellCheck={false} required />
+              <button type="submit" disabled={!roomCode}>Join <span aria-hidden="true">↗</span></button>
+            </div>
+          </form>
+          <p>Room codes take you straight to the canvas your group is using.</p>
+        </div>
+      </section>
+
       <section className="artwall-wall" aria-labelledby="home-art-title">
         <div className="artwall-section-heading">
           <h2 id="home-art-title" tabIndex={-1}>Community wall</h2>
           <DiscoveryLink href="/gallery" onNavigate={onNavigate}>All artwork <span aria-hidden="true">↗</span></DiscoveryLink>
-          <p className="print-wall-note">New drawings from our artists.</p>
+          <p className="print-wall-note">Finished pieces that artists chose to share.</p>
         </div>
         {feeds.art.status === "ready" && feeds.art.items.length
           ? <ArtworkCards posts={feeds.art.items} onNavigate={onNavigate} />
           : <FeedNotice status={feeds.art.status} onRetry={retry} empty="The wall is quiet for now. Draw something of your own and share it whenever you like." />}
         <div className="home-ink-slot" data-home-ink-tools="" />
+      </section>
+
+      <section className="home-postcards" aria-labelledby="home-postcard-title">
+        <div className="postcard-intro">
+          <p className="postcard-plan">Drawesome Family</p>
+          <h2 id="home-postcard-title">Send a little art.</h2>
+          <p>Turn a drawing from your Family room into a postcard. Add a note in the margin and send it to someone who’d love to find it in their inbox.</p>
+          <DiscoveryLink href="/family" onNavigate={onNavigate}>Explore the Family plan <span aria-hidden="true">↗</span></DiscoveryLink>
+        </div>
+        <img src="/media/family-postcard.webp" alt="A finished Family art postcard with a whale drawing and a personal note for Nana." width="900" height="600" loading="lazy" />
       </section>
 
       <section className="artwall-idea" aria-labelledby="home-idea-title">
@@ -124,23 +171,12 @@ export default function HomePage({ onNavigate }) {
 
       <section className="artwall-together" aria-labelledby="home-together-title">
         <div className="print-together-intro">
-          <h2 id="home-together-title">Draw together</h2>
-          <p>Add a friend by code and meet on the same canvas. Doodle from scratch or pick a coloring sheet to fill in together.</p>
-          <DiscoveryLink href="/friends" onNavigate={onNavigate}>Find a friend <span aria-hidden="true">↗</span></DiscoveryLink>
+          <h2 id="home-together-title">Try a drawing relay</h2>
+          <p>One person sketches a creature. The other draws a place for it to live. Swap roles for round two.</p>
+          <DiscoveryLink href="/friends" onNavigate={onNavigate}>Draw with a friend <span aria-hidden="true">↗</span></DiscoveryLink>
         </div>
         <div className="artwall-together-options">
-          <form className="artwall-room-form" onSubmit={(event) => {
-            event.preventDefault();
-            if (!roomCode) return;
-            if (onNavigate) onNavigate(`/join/${roomCode}`);
-            else window.location.assign(`/join/${roomCode}`);
-          }}>
-            <label htmlFor="home-room-code">Got a room code?</label>
-            <div>
-              <input id="home-room-code" value={code} onChange={(event) => setCode(event.target.value)} maxLength={8} placeholder="ROOM CODE" autoCapitalize="characters" autoComplete="off" spellCheck={false} required />
-              <button type="submit" disabled={!roomCode}>Join <span aria-hidden="true">↗</span></button>
-            </div>
-          </form>
+
           <div className="artwall-daily">
             <h3>Today’s shared canvas</h3>
             {feeds.daily.status === "loading" ? <p role="status">Finding today’s prompt…</p>

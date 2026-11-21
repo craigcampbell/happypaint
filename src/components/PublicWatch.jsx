@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 import LiveRoomCanvas from "./LiveRoomCanvas";
 
 // A borrowed, throwaway name for the "watching as …" line: client-only, never
@@ -178,7 +179,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
   const blocked = BLOCKED_COPY[reason] || BLOCKED_COPY.offline;
 
   return (
-    <div className="site-page">
+    <div className="site-page watch-page">
       <SiteNav onNavigate={onNavigate} current="/live" />
       <main className="site-page-body">
         <h1>{title}</h1>
@@ -203,8 +204,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
         </p>
 
         <p style={{ margin: "0 0 14px", color: "#44535e", fontWeight: 600 }}>
-          <span aria-hidden="true">👀</span> You’re watching as <strong>{alias}</strong>, no sign-in, nothing saved.
-          Watching is read-only: you can’t draw or chat from here.
+          <span aria-hidden="true">👀</span> You’re watching as <strong>{alias}</strong>. This view follows the canvas as people paint. Open the room to join in, subject to its drawing permissions.
         </p>
 
         {bookLink ? (
@@ -299,6 +299,7 @@ export default function PublicWatch({ roomCode = "", onNavigate }) {
           Public rooms are open to everyone who has the link. The art shown here is what that room is painting right now.
         </p>
       </main>
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

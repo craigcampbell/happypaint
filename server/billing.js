@@ -22,11 +22,18 @@ const FAMILY_EVENT_TYPES = new Set([
   'invoice.paid',
   'invoice.payment_failed',
 ]);
-const EXPECTED_PRICES = {
-  monthly: { amount: 199, interval: 'month' },
+export const EXPECTED_PRICES = {
+  monthly: { amount: 299, interval: 'month' },
   yearly: { amount: 1500, interval: 'year' },
 };
-export { EXPECTED_PRICES };
+const LEGACY_MONTHLY_CENTS = 199;
+
+function matchesRate(price, amount, interval) {
+  return price?.currency === 'usd' && price.unit_amount === amount &&
+    price.recurring?.interval === interval && price.recurring.interval_count === 1 &&
+    price.recurring.usage_type === 'licensed' && price.billing_scheme === 'per_unit' &&
+    !price.transform_quantity;
+}
 
 function cleanOrigin(value) {
   try {
@@ -143,7 +150,7 @@ export function createBilling({
       if (!Number(record.quantity)) record.quantity = 1;
       if (record.familyProductValid == null) {
         record.familyProductValid = Boolean(
-          (record.priceId === prices.monthly || record.priceId === prices.yearly) && record.quantity === 1,
+          record.priceId && (record.priceId === prices.monthly || record.priceId === prices.yearly) && record.quantity === 1,
         );
       }
     }
@@ -249,9 +256,11 @@ export function createBilling({
     const priceId = priceIdFrom(subscription);
     const productId = productIdFrom(subscription);
     return Boolean(
-      item && Number(item.quantity || 1) === 1 &&
+      item && subscription.items.data.length === 1 && item.quantity === 1 &&
       familyProductId && productId === familyProductId &&
-      (priceId === prices.monthly || priceId === prices.yearly),
+      (priceId === prices.monthly || priceId === prices.yearly ||
+        // Stripe subscriptions retain their old price ID after the catalog moves.
+        matchesRate(item.price, LEGACY_MONTHLY_CENTS, 'month')),
     );
   }
 
@@ -279,6 +288,7 @@ export function createBilling({
       status: familyProductValid ? (subscription.status || 'inactive') : 'invalid_product',
       productId: productIdFrom(subscription),
       priceId: priceIdFrom(subscription),
+      interval: familyProductValid ? (priceIdFrom(subscription) === prices.yearly ? 'yearly' : 'monthly') : null,
       quantity: Number(firstItem(subscription)?.quantity || 1),
       familyProductValid,
       currentPeriodEnd: end,
@@ -301,7 +311,8 @@ export function createBilling({
       (record.status === 'active' && paidThroughMs > at) ||
       (record.status === 'past_due' && paidThroughMs + pastDueGraceMs > at)
     );
-    const interval = record.priceId === prices.yearly ? 'yearly' : record.priceId === prices.monthly ? 'monthly' : null;
+    const configuredInterval = record.priceId && Object.keys(prices).find(key => prices[key] === record.priceId);
+    const interval = record.familyProductValid ? (record.interval || configuredInterval || null) : null;
     return {
       active,
       status: record.status || 'none',
@@ -339,17 +350,20 @@ export function createBilling({
       return catalogValidation.ok;
     }
     try {
+      const amounts = {};
       for (const [interval, priceId] of Object.entries(prices)) {
         const price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
         const expected = EXPECTED_PRICES[interval];
         const productId = typeof price.product === 'string' ? price.product : price.product?.id;
+        const supportedRate = matchesRate(price, expected.amount, expected.interval) ||
+          (interval === 'monthly' && matchesRate(price, LEGACY_MONTHLY_CENTS, 'month'));
         if (
-          price.active !== true || price.currency !== 'usd' || Number(price.unit_amount) !== expected.amount ||
-          price.recurring?.interval !== expected.interval || productId !== familyProductId ||
+          price.active !== true || !supportedRate || productId !== familyProductId ||
           (typeof price.product === 'object' && price.product.active === false)
         ) {
           throw new Error(`invalid_${interval}_price`);
         }
+        amounts[interval] = price.unit_amount;
       }
       const portal = await stripe.billingPortal.configurations.retrieve(portalConfigurationId);
       const features = portal.features || {};
@@ -375,7 +389,7 @@ export function createBilling({
           throw new Error('unsafe_portal_products');
         }
       }
-      catalogValidation = { checked: true, checkedAt: now(), ok: true, error: null };
+      catalogValidation = { checked: true, checkedAt: now(), ok: true, error: null, amounts };
     } catch (error) {
       catalogValidation = { checked: true, checkedAt: now(), ok: false, error: errorCode(error) };
       console.error('[billing] Stripe catalog validation failed:', errorCode(error));
@@ -583,8 +597,13 @@ export function createBilling({
       res.json({
         configured,
         plans: { monthly: configured, yearly: configured },
-        display: { monthly: '$1.99/month', yearly: '$15/year' },
-        yearlySavingsPercent: 37,
+        display: catalogValidated ? {
+          monthly: `$${catalogValidation.amounts.monthly / 100}/month`,
+          yearly: `$${catalogValidation.amounts.yearly / 100}/year`,
+        } : null,
+        yearlySavingsPercent: catalogValidated
+          ? Math.round(100 * (1 - catalogValidation.amounts.yearly / (12 * catalogValidation.amounts.monthly)))
+          : null,
         termsVersion,
       });
     });

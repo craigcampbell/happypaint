@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getDeviceKey as deviceKey } from "../utils/deviceIdentity";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 import { getSession } from "../utils/auth";
 import { getCommunityEvent } from "../data/communityEvents";
 import { DiscoveryLink } from "./DiscoveryPage";
@@ -298,8 +299,8 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
       <SiteNav onNavigate={onNavigate} current="/wall" />
       <main className="wall-main">
         <header className="wall-hero">
-          <h1>{getCommunityEvent(spotlight?.event)?.sensitive ? "Drawings shared with care" : "🧲 The Fridge Wall"}</h1>
-          <p>Drawings shared by the community, shown newest first. Sharing is always optional.</p>
+          <h1>{getCommunityEvent(spotlight?.event)?.sensitive ? "Drawings shared with care" : "The Fridge Wall"}</h1>
+          <p>Open a drawing to see it up close. Give a favorite a heart, or try a remix where the artist has allowed one.</p>
           <DiscoveryLink href="/gallery" onNavigate={onNavigate}>Discover artwork, studios &amp; events →</DiscoveryLink>
         </header>
 
@@ -369,6 +370,7 @@ export default function WallPage({ onNavigate, initialPostId = "" }) {
         ) : null}
       </main>
       {toast ? <div className="wall-toast" role="status">{toast}</div> : null}
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

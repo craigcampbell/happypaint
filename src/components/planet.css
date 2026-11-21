@@ -31,6 +31,7 @@
 }
 .planet-panel-head { text-align: center; margin-bottom: 12px; }
 .planet-panel-head h2 { margin: 0 0 6px; font-size: 1.25rem; color: #0f2c22; }
+.planet-globe-guide { max-width: 36em; margin: 0 auto 8px; color: #284d40; line-height: 1.5; }
 
 /* ---- Globe ---- */
 .planet-globe-wrap { max-width: 700px; margin: 0 auto; }

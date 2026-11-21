@@ -233,7 +233,7 @@ export default function InktoberPage({ onNavigate }) {
         <EventSharingReceipt onRemoved={(id) => setPosts((items) => items.filter((post) => post.id !== id))} />
         <section className="ink-hero">
           <p className="ink-eyebrow">Community event · October {ink?.year || fallbackPrompts.year}</p>
-          <h1 id="ink-title">🖋️ Inktober at Drawesome</h1>
+          <h1 id="ink-title">Inktober at Drawesome</h1>
           <p className="ink-hero-sub">
             One prompt a day, at your own pace. Start a drawing just for you, then share a finished
             picture if you choose. You can also keep a sketchbook or draw on the shared Ink &amp; Pencil canvas.

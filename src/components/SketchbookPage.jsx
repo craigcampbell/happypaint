@@ -117,40 +117,42 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   if (status === "missing" || status === "error" || !book) {
     const returnTo = encodeURIComponent(`/sketchbook/${bookId}`);
     return (
-      <main className="route-status">
-        {status === "error" ? (
-          <>
-            <h1>We couldn’t open this sketchbook</h1>
-            <p>Check your connection, then try again.</p>
-            <button type="button" className="primary-action" onClick={() => load(session)}>Try again</button>
-          </>
-        ) : (
-          <>
-            <h1>This sketchbook is private, or isn’t here</h1>
-            <p>
-              Only the owner and invited artists can open a private sketchbook. If you were invited,
-              sign in and come straight back, this page will pick up where you left off.
-            </p>
-            {session === null && isCloudConfigured ? (
-              <button
-                type="button"
-                className="primary-action"
-                onClick={() => onNavigate(`/signup?mode=login&return=${returnTo}`)}
-              >
-                Log in to view this sketchbook
-              </button>
-            ) : (
+      <div className="skb-paper-page">
+        <SiteNav onNavigate={onNavigate} current="/inktober" />
+        <main className="skb-start skb-reader-missing">
+          {status === "error" ? (
+            <>
+              <h1>We couldn’t open this sketchbook</h1>
+              <p>Check your connection, then try again.</p>
+              <button type="button" className="primary-action" onClick={() => load(session)}>Try again</button>
+            </>
+          ) : (
+            <>
+              <h1>This sketchbook is private, or isn’t here</h1>
               <p>
-                {session
-                  ? "You’re signed in, so this book either hasn’t invited you or the link is incomplete."
-                  : "It may have been removed, or the link is incomplete."}
+                Only the owner and invited artists can open a private sketchbook. If you have an invitation, open the invitation link first.
               </p>
-            )}
-            <button type="button" onClick={() => onNavigate("/inktober")}>Browse Inktober</button>
-          </>
-        )}
-        <a href="/">Back to Drawesome</a>
-      </main>
+              {session === null && isCloudConfigured ? (
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => onNavigate(`/signup?mode=login&return=${returnTo}`)}
+                >
+                  Log in to view this sketchbook
+                </button>
+              ) : (
+                <p>
+                  {session
+                    ? "You’re signed in, so this book either hasn’t invited you or the link is incomplete."
+                    : "It may have been removed, or the link is incomplete."}
+                </p>
+              )}
+              <button type="button" onClick={() => onNavigate("/inktober")}>Browse Inktober</button>
+            </>
+          )}
+        </main>
+        <SiteFooter onNavigate={onNavigate} />
+      </div>
     );
   }
 
@@ -251,195 +253,190 @@ export default function SketchbookPage({ bookId, onNavigate }) {
   return (
     <div className="skb-reader">
       <SiteNav onNavigate={onNavigate} current="/inktober" />
-      <header className="skb-reader-head">
-        <span className="skb-prompt-chip">
-          <span className="skb-prompt-tag">#inktober 2026</span>
-          {page ? (
-            <>
-              <span>Day {page.day}</span>
-              <span className="skb-prompt-text">“{page.prompt}”</span>
-            </>
-          ) : (
-            <span className="skb-prompt-text">a brand-new sketchbook</span>
-          )}
-        </span>
-        <h1 className="skb-reader-title">{book.title || "Inktober sketchbook"}</h1>
-        <span
-          className={`skb-badge ${unsaved ? "skb-badge-unsaved" : isPublic ? "skb-badge-public" : "skb-badge-private"}`}
-          title={unsaved
-            ? "This sketchbook isn't saved to an account yet. Its pages stay public while they last."
-            : isPublic
-              ? "Public, anyone with the link can watch; drawing stays invite-only"
-              : "Private, only the owner and invited artists can open this book"}
-        >
-          {unsaved ? "✏️ Not saved yet" : isPublic ? "🌍 Public" : "🔒 Private"}
-        </span>
-        <span className="skb-reader-meta">
-          {book.artistCount} of {book.maxArtists} artists · {book.pageCount} of {book.maxPages} pages
-          {book.moderationHidden ? " · hidden from discovery by moderators" : ""}
-        </span>
-      </header>
-      <p className="skb-reader-visibility-note">
-        {unsaved
-          ? "The artist hasn't signed up yet: these pages are public while they last, and only the artist's own device can draw on them."
-          : isPublic
-            ? "Anyone with the link can watch this book; only the owner and invited artists can draw."
-            : isOwner
-              ? "Private: only you and your invited artists can open this book. Invitation links grant both viewing and drawing."
-              : "Private book, you’re viewing as an invited artist."}
-      </p>
-
-      {unsaved ? (
-        <div className="skb-reader-unsaved">
-          <p>
-            This sketchbook isn&rsquo;t saved to an account yet, so it isn&rsquo;t permanent. You can start your own
-            in one tap, no account needed, and save it later if you want to keep it.
-          </p>
-          <button type="button" className="primary-action" disabled={busy} onClick={startOwnGuestBook}>
-            {busy ? "Starting your page…" : "Start your own sketchbook →"}
-          </button>
-        </div>
-      ) : null}
-
-      {pages.length > 0 ? (
-        <>
-          <nav className="skb-reader-nav" aria-label="Flip pages">
-            <button type="button" disabled={selected <= 0} onClick={() => setSelected(selected - 1)}>‹ Previous page</button>
-            <span className="skb-reader-meta">Page {selected + 1} of {pages.length}</span>
-            <button type="button" disabled={selected >= pages.length - 1} onClick={() => setSelected(selected + 1)}>Next page ›</button>
-          </nav>
-
-          <div className="skb-reader-canvas">
-            {page && isPublic ? (
-              <Suspense fallback={<div className="skb-reader-empty">Loading this page’s canvas…</div>}>
-                {/* ONLY the selected page's room loads a canvas/socket. Spectator
-                    sockets are anonymous-only and private books have NO spectator
-                    surface (server: room_blocked book_private), so the canvas
-                    mounts for public books only. */}
-                <LiveRoomCanvas key={page.room} roomCode={page.room} snapshotIntervalMs={60000} />
-              </Suspense>
-            ) : null}
-            {page && !isPublic ? (
-              <div className="skb-reader-empty skb-reader-private-note">
-                <div>
-                  <p>🔒 This page’s canvas stays inside its studio while the book is private.</p>
-                  <button type="button" className="primary-action" onClick={() => onNavigate(`/join/${page.room}`)}>
-                    Open the page studio to view &amp; draw →
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="skb-days" role="tablist" aria-label="Prompt days">
-            {pages.map((p, i) => (
-              <button
-                type="button"
-                key={p.room}
-                role="tab"
-                aria-current={i === selected ? "true" : "false"}
-                title={`Day ${p.day}, ${p.prompt}${p.hidden ? " (hidden by moderators)" : ""}`}
-                onClick={() => setSelected(i)}
-              >
-                {p.ops > 0 ? <span className="skb-day-dot" aria-label="has artwork">●</span> : null} {p.day}
-              </button>
-            ))}
-          </div>
-
-          <div className="skb-reader-actions">
+      <main className="skb-reader-content" aria-labelledby="skb-book-title">
+        <header className="skb-reader-head">
+          <span className="skb-prompt-chip">
+            <span className="skb-prompt-tag">#inktober 2026</span>
             {page ? (
               <>
-                <button type="button" className="ink-join-btn" onClick={() => onNavigate(`/join/${page.room}`)}>
-                  Visit this page’s studio →
-                </button>
-                {isPublic ? (
-                  <button type="button" onClick={() => onNavigate(`/live/${page.room}`)}>
-                    Watch live
-                  </button>
-                ) : null}
+                <span>Day {page.day}</span>
+                <span className="skb-prompt-text">“{page.prompt}”</span>
               </>
-            ) : null}
-            <button type="button" className="ink-join-btn" onClick={() => onNavigate("/sketchbook")}>
-              Start your own sketchbook →
+            ) : (
+              <span className="skb-prompt-text">a brand-new sketchbook</span>
+            )}
+          </span>
+          <h1 className="skb-reader-title" id="skb-book-title">{book.title || "Inktober sketchbook"}</h1>
+          <span
+            className={`skb-badge ${unsaved ? "skb-badge-unsaved" : isPublic ? "skb-badge-public" : "skb-badge-private"}`}
+            title={unsaved
+              ? "This sketchbook isn't saved to an account yet. Its pages stay public while they last."
+              : isPublic
+                ? "Public, anyone with the link can watch; drawing stays invite-only"
+                : "Private, only the owner and invited artists can open this book"}
+          >
+            {unsaved ? "✏️ Not saved yet" : isPublic ? "🌍 Public" : "🔒 Private"}
+          </span>
+          <span className="skb-reader-meta">
+            {book.artistCount} of {book.maxArtists} artists · {book.pageCount} of {book.maxPages} pages
+            {book.moderationHidden ? " · hidden from discovery by moderators" : ""}
+          </span>
+        </header>
+        <p className="skb-reader-visibility-note">
+          {unsaved
+            ? (guestOwner ? "Anyone with the link can watch. You can keep drawing from this device." : "Anyone with the link can watch. Only the device that started this sketchbook can draw on its pages.")
+            : isPublic
+              ? (isOwner ? "Anyone with the link can watch. Open a page’s studio to draw or invite another artist." : "Flip through the pages or watch a page live. The owner and invited artists can draw in each page’s studio.")
+              : isOwner
+                ? "Only you and your invited artists can open this book. Open a page’s studio to draw or manage invitations."
+                : "You’re an invited artist. Choose a page and open its studio to draw with the team."}
+        </p>
+
+        {unsaved && !guestOwner ? (
+          <div className="skb-reader-unsaved">
+            <p>
+              {session ? "Want to try the prompt? Open today’s page in your own sketchbook." : "Want to try the prompt? Start a public guest sketchbook of your own. You can save it to an account later."}
+            </p>
+            <button type="button" className="primary-action" disabled={busy} onClick={startOwnGuestBook}>
+              {busy ? "Starting your page…" : "Start your own sketchbook →"}
             </button>
-            {canManagePages && book.pageCount < book.maxPages ? (
-              <>
-                <button type="button" disabled={busy} onClick={addTodayPage}>+ Add today&rsquo;s page</button>
+          </div>
+        ) : null}
+
+        {pages.length > 0 ? (
+          <>
+            <nav className="skb-reader-nav" aria-label="Flip pages">
+              <button type="button" disabled={selected <= 0} onClick={() => setSelected(selected - 1)}>‹ Previous page</button>
+              <span className="skb-reader-meta">Page {selected + 1} of {pages.length}</span>
+              <button type="button" disabled={selected >= pages.length - 1} onClick={() => setSelected(selected + 1)}>Next page ›</button>
+            </nav>
+
+            <div className="skb-reader-canvas">
+              {page && isPublic ? (
+                <Suspense fallback={<div className="skb-reader-empty">Loading this page’s canvas…</div>}>
+                  {/* ONLY the selected page's room loads a canvas/socket. Spectator
+                      sockets are anonymous-only and private books have NO spectator
+                      surface (server: room_blocked book_private), so the canvas
+                      mounts for public books only. */}
+                  <LiveRoomCanvas key={page.room} roomCode={page.room} snapshotIntervalMs={60000} />
+                </Suspense>
+              ) : null}
+              {page && !isPublic ? (
+                <div className="skb-reader-empty skb-reader-private-note">
+                  <div>
+                    <p>🔒 This page’s canvas stays inside its studio while the book is private.</p>
+                    <button type="button" className="primary-action" onClick={() => onNavigate(`/join/${page.room}`)}>
+                      Open the page studio to view &amp; draw →
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <nav className="skb-days" aria-label="Prompt days">
+              {pages.map((p, i) => (
                 <button
                   type="button"
-                  disabled={busy}
-                  aria-expanded={showDayPicker}
-                  onClick={() => setShowDayPicker((v) => !v)}
-                  title="Add a page for a day you missed"
+                  key={p.room}
+                  aria-label={`Day ${p.day}, ${p.prompt}`}
+                  aria-current={i === selected ? "true" : "false"}
+                  title={`Day ${p.day}, ${p.prompt}${p.hidden ? " (hidden by moderators)" : ""}`}
+                  onClick={() => setSelected(i)}
                 >
-                  📅 Catch up on a day…
+                  {p.ops > 0 ? <span className="skb-day-dot" aria-label="has artwork">●</span> : null} {p.day}
                 </button>
-              </>
-            ) : null}
-            {isOwner ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={toggleVisibility}
-                title={isPublic
-                  ? "Switch back to private, only you and invited artists can open the book (takes effect immediately)"
-                  : "Make the book watchable by anyone with the link (asks for confirmation)"}
-              >
-                {isPublic ? "Make private" : "Make public…"}
-              </button>
-            ) : null}
-          </div>
+              ))}
+            </nav>
 
-          {canManagePages && showDayPicker ? (
-            <div className="skb-days skb-days-catchup" role="list" aria-label="Add a page for a prompt day">
-              {prompts.length === 0 ? (
-                <span className="skb-reader-meta">Loading the prompt list…</span>
-              ) : prompts.map((p) => {
-                const existing = pages.findIndex((pg) => pg.day === p.day);
-                return (
+            <div className="skb-reader-actions">
+              {page && isPublic ? (
+                <>
+                  <button type="button" className="ink-join-btn" onClick={() => onNavigate(`/live/${page.room}`)}>Watch live</button>
+                  <button type="button" onClick={() => onNavigate(`/join/${page.room}`)}>Visit this page’s studio →</button>
+                </>
+              ) : null}
+              {!unsaved && !isOwner ? (
+                <button type="button" onClick={() => onNavigate("/sketchbook")}>Start your own sketchbook →</button>
+              ) : null}
+              {canManagePages && book.pageCount < book.maxPages ? (
+                <>
+                  <button type="button" disabled={busy} onClick={addTodayPage}>+ Add today&rsquo;s page</button>
                   <button
                     type="button"
-                    key={p.day}
-                    role="listitem"
                     disabled={busy}
-                    className={existing >= 0 ? "skb-day-has-page" : ""}
-                    title={`Day ${p.day}, ${p.prompt}${existing >= 0 ? " (page exists, opens it)" : " (adds a page)"}`}
-                    onClick={() => (existing >= 0 ? setSelected(existing) : addDayPage(p.day))}
+                    aria-expanded={showDayPicker}
+                    onClick={() => setShowDayPicker((v) => !v)}
+                    title="Add a page for a day you missed"
                   >
-                    {existing >= 0 ? <span className="skb-day-dot" aria-label="has a page">●</span> : null} {p.day}
+                    📅 Catch up on a day…
                   </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <div className="skb-reader-empty">
-          <div>
-            <p>This sketchbook has no pages yet.</p>
-            {isOwner ? (
-              <>
-                <button type="button" className="primary-action" disabled={busy} onClick={addTodayPage}>
-                  Add the first page
-                </button>
+                </>
+              ) : null}
+              {isOwner ? (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={toggleVisibility}
-                  style={{ marginLeft: "0.6rem" }}
+                  title={isPublic
+                    ? "Switch back to private, only you and invited artists can open the book (takes effect immediately)"
+                    : "Make the book watchable by anyone with the link (asks for confirmation)"}
                 >
                   {isPublic ? "Make private" : "Make public…"}
                 </button>
-              </>
-            ) : (
-              <button type="button" className="primary-action" onClick={() => onNavigate("/sketchbook")}>
-                Start your own sketchbook
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+              ) : null}
+            </div>
 
+            {canManagePages && showDayPicker ? (
+              <div className="skb-days skb-days-catchup" role="list" aria-label="Add a page for a prompt day">
+                {prompts.length === 0 ? (
+                  <span className="skb-reader-meta">Loading the prompt list…</span>
+                ) : prompts.map((p) => {
+                  const existing = pages.findIndex((pg) => pg.day === p.day);
+                  return (
+                    <button
+                      type="button"
+                      key={p.day}
+                      role="listitem"
+                      disabled={busy}
+                      className={existing >= 0 ? "skb-day-has-page" : ""}
+                      title={`Day ${p.day}, ${p.prompt}${existing >= 0 ? " (page exists, opens it)" : " (adds a page)"}`}
+                      onClick={() => (existing >= 0 ? setSelected(existing) : addDayPage(p.day))}
+                    >
+                      {existing >= 0 ? <span className="skb-day-dot" aria-label="has a page">●</span> : null} {p.day}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="skb-reader-empty">
+            <div>
+              <p>{isOwner ? "Give your sketchbook its first page. Today’s prompt will be waiting in the studio." : "The owner hasn’t added a prompt page yet. Check this link again after they start drawing."}</p>
+              {isOwner ? (
+                <>
+                  <button type="button" className="primary-action" disabled={busy} onClick={addTodayPage}>
+                    Add the first page
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={toggleVisibility}
+                    style={{ marginLeft: "0.6rem" }}
+                  >
+                    {isPublic ? "Make private" : "Make public…"}
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="primary-action" onClick={() => onNavigate("/sketchbook")}>
+                  Start your own sketchbook
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+      </main>
       <SiteFooter onNavigate={onNavigate} />
       {toast ? <div className="wall-toast" role="status">{toast}</div> : null}
     </div>

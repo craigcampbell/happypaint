@@ -4,12 +4,15 @@
 // logging in lands here, so a returning artist is one tap from their work.
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
+import { QUICK_JOIN_PATH } from "../data/curatorContent";
 import MyRooms from "./MyRooms";
 import { getSession, onAuthStateChange } from "../utils/auth";
 import { getRecentRooms } from "../utils/recentRooms";
 
 export default function RoomFinderPage({ onNavigate }) {
-  const [rooms, setRooms] = useState([]);
+  const [rooms, setRooms] = useState(null);
+  const [listError, setListError] = useState(false);
   const [code, setCode] = useState("");
   const [session, setSession] = useState(null);
   const [hasRecent] = useState(() => getRecentRooms().length > 0);
@@ -29,8 +32,11 @@ export default function RoomFinderPage({ onNavigate }) {
     const load = () =>
       fetch("/api/rooms/public", { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
-        .then((d) => active && Array.isArray(d?.rooms) && setRooms(d.rooms))
-        .catch(() => {});
+        .then((data) => {
+          if (!Array.isArray(data?.rooms)) throw new Error('rooms_unavailable');
+          if (active) { setRooms(data.rooms); setListError(false); }
+        })
+        .catch(() => { if (active) setListError(true); });
     load();
     const t = window.setInterval(load, 15000);
     return () => {
@@ -43,24 +49,27 @@ export default function RoomFinderPage({ onNavigate }) {
   // grid of 20 identical "Be the first!" cards answers that question with a
   // shrug. Busy rooms rise to the top, cards with someone in them get a hot
   // highlight, and when nobody is anywhere we say so once instead of 20 times.
-  const ordered = [...rooms].sort(
+  const ordered = [...(rooms || [])].sort(
     (a, b) => (b.users || 0) - (a.users || 0) || (b.ops || 0) - (a.ops || 0),
   );
   const anyLive = ordered.some((r) => (r.users || 0) > 0);
 
   return (
-    <div className="site-page">
+    <div className="site-page room-directory">
       <SiteNav onNavigate={onNavigate} current="/rooms" />
       <main className="site-page-body">
+        <header className="directory-heading">
+          <h1>Public drawing rooms</h1>
+          <p className="site-lead">Pick a shared canvas by theme or let us find a room with people painting. Use a room code to meet someone you already know.</p>
+          <a className="directory-shuffle" href={QUICK_JOIN_PATH}>Join a random room</a>
+        </header>
+
         {session || hasRecent ? (
           <section className="myrooms-section" aria-labelledby="myrooms-title">
-            <h1 id="myrooms-title">{session ? "Pick up where you left off" : "Your recent rooms"}</h1>
+            <h2 id="myrooms-title">{session ? "Pick up where you left off" : "Your recent rooms"}</h2>
             <MyRooms variant="grid" token={session?.access_token || null} onJoin={(c) => onNavigate(`/join/${c}`)} />
           </section>
         ) : null}
-
-        <h1>{session || hasRecent ? "Or find a live room" : "Find a room"}</h1>
-        <p className="site-lead">Pick a public room, or <a href="/friends">meet a friend on a shared canvas</a>.</p>
 
         <form
           className="finder-code"
@@ -70,94 +79,34 @@ export default function RoomFinderPage({ onNavigate }) {
             if (c) onNavigate(`/join/${c}`);
           }}
         >
-          <input
+          <label htmlFor="directory-room-code">Have a room code?</label>
+          <input id="directory-room-code"
             type="text"
             value={code}
             maxLength={8}
-            placeholder="Got a room code? Type it here"
+            placeholder="Room code" autoComplete="off" spellCheck={false}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
           />
-          <button type="submit" className="primary-action">Join →</button>
+          <button type="submit" className="primary-action" disabled={!code.trim()}>Join room</button>
         </form>
 
-        {rooms.length > 0 && !anyLive ? (
-          <p
-            className="open-rooms-quiet"
-            style={{
-              margin: "0 0 14px",
-              padding: "10px 14px",
-              borderRadius: 12,
-              background: "#fff7e6",
-              border: "2px solid #ffd98a",
-              color: "#7a5200",
-              fontWeight: 600,
-            }}
-          >
-            Nobody&rsquo;s drawing this minute. Pick any room, your canvas lights up the
-            moment you&rsquo;re in, and a friend can join with its code.
-          </p>
-        ) : null}
+        <h2 className="directory-list-title">Browse by theme</h2>
+        {listError ? <p role="status">Room counts are unavailable. The list will refresh automatically. You can still join the <a href="/join/MAIN">Open Studio</a>.</p>
+          : !rooms ? <p role="status">Checking the room list…</p>
+          : !rooms.length ? <p>No rooms are listed right now. <a href="/draw">Open a solo canvas</a>.</p>
+          : !anyLive && <p className="directory-quiet">The rooms are quiet. Pick one to start a drawing that the next visitor can add to.</p>}
 
-        <div className="open-rooms-grid">
-          {ordered.map((room, i) => {
-            const live = (room.users || 0) > 0;
-            const busiest = live && i === 0;
-            return (
-            <button
-              type="button"
-              key={room.code}
-              className={`open-room-card${live ? " open-room-card-hot" : ""}`}
-              style={live ? { borderColor: "#19a463", boxShadow: "0 0 0 3px rgba(25,164,99,.18)" } : undefined}
-              onClick={() => onNavigate(`/join/${room.code}`)}
-            >
-              <span className="open-room-emoji" aria-hidden="true">{room.emoji || "🎨"}</span>
-              <span
-                className="open-room-code"
-                style={{
-                  display: "inline-block",
-                  padding: "3px 10px",
-                  border: "2px solid #2d6cdf",
-                  borderRadius: "10px",
-                  background: "#eef4ff",
-                  color: "#2d6cdf",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                  fontWeight: 900,
-                  fontSize: "1.15rem",
-                  letterSpacing: "0.08em",
-                  lineHeight: 1.3,
-                  alignSelf: "flex-start",
-                }}
-              >
-                {room.code}
-              </span>
-              <span className="open-room-title">{room.title || `Room ${room.code}`}</span>
-              {room.prompt ? <span className="open-room-prompt">“{room.prompt}”</span> : null}
-              <span className="open-room-meta">
-                <span className="open-room-live"><i className="live-dot" aria-hidden="true" /> Open now</span>
-                <span className="open-room-count">{room.users === 0 ? "Be the first!" : `${room.users} painting`}</span>
-              </span>
-              {busiest ? (
-                <span
-                  className="open-room-here"
-                  style={{
-                    alignSelf: "flex-start",
-                    padding: "2px 10px",
-                    borderRadius: 999,
-                    background: "#e6f7ee",
-                    color: "#127a49",
-                    fontWeight: 800,
-                    fontSize: "0.95rem",
-                  }}
-                >
-                  People are here now
-                </span>
-              ) : null}
-              <span className="open-room-go">Paint here →</span>
-            </button>
-            );
-          })}
+        <div className="directory-grid">
+          {ordered.map(room => <a key={room.code} className="directory-room" href={'/join/' + room.code}>
+            <span className="directory-room-symbol" aria-hidden="true">{room.emoji || '🎨'}</span>
+            <div><h3>{room.title || room.code}</h3>
+              {room.prompt && <p>{room.prompt}</p>}
+              <small>{room.users ? room.users + ' painting' : 'Open canvas'} · {room.code}</small>
+            </div>
+          </a>)}
         </div>
       </main>
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

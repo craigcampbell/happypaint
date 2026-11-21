@@ -40,9 +40,13 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
     data-default-title={content.title === 'Come draw\nwith us.'} aria-labelledby={id}>
     <div className="print-layout">
       <InkFlourishes />
-      <div className="print-lead">
+      <div className="print-intro">
         {content.kicker && <p className="print-kicker">{content.kicker}</p>}
         <div className="print-headline">{heading}</div>
+      </div>
+      {content.art === 'ink' && <PaintingReplay preview={preview} />}
+      {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
+      <div className="print-invitation">
         {content.description && <p className="print-deck">{content.description}</p>}
         <div className="print-actions">
           <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
@@ -50,8 +54,6 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
         </div>
         {content.note && <p className="print-note">{content.note}</p>}
       </div>
-      {content.art === 'ink' && <PaintingReplay preview={preview} />}
-      {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
     </div>
   </header>;
 }
@@ -63,10 +65,15 @@ export default function CuratedHeader({ page, content, onNavigate, preview = fal
   if (page === 'home') return <HomeMasthead content={content} onNavigate={onNavigate}
     preview={preview} heading={heading} id={id} orbit={orbit} />;
 
-  return <header className="discovery-heading curated-header" data-palette={content.palette} data-art={content.art} aria-labelledby={id}>
-    <p className="discovery-eyebrow">{content.kicker}</p>
-    <div className="curator-poster">{heading}{content.art === 'ink' ? <InkPlay /> : content.art === 'orbit' ? orbit : null}</div>
-    <p>{content.description}</p><p className="curator-note">{content.note}</p>
-    <HeaderLink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="curator-cta">{content.ctaLabel} <span aria-hidden="true">↗</span></HeaderLink>
+  return <header className="discovery-heading curated-header directory-cover" data-palette={content.palette} data-art={content.art} aria-labelledby={id}>
+    <div className="directory-cover-copy">
+      {content.kicker && <p className="discovery-eyebrow">{content.kicker}</p>}
+      {heading}
+      <p>{content.description}</p>{content.note && <p className="curator-note">{content.note}</p>}
+      <HeaderLink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="curator-cta">{content.ctaLabel} <span aria-hidden="true">↗</span></HeaderLink>
+    </div>
+    {content.art !== 'none' && <div aria-hidden="true" className="directory-cover-print">
+      {content.art === 'ink' ? <InkPlay /> : orbit}
+    </div>}
   </header>;
 }

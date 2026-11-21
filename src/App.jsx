@@ -165,6 +165,7 @@ import { getCommunityEvent } from "./data/communityEvents";
 import { applyCameraTransform, buildFilmPlan, clampHold, drawThroughCamera, normalizeCamera, normalizeLoops, scenePassMs, sceneRuntimeMs } from "./utils/filmPlan";
 import { SOUNDTRACK_MAX_BYTES, decodeSoundtrack, fileToDataUrl, playSoundtrack, renderSoundtrackSlice } from "./utils/soundtrack";
 import { VIDEO_TRACE_MAX_BYTES, createVideoTrace, disposeVideoTrace, drawVideoTrace, framesToCoverClip, seekVideoTrace } from "./utils/videoTrace";
+import ArtPostcard from "./components/ArtPostcard";
 import ShareInviteSheet from "./components/ShareInviteSheet";
 import SketchbookRoomBanner from "./components/SketchbookRoomBanner";
 import { openSketchbookPrompt } from "./utils/sketchbookApi";
@@ -1277,6 +1278,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   }, []);
   // Fridge Wall post dialog: null, or {frames: [dataURL...], durationMs}.
   const [wallPostDraft, setWallPostDraft] = useState(null);
+  const [showPostcard, setShowPostcard] = useState(false);
   const [showShareInvite, setShowShareInvite] = useState(false); // "Invite friends" sheet (copy / share / Instagram / X)
   // Inktober sketchbook page rooms (docs/SKETCHBOOKS-CONTRACT.md): the banner
   // under the room bar resolves the pinned page metadata ONCE per room/auth
@@ -11163,6 +11165,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     setOrchestraVolume(volume);
   };
 
+  const postcardAvailable = Boolean(session) && mp.connected && mp.familyRoom && mp.canPaint
+    && roomAudience === "friends" && joinStep >= 3 && !initialLocal;
+  useEffect(() => {
+    if (!postcardAvailable) setShowPostcard(false);
+  }, [postcardAvailable]);
+  const openPostcard = async () => {
+    if (!postcardAvailable || !(await gateExport())) return;
+    setShowPostcard(true);
+  };
+
   const adSupportedRoom = mp.connected && mp.adSupported && Boolean(roomAudience) && !roomFingerPaint;
   const showRoomBanner = adSupportedRoom && !mpSketchbookPage && !sketchbookPage;
 
@@ -11246,6 +11258,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
             <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
               🎬 Timelapse
             </button>
+            {postcardAvailable && <button type="button" onClick={openPostcard}>Art postcard</button>}
             <button type="button" onClick={exportPng}>
               Export
             </button>
@@ -12565,6 +12578,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
             <button type="button" onClick={openReplay} title="Watch it draw + share a timelapse GIF">
               🎬 Timelapse
             </button>
+            {postcardAvailable && <button type="button" onClick={openPostcard}>Art postcard</button>}
             <button type="button" onClick={exportPng}>
               Export
             </button>
@@ -13552,11 +13566,14 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
       ) : null}
 
+      {showPostcard && postcardAvailable && <ArtPostcard getArt={getInviteArt} onClose={() => setShowPostcard(false)} />}
       {showShareInvite && !initialLocal ? (
         <ShareInviteSheet
           roomId={roomId}
           roomTitle={roomTitle}
           getArt={getInviteArt}
+          onPostcard={postcardAvailable ? openPostcard : null}
+          postcardOpen={showPostcard && postcardAvailable}
           onClose={() => setShowShareInvite(false)}
           showToast={showToast}
           inktoberPage={sketchbookPageMeta?.year

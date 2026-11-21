@@ -94,8 +94,7 @@ export default function PlanetPage({ onNavigate }) {
         <header className="jar-hero planet-hero">
           <h1 id="planet-title"><PaintedGlobe size={56} /> <span>The Painted Planet</span></h1>
           <p>
-            One little planet, painted by everyone who draws here. Spin the globe, tap a country to see how much it has painted,
-            <strong> open it to color that country&rsquo;s flag together</strong>, and watch the painting below fill in with every stroke.
+            Pick a country and color its flag on a shared canvas. Anyone can join the same flag room and paint alongside you.
           </p>
         </header>
 
@@ -112,11 +111,12 @@ export default function PlanetPage({ onNavigate }) {
           <>
             <section className="planet-panel" aria-labelledby="planet-globe-title">
               <div className="planet-panel-head">
-                <h2 id="planet-globe-title">Every nation, painted</h2>
+                <h2 id="planet-globe-title">Find a flag to paint</h2>
+                <p className="planet-globe-guide">Drag the globe to explore, or use <strong>Find a country</strong>. Choose a country, then open its flag studio.</p>
                 <p className="jar-panel-sub">
                   {countries.length > 0
-                    ? `${countries.length} country ${countries.length === 1 ? "group has" : "groups have"} painted here (groups under 5 stay private).`
-                    : "No country groups to show yet, groups under 5 painters stay private."}
+                    ? `Activity is visible for ${countries.length} ${countries.length === 1 ? "country" : "countries"} with at least five recorded sessions.`
+                    : "Country activity appears after five recorded sessions in a country."}
                   {liveTotal > 0 ? ` ${liveTotal} coloring flags right now.` : ""}
                 </p>
               </div>
@@ -154,8 +154,7 @@ export default function PlanetPage({ onNavigate }) {
               <div className="planet-panel-head">
                 <h2 id="planet-scene-title">The scene we&rsquo;re painting together</h2>
                 <p className="jar-panel-sub">
-                  Every recorded stroke on Drawesome adds a little paint to this picture. It fills in as the whole community draws -
-                  an illustration of how much drawing happens here, not a measured saving of anything.
+                  As the community passes each stroke milestone, another part of the landscape fills with color.
                 </p>
               </div>
               <NatureScene strokes={strokes} />
@@ -197,7 +196,7 @@ export default function PlanetPage({ onNavigate }) {
 
             <p className="jar-cta">
               <button type="button" className="primary-action" onClick={() => onNavigate("/join/MAIN")}>
-                Add your strokes, start drawing 🖌️
+                Draw in the main room
               </button>
             </p>
           </>

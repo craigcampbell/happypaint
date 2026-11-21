@@ -34,7 +34,7 @@ export const LEGACY_PAGE_META = {
   },
   "/family": {
     "title": "Drawesome Family, ad-free creative spaces",
-    "description": "One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly."
+    "description": "Draw together ad-free and turn a private Family room’s artwork into a postcard to keep or share. Explore the adult-owned Family plan."
   },
   "/faq": {
     "title": "Safety & FAQ: Drawesome",

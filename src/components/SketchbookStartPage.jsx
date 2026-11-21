@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import { createOrResumeSketchbook, fetchMySketchbook, startGuestSketchbook, claimSketchbook } from "../utils/sketchbookApi";
-import { getSession, isCloudConfigured, onAuthStateChange, LOCAL_ONLY_MESSAGE } from "../utils/auth";
+import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import { getDeviceKey, readGuestSketchbook, saveGuestSketchbook, clearGuestSketchbook } from "../utils/guestSketchbook";
 import "../sketchbook.css";
 
@@ -205,21 +205,14 @@ export default function SketchbookStartPage({ onNavigate }) {
   };
 
   return (
-    <div>
+    <div className="skb-paper-page">
       <SiteNav onNavigate={onNavigate} current="/inktober" />
       <main className="skb-start" aria-labelledby="skb-start-title">
-        <p className="home-eyebrow">#inktober 2026</p>
+        <p className="skb-edition">Inktober · October 2026</p>
         <h1 id="skb-start-title">Your Inktober sketchbook</h1>
         <p className="skb-start-sub">
-          One prompt a day, one page per prompt, all October. Flip through your book anytime, and invite
-          up to five artists to draw alongside you.
+          Turn the 31 October prompts into a book of ink and pencil drawings. Each prompt opens a fresh page.
         </p>
-        <ul className="skb-start-points">
-          <li>📖 Up to 31 pages, one for each official daily prompt, pinned forever.</li>
-          <li>🖋️ Ink &amp; pencil tools, like the shared Ink &amp; Pencil room.</li>
-          <li>🔒 Private by default, only you and the artists you invite can open it. You choose if it ever goes public.</li>
-          <li>✨ Public sketchbooks are watchable by anyone with the link, and pages with real artwork appear in the Inktober gallery automatically.</li>
-        </ul>
 
         {session === undefined || status === "checking" || status === "creating" || status === "guest-starting" ? (
           <p className="skb-status-line" role="status">
@@ -236,7 +229,7 @@ export default function SketchbookStartPage({ onNavigate }) {
         {session && status === "confirm" ? (
           <div className="skb-start-actions skb-consent">
             <p className="skb-status-line">
-              You don&rsquo;t have a sketchbook yet. Choose who can see it, you can change this later.
+              Choose who can see your pages. You can invite up to five other artists to draw with you in either kind of book.
             </p>
             <div className="skb-visibility-choice" role="radiogroup" aria-label="Sketchbook visibility">
               <label className={`skb-visibility-option${isPublic ? "" : " skb-visibility-selected"}`}>
@@ -247,8 +240,7 @@ export default function SketchbookStartPage({ onNavigate }) {
                   onChange={() => setIsPublic(false)}
                 />
                 <span>
-                  <strong>Private</strong> <em>(default)</em>, only you and the artists you invite can
-                  view or draw. It never appears in the public Inktober gallery.
+                  <strong>Private</strong> <em>(default)</em><br />Only you and your invited artists can open the book.
                 </span>
               </label>
               <label className={`skb-visibility-option${isPublic ? " skb-visibility-selected" : ""}`}>
@@ -259,9 +251,7 @@ export default function SketchbookStartPage({ onNavigate }) {
                   onChange={() => setIsPublic(true)}
                 />
                 <span>
-                  <strong>Public</strong>, anyone with the link can watch your pages (drawing stays
-                  limited to you and your invited artists), and pages with real artwork appear in the
-                  public Inktober gallery automatically.
+                  <strong>Public</strong><br />Anyone with the link can watch. Pages with drawings can appear in the Inktober gallery.
                 </span>
               </label>
             </div>
@@ -276,8 +266,7 @@ export default function SketchbookStartPage({ onNavigate }) {
             {isCloudConfigured ? (
               <>
                 <p className="skb-status-line">
-                  A sketchbook keeps your artwork under your account, so it needs a quick sign-in.
-                  Come straight back here afterwards, this page picks up where you left off.
+                  Sign in to keep a sketchbook under your account and invite other artists. We&rsquo;ll bring you back here.
                 </p>
                 <button
                   type="button"
@@ -289,14 +278,14 @@ export default function SketchbookStartPage({ onNavigate }) {
                 <button type="button" onClick={() => onNavigate(`/signup?return=${RETURN_TO}`)}>Sign up free</button>
               </>
             ) : (
-              <p className="skb-status-line" role="alert">{LOCAL_ONLY_MESSAGE} Sketchbooks need cloud accounts.</p>
+              <>
+                <p className="skb-status-line">Personal sketchbooks are unavailable on this server. The shared Ink &amp; Pencil room is open to everyone.</p>
+                <button type="button" className="primary-action" onClick={() => onNavigate("/join/INKTOBER")}>Draw in the shared room</button>
+              </>
             )}
             <p className="skb-start-quiet">
-              No account? You can still draw Inktober anonymously in the{" "}
-              <a href="/join/INKTOBER" onClick={(e) => { e.preventDefault(); onNavigate("/join/INKTOBER"); }}>
-                shared Ink &amp; Pencil room
-              </a>{" "}
-              or <a href="/inktober" onClick={(e) => { e.preventDefault(); onNavigate("/inktober"); }}>browse the event</a>.
+              {isCloudConfigured && <><a href="/join/INKTOBER" onClick={(e) => { e.preventDefault(); onNavigate("/join/INKTOBER"); }}>Draw in the shared room</a> without an account, or </>}
+              <a href="/inktober" onClick={(e) => { e.preventDefault(); onNavigate("/inktober"); }}>Explore the Inktober prompts</a>.
             </p>
           </div>
         ) : null}

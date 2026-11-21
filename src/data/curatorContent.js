@@ -8,12 +8,12 @@ export const CURATOR_PAGES = Object.freeze({
 export const CURATOR_PALETTES = ['paper', 'acid', 'vermilion'];
 export const CURATOR_ART = ['ink', 'orbit', 'none'];
 export const QUICK_JOIN_PATH = '/api/rooms/quick-join';
-export const CURATOR_LINKS = [QUICK_JOIN_PATH, '/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
+export const CURATOR_LINKS = [QUICK_JOIN_PATH, '/wall', '/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
 const defaults = {
   home: { kicker: 'Multiplayer drawing', title: 'Come draw\nwith us.', description: 'Jump into a public room and draw something awesome with someone new. Or share a canvas with friends and family.', note: 'Free to join · Ad-supported rooms', ctaLabel: 'Join a random room', ctaHref: QUICK_JOIN_PATH, palette: 'acid', art: 'ink' },
-  gallery: { kicker: 'Made by people. Not a perfection contest.', title: 'THE ART\nIS THE POINT.', description: 'Explore drawings shared by the community.', note: 'look a little closer.', ctaLabel: 'Make your own', ctaHref: '/draw', palette: 'paper', art: 'orbit' },
-  events: { kicker: 'A reason to pick up a brush.', title: 'GOOD IDEAS.\nOPEN INVITATIONS.', description: 'Find a shared idea. Draw your own contribution.', note: 'come as you are.', ctaLabel: 'Start drawing', ctaHref: '/draw', palette: 'paper', art: 'ink' },
-  studios: { kicker: 'A window into somebody’s world.', title: 'ARTIST\nSTUDIOS.', description: 'Watch public studios. Drawing stays with the artist and approved painters.', note: 'watch first. join on your terms.', ctaLabel: 'Draw privately', ctaHref: '/draw', palette: 'paper', art: 'orbit' },
+  gallery: { kicker: '', title: 'Community\ngallery.', description: 'Browse finished drawings, look up an artist, or open a sketchbook to see how an idea developed.', note: '', ctaLabel: 'Open the Fridge Wall', ctaHref: '/wall', palette: 'paper', art: 'orbit' },
+  events: { kicker: '', title: 'Drawing\ninvitations.', description: 'Choose a community prompt. Each invitation opens its own drawing activity and explains how to share your contribution.', note: '', ctaLabel: 'Explore Inktober', ctaHref: '/inktober', palette: 'paper', art: 'ink' },
+  studios: { kicker: '', title: 'Artist\nstudios.', description: 'Pick a public studio to watch its canvas as it changes. The artist chooses who can join them to paint.', note: '', ctaLabel: 'Find a shared canvas', ctaHref: '/rooms', palette: 'paper', art: 'orbit' },
 };
 export function getCuratorDefaults(page) { return Object.hasOwn(defaults, page) ? { ...defaults[page] } : null; }
 export function curatorPageForPath(path) { return Object.keys(CURATOR_PAGES).find((key) => CURATOR_PAGES[key].path === path) || null; }

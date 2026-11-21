@@ -238,8 +238,8 @@ export default function FriendsPage({ onNavigate }) {
   return <div className="site-page discovery-page friends-page">
     <SiteNav onNavigate={onNavigate} current="/friends" />
     <main className="friends-main" id="main-content">
-      <header className="friends-heading"><h1>Friends</h1>
-        <p>{isCloudConfigured ? "Meet a friend on the same canvas." : "Make a room and invite someone to draw with you."}</p>
+      <header className="friends-heading"><h1>Draw with friends</h1>
+        <p>{isCloudConfigured ? "Swap friend codes to connect your accounts. Already have a room code? Use it below to open the shared canvas." : "Make one room code for your group. Send the link, open the room, and you can all paint on the same page."}</p>
       </header>
       <div className="friends-layout">
         <div className="friends-main-column">

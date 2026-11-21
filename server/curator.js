@@ -22,10 +22,15 @@ function validStore(stored) {
   });
 }
 
-const previousHomeCopy = [
-  { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw' },
-  { kicker: 'An open invitation to make something.', title: 'MAKE A\nBEAUTIFUL\nMESS.', description: 'A blank canvas. A wild idea. A little time to play.', note: 'no perfect lines required.', ctaLabel: 'Draw now', ctaHref: '/draw' },
-];
+const previousCopy = {
+  home: [
+    { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw' },
+    { kicker: 'An open invitation to make something.', title: 'MAKE A\nBEAUTIFUL\nMESS.', description: 'A blank canvas. A wild idea. A little time to play.', note: 'no perfect lines required.', ctaLabel: 'Draw now', ctaHref: '/draw' },
+  ],
+  gallery: [{ kicker: 'Made by people. Not a perfection contest.', title: 'THE ART\nIS THE POINT.', description: 'Explore drawings shared by the community.', note: 'look a little closer.', ctaLabel: 'Make your own', ctaHref: '/draw' }],
+  events: [{ kicker: 'A reason to pick up a brush.', title: 'GOOD IDEAS.\nOPEN INVITATIONS.', description: 'Find a shared idea. Draw your own contribution.', note: 'come as you are.', ctaLabel: 'Start drawing', ctaHref: '/draw' }],
+  studios: [{ kicker: 'A window into somebody’s world.', title: 'ARTIST\nSTUDIOS.', description: 'Watch public studios. Drawing stays with the artist and approved painters.', note: 'watch first. join on your terms.', ctaLabel: 'Draw privately', ctaHref: '/draw' }],
+};
 
 export function createCurator({ dataDir }) {
   const file = join(dataDir, '.curator.json');
@@ -33,15 +38,15 @@ export function createCurator({ dataDir }) {
   try {
     const stored = JSON.parse(readFileSync(file, 'utf8'));
     if (!validStore(stored)) throw new Error('Invalid Curator store');
-    // Editing another page or restoring defaults can persist an old homepage
-    // template. Replace its stock copy while retaining custom editorial text.
-    const home = stored.pages.home;
-    const defaultHome = getCuratorDefaults('home');
-    for (const key of ['draft', 'published']) {
-      const content = home[key];
-      const stockCopy = previousHomeCopy.some(template =>
-        Object.entries(template).every(([field, value]) => content[field] === value));
-      if (stockCopy) home[key] = { ...defaultHome, palette: content.palette, art: content.art };
+    // Other pages' defaults can be saved alongside a curated publication.
+    // Recognize old stock text without changing an editor's own copy or art.
+    for (const page of pageKeys) {
+      for (const key of ['draft', 'published']) {
+        const content = stored.pages[page][key];
+        const stockCopy = previousCopy[page]?.some(template =>
+          Object.entries(template).every(([field, value]) => content[field] === value));
+        if (stockCopy) stored.pages[page][key] = { ...getCuratorDefaults(page), palette: content.palette, art: content.art };
+      }
     }
     document = stored;
   } catch (error) {

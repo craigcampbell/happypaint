@@ -1,23 +1,27 @@
 // Keep these descriptions aligned with server storage and accountDeletion.js.
+import GuideLinks from "./GuideLinks";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 
 export default function PrivacyPage({ onNavigate }) {
   return (
-    <div className="site-page">
+    <div className="site-page field-guide">
       <SiteNav onNavigate={onNavigate} current="/privacy" />
-      <main className="site-page-body">
+      <main className="site-page-body guide-body">
         <h1>Privacy</h1>
         <p className="site-lead">
           You can draw and paint together without an account. This page explains what stays in your
           browser, what reaches our servers, and what other people can see.
         </p>
 
+        <GuideLinks current="/privacy" onNavigate={onNavigate} />
+
         <h2>What we store</h2>
         <ul>
           <li><strong>Guest drawing.</strong> You do not need to provide an email or real name. Rooms assign a session identifier and nickname. A separate random identifier saved in your browser connects guest server saves to this device.</li>
           <li><strong>Art and browser storage.</strong> Drafts, gallery items, brushes and preferences use browser storage. Saved art can also be stored on our server under your device identifier or account. Shared canvas history is stored so later visitors can see the drawing.</li>
           <li><strong>Optional accounts.</strong> Signing in stores account details such as your email, name and account identifier, and connects features such as gallery sync, room ownership and optional Family billing.</li>
+          <li><strong>Art postcards.</strong> Your device creates the postcard image and note. You choose the app or email recipient when you share it. Drawesome does not collect a mailing list for postcards.</li>
           <li><strong>Friends.</strong> If you set up Friends, we store the nickname you choose, your friend code, requests, accepted connections and shared room codes. People you exchange requests with can see your friend nickname and code. Account deletion removes your friend profile and connections.</li>
           <li><strong>Chat and reports.</strong> Room chat history is stored with nicknames and messages; moderation logs also include an account identifier when signed in. Reports may keep the reported reason, reporter nickname and recent chat, including shared doodle images, for moderator review.</li>
           <li><strong>Usage statistics.</strong> We keep totals and records of drawing sessions: rooms visited, session times, drawing and chat counts, brushes and saves. These can include a guest nickname or account identifier, country when available, language, time zone, device type, input type and approximate screen size. Administrators use these records to understand use and performance. Network addresses are also used for connection security and abuse limits; raw network addresses are not saved in these usage statistics.</li>

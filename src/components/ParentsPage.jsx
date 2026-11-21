@@ -3,35 +3,37 @@
 // Everything stated here reflects SHIPPED behavior, if a claim stops being
 // true in code, fix the code or fix this page in the same change.
 
+import GuideLinks from "./GuideLinks";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
+import { isCloudConfigured } from "../utils/auth";
 import { createInviteCode } from "../utils/social";
 
 const PILLARS = [
   {
     icon: "🛡️",
-    title: "Filters help; adult supervision still matters",
+    title: "Moderation and adult supervision",
     body: "Public chat is filtered. Image scanning runs when a capable participant's device is available, so it is not guaranteed in every session. Filters can miss things. Hosts have moderation tools, and anyone can report a concern. Severe language is filtered in private rooms too.",
   },
   {
     icon: "🔒",
     title: "Room codes are invitations",
-    body: "A private room is not listed in public room discovery. Anyone with its link or code can join, including someone who receives a forwarded invitation. Share it only with people you know, and stay in the room with younger artists.",
+    body: "A private room is not listed in public room discovery. The link or code can be forwarded, so other people may try to enter. Share it only with people you know, and stay in the room with younger artists.",
   },
   {
     icon: "🙈",
     title: "Know what is public",
-    body: "Public-room artwork, chat, and display names can appear in homepage previews. Private rooms do not allow the public spectator connection. Use a nickname and keep real names, school names, contact details, and personal photos out of shared art and chat.",
+    body: "Public-room artwork, chat, and display names can appear in public room previews. Private rooms do not allow the public spectator connection. Use a nickname and keep real names, school names, contact details, and personal photos out of shared art and chat.",
   },
   {
     icon: "👤",
-    title: "No accounts needed, no people search",
+    title: "Guest drawing and friend codes",
     body: "Kids can draw as guests. Signed-in artists can exchange an exact friend code and accept a request to draw together. Younger artists should use a guardian-managed account and share their code with people they know.",
   },
   {
     icon: "🚫",
     title: "Free drawing, optional adult-owned Family plan",
-    body: "Drawing and joining a room do not require a payment or account. Drops are play money, with no paid coins or cash tips. Free spaces may display contextual ads. Where subscriptions are available, an adult can choose an ad-free Family space for invited guests.",
+    body: "Public rooms are free to join as a guest. Drops are play money, with no paid coins or cash tips. Free spaces may display contextual ads. An optional Family subscription gives the member ad-free painting and lets everyone in their private rooms make art postcards.",
   },
   {
     icon: "🧽",
@@ -42,8 +44,8 @@ const PILLARS = [
 
 const CLASSROOM = [
   ["1", "Create a fresh room below. Try one brush stroke and check that the drawing tools work on the devices you plan to use."],
-  ["2", "Choose Invite friends inside the studio and share the link or code with your group. Students can join as guests in a browser, with no email address or install."],
-  ["3", "Check the Host controls before inviting your group: you can lock the canvas, mute or remove a painter, and clear the canvas. The first guest in an unowned private room is its temporary host; guest hosting can pass to another painter when you leave."],
+  ["2", "Choose Invite friends inside the studio and share the link or code with your group. On a site with accounts, participants sign in to enter an invite-only room. Check access on a student device first."],
+  ["3", "Check the Host controls before inviting your group: you can lock the canvas, mute or remove a painter, and clear the canvas. On sites without accounts, guest hosting can pass to another painter when the host leaves."],
   ["4", "Set a short timer, choose one activity below, and agree to add to one another's art kindly. At the end, use the studio's download/export tools to keep a copy. Posting to the public Wall is optional."],
 ];
 
@@ -70,21 +72,23 @@ const ACTIVITIES = [
 
 export default function ParentsPage({ onNavigate }) {
   return (
-    <div className="site-page">
+    <div className="site-page field-guide">
       <SiteNav onNavigate={onNavigate} current="/parents" />
-      <main className="site-page-body parents-page">
+      <main className="site-page-body guide-body parents-page">
         <header className="parents-hero">
           <p className="eyebrow">For the grown-ups</p>
-          <h1>Free drawing activities for families &amp; classrooms</h1>
+          <h1>Draw together at home or in class</h1>
           <p className="site-lead">
             Make one drawing together in your browser. Start with a short, adult-led session,
-            invite people you know, and try one of the activities below. No student accounts needed.
+            invite people you know, and try one of the activities below. {isCloudConfigured ? "Guests can join public canvases. Everyone signs in for a private activity room." : "Your group can enter a private activity room by code as guests."}
           </p>
           <div className="site-page-actions">
             <button type="button" className="primary-action" onClick={() => onNavigate(`/join/${createInviteCode()}`)}>Create an activity room →</button>
             <a href="#activities">See the activities</a>
           </div>
         </header>
+
+        <GuideLinks current="/parents" onNavigate={onNavigate} />
 
         <section className="safety-grid" aria-label="How safety works">
           {PILLARS.map((item) => (
@@ -99,10 +103,9 @@ export default function ParentsPage({ onNavigate }) {
         <section className="parents-ages">
           <h2>Ages</h2>
           <p>
-            Drawing never requires an account. Creating an account is for ages <strong>13 and up</strong>,
-            or set up by a parent/guardian for a younger child, the sign-up form asks, and under-13s
-            are pointed back to guest drawing. For a family or class, begin in a private room with an
-            adult present. Read the privacy and safety information before using it with students.
+            Artists aged <strong>13 and up</strong> can create their own accounts when accounts are available.
+            A parent or guardian can set one up for a younger child. Start a family or class session
+            in a private room with an adult present. Read the privacy and safety information before using it with students.
           </p>
         </section>
 
@@ -117,13 +120,13 @@ export default function ParentsPage({ onNavigate }) {
             ))}
           </ol>
           <p className="parents-note">
-            Room sizes are limited. Start with a small group; for larger classes, try separate rooms for each group.
+            Start with a small group. For a larger class, give each group its own room code.
           </p>
         </section>
 
         <section className="parents-activities" id="activities" aria-labelledby="parents-activities-title">
           <h2 id="parents-activities-title">Three activities you can try today</h2>
-          <p>No worksheet, account, or paid plan needed. Use the shared canvas and the brushes already in the studio.</p>
+          <p>All three use the shared canvas and brushes in a free room.</p>
           <div className="parents-activity-grid">
             {ACTIVITIES.map((activity) => (
               <article className="parents-activity-card" key={activity.title}>

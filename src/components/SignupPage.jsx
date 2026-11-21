@@ -3,9 +3,9 @@
 // primary path; Google appears only once it's configured in PocketBase.
 import { useEffect, useState } from "react";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 import { safeSignInReturn } from "../utils/signInReturn";
 import {
-  LOCAL_ONLY_MESSAGE,
   OAUTH_PROVIDERS,
   getEnabledOAuthProviderIds,
   getSession,
@@ -21,7 +21,7 @@ import {
 export default function SignupPage({ onNavigate }) {
   const [session, setSession] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState(isCloudConfigured ? "" : LOCAL_ONLY_MESSAGE);
+  const [message, setMessage] = useState("");
   const [mode, setMode] = useState(() =>
     new URLSearchParams(window.location.search).get("mode") === "login" ? "login" : "signup",
   ); // "signup" | "login"
@@ -107,11 +107,28 @@ export default function SignupPage({ onNavigate }) {
 
   const oauthProviders = OAUTH_PROVIDERS.filter((p) => oauthIds.includes(p.id));
 
+  if (!isCloudConfigured) {
+    return (
+      <div className="site-page field-guide account-page">
+        <SiteNav onNavigate={onNavigate} current="/signup" />
+        <main className="site-page-body site-page-narrow">
+          <h1>Draw as a guest</h1>
+          <p className="site-lead">Accounts are turned off on this site. You can still make a solo drawing, join a public room, or invite friends by code.</p>
+          <div className="site-page-actions">
+            <a href="/draw" className="guide-primary">Open a solo canvas</a>
+            <a href="/friends">Make a room with friends</a>
+          </div>
+        </main>
+        <SiteFooter onNavigate={onNavigate} />
+      </div>
+    );
+  }
+
   return (
-    <div className="site-page">
+    <div className="site-page field-guide account-page">
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
-        <h1>{showSignedIn ? "You’re signed in" : mode === "signup" ? (friendsReturn ? "Sign up to draw with friends" : promptReturn ? "Sign up for your drawing prompt" : "Sign up, keep your art forever") : "Welcome back"}</h1>
+        <h1>{showSignedIn ? "You’re signed in" : mode === "signup" ? (friendsReturn ? "Sign up to draw with friends" : promptReturn ? "Sign up for your drawing prompt" : "Keep your gallery across devices") : "Welcome back"}</h1>
         <p className="site-lead">
           {friendsReturn ? "Choose a nickname and exchange friend codes to draw and color together." : promptReturn ? "Your selected prompt opens on a private canvas after you sign in. You can also start with a blank canvas as a guest."
             : <>You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find it on any device.</>}
@@ -209,7 +226,7 @@ export default function SignupPage({ onNavigate }) {
                 <button
                   type="submit"
                   className="primary-action signup-submit"
-                  disabled={busy || !isCloudConfigured || (mode === "signup" && ageBand !== "13plus" && ageBand !== "parent")}
+                  disabled={busy || (mode === "signup" && ageBand !== "13plus" && ageBand !== "parent")}
                 >
                   {mode === "signup" ? "Create account" : "Log in"}
                 </button>
@@ -243,7 +260,6 @@ export default function SignupPage({ onNavigate }) {
                 </>
               ) : null}
 
-              {!isCloudConfigured ? <p className="account-note compliance">{LOCAL_ONLY_MESSAGE}</p> : null}
               <button type="button" className="signup-guest" onClick={() => onNavigate(guestPath)}>
                 {friendsReturn ? "Back to Friends →" : promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
               </button>
@@ -258,6 +274,7 @@ export default function SignupPage({ onNavigate }) {
           <li>🛡️ No behavioral ads or child-facing buys; delete anytime</li>
         </ul>
       </main>
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

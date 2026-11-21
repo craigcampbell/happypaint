@@ -1,32 +1,32 @@
 // About Drawesome, drawing together and the available room controls.
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 
 export default function AboutPage({ onNavigate }) {
   return (
-    <div className="site-page">
+    <div className="site-page field-guide">
       <SiteNav onNavigate={onNavigate} current="/about" />
       <main className="site-page-body">
-        <h1>About Drawesome <span aria-hidden="true">🎨</span></h1>
+        <h1>About Drawesome</h1>
         <p className="site-lead">
-          Drawesome is a free studio for drawing, coloring, and painting together in real time -
-          in the browser, on a phone, or on a tablet. No account needed to start.
+          Drawesome is a free studio for drawing, coloring, and painting together in real time. Open it in a browser on your phone, tablet, or computer. No account needed to start.
         </p>
 
         <div className="about-grid">
           <article>
-            <h3>🖌️ Paint together, live</h3>
-            <p>Join an open public room or share a short code with friends and paint on the same canvas at once, everyone’s cursors and strokes appear instantly.</p>
+            <h2>Paint together, live</h2>
+            <p>Join an open public room or share a short code with friends and paint on the same canvas. You can see where each painter is working as their strokes appear.</p>
           </article>
           <article>
-            <h3>🌈 Real tools, made fun</h3>
-            <p>Markers, crayons, pencils, spray, glow, coloring sheets, layers, GIF import, pinch-zoom &amp; rotate, chunky and tappable on touch.</p>
+            <h2>Choose a brush</h2>
+            <p>Build up a drawing with markers, pencils, crayons, or a coloring sheet. Pinch to zoom on a touch screen when you want to add detail.</p>
           </article>
           <article>
-            <h3>🛡️ Know your room</h3>
-            <p>Choose a private room with people you know, or join a public canvas. Public art and chat can appear on the homepage. Filters and host controls help, but younger artists should have an adult present. Read the safety and privacy pages before joining.</p>
+            <h2>Know your room</h2>
+            <p>Choose a private room with people you know, or join a public canvas. Public art and chat can appear in room previews. Filters and host controls help, but younger artists should have an adult present. Read the safety and privacy pages before joining.</p>
           </article>
           <article>
-            <h3>💾 Yours to keep</h3>
+            <h2>Keep a copy</h2>
             <p>Download art you want to keep, or save it to your gallery. When accounts are available, an optional sign-in adds gallery sync across devices.</p>
           </article>
         </div>
@@ -38,6 +38,7 @@ export default function AboutPage({ onNavigate }) {
           <button type="button" onClick={() => onNavigate("/privacy")}>Privacy</button>
         </div>
       </main>
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

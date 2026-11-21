@@ -75,6 +75,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const pingTimerRef = useRef(null);
 
   const [connected, setConnected] = useState(false);
+  const [familyRoom, setFamilyRoom] = useState(false);
   const [adSupported, setAdSupported] = useState(false);
   const [users, setUsers] = useState([]);
   const [self, setSelf] = useState(null);
@@ -101,6 +102,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     shouldReconnectRef.current = true;
     // Wait for this connection’s room entitlement before requesting inventory.
     setAdSupported(false);
+    setFamilyRoom(false);
 
     let ws;
     try {
@@ -125,6 +127,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       switch (data.type) {
         case "connected":
           setAdSupported(data.adFree === false);
+          setFamilyRoom(data.familyRoom === true);
           setSelf({ id: data.userId, name: data.userName, color: data.userColor });
           // Artist-studio handshake: paint permission + the room's public
           // profile. Other audiences send canPaint:true / roomProfile:null,
@@ -138,6 +141,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
           break;
         case "billing_entitlement":
           setAdSupported(data.adFree === false);
+          setFamilyRoom(data.familyRoom === true);
           break;
         case "role_changed":
           // Server-authoritative paint access change (approve/revoke/promote/
@@ -242,6 +246,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       if (pingTimerRef.current) window.clearInterval(pingTimerRef.current);
       if (wsRef.current !== ws || !shouldReconnectRef.current) return;
       setConnected(false);
+      setFamilyRoom(false);
       const delay = Math.min(1000 * 2 ** retryRef.current, 15000);
       retryRef.current += 1;
       reconnectTimerRef.current = window.setTimeout(connect, delay);
@@ -280,6 +285,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     wsRef.current = null;
     ws?.close();
     setConnected(false);
+    setFamilyRoom(false);
   }, []);
 
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
@@ -455,7 +461,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendModRemove = useCallback((opIds) => send({ type: "mod_remove", opIds }), [send]);
 
   return {
-    connected, adSupported, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
+    connected, adSupported, familyRoom, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
     sendOp, sendCheckpointNack, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendPaintRequest, sendPaintApprove, sendPaintRevoke,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,

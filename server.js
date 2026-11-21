@@ -3783,18 +3783,26 @@ function broadcast(roomId, message, exceptId = null) {
 
 function roomHasFamilyEntitlement(room) {
   return Boolean(
-    room?.audience === 'friends' &&
+    ACCOUNTS_CONFIGURED && room?.audience === 'friends' &&
     room.ownerProfileId &&
     billing.isProfileEntitled(room.ownerProfileId)
   );
 }
 
-// Stripe can activate, recover, or end Family while friends are already
-// painting. Push the new ad state immediately instead of waiting for reconnect.
+function familyBenefits(room, user) {
+  const familyRoom = roomHasFamilyEntitlement(room);
+  return { familyRoom, adFree: familyRoom || billing.isProfileEntitled(user.profileId) };
+}
+
+// The host's private room benefit applies to every invitee. A member's own
+// ad-free pass follows their authenticated sockets into other rooms.
 function refreshFamilyRoomEntitlement(profileId) {
   for (const room of rooms.values()) {
-    if (room.ownerProfileId === profileId) {
-      broadcast(room.code, { type: 'billing_entitlement', adFree: roomHasFamilyEntitlement(room) });
+    const ownerChanged = room.audience === 'friends' && room.ownerProfileId === profileId;
+    for (const user of room.users.values()) {
+      if (ownerChanged || user.profileId === profileId) {
+        sendReliable(user.ws, JSON.stringify({ type: 'billing_entitlement', ...familyBenefits(room, user) }));
+      }
     }
   }
 }
@@ -5083,9 +5091,7 @@ wss.on('connection', async (ws, req) => {
     wetCanvas: !!room.wetCanvas,
     brushMode: room.brushMode === 'fun' ? 'fun' : 'realistic',
     moderated: room.audience === 'kid_safe',
-    // A Family plan belongs to the PRIVATE room owner. Every invited guest
-    // inherits that room's ad-free experience without needing an account.
-    adFree: roomHasFamilyEntitlement(room),
+    ...familyBenefits(room, user),
     watched: room.watchers.size > 0,
     // Capability key for cross-room @mention notifications: proves to the
     // notify channel that this client really held this name in this room, so
@@ -12325,7 +12331,7 @@ const PAGE_META = {
     description: 'Browse public artist studios: watch verified artists paint live, search by title, description and tags, and open a studio to watch. Anyone can view; only approved painters draw.',
   },
   '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
-  '/family': { title: 'Drawesome Family, ad-free creative spaces', description: 'One parent-owned, ad-free drawing space where every invited friend joins free. $1.99 monthly or $15 yearly.' },
+  '/family': { title: 'Drawesome Family, ad-free creative spaces', description: 'Draw together ad-free and turn a private Family room’s artwork into a postcard to keep or share. Explore the adult-owned Family plan.' },
   '/faq': {
     title: 'Safety & FAQ: Drawesome',
     description: 'How moderation works, what data we store, how to report, and house rules, written to match how the app actually works.',

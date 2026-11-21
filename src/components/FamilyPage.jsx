@@ -9,7 +9,7 @@ export default function FamilyPage({ onNavigate }) {
   const [session, setSession] = useState(null);
   const [config, setConfig] = useState(null);
   const [billing, setBilling] = useState(null);
-  const [interval, setInterval] = useState("yearly");
+  const [interval, setInterval] = useState("monthly");
   const [adultConfirmed, setAdultConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -110,56 +110,70 @@ export default function FamilyPage({ onNavigate }) {
     }
   };
 
-  const configuredForPlan = Boolean(isCloudConfigured && config?.configured && config?.plans?.[interval]);
-  const [priceAmount, priceUnit] = String(
-    config?.display?.[interval] || (interval === "yearly" ? "$15/year" : "$1.99/month"),
-  ).split("/");
+  const price = config?.display?.[interval];
+  const configuredForPlan = Boolean(isCloudConfigured && price && config?.configured && config?.plans?.[interval]);
+  const [priceAmount, priceUnit] = price ? price.split("/") : [];
+  const openRoom = () => onNavigate(`/join/${createInviteCode()}`);
   const yearlySavings = Number(config?.yearlySavingsPercent);
 
   return (
     <div className="family-page">
       <SiteNav onNavigate={onNavigate} current="/family" />
       <main className="family-main">
-        <section className="family-hero">
-          <p className="home-eyebrow">Drawesome Family</p>
-          <h1>One creative space. All their friends.</h1>
-          <p className="family-lead">
-            Support Drawesome and keep your family&apos;s private rooms ad-free. Drawing, creating rooms, and inviting friends are already free, with no account required.
-          </p>
+        <section className="family-hero" aria-labelledby="family-title">
+          <div>
+            <p className="family-kicker">Drawesome Family</p>
+            <h1 id="family-title">Send a little <em>art.</em></h1>
+            <p className="family-lead">Turn a drawing you made together into a postcard for someone you love.</p>
+            <a href="#family-membership" className="family-jump">
+              {billing?.active ? "Your Family membership" : "Explore the Family plan"}
+              {!billing?.active && config?.configured && isCloudConfigured && config.display?.monthly ? ` · ${config.display.monthly}` : ""} ↓
+            </a>
+          </div>
+          <figure className="family-example">
+            <img src="/media/family-postcard.webp" width="960" height="640" alt="A blue whale rises above ocean waves on a postcard with a note for Nana." />
+            <figcaption>From a shared canvas to a postcard.</figcaption>
+          </figure>
         </section>
 
         <section className="family-offer" aria-labelledby="family-plan-title">
           <div className="family-benefits">
-            <h2 id="family-plan-title">A little support for shared art time</h2>
-            <ul>
-              <li><span>✓</span><strong>Ad-free private rooms</strong><small>Everyone invited by your family paints without ads.</small></li>
-              <li><span>✓</span><strong>Parent-owned space</strong><small>The subscription stays with the grown-up&apos;s account.</small></li>
-              <li><span>✓</span><strong>Friends always join free</strong><small>Send a room code. Guests never hit a paywall.</small></li>
-              <li><span>✓</span><strong>Keep the free studio free</strong><small>Your plan helps pay for canvases, rooms, and new brushes.</small></li>
-            </ul>
+            <h2 id="family-plan-title">Inside the Family plan</h2>
+            <dl>
+              <dt>Art postcards</dt>
+              <dd>Open Invite in your room, choose <strong>Make an art postcard</strong> and add a note. Save the PNG to attach to an email, or share it through a supported app on your device.</dd>
+              <dt>Ad-free painting for you</dt>
+              <dd>Sign in with your Family account to paint ad-free in any drawing room you visit.</dd>
+              <dt>One plan for the room</dt>
+              <dd>Everyone who draws in a private room you own can paint ad-free and make postcards. Your guests join for free.</dd>
+            </dl>
           </div>
 
-          <div className="family-card">
+          <div className="family-card" id="family-membership">
             {billing?.active || billing?.manageable ? (
               <>
                 <span className="family-active-badge">{billing.active ? "Family active" : "Billing needs attention"}</span>
-                <h2>{billing.active ? "Your spaces are ad-free" : "Keep your Family plan running"}</h2>
+                <h2>{billing.active ? "Your Family plan" : "Keep your Family plan running"}</h2>
                 <p>{billing.active
-                  ? "Invite as many friends as the room allows. They inherit your ad-free room automatically."
+                  ? "Start a private room and share its invite link. Your guests get the room’s Family benefits as soon as they join."
                   : "Update your payment method or review the subscription securely in Stripe."}</p>
                 {billing.renewsAt ? <p className="family-renewal">{billing.cancelAtPeriodEnd ? "Ends" : "Renews"} {new Date(billing.renewsAt).toLocaleDateString()}</p> : null}
-                <button type="button" className="primary-action" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
+                {billing.active && <button type="button" className="primary-action" onClick={openRoom}>Open a Family room</button>}
+                <button type="button" className="family-manage" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
               </>
             ) : (
               <>
-                <div className="family-price-toggle" role="group" aria-label="Billing frequency">
-                  <button type="button" className={interval === "monthly" ? "is-on" : ""} onClick={() => setInterval("monthly")}>Monthly</button>
-                  <button type="button" className={interval === "yearly" ? "is-on" : ""} onClick={() => setInterval("yearly")}>
-                    Yearly{yearlySavings > 0 ? ` · save ${yearlySavings}%` : ""}
-                  </button>
-                </div>
-                <p className="family-price"><strong>{priceAmount}</strong><span>/{priceUnit || (interval === "yearly" ? "year" : "month")}</span></p>
-                <p className="family-price-note">Cancel anytime from the parent account.</p>
+                <h2>Family membership</h2>
+                {price && <>
+                  <div className="family-price-toggle" role="group" aria-label="Billing frequency">
+                    <button type="button" aria-pressed={interval === "monthly"} className={interval === "monthly" ? "is-on" : ""} onClick={() => setInterval("monthly")}>Monthly</button>
+                    <button type="button" aria-pressed={interval === "yearly"} className={interval === "yearly" ? "is-on" : ""} onClick={() => setInterval("yearly")}>
+                      Yearly{yearlySavings > 0 ? ` · save ${yearlySavings}%` : ""}
+                    </button>
+                  </div>
+                  <p className="family-price"><strong>{priceAmount}</strong><span>/{priceUnit}</span></p>
+                  <p className="family-price-note">Renews {interval}. A grown-up can manage or cancel renewal in Stripe.</p>
+                </>}
                 {session && configuredForPlan ? (
                   <label className="family-adult-check">
                     <input type="checkbox" checked={adultConfirmed} onChange={(event) => setAdultConfirmed(event.target.checked)} />
@@ -180,8 +194,8 @@ export default function FamilyPage({ onNavigate }) {
                 </button>
                 {!configuredForPlan ? (
                   <div className="family-setup-note" role="status">
-                    <p>{config ? "Family subscriptions aren’t available yet. You can still draw, save, and invite friends for free." : "You can start drawing while we check."}</p>
-                    <button type="button" onClick={() => onNavigate(`/join/${createInviteCode()}`)}>Draw with friends for free</button>
+                    <p>{config ? "Family checkout is currently unavailable. You can still draw together for free." : "You can start drawing while we check."}</p>
+                    <button type="button" onClick={() => isCloudConfigured && !session ? onNavigate("/friends") : openRoom()}>Draw with friends for free</button>
                   </div>
                 ) : null}
               </>
@@ -191,8 +205,13 @@ export default function FamilyPage({ onNavigate }) {
         </section>
 
         <section className="family-plain-language">
-          <h2>Built for a parent to own-not a kid to buy.</h2>
-          <p>There are no paid coins, cash tips, or purchases inside the canvas. The free studio remains usable without an account. Family simply removes advertising from private spaces owned by the subscribed account.</p>
+          <h2>What can we do for free?</h2>
+          <p>Open a public room as a guest, paint on a shared canvas and save your drawing. Friends and family can meet by room code. On a site with accounts, sign in to enter a private room.</p>
+          <a href="/rooms" onClick={event => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+            event.preventDefault();
+            onNavigate("/rooms");
+          }}>Browse drawing rooms</a>
         </section>
       </main>
       <SiteFooter onNavigate={onNavigate} />

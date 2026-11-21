@@ -56,7 +56,7 @@ async function copyText(text) {
   }
 }
 
-export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, showToast, inktoberPage }) {
+export default function ShareInviteSheet({ roomId, roomTitle, getArt, onPostcard, postcardOpen, onClose, showToast, inktoberPage }) {
   const joinUrl = `${window.location.origin}/join/${encodeURIComponent(roomId)}`;
   const title = roomTitle || `Drawesome room ${roomId}`;
   const [fetched, setFetched] = useState(null); // /api/inktober payload
@@ -155,12 +155,13 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
   }, []);
 
   useEffect(() => {
+    if (postcardOpen) return undefined;
     const onKey = (event) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, postcardOpen]);
 
   const copyLink = async () => {
     if (await copyText(joinUrl)) {
@@ -284,6 +285,7 @@ export default function ShareInviteSheet({ roomId, roomTitle, getArt, onClose, s
           </button>
         </div>
 
+        {onPostcard && <button type="button" className="share-invite-btn" onClick={onPostcard}>Make an art postcard</button>}
         <div className="share-invite-preview">
           {card ? (
             <img src={card.url} alt="Your invite card" />

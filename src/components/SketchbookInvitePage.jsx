@@ -12,12 +12,12 @@ import { useEffect, useRef, useState } from "react";
 import SiteNav from "./SiteNav";
 import SiteFooter from "./SiteFooter";
 import { acceptSketchbookInvite } from "../utils/sketchbookApi";
-import { getSession, isCloudConfigured, onAuthStateChange, LOCAL_ONLY_MESSAGE } from "../utils/auth";
+import { getSession, isCloudConfigured, onAuthStateChange } from "../utils/auth";
 import "../sketchbook.css";
 
 const ERROR_COPY = {
   invite_invalid: "That invitation link is invalid or was revoked. Ask the sketchbook owner for a fresh one.",
-  book_full: "This sketchbook already has its six artists, the invitation is still kind, but the book is full.",
+  book_full: "All six artist spots are taken. Ask the owner if a spot can be opened for you.",
   own_book: "This is your own sketchbook, you can already draw in it!",
   bad_token: "That invitation link looks incomplete. Copy the whole link and try again.",
 };
@@ -66,10 +66,10 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
   }, [session, token]);
 
   return (
-    <div>
+    <div className="skb-paper-page">
       <SiteNav onNavigate={onNavigate} current="/inktober" />
       <main className="skb-start" aria-labelledby="skb-invite-title">
-        <p className="home-eyebrow">#inktober 2026</p>
+        <p className="skb-edition">Inktober · Sketchbook invitation</p>
         <h1 id="skb-invite-title">You&rsquo;re invited to draw</h1>
 
         {session === undefined || state === "working" ? (
@@ -83,8 +83,7 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
             {isCloudConfigured ? (
               <>
                 <p className="skb-start-sub">
-                  An invitation is for a specific artist, so accepting it needs a quick sign-in.
-                  Come straight back to this link afterwards, it will pick up where you left off.
+                  Join the artist who invited you on the pages of their sketchbook. After you sign in, this invitation automatically adds your account to the book.
                 </p>
                 <button
                   type="button"
@@ -96,14 +95,17 @@ export default function SketchbookInvitePage({ token, onNavigate }) {
                 <button type="button" onClick={() => onNavigate(`/signup?return=${returnTo}`)}>Sign up free</button>
               </>
             ) : (
-              <p className="skb-status-line" role="alert">{LOCAL_ONLY_MESSAGE} Invitations need cloud accounts.</p>
+              <>
+                <p className="skb-status-line">This server has accounts turned off, so it can&rsquo;t accept sketchbook invitations. You can still draw together in the shared Ink &amp; Pencil room.</p>
+                <button type="button" className="primary-action" onClick={() => onNavigate("/join/INKTOBER")}>Draw in the shared room</button>
+              </>
             )}
           </div>
         ) : null}
 
         {state === "done" ? (
           <div className="skb-start-actions">
-            <p className="skb-start-sub">You&rsquo;re in! You can draw on every page of this sketchbook.</p>
+            <p className="skb-start-sub">You&rsquo;re in! Open the sketchbook, choose a prompt day, then enter that page&rsquo;s studio to draw with the other artists.</p>
             {bookPublic === false ? (
               <p className="skb-status-line">
                 This is a <strong>private</strong> sketchbook, only the owner and invited artists like you can open it.

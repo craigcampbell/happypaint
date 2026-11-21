@@ -1,7 +1,9 @@
 // Safety & FAQ, a plain-language page parents and kids can read to understand
 // exactly how Drawesome keeps rooms kind, what data we keep, and how to get help.
 // Written to match how the app actually works today (not aspirational).
+import GuideLinks from "./GuideLinks";
 import SiteNav from "./SiteNav";
+import SiteFooter from "./SiteFooter";
 
 function QA({ q, children }) {
   return (
@@ -14,38 +16,45 @@ function QA({ q, children }) {
 
 export default function FaqPage({ onNavigate }) {
   return (
-    <div className="site-page">
+    <div className="site-page field-guide">
       <SiteNav onNavigate={onNavigate} current="/faq" />
-      <main className="site-page-body">
-        <h1>Safety &amp; FAQ <span aria-hidden="true">🛟</span></h1>
+      <main className="site-page-body guide-body">
+        <h1>Common questions</h1>
         <p className="site-lead">
-          Drawesome is a paint-together studio for kids and teens. Here’s exactly how it works, how we
-          keep rooms kind, and how to get help. If you’re a grown-up deciding whether it’s okay for your
-          kid, this page is for you.
+          Find out who can join your canvas, how to keep a drawing, and where to get help if something goes wrong in a room.
         </p>
+
+        <GuideLinks current="/faq" onNavigate={onNavigate} />
 
         <QA q="Is Drawesome safe for my kid?">
           <p>
-            <strong>Public rooms</strong> (the ones on the home page and in “Find a room”) are auto-moderated:
-            chat is filtered for bad words, drawings are scanned for inappropriate images when a capable
+            <strong>Public rooms</strong> have moderation tools.
+            Chat is filtered for bad words, drawings are scanned for inappropriate images when a capable
             device is present, hosts can mute / remove / hide, and anyone can report with one tap.
           </p>
           <p>These tools can miss harmful content. For younger artists, start in a private room with people you know and an adult present.</p>
           <p>
             <strong>Private rooms</strong>, the ones you make by sharing a short code, are meant for people
             you already know. Serious/explicit chat is filtered everywhere. Private rooms are unlisted,
-            but anyone who receives their link or code can join. Keep invitations with people you trust.
+            and a forwarded link or code lets someone else try to enter. Keep invitations with people you trust.
           </p>
         </QA>
 
         <QA q="Who can see a public room?">
-          <p>Anyone can join a public room. Its artwork, chat, and display names can also appear in homepage previews. Use a nickname and do not share personal details in drawings or chat. Private rooms do not allow the public spectator connection.</p>
+          <p>Anyone can join a public room. Its artwork, chat, and display names can also appear in public room previews. Use a nickname and do not share personal details in drawings or chat. Private rooms do not allow the public spectator connection.</p>
+        </QA>
+
+        <QA q="Who are Pip and Fern?">
+          <p>They’re drawing bots in the recorded homepage demo. To paint with other visitors, choose <strong>Join a random room</strong>. Open Rooms inside the studio to try another public canvas.</p>
+        </QA>
+
+        <QA q="Can I email a drawing?">
+          <p>Download your drawing and attach the image to an email. In an eligible Family room you can also turn the canvas into an art postcard with a personal note. <a href="/family">See the Family plan</a>.</p>
         </QA>
 
         <QA q="Do you need an account?">
           <p>
-            No. Drawing is guest-friendly, tap in and paint. Where accounts are available, an optional
-            sign-in adds gallery sync and persistent room ownership. Free drawing and rooms work signed out.
+            You can draw solo or join a public canvas as a guest. On a site with accounts enabled, sign in to use friend lists and invite-only rooms or sync your gallery across devices.
           </p>
         </QA>
 
@@ -105,6 +114,7 @@ export default function FaqPage({ onNavigate }) {
           <button type="button" onClick={() => onNavigate("/about")}>About</button>
         </div>
       </main>
+      <SiteFooter onNavigate={onNavigate} />
     </div>
   );
 }

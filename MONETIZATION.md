@@ -6,13 +6,22 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
 ## Family subscriptions
 
 1. In Stripe, create one recurring product named **Drawesome Family** with:
-   - monthly price: **$1.99 USD**
+   - monthly price: **$2.99 USD**
    - yearly price: **$15 USD**
 2. Copy the `prod_...` id to `STRIPE_PRODUCT_FAMILY` and the two `price_...`
    ids to `STRIPE_PRICE_FAMILY_MONTHLY` and
    `STRIPE_PRICE_FAMILY_YEARLY`. The server verifies that both prices are
-   active, USD, exactly 199/1500 cents, monthly/yearly, and belong to that
-   product before checkout is enabled.
+   active, billed per unit in USD, and belong to that product. The Family
+   page shows the verified price. An invalid or unavailable catalog suppresses
+   the price and disables checkout.
+
+   To move an existing $1.99 monthly offer, add a new $2.99 monthly Price
+   to the same Stripe product, update the portal configuration’s allowed
+   monthly Price and `STRIPE_PRICE_FAMILY_MONTHLY`, then restart. Existing
+   subscriptions keep their original price, including after the old price is
+   archived. A deployment still pointing to $1.99 will display and charge
+   $1.99. Check checkout, renewal and cancellation in Stripe test mode first.
+   [Stripe pricing guide](https://docs.stripe.com/products-prices/manage-prices#edit-a-price)
 3. Put a restricted production secret in `STRIPE_SECRET_KEY`. It needs only the
    permissions used here: read Prices; read/write Customers, Checkout Sessions,
    Subscriptions, and Billing Portal Sessions. Keep sandbox and live keys,
@@ -70,9 +79,11 @@ The admin overview shows catalog readiness, active/attention counts, the last
 processed Stripe event, and any deletion-cancellation retries without exposing
 keys or customer identifiers.
 
-An active Family entitlement belongs to the signed-in owner of a private room.
-Every anonymous or signed-in friend joining that room inherits its ad-free
-status. Public communal rooms remain free/ad-supported.
+A signed-in subscriber paints ad-free in any drawing room. Private rooms owned
+by subscribers also give every invited painter ad-free drawing and the Art
+postcard export. The server sends each member their individual `adFree`
+status and the separate `familyRoom` flag, including after webhook changes.
+Other visitors to a public room keep the ordinary free experience.
 
 ## Advertising
 
@@ -105,10 +116,10 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
 - With all billing/ad variables blank: open a fresh private room anonymously,
   draw, invite another browser, save/export, and confirm there are no ad calls.
 - With Stripe test keys: subscribe from `/family`, replay the webhook, reopen
-  the owner's private room, and confirm both owner and guest receive
-  `adFree: true` in the WebSocket `connected` payload.
-- Create a signed-in public room and confirm it remains ad-supported even when
-  its owner has Family.
+  the owner’s private room, and confirm both owner and invitee receive
+  `adFree: true` and `familyRoom: true` in the WebSocket `connected` payload.
+- In a public room, confirm the subscriber receives `adFree: true`, another
+  visitor receives `adFree: false` and both receive `familyRoom: false`.
 - Use a Stripe test clock to exercise renewal success, payment failure, the
   past-due grace boundary, cancellation at period end, and webhook retries.
 - With Google test inventory: join an ordinary free room and confirm the banner above the canvas; shorten

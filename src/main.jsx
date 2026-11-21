@@ -10,6 +10,7 @@ import './studio-layout.css'
 import './quick-stroke.css'
 import './route-status.css'
 import './site-nav.css'
+import './public-pages.css'
 
 
 // iOS Safari: the studio handles its own canvas gestures. Marketing and guide

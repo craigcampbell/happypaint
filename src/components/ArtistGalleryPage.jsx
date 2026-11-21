@@ -181,6 +181,10 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
   const token = session?.access_token || null;
   const unverified = Boolean(session) && (session.verified === false || session.user?.verified === false);
   const [createOpen, setCreateOpen] = useState(() => new URLSearchParams(window.location.search).get("create") === "1");
+  const setupHeading = useRef(null);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("create") === "1") setupHeading.current?.focus();
+  }, []);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tagsInput, setTagsInput] = useState("");
@@ -243,8 +247,8 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
         <CuratedHeader page="studios" content={content} onNavigate={onNavigate} />
         <DiscoveryTabs onNavigate={onNavigate} active="studios" />
         <p className="site-lead">
-          Public studios run by individual artists. Anyone can watch; only the
-          artist and the painters they approve can draw.
+          Anyone can watch a studio. To paint alongside the artist, visit their
+          studio and sign in to request paint access.
         </p>
 
         {/* ----------------------------- filters ----------------------------- */}
@@ -335,10 +339,10 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
               {hasFilters ? (
                 <p>No studios match that search. Try different words, or clear the filters.</p>
               ) : (
-                <p>
-                  No artist studios are listed yet. Yours could be the first -
-                  create a studio below and publish it when you’re ready.
-                </p>
+                <>
+                  <p>No artist studios are listed yet. Public drawing rooms are open to guest painters.</p>
+                  <DiscoveryLink className="discovery-text-link" href="/rooms" onNavigate={onNavigate}>Find a public drawing room →</DiscoveryLink>
+                </>
               )}
             </div>
           ) : null}
@@ -402,7 +406,7 @@ export default function ArtistGalleryPage({ onNavigate, session = null, pageSize
 
         {/* --------------------------- create studio -------------------------- */}
         <section className="ag-create" aria-labelledby="ag-create-title">
-          <h2 id="ag-create-title">Start your own artist studio</h2>
+          <h2 id="ag-create-title" ref={setupHeading} tabIndex={-1}>Start your own artist studio</h2>
           {!session ? (
             <p className="ag-signin-note">
               Creating a hosted artist studio needs a verified account.

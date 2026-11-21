@@ -1,3 +1,7 @@
+import SiteNav from './SiteNav';
+import SiteFooter from './SiteFooter';
+import GuideLinks from './GuideLinks';
+
 // Plain-language safety + data page for parents/guardians. Everything stated
 // here reflects shipped behavior (anonymous-first, public-room moderation,
 // play-money only, no public people search, local-first storage, account
@@ -17,12 +21,12 @@ const SAFETY = [
   {
     icon: "⭐",
     title: "Hosts have moderation tools",
-    body: "Room hosts can lock or clear the canvas, mute or remove a painter, and review flags. The first guest in an unowned private room becomes its temporary host; hosting can pass to another painter when that guest leaves. A host role does not verify someone's age or identity.",
+    body: "Room hosts can lock or clear the canvas, mute or remove a painter, and review flags. In rooms that allow guest hosting, the temporary host role can pass to another painter when the guest host leaves. A host role does not verify someone's age or identity.",
   },
   {
     icon: "🔒",
     title: "Keep room invitations with people you know",
-    body: "Private rooms are unlisted, but anyone with a room link or code can join, including a forwarded invitation. Public-room art, chat, and display names can appear on the homepage. Use nicknames and keep personal details out of shared art and chat.",
+    body: "Private rooms are unlisted, but anyone with a room link or code can join, including a forwarded invitation. Public-room art, chat, and display names may appear in room previews. The homepage replay uses two drawing bots. Use nicknames and keep personal details out of shared art and chat.",
   },
   {
     icon: "⚠️",
@@ -31,30 +35,25 @@ const SAFETY = [
   },
   {
     icon: "🚫",
-    title: "No behavioral ads or child-facing buying.",
+    title: "How free rooms are funded",
     body: "Free spaces may show contextual, non-personalized ads marked child-directed. The in-app \"drops\" remain play-money earned by drawing; the optional Family subscription is bought and managed by an adult outside the canvas.",
   },
 ];
 
 export default function SafetyPage({ onNavigate }) {
   return (
-    <main className="safety-page">
-      <header className="safety-top">
-        <button type="button" className="safety-home" onClick={() => onNavigate("/")}>
-          ← Drawesome 🎨
-        </button>
-        <button type="button" className="primary-action" onClick={() => onNavigate("/studio")}>
-          Open the studio
-        </button>
-      </header>
-
+    <div className="site-page field-guide">
+      <SiteNav onNavigate={onNavigate} current="/safety" />
+      <main className="site-page-body guide-body">
       <section className="safety-hero">
-        <h1>Drawing together: safety &amp; privacy</h1>
+        <h1>Room safety</h1>
         <p>
           Know what is shared, how room controls work, and where filters have limits.
           For younger artists, start with an adult and people you already know.
         </p>
       </section>
+
+      <GuideLinks current="/safety" onNavigate={onNavigate} />
 
       <section className="safety-grid">
         {SAFETY.map((item) => (
@@ -98,6 +97,8 @@ export default function SafetyPage({ onNavigate }) {
           🎨 Start drawing
         </button>
       </section>
-    </main>
+      </main>
+      <SiteFooter onNavigate={onNavigate} />
+    </div>
   );
 }

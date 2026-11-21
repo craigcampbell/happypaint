@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBilling, EXPECTED_PRICES } from '../server/billing.js';
+import { createBilling } from '../server/billing.js';
 
 const originalEnv = { ...process.env };
 const dataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-hardening-'));
@@ -63,7 +63,7 @@ function familySubscription(id, profileId, customerId, overrides = {}) {
   };
 }
 
-function makeStripe({ badCatalog = false, badPortal = false } = {}) {
+function makeStripe({ badCatalog = false, badPortal = false, monthlyAmount = 299 } = {}) {
   return {
     prices: {
       async retrieve(id) {
@@ -72,8 +72,9 @@ function makeStripe({ badCatalog = false, badPortal = false } = {}) {
           id,
           active: true,
           currency: 'usd',
-          unit_amount: badCatalog ? 1 : (monthly ? 199 : 1500),
-          recurring: { interval: monthly ? 'month' : 'year' },
+          unit_amount: badCatalog ? 1 : (monthly ? monthlyAmount : 1500),
+          billing_scheme: 'per_unit',
+          recurring: { interval: monthly ? 'month' : 'year', interval_count: 1, usage_type: 'licensed' },
           product: { id: 'prod_family', active: true },
         };
       },
@@ -419,22 +420,35 @@ try {
   const badPortalConfig = await fetch(`${unsafePortal.origin}/api/billing/config`).then((res) => res.json());
   assert.equal(badPortalConfig.configured, false, 'unsafe portal cancellation settings fail checkout closed');
 
-  // Price-drift guard: the display strings the server serves and the client
-  // fallbacks must both match EXPECTED_PRICES in server/billing.js, and no
-  // stale price literal may survive in the surfaces buyers see.
-  assert.equal(config.display.monthly, `$${EXPECTED_PRICES.monthly.amount / 100}/month`);
-  assert.equal(config.display.yearly, `$${EXPECTED_PRICES.yearly.amount / 100}/year`);
-  assert.ok(config.yearlySavingsPercent >= 25, 'yearly must stay meaningfully cheaper than 12x monthly');
-  const familyPageSrc = await readFile(new URL('../src/components/FamilyPage.jsx', import.meta.url), 'utf8');
-  const serverSrc = await readFile(new URL('../server.js', import.meta.url), 'utf8');
-  for (const key of ['monthly', 'yearly']) {
-    const literal = `$${EXPECTED_PRICES[key].amount / 100}/${key === 'monthly' ? 'month' : 'year'}`;
-    assert.ok(familyPageSrc.includes(literal), `FamilyPage fallback must say ${literal}`);
-  }
-  for (const stale of ['$4.99', '$39/', '$39 ', '499', '3900']) {
-    assert.ok(!familyPageSrc.includes(stale), `stale price ${stale} must not survive in FamilyPage.jsx`);
-    assert.ok(!serverSrc.includes(`$${stale}`), `stale price $${stale} must not survive in server copy`);
-  }
+  assert.deepEqual(config.display, { monthly: '$2.99/month', yearly: '$15/year' });
+  assert.equal(config.yearlySavingsPercent, 58);
+  assert.equal(badConfig.display, null, 'never display an unverified price');
+
+  const oldCatalog = await listen(createBilling({
+    dataDir: badDataDir, stripeClient: makeStripe({ monthlyAmount: 199 }),
+    verifyAccessToken: async token => ({ profileId: token }), startMaintenance: false,
+  }));
+  try {
+    const legacy = await fetch(`${oldCatalog.origin}/api/billing/config`).then(res => res.json());
+    assert.equal(legacy.configured, true, 'previous deployment continues selling its configured rate');
+    assert.deepEqual(legacy.display, { monthly: '$1.99/month', yearly: '$15/year' });
+    assert.equal(legacy.yearlySavingsPercent, 37);
+  } finally { await new Promise(resolve => oldCatalog.httpServer.close(resolve)); }
+
+  const legacyPrice = {
+    id: 'price_retired', active: false, product: 'prod_family', currency: 'usd', unit_amount: 199,
+    billing_scheme: 'per_unit', recurring: { interval: 'month', interval_count: 1, usage_type: 'licensed' },
+  };
+  const retiredSub = familySubscription('sub_retired', 'legacy_profile', 'cus_retired', {
+    items: { data: [{ quantity: 1, price: legacyPrice }] },
+  });
+  subscriptions.set(retiredSub.id, retiredSub);
+  await sendEvent(appOrigin, event('evt_retired_paid', 'invoice.paid', {
+    customer: retiredSub.customer, parent: { subscription_details: { subscription: retiredSub.id } },
+  }, 500));
+  const grandfathered = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('legacy_profile') }).then(res => res.json());
+  assert.equal(grandfathered.active, true, 'renewals at the retired $1.99 rate keep Family access');
+  assert.equal(grandfathered.interval, 'monthly');
 
   console.log('billing hardening integration: ok');
 } finally {

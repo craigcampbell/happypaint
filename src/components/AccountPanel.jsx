@@ -204,7 +204,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
         <div className="ps-group account-section">
           <h3>Drawesome Family</h3>
           <p className="account-note">
-            A parent can make every private room they own ad-free-including for friends who join as guests.
+            Paint ad-free with a Family membership. Everyone in a private room you own can turn the shared drawing into an Art postcard.
           </p>
           <button type="button" className="primary-action" onClick={() => { window.location.href = "/family"; }}>
             View Family plan
