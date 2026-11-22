@@ -141,24 +141,14 @@ month. These counts begin when the moderation dashboard is deployed.
 
 ## Advertising
 
-Use Google Ad Manager only after the site and creatives are approved for a
-child-directed experience. Create:
+Drawesome has one responsive Google Ad Manager display placement above the free-room canvas. To launch the banner:
 
-- a display unit for the free-room canvas banner (300x50, 300x100 or 320x50);
-- an H5 game manual interstitial unit (a limited-access format).
+1. In your publisher account, add `drawesome.art` and complete the site review for the actual drawing-room placement. Review the child-directed and user-generated content requirements. Google restricts ads on screens whose primary purpose is private communication or that have insufficient publisher content. Confirm the appropriate consent or limited-ads setup for your audience with Google before sending traffic. [Manage sites](https://support.google.com/admanager/answer/10130765) · [Placement policies](https://support.google.com/adsense/answer/1346295) · [Publisher content policy](https://support.google.com/publisherpolicies/answer/11112688) · [Consent requirements](https://support.google.com/admanager/answer/13554116)
+2. Under **Inventory → Ad units**, create a display unit such as `free_room_banner`. Its supported sizes are 300×50, 300×100, and 320×50. Enable eligible AdSense backfill or target the unit with an active line item and matching creative. A newly created unit alone has no guaranteed fill. [Create an ad unit](https://support.google.com/admanager/answer/10477477) · [AdSense demand in Ad Manager](https://support.google.com/admanager/answer/1670087)
+3. Put the full ad unit path from the generated Google Publisher Tag in the production `.env` as `VITE_GAM_AD_UNIT_CHAT`. Its shape is `/NETWORK_CODE/free_room_banner`; copy Google's exact path if it includes parent units. Put the separate seller ID from Google's ads.txt entry in `GAM_ADS_TXT_PUBLISHER_ID`. It starts with `pub-` and has 16 digits. The publisher ID can be deployed first if Google requests ads.txt for verification. [Google's ads.txt guide](https://support.google.com/admanager/answer/9422161)
+4. Rebuild and recreate the app to pick up the unit path. Check `https://drawesome.art/ads.txt` for the authorized Google seller line, then check an eligible free room with Google's publisher console. The banner stays collapsed when there is no fill. Jam Pass participants and rooms covered by their host's pass receive no room ad. [Publisher Console](https://developers.google.com/publisher-tag/guides/publisher-console)
 
-Set their full unit paths in `VITE_GAM_AD_UNIT_CHAT` and
-`VITE_GAM_AD_UNIT_INTERSTITIAL`, then rebuild. The existing `CHAT` variable now controls the
-banner above the canvas. It appears when inventory fills in a connected,
-ad-supported room. Private Jam Pass rooms, finger-paint rooms, sketchbook pages
-and local drawing skip this placement. Every GPT request is tagged as
-child-directed, under-age-of-consent, non-personalized, and restricted-data-
-processing. Empty unit paths mean the GPT script is never requested.
-
-Set `GAM_ADS_TXT_PUBLISHER_ID` to the full `pub-` ID from Ad Manager so
-the server serves `google.com, <id>, DIRECT, f08c47fec0942fa0` at `/ads.txt`.
-[Google's ads.txt setup guide](https://support.google.com/admanager/answer/9422161)
-Unset, `/ads.txt` returns 404 and no inventory is claimed on the domain.
+The historic `CHAT` setting controls the canvas banner. Finger-paint rooms, sketchbooks, and local drawing skip the banner. Child-directed, under-age-of-consent, non-personalized and restricted-data-processing flags are applied before GPT requests ads. With both unit paths empty, the app does not load GPT. The optional `VITE_GAM_AD_UNIT_INTERSTITIAL` can stay empty for a banner-only launch; it requires Google's limited-access H5 game manual interstitial format.
 
 Interstitials are prefetched but can display only at natural breaks after at
 least ten minutes: a save, PNG export, or completed Draw & Guess round. The app

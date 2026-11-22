@@ -51,28 +51,29 @@ try {
   console.log('ads.txt (unset):', ads404.status);
   if (ads404.status !== 404) throw new Error('ads.txt must 404 when GAM_ADS_TXT_PUBLISHER_ID is unset');
 
-  // Configured state on a second port: ads.txt must serve the GAM line.
-  const server2 = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: '8944', DATA_DIR: SCRATCH, GAM_ADS_TXT_PUBLISHER_ID: '123456789' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  try {
-    await waitFor('http://127.0.0.1:8944/healthz');
-    const adsRes = await fetch('http://127.0.0.1:8944/ads.txt');
-    const adsBody = await adsRes.text();
-    console.log('ads.txt (set):', adsRes.status, JSON.stringify(adsBody.trim()));
-    if (adsRes.status !== 200 || !adsBody.includes('google.com, 123456789, DIRECT, f08c47fec0942fa0')) {
-      throw new Error('ads.txt must serve the GAM DIRECT line when configured');
-    }
-  } finally {
-    const exited = new Promise((resolve) => {
-      if (server2.exitCode !== null) return resolve();
-      server2.once('exit', resolve);
-      setTimeout(resolve, 3000);
+  for (const [publisherId, status] of [['123456789', 404], ['pub-1234567890123456', 200]]) {
+    const server2 = spawn(process.execPath, ['server.js'], {
+      cwd: ROOT,
+      env: { ...process.env, PORT: '8944', DATA_DIR: join(SCRATCH, publisherId), GAM_ADS_TXT_PUBLISHER_ID: publisherId },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    server2.kill();
-    await exited;
+    try {
+      await waitFor('http://127.0.0.1:8944/healthz');
+      const adsRes = await fetch('http://127.0.0.1:8944/ads.txt');
+      const adsBody = await adsRes.text();
+      console.log('ads.txt:', publisherId, adsRes.status);
+      if (adsRes.status !== status || (status === 200 && adsBody.trim() !== `google.com, ${publisherId}, DIRECT, f08c47fec0942fa0`)) {
+        throw new Error('Only a Google publisher ID should produce a DIRECT seller line');
+      }
+    } finally {
+      const exited = new Promise((resolve) => {
+        if (server2.exitCode !== null) return resolve();
+        server2.once('exit', resolve);
+        setTimeout(resolve, 3000);
+      });
+      server2.kill();
+      await exited;
+    }
   }
 
   const familyHtml = await fetch('http://127.0.0.1:8943/family').then((r) => r.text());

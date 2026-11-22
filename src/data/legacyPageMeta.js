@@ -55,5 +55,9 @@ export const LEGACY_PAGE_META = {
   "/signup": {
     "title": "Save your art: Drawesome",
     "description": "An optional free account adds gallery sync across devices where accounts are available. You can keep drawing as a guest."
+  },
+  "/contact": {
+    "title": "Contact the Drawesome team | Drawesome",
+    "description": "Send a private message to the Drawesome team about drawing rooms, Jam Pass, safety, privacy, or a problem with the site."
   }
 };

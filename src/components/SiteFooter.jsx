@@ -41,6 +41,7 @@ export default function SiteFooter({ onNavigate }) {
         { href: "/parents", label: "Parents & teachers" },
         { href: "/safety", label: "Room safety" },
         { href: "/faq", label: "Common questions" },
+        { href: "/contact", label: "Contact the team" },
         { href: "/privacy", label: "Privacy & data" },
         ...(isCloudConfigured ? [
           { href: "/signup", label: "Sync your gallery" },
@@ -69,7 +70,7 @@ export default function SiteFooter({ onNavigate }) {
         ))}
       </div>
       <p className="site-footer-note">
-        To flag a drawing or chat message, use Report in the studio. For help, email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>
+        To flag a drawing or chat message, use Report in the studio.
       </p>
     </footer>
   );

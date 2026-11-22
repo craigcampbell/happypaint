@@ -23,6 +23,7 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 import { buildGzippedHistoryFrame } from './server/historyFrame.js';
 import { createCatchup } from './server/catchup.js';
 import { createPresence, KIND_PAGE, KIND_PAINT, KIND_WATCH, F_VIEWS, F_JOINS, F_STROKES, F_CHATS } from './server/presence.js';
+import { createContactInbox } from './server/contactInbox.js';
 import { createAdminAuth } from './server/adminAuth.js';
 import { createCheckpointService } from './server/checkpoints.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
@@ -7459,6 +7460,8 @@ const curator = createCurator({ dataDir: DATA_DIR });
 curator.registerRoutes(app, adminGuard);
 featuredRooms = createFeaturedRooms({ dataDir: DATA_DIR, getRoomEligibility: featuredSource });
 featuredRooms.registerRoutes(app, adminGuard);
+const contactInbox = createContactInbox(DATA_DIR);
+contactInbox.registerRoutes(app, { adminGuard, clientIp, rateOk });
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
 economy.registerRoutes(app);
@@ -8199,7 +8202,7 @@ app.post('/api/report', (req, res) => {
 app.post('/api/account/scrub-chat', async (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const identity = token ? await verifyAccessToken(token) : null;
+  const identity = token ? await verifyAccessToken(token, { forErasure: true }) : null;
   if (!identity || !identity.profileId) return res.status(401).json({ error: 'unauthorized' });
   const pid = identity.profileId;
   // This is a once-per-account action that synchronously rereads and rewrites
@@ -8208,6 +8211,8 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   if (!rateOk(`scrub:${pid}`, 3, 60 * 60_000) || !rateOk(`scrub-ip:${clientIp(req)}`, 6, 60 * 60_000)) {
     return res.status(429).json({ error: 'slow_down' });
   }
+  try { contactInbox.scrubEmail(identity.verifiedEmail); }
+  catch { return res.status(503).json({ error: 'contact_erasure_failed' }); }
   try { friendDirectory.scrub(pid); }
   catch { return res.status(503).json({ error: 'friends_erasure_failed' }); }
   // Resolve related sources BEFORE analytics/ACL erasure. Frozen metadata
@@ -12496,6 +12501,7 @@ app.get('/api/admin/metrics', (req, res) => {
     // Trusted-checkpoint pipeline: worker builds/failures, warm-join hits,
     // invalidations (mutation mid-build) and the bounded cache footprint.
     checkpoints: checkpoints.metrics(),
+    contactOpen: contactInbox.openCount(),
     reports: { open: reports.filter((r) => r.status === 'open').length, total: reports.length },
     sheets: sheets.length,
   });
@@ -12715,6 +12721,7 @@ const PAGE_META = {
     description: 'Try three free drawing activities for families and classrooms. Create a private invite room, draw together without student accounts, and learn how adult supervision and sharing work.',
   },
   '/privacy': { title: 'Privacy: Drawesome', description: 'What stays in your browser, what reaches our servers even when drawing as a guest, what others can see, and the scope and limits of deletion options.' },
+  '/contact': { title: 'Contact the Drawesome team | Drawesome', description: 'Send a private message to the Drawesome team about drawing rooms, Jam Pass, safety, privacy, or a problem with the site.' },
   '/signup': { title: 'Save your art: Drawesome', description: 'An optional free account adds gallery sync across devices where accounts are available. You can keep drawing as a guest.' },
 };
 
@@ -12837,7 +12844,7 @@ app.get('/robots.txt', (_req, res) => {
 // 404 and no ad inventory is claimed on the domain.
 const GAM_ADS_TXT_PUBLISHER_ID = String(process.env.GAM_ADS_TXT_PUBLISHER_ID || '').trim();
 app.get('/ads.txt', (_req, res) => {
-  if (!GAM_ADS_TXT_PUBLISHER_ID) return res.status(404).type('text/plain').send('Not found');
+  if (!/^pub-\d{16}$/.test(GAM_ADS_TXT_PUBLISHER_ID)) return res.status(404).type('text/plain').send('Not found');
   res.type('text/plain').send(`google.com, ${GAM_ADS_TXT_PUBLISHER_ID}, DIRECT, f08c47fec0942fa0\n`);
 });
 

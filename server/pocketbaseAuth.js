@@ -43,13 +43,13 @@ function remember(token, profile, ttl) {
 }
 
 // Returns { profileId, displayName } for a valid token, else null. Never throws.
-export async function verifyAccessToken(token) {
+export async function verifyAccessToken(token, { forErasure = false } = {}) {
   if (!token || typeof token !== 'string') return null;
   const { url } = cfg();
   if (!url) return null;
 
   const hit = cache.get(token);
-  if (hit && hit.exp > Date.now()) return hit.profile;
+  if (!forErasure && hit && hit.exp > Date.now()) return hit.profile;
 
   try {
     const res = await fetch(`${url}/api/collections/users/auth-refresh`, {
@@ -70,6 +70,9 @@ export async function verifyAccessToken(token) {
     }
     const profile = { profileId: String(rec.id), displayName: displayNameFromRecord(rec) };
     remember(token, profile, OK_TTL_MS);
+    // Only account erasure needs the verified email. Refresh it directly from
+    // PocketBase, and keep it out of the shared identity cache and normal joins.
+    if (forErasure && rec.verified === true && typeof rec.email === 'string') return { ...profile, verifiedEmail: rec.email.trim() };
     return profile;
   } catch {
     return null; // network hiccup → treat as anonymous, don't cache

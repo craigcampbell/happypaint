@@ -30,6 +30,7 @@ server.err.log
 .chatlog/
 .admin-key
 .reports.json
+.contact-inbox.json*
 .sheets.json
 .metrics.json
 .analytics.json

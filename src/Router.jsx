@@ -12,6 +12,7 @@ const StudioApp = lazy(() => import("./App"));
 const PrivatePromptStudio = lazy(() => import("./components/PrivatePromptStudio"));
 const AboutPage = lazy(() => import("./components/AboutPage"));
 const PrivacyPage = lazy(() => import("./components/PrivacyPage"));
+const ContactPage = lazy(() => import("./components/ContactPage"));
 const SignupPage = lazy(() => import("./components/SignupPage"));
 const FriendsPage = lazy(() => import("./components/FriendsPage"));
 const RoomFinderPage = lazy(() => import("./components/RoomFinderPage"));
@@ -102,7 +103,7 @@ export default function Router() {
 
   let page;
   const drawing = path === "/draw" || (path.startsWith("/studio") && !path.startsWith("/studios")) || path.startsWith("/join");
-  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar", "/coloring-book"].some(prefix => path.startsWith(prefix));
+  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar", "/coloring-book", "/contact"].some(prefix => path.startsWith(prefix));
   if (path === "/draw") {
     const params = new URLSearchParams(window.location.search);
     const event = getCommunityEvent(params.get("event"));
@@ -162,6 +163,8 @@ export default function Router() {
     page = <AboutPage onNavigate={navigate} />;
   } else if (path.startsWith("/privacy")) {
     page = <PrivacyPage onNavigate={navigate} />;
+  } else if (path === "/contact" || path === "/contact/") {
+    page = <ContactPage onNavigate={navigate} />;
   } else if (path.startsWith("/signup")) {
     page = <SignupPage onNavigate={navigate} />;
   } else if (path === "/friends") {

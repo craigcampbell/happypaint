@@ -388,6 +388,9 @@ everything:
 - `.artworks/<key>.json`, anonymous per-device saved art (capped `MAX_SAVES`).
 - `.sheets.json`, admin-uploaded custom sheets. `.sheet-theme.json`, today's pick.
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
+- `.contact-inbox.json` holds messages from the public `/contact` form for up to
+  90 days. Only the authenticated `/admin#contact` inbox can read, resolve, or
+  delete them. Submission is independent of PocketBase and email delivery.
 - `.admin-totp.json` (2FA secret + hashed recovery codes + replay counter, see
   `server/adminAuth.js` and RUNNING.md) and `.admin-sessions.json` (hashed
   admin session tokens with expiry). Once the first exists, `x-admin-key` must

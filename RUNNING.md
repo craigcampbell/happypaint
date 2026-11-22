@@ -14,6 +14,22 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system map and
 [MOVING.md](MOVING.md) for moving the stack. This guide supersedes the older
 standalone-Node operating instructions.
 
+## Contact messages and incoming email
+
+Website visitors can use `/contact`. Open `/admin#contact` to read a message,
+resolve it, or delete it. A reply address is optional. The form delivers
+directly to the app’s private inbox, including when domain mail is unavailable.
+
+Incoming addresses such as `mail@drawesome.art` and `admin@drawesome.art`
+depend on the domain’s MX provider and its alias rules. For a switch to
+Cloudflare Email Routing, verify the destination inbox first. Inventory existing
+aliases, use Cloudflare’s provider migration instructions to replace the old MX
+records and update the existing SPF record, then create the forwarding rules
+immediately. Include `hello@` and `safety@` if people have those older addresses.
+Send a test from a different mailbox and confirm receipt at the destination.
+[Cloudflare mail migration](https://developers.cloudflare.com/email-service/configuration/domains/) ·
+[Routing rules and verified destinations](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/)
+
 ## Deploy an app update
 
 Run from the repository root. Build before replacing the running app, keep a

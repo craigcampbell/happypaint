@@ -91,7 +91,7 @@ export default function SafetyPage({ onNavigate }) {
           </li>
         </ul>
         <p className="safety-note">
-          Questions or something to report? Use the report control in a room or email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.
+          Use Report in the room to flag a drawing or chat message. For other safety concerns, <a href="/contact?topic=safety">contact the Drawesome team</a>.
         </p>
       </section>
 

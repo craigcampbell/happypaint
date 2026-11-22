@@ -16,6 +16,7 @@ backups
 .billing.json
 .ai-coloring
 .reports.json
+.contact-inbox.json*
 .metrics.json
 .sheets.json
 .sheet-theme.json

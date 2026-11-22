@@ -140,15 +140,14 @@ export default function ParentsPage({ onNavigate }) {
           <div className="site-page-actions">
             <button type="button" className="primary-action" onClick={() => onNavigate(`/join/${createInviteCode()}`)}>Try an activity together →</button>
           </div>
-          <p className="parents-note">Help shape the next activity: tell us what worked and what got in the way at <a href="mailto:hello@drawesome.art">hello@drawesome.art</a>. Please leave out student names and personal details.</p>
+          <p className="parents-note"><a href="/contact">Tell us how the activity went</a> and what got in the way. Please leave out student names and personal details.</p>
         </section>
 
         <section className="parents-contact">
           <h2>Questions or concerns</h2>
           <p>
             Use the report control in a room or on a gallery post to send a concern for review.
-            Reports are not a promise of an immediate response. For anything else:{" "}
-            <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>. See also our{" "}
+            For other concerns, <a href="/contact?topic=safety">contact the team</a>. See also our{" "}
             <a
               href="/privacy"
               onClick={(e) => {

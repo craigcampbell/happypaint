@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import AdminLogin from "./AdminLogin";
 import AdminColoringModeration from "./AdminColoringModeration";
+import AdminContactInbox from "./AdminContactInbox";
 import { adminLogout, clearAdminToken, getAdminToken, onAdminAuthChange } from "../utils/adminAuth";
 
 function currentTab() {
   const tab = window.location.hash.slice(1);
-  return ["users", "content", "chat", "ai-coloring"].includes(tab) ? tab : "overview";
+  return ["users", "content", "chat", "ai-coloring", "contact"].includes(tab) ? tab : "overview";
 }
 
 function formatUptime(s) {
@@ -505,9 +506,13 @@ export default function LiveAdmin({ onNavigate }) {
         <button type="button" className={page === "chat" ? "is-active" : ""} onClick={() => openTab("chat")}>
           Chat log {chatFeed.blocked24h ? <span className="admin-badge">{chatFeed.blocked24h} blocked</span> : null}
         </button>
+        <button type="button" className={page === "contact" ? "is-active" : ""} aria-current={page === "contact" ? "page" : undefined} onClick={() => openTab("contact")}>
+          Contact inbox {metrics?.contactOpen > 0 && <span className="admin-badge">{metrics.contactOpen} open</span>}
+        </button>
       </nav>
 
       {page === "ai-coloring" && <AdminColoringModeration adminKey={adminKey} onUnauthorized={endSession} />}
+      {page === "contact" && <AdminContactInbox key={adminKey} adminKey={adminKey} openCount={metrics?.contactOpen} onUnauthorized={endSession} />}
 
       {page === "overview" ? (
         <>

@@ -102,8 +102,8 @@ export default function FaqPage({ onNavigate }) {
 
         <QA q="Who runs Drawesome? How do I reach you?">
           <p>
-            We’re a small team. For anything safety-related, a report that needs a human, a privacy request,
-            or a worry, email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.
+            Use Report in the room to flag a drawing or chat message. For a question, a privacy request,
+            or a concern you’d like to discuss privately, <a href="/contact">send a message to the Drawesome team</a>.
           </p>
         </QA>
 

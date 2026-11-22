@@ -79,7 +79,7 @@ services:
       - AI_COLORING_ENABLED=${AI_COLORING_ENABLED:-false}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - AI_COLORING_MODEL=${AI_COLORING_MODEL:-x-ai/grok-imagine-image-2.0}
-      # Ad Manager publisher id for /ads.txt (the numeric GAM network id).
+      # Google publisher ID for /ads.txt (pub- followed by 16 digits).
       # Empty = /ads.txt serves 404 and no inventory is claimed.
       - GAM_ADS_TXT_PUBLISHER_ID=${GAM_ADS_TXT_PUBLISHER_ID:-}
     ports:
