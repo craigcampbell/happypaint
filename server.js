@@ -15,7 +15,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, readdirSync, appendFileSync, statSync, openSync, readSync, closeSync, promises as fsp } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, rmSync, renameSync, readdirSync, appendFileSync, statSync, openSync, readSync, closeSync, promises as fsp } from 'fs';
 import { randomBytes, randomInt, createHash, createHmac, timingSafeEqual } from 'crypto';
 import { isIP } from 'net';
 import { promises as dnsPromises } from 'dns';
@@ -1436,11 +1436,6 @@ function thumbBakedAt(room) {
   }
   return room.thumbBakedAt;
 }
-function dropRoomThumb(room) {
-  room.thumbRequest = null;
-  room.thumbBakedAt = 0;
-  try { unlinkSync(thumbFile(room.code)); } catch { /* no file */ }
-}
 function validThumbImage(dataUrl) {
   if (typeof dataUrl !== 'string' || dataUrl.length > THUMB_MAX_CHARS) return null;
   const match = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
@@ -1466,16 +1461,20 @@ function sweepRoomThumbs() {
   });
 }
 
-function invalidateRoomSnapshot(room) {
+function invalidateRoomSnapshot(room, requireRemoval = false) {
   room.snapshotRequest = null; // an in-flight encoding predates this canvas change
   room.snapshotOpId = 0;
   room.snapshot = null;
   // Also discard dormant files while the experiment is disabled, so a later
   // opt-in cannot resurrect art hidden or removed in the meantime.
-  try { unlinkSync(snapshotFile(room.code)); } catch { /* no file */ }
   // The mural changed under it (clear / wipe / sheet swap): a stale thumbnail
   // would show the admin art that is no longer there. The next sweep re-bakes.
-  dropRoomThumb(room);
+  room.thumbRequest = null;
+  room.thumbBakedAt = 0;
+  for (const path of [snapshotFile(room.code), thumbFile(room.code)]) {
+    try { rmSync(path, { force: true }); }
+    catch (err) { if (requireRemoval) throw err; }
+  }
 }
 // A room is worth snapshotting once it's big enough, and its snapshot is due
 // for a refresh once enough ops have accumulated past the baked-in opId.
@@ -11658,6 +11657,78 @@ function persistSheets() {
   try { writeFileSync(SHEETS_FILE, JSON.stringify(sheets)); } catch { /* ignore */ }
 }
 
+function removeGeneratedPage(id) {
+  const existing = aiColoring.find(id);
+  if (existing) {
+    // An interrupted takedown must never leave a readable thumbnail or a
+    // join snapshot after the original PNG has been revoked.
+    invalidateRoomSnapshot(rooms.get(existing.room) || { code: existing.room }, true);
+  }
+  const { room: code } = aiColoring.moderate(id, 'removed');
+  const room = rooms.get(code);
+  if (room) {
+    if (room.wipeReq?.sheetId === id) cancelWipeRequest(room, 'blocked');
+    if (room.lastClearedSheet === id) room.lastClearedSheet = null;
+    if (room.sheetId === id) {
+      room.sheetId = null;
+      broadcast(code, { type: 'sheet', sheetId: null });
+      persistRoom(code);
+    }
+    // The owner's generation dialog can still hold an uninstalled preview.
+    broadcast(code, { type: 'ai_coloring_removed', sheetId: id });
+    return;
+  }
+  // Only edit metadata in an offline room. Older, unsplit room files can
+  // also contain the original strokes, so preserve all other fields.
+  const path = roomFile(code);
+  let saved;
+  try { saved = JSON.parse(readFileSync(path, 'utf8')); }
+  catch (err) { if (err.code === 'ENOENT') return; throw err; }
+  if (saved.sheetId === id) {
+    saved.sheetId = null;
+    const tmp = path + '.moderation.tmp';
+    writeFileSync(tmp, JSON.stringify(saved), { mode: 0o600 });
+    renameSync(tmp, path);
+  }
+}
+
+function adminColoringHandler(handler) {
+  return (req, res) => {
+    if (!adminGuard(req, res)) return;
+    res.set('Cache-Control', 'private, no-store').vary('x-admin-key');
+    res.set('X-Content-Type-Options', 'nosniff');
+    try { return handler(req, res); }
+    catch (err) {
+      return res.status(err.status || 503).json({ error: err.status ? err.code : 'unavailable' });
+    }
+  };
+}
+
+const adminColoringRoute = '/api/admin/ai-coloring';
+app.get(adminColoringRoute, adminColoringHandler((req, res) => {
+  const { status = 'pending', room = '', offset = '0', limit = '25' } = req.query;
+  if (!['pending', 'reviewed', 'removed', 'all'].includes(status) ||
+      typeof room !== 'string' || !/^[A-Z0-9_-]{0,16}$/i.test(room) ||
+      typeof offset !== 'string' || !/^\d+$/.test(offset) || !Number.isSafeInteger(Number(offset)) ||
+      typeof limit !== 'string' || !/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 100) {
+    return res.status(400).json({ error: 'invalid_filters' });
+  }
+  res.json(aiColoring.listModeration({ status, room: room.toUpperCase(), offset: Number(offset), limit: Number(limit) }));
+}));
+
+app.get(adminColoringRoute + '/:id/image', adminColoringHandler((req, res) => {
+  const png = aiColoring.preview(req.params.id);
+  res.type('image/png').send(png);
+}));
+app.post(adminColoringRoute + '/:id/review', adminColoringHandler((req, res) => {
+  aiColoring.moderate(req.params.id, 'reviewed');
+  res.json({ ok: true });
+}));
+app.post(adminColoringRoute + '/:id/remove', adminColoringHandler((req, res) => {
+  removeGeneratedPage(req.params.id);
+  res.json({ ok: true });
+}));
+
 const coloringRoute = '/api/rooms/:code/ai-coloring';
 app.all(coloringRoute, async (req, res, next) => {
   res.set('Cache-Control', 'private, no-store').vary('Authorization');
@@ -11705,7 +11776,11 @@ app.post(coloringRoute, async (req, res) => {
     }
     res.json({ ...aiColoring.finish(entry, image), ...aiColoring.usage(profile) });
   } catch (err) {
-    if (err.code === 'content_blocked') return res.status(422).json({ error: 'content_blocked', stage: err.stage });
+    if (err.code === 'content_blocked') {
+      try { aiColoring.noteBlocked(entry, err.stage); }
+      catch { console.warn('[ai-coloring] Could not record an automatic moderation block'); }
+      return res.status(422).json({ error: 'content_blocked', stage: err.stage });
+    }
     if (err.code === 'unusable_page') return res.status(422).json({ error: 'unusable_page' });
     if (err.code === 'provider_unavailable') return res.status(502).json({ error: 'generation_failed' });
     if (err.status) return res.status(err.status).json({ error: err.code });

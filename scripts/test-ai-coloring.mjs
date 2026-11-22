@@ -16,6 +16,7 @@ const root = new URL('..', import.meta.url);
 const dir = await mkdtemp(join(tmpdir(), 'family-coloring-'));
 const calls = [];
 const sockets = new Set();
+const adminKey = 'fixture-coloring-moderator';
 let rejectStage = '';
 let child;
 let logs = '';
@@ -70,7 +71,7 @@ async function start(accounts = true, enabled = true) {
   const mockOrigin = 'http://127.0.0.1:' + mock.address().port;
   child = spawn(process.execPath, ['--import', join(dir, 'fixture.mjs'), 'server.js'], {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(port), DATA_DIR: dir, PB_URL: accounts ? mockOrigin : '', POCKETBASE_URL: '',
+    env: { ...process.env, PORT: String(port), DATA_DIR: dir, ADMIN_KEY: adminKey, PB_URL: accounts ? mockOrigin : '', POCKETBASE_URL: '',
       AI_COLORING_ENABLED: String(enabled), OPENROUTER_API_KEY: 'coloring-test-key', COLORING_TEST_ORIGIN: mockOrigin,
       AI_COLORING_MODEL: 'x-ai/grok-imagine-image-2.0', STRIPE_SECRET_KEY: '', STRIPE_CHECKOUT_ENABLED: 'false' },
   });
@@ -90,6 +91,9 @@ async function api(path, token, body, key) {
   if (key) headers['Idempotency-Key'] = key;
   const res = await fetch(base + path, { headers, method: body ? 'POST' : 'GET', body: body && JSON.stringify(body) });
   return { status: res.status, body: await res.json() };
+}
+function admin(suffix = '', method = 'GET', headers = { 'x-admin-key': adminKey }) {
+  return fetch(base + '/api/admin/ai-coloring' + suffix, { method, headers });
 }
 async function painter(room, token = '') {
   const ws = new WebSocket(base.replace('http:', 'ws:') + '/ws?room=' + room);
@@ -168,6 +172,32 @@ try {
   assert.equal(repeated.body.id, id);
   assert.equal(calls.length, 0);
 
+  const imagePath = '/' + id + '/image';
+  const reviewPath = '/' + id + '/review';
+  const removePath = '/' + id + '/remove';
+  for (const [suffix, method] of [['', 'GET'], [imagePath, 'GET'], [reviewPath, 'POST'], [removePath, 'POST']]) {
+    assert.equal((await admin(suffix, method, {})).status, 401);
+    assert.equal((await admin(suffix, method, { Authorization: 'Bearer owner' })).status, 401);
+  }
+  const pending = await (await admin()).json();
+  assert.equal(pending.total, 1);
+  assert.equal(pending.items[0].id, id);
+  assert.equal(pending.items[0].room, room);
+  assert.equal(pending.items[0].status, 'pending');
+  assert.deepEqual(pending.counts, { pending: 1, reviewed: 0, removed: 0, blockedPrompt: 1, blockedImage: 1 });
+  assert(!JSON.stringify(pending).includes(request.prompt));
+  assert(!JSON.stringify(pending).includes('data:image'));
+  assert.equal((await (await admin('?room=OTHERBOX')).json()).total, 0);
+  const adminImage = await admin(imagePath);
+  assert.equal(adminImage.status, 200);
+  assert.match(adminImage.headers.get('cache-control'), /no-store/);
+  assert.equal(adminImage.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(adminImage.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await adminImage.arrayBuffer()), Buffer.from(image.split(',')[1], 'base64'));
+  assert.equal((await admin(reviewPath, 'POST')).status, 200);
+  assert.equal((await admin(reviewPath, 'POST')).status, 200);
+  assert.equal((await (await admin()).json()).total, 0);
+
   const read = '/api/sheets/' + id;
   assert.equal((await api(read, 'friend')).status, 404, 'preview is private to its owner');
   assert.equal((await api(read, 'other')).status, 404);
@@ -183,7 +213,29 @@ try {
   const rejoined = await painter(room, 'friend');
   await rejoined.message(e => e.type === 'sheet' && e.sheetId === id);
   assert.equal((await api(read, 'friend')).body.image, image);
-  await painter(room, 'owner');
+  const returnedOwner = await painter(room, 'owner');
+  const strokeId = 'keep-this-brushstroke';
+  returnedOwner.send({ type: 'op', op: { kind: 'draw', strokeId, points: [{ x: 10, y: 12 }, { x: 20, y: 24 }],
+    settings: { brush: 'pencil', size: 5, color: '#147281' }, end: true } });
+  await rejoined.message(e => e.type === 'op' && e.op.strokeId === strokeId);
+  assert.equal((await (await admin('?status=reviewed')).json()).items[0].id, id);
+  assert.equal((await admin(removePath, 'POST')).status, 200);
+  await rejoined.message(e => e.type === 'ai_coloring_removed' && e.sheetId === id);
+  await rejoined.message(e => e.type === 'sheet' && e.sheetId === null);
+  assert.equal((await api(read, 'owner')).status, 404);
+  assert.equal((await api(read, 'friend')).status, 404);
+  assert.equal((await admin(imagePath)).status, 404);
+  assert.equal((await admin(removePath, 'POST')).status, 200);
+  assert.equal((await admin(reviewPath, 'POST')).status, 409);
+  const removed = await (await admin('?status=removed')).json();
+  assert.equal(removed.items[0].id, id);
+  assert.equal(removed.counts.removed, 1);
+  const retryRemoved = await api(sheetApi, 'owner', request, key);
+  assert.equal(retryRemoved.status, 410);
+  assert.equal(retryRemoved.body.error, 'page_removed');
+  assert.equal(calls.length, 0);
+  const lateJoin = await painter(room, 'friend');
+  await lateJoin.message(e => e.type === 'history' && e.ops?.some(op => op.strokeId === strokeId));
   assert.equal((await api(sheetApi, 'owner')).body.remaining, 4);
   for (let i = 0; i < 4; i++) {
     const next = await api(sheetApi, 'owner', request, randomUUID());
@@ -194,7 +246,8 @@ try {
   assert.equal(calls.length, charges);
   assert.equal((await api('/api/account/scrub-chat', 'owner', {})).status, 200);
   assert.equal((await api(read, 'friend')).status, 404);
-  console.log('Family AI coloring: anonymous library, access, moderation, idempotency, shared sheet, restart, quota and erasure passed.');
+  assert.equal((await (await admin('?status=all')).json()).total, 0);
+  console.log('Family AI coloring passed for anonymous library, access, automated and human moderation, live takedown, preserved strokes, restart, quota and erasure.');
 } finally {
   await stop();
   if (mock.listening) await new Promise(resolve => mock.close(resolve));

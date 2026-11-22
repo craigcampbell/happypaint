@@ -347,8 +347,9 @@ token)`), returns `send*` emitters + `disconnect()`.
 - Private Family room owners can also request an AI coloring page at
   `GET|POST /api/rooms/:code/ai-coloring`. The Node server checks a submitted
   scene description through OpenRouter, generates one image, reviews the
-  raster and converts it to black ink on transparency. A preview is private
-  to the owner until they apply it through the room's sheet/wipe flow.
+  raster and converts it to black ink on transparency. The owner can preview
+  the page before sharing it through the room's sheet/wipe flow. Site
+  moderators can inspect previews and applied sheets at `/admin#ai-coloring`.
   Applied `ai_` sheets load through the authenticated `/api/sheets/:id`
   route. Assets and monthly accounting live under `DATA_DIR/.ai-coloring`
   and are scrubbed on account erasure. See [MONETIZATION.md](MONETIZATION.md#custom-coloring-pages)

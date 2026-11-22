@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import AdminLogin from "./AdminLogin";
-import { adminLogout, getAdminToken } from "../utils/adminAuth";
+import AdminColoringModeration from "./AdminColoringModeration";
+import { adminLogout, clearAdminToken, getAdminToken, onAdminAuthChange } from "../utils/adminAuth";
+
+function currentTab() {
+  const tab = window.location.hash.slice(1);
+  return ["users", "content", "chat", "ai-coloring"].includes(tab) ? tab : "overview";
+}
 
 function formatUptime(s) {
   if (s < 60) return `${s}s`;
@@ -233,6 +239,7 @@ function EvidenceNote({ ev }) {
 
 export default function LiveAdmin({ onNavigate }) {
   const [adminKey, setAdminKey] = useState(() => getAdminToken());
+  const activeKey = useRef(adminKey);
   const [authed, setAuthed] = useState(false);
   const [rooms, setRooms] = useState([]);
   const [reports, setReports] = useState([]);
@@ -242,13 +249,30 @@ export default function LiveAdmin({ onNavigate }) {
   const [billing, setBilling] = useState(null);
   const [presence, setPresence] = useState(null);
   const [windowId, setWindowId] = useState("live");
-  const [page, setPage] = useState("overview");
+  const [page, setPage] = useState(currentTab);
   const [uploading, setUploading] = useState(false);
   // Cross-room chat feed (policing): newest lines of every room's audit log.
   const [chatFeed, setChatFeed] = useState({ chat: [], rooms: [], blocked24h: 0, total: 0 });
   const [chatRoom, setChatRoom] = useState("");
   const [chatQuery, setChatQuery] = useState("");
   const [chatBlockedOnly, setChatBlockedOnly] = useState(false);
+
+  useEffect(() => {
+    const selectTab = () => setPage(currentTab());
+    window.addEventListener("hashchange", selectTab);
+    return () => window.removeEventListener("hashchange", selectTab);
+  }, []);
+  const openTab = (name) => { window.location.hash = name; };
+
+  const endSession = useCallback(() => {
+    activeKey.current = "";
+    clearAdminToken();
+    setAdminKey("");
+    setAuthed(false);
+  }, []);
+  useEffect(() => onAdminAuthChange((kind) => {
+    if (kind === "logout") endSession();
+  }), [endSession]);
 
   // A unique query string per request defeats any stale service-worker / proxy
   // cache (a cached 401 would otherwise lock you out no matter the key).
@@ -276,8 +300,9 @@ export default function LiveAdmin({ onNavigate }) {
         fetch(bust(chatUrl), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
         fetch(bust(`/api/admin/presence?todayStart=${localMidnight()}`), { headers: { "x-admin-key": adminKey }, cache: "no-store" }),
       ]);
+      if (activeKey.current !== adminKey) return;
       if ([r1, r2, r3, r4, r5, r6, r7].some((response) => response.status === 401)) {
-        setAuthed(false);
+        endSession();
         return;
       }
       const d1 = await r1.json();
@@ -294,7 +319,6 @@ export default function LiveAdmin({ onNavigate }) {
       if (d5) setBilling(d5);
       if (d6) setChatFeed({ chat: Array.isArray(d6.chat) ? d6.chat : [], rooms: Array.isArray(d6.rooms) ? d6.rooms : [], blocked24h: Number(d6.blocked24h) || 0, total: Number(d6.total) || 0 });
       if (d7 && d7.now && d7.windows) setPresence(d7);
-      setAuthed(true);
       // The admin header keeps this console's own polling out of the visitor
       // counts (server-side presence skips requests that carry the key).
       const s = await fetch(bust("/api/sheets"), { headers: { "x-admin-key": adminKey }, cache: "no-store" }).then((r) => r.json()).catch(() => null);
@@ -302,7 +326,7 @@ export default function LiveAdmin({ onNavigate }) {
     } catch {
       // leave as-is on a transient error
     }
-  }, [adminKey, chatRoom, chatQuery, chatBlockedOnly]);
+  }, [adminKey, chatRoom, chatQuery, chatBlockedOnly, endSession]);
 
   const uploadSheet = (file) => {
     if (!file) return;
@@ -343,9 +367,11 @@ export default function LiveAdmin({ onNavigate }) {
   };
 
   useEffect(() => {
+    let current = true;
     if (adminKey) {
-      checkKey(adminKey).then((ok) => setAuthed(ok));
+      checkKey(adminKey).then((ok) => { if (current && activeKey.current === adminKey) setAuthed(ok); });
     }
+    return () => { current = false; };
   }, [adminKey, checkKey]);
 
   useEffect(() => {
@@ -357,14 +383,14 @@ export default function LiveAdmin({ onNavigate }) {
 
   // Sign-in lives in <AdminLogin> (key + authenticator code -> session token).
   const onAuthed = (token) => {
+    activeKey.current = token;
     setAdminKey(token);
     setAuthed(true);
   };
 
   const signOut = () => {
     adminLogout(adminKey);
-    setAdminKey("");
-    setAuthed(false);
+    endSession();
   };
 
   const clearRoom = async (id) => {
@@ -464,19 +490,24 @@ export default function LiveAdmin({ onNavigate }) {
       </header>
 
       <nav className="admin-tabs" aria-label="Admin pages">
-        <button type="button" className={page === "overview" ? "is-active" : ""} onClick={() => setPage("overview")}>
+        <button type="button" className={page === "overview" ? "is-active" : ""} onClick={() => openTab("overview")}>
           Overview
         </button>
-        <button type="button" className={page === "users" ? "is-active" : ""} onClick={() => setPage("users")}>
+        <button type="button" className={page === "users" ? "is-active" : ""} onClick={() => openTab("users")}>
           Users
         </button>
-        <button type="button" className={page === "content" ? "is-active" : ""} onClick={() => setPage("content")}>
+        <button type="button" className={page === "content" ? "is-active" : ""} onClick={() => openTab("content")}>
           Content
         </button>
-        <button type="button" className={page === "chat" ? "is-active" : ""} onClick={() => setPage("chat")}>
+        <button type="button" className={page === "ai-coloring" ? "is-active" : ""} aria-current={page === "ai-coloring" ? "page" : undefined} onClick={() => openTab("ai-coloring")}>
+          AI coloring
+        </button>
+        <button type="button" className={page === "chat" ? "is-active" : ""} onClick={() => openTab("chat")}>
           Chat log {chatFeed.blocked24h ? <span className="admin-badge">{chatFeed.blocked24h} blocked</span> : null}
         </button>
       </nav>
+
+      {page === "ai-coloring" && <AdminColoringModeration adminKey={adminKey} onUnauthorized={endSession} />}
 
       {page === "overview" ? (
         <>
@@ -760,7 +791,7 @@ export default function LiveAdmin({ onNavigate }) {
                 </div>
                 <div className="admin-actions">
                   <button type="button" onClick={() => watchRoom(room.id)}>🕵️ Watch</button>
-                  <button type="button" onClick={() => { setChatRoom(room.id); setPage("chat"); }}>💬 Chat log</button>
+                  <button type="button" onClick={() => { setChatRoom(room.id); openTab("chat"); }}>💬 Chat log</button>
                   <button type="button" className="admin-danger" onClick={() => clearRoom(room.id)}>Clear</button>
                   <button type="button" className="admin-danger" onClick={() => deleteRoom(room.id)}>Delete</button>
                 </div>

@@ -1013,6 +1013,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const sheetRectRef = useRef(null);
   const sheetModeRef = useRef("over"); // 'over' = lines on top (color under)
   const [sheetId, setSheetId] = useState(null);
+  const [removedAiSheets, setRemovedAiSheets] = useState(() => new Set());
   // Flag rooms pin their sheet server-side; the rail hides swap/remove for them.
   const pinnedFlagSheet = typeof sheetId === "string" && /^flag:[A-Z]{2}$/.test(sheetId);
   const [sheetMode, setSheetMode] = useState("over");
@@ -8410,6 +8411,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           frameTimingRef.current = normalizeFrameTiming(data.frameTiming);
           setRoomFrameTiming(frameTimingRef.current);
           myUserIdRef.current = data.userId;
+          if (sheetLoadVersion.current > 0) {
+            // A moderator may have removed a sheet while we were offline.
+            // The server will send its current sheet after the join history.
+            setSheetId(null);
+            loadSheetImage(null);
+          }
           if (colorEntryRef.current === "joining") {
             colorEntryRef.current = data.audience === "friends" && !data.hasSheet && !data.locked
               && !data.sketchbook && !data.inkOnly && !data.storybook && !data.phone ? "choose" : "";
@@ -9488,6 +9495,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           break;
         case "frame_denied":
           setStatus(data.reason || "Can't add more frames here");
+          break;
+        case "ai_coloring_removed":
+          // A private preview can be open before anyone installs the page.
+          setRemovedAiSheets(current => current.has(data.sheetId) ? current : new Set([...current, data.sheetId]));
           break;
         case "sheet":
           setSheetId(data.sheetId || null);
@@ -13571,7 +13582,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
       {showSheetModal ? (
         <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyColoringSheet}
-          roomCode={roomId} ownerToken={canGenerateColoring ? session.access_token : null} />
+          roomCode={roomId} ownerToken={canGenerateColoring ? session.access_token : null} removedAiSheets={removedAiSheets} />
       ) : null}
 
       {showPostcard && postcardAvailable && <ArtPostcard getArt={getInviteArt} onClose={() => setShowPostcard(false)} />}

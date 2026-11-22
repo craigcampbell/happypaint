@@ -15,6 +15,7 @@ function problemMessage(code, stage) {
       return "This page didn’t pass the safety check. Try a different idea.";
     case "consent_required": return "The generator has changed. Reload the studio to review how it uses your description.";
     case "unusable_page": return "The picture didn’t have enough clear outlines to color. Try another description.";
+    case "page_removed": return "A moderator removed this coloring page.";
     case "attempt_limit": return "This account has reached its generation attempt limit until next month.";
     case "invalid_recipe": return "Enter a description and choose a detail level.";
     case "monthly_limit": return "You’ve used this month’s pages. Your allowance renews next month.";
@@ -26,14 +27,16 @@ function problemMessage(code, stage) {
   }
 }
 
-export default function FamilyColoringPicker({ roomCode, token, onApply, children }) {
+export default function FamilyColoringPicker({ roomCode, token, onApply, removedAiSheets, children }) {
   const [availability, setAvailability] = useState(null);
   const [checkFailed, setCheckFailed] = useState(false);
   const [check, setCheck] = useState(0);
   const [creating, setCreating] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [detail, setDetail] = useState(COLORING_DETAILS[0].id);
-  const [page, setPage] = useState(null);
+  const [preview, setPage] = useState(null);
+  const removed = Boolean(preview && removedAiSheets?.has(preview.id));
+  const page = removed ? null : preview;
   const [editing, setEditing] = useState(true);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
@@ -43,6 +46,15 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, childre
   const generationNumber = useRef(0);
   const retryRequest = useRef(null);
   const url = `/api/rooms/${encodeURIComponent(roomCode)}/ai-coloring`;
+
+  useEffect(() => {
+    // Also discard a late HTTP result if its removal won the race over WS.
+    if (!removed) return;
+    setPage(null);
+    setEditing(true);
+    setCanCheckLatest(false);
+    setProblem(problemMessage("page_removed"));
+  }, [removed]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,7 +68,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, childre
       return response.json();
     }).then(data => {
       if (controller.signal.aborted || version !== generationNumber.current) return;
-      setAvailability(data);
+      setAvailability({ enabled: data.enabled, remaining: data.remaining, limit: data.limit, attemptsRemaining: data.attemptsRemaining });
       if (validPage(data.page)) {
         setProblem("");
         setCanCheckLatest(false);
@@ -106,6 +118,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, childre
         return;
       }
       if (!response.ok) {
+        if (data.error === "page_removed") retryRequest.current = null;
         if (data.error === "monthly_limit") setAvailability(current => ({ ...current, remaining: 0 }));
         if (data.error === "attempt_limit") setAvailability(current => ({ ...current, attemptsRemaining: 0 }));
         setCanCheckLatest(data.error === "busy");
@@ -162,7 +175,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, childre
         <select id="ai-sheet-detail" value={detail} disabled={busy} onChange={event => setDetail(event.target.value)}>
           {COLORING_DETAILS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>
-        <p className="ai-sheet-note" id="ai-sheet-privacy">For grown-ups. Choosing Generate sends this description to OpenRouter to check it and make one page. Leave out names, contact details, sexual content and violence.</p>
+        <p className="ai-sheet-note" id="ai-sheet-privacy">For grown-ups. Choosing Generate sends this description to OpenRouter to check it and make one page. Site moderators can review your preview. Leave out names, contact details, sexual content and violence.</p>
         <div className="ai-sheet-actions">
           <button type="submit" className="primary-action" disabled={busy || !prompt.trim() || availability.remaining <= 0 || availability.attemptsRemaining === 0} aria-describedby="ai-sheet-privacy">
             {busy ? "Making your page…" : "Generate with OpenRouter"}

@@ -190,7 +190,7 @@ function SheetLibrary({ onClose, onApply }) {
   </>;
 }
 
-export default function ColoringSheetModal({ onClose, onApply, roomCode, ownerToken }) {
+export default function ColoringSheetModal({ onClose, onApply, roomCode, ownerToken, removedAiSheets }) {
   const library = <SheetLibrary onClose={onClose} onApply={onApply} />;
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -208,7 +208,7 @@ export default function ColoringSheetModal({ onClose, onApply, roomCode, ownerTo
           </button>
         </div>
         {ownerToken ? (
-          <FamilyColoringPicker key={roomCode + ownerToken} roomCode={roomCode} token={ownerToken} onApply={onApply}>
+          <FamilyColoringPicker key={roomCode + ownerToken} roomCode={roomCode} token={ownerToken} onApply={onApply} removedAiSheets={removedAiSheets}>
             {library}
           </FamilyColoringPicker>
         ) : library}

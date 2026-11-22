@@ -94,8 +94,10 @@ Family owner per UTC calendar month, shared across their rooms. There is also
 a ceiling of twelve generation attempts in that month, including rejected
 or interrupted requests. Downloading or applying an existing page is free.
 
-Set `OPENROUTER_API_KEY` and `AI_COLORING_ENABLED=true` in the server
-environment, then recreate the app container to apply them. The provider
+Set `OPENROUTER_API_KEY` and `AI_COLORING_ENABLED=true` in the project-root
+`.env` on the machine running the app. Docker Compose reads the file when you
+run `docker compose up -d --build app`. For a direct Node launch, use
+`node --env-file=.env server.js` with the usual PocketBase settings. The provider
 account pays for generation and safety reviews. The default image model
 is Grok Imagine Image 2.0. `AI_COLORING_MODEL` can select another model
 that supports the same OpenRouter image request. The standard library
@@ -106,6 +108,13 @@ its content before releasing a page. Only the description and generated image
 are used for these calls. Drawesome keeps the resulting page and usage data
 under `DATA_DIR`. The submitted description is omitted from the stored
 record. [OpenRouter image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation)
+
+In `/admin#ai-coloring`, moderators can preview pages that passed both checks,
+mark a page reviewed or remove it. Removal deletes the stored image and lifts
+the coloring sheet from the shared canvas, preserving the painters’ strokes.
+A removed page still counts toward the owner’s monthly allowance. The dashboard
+also counts descriptions and images rejected by the automated checks this UTC
+month. These counts begin when the moderation dashboard is deployed.
 
 ## Advertising
 
