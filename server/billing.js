@@ -111,6 +111,7 @@ export function createBilling({
   now = () => Date.now(),
   startMaintenance = true,
   onEntitlementChange = null,
+  aiColoringEnabled = false,
 }) {
   const secretKey = process.env.STRIPE_SECRET_KEY || '';
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
@@ -596,6 +597,7 @@ export function createBilling({
       const configured = catalogValidated && checkoutEnabled;
       res.json({
         configured,
+        aiColoringEnabled,
         plans: { monthly: configured, yearly: configured },
         display: catalogValidated ? {
           monthly: `$${catalogValidation.amounts.monthly / 100}/month`,

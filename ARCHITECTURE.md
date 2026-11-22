@@ -344,6 +344,15 @@ token)`), returns `send*` emitters + `disconnect()`.
 - Studio: `ColoringSheetModal` (search/grid/preview/Add). A room has **one**
   active sheet; changing it clears the canvas (confirm). Library sheet ids are
   prefixed `lib:` in the `set_sheet` protocol and loaded as static PNGs.
+- Private Family room owners can also request an AI coloring page at
+  `GET|POST /api/rooms/:code/ai-coloring`. The Node server checks a submitted
+  scene description through OpenRouter, generates one image, reviews the
+  raster and converts it to black ink on transparency. A preview is private
+  to the owner until they apply it through the room's sheet/wipe flow.
+  Applied `ai_` sheets load through the authenticated `/api/sheets/:id`
+  route. Assets and monthly accounting live under `DATA_DIR/.ai-coloring`
+  and are scrubbed on account erasure. See [MONETIZATION.md](MONETIZATION.md#custom-coloring-pages)
+  for the runtime flags and Family allowance.
 
 ## Economy, play-money only
 

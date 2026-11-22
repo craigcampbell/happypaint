@@ -27,6 +27,8 @@ import { createAdminAuth } from './server/adminAuth.js';
 import { createCheckpointService } from './server/checkpoints.js';
 import { verifyAccessToken, pocketbaseConfigured, forgetProfileTokens } from './server/pocketbaseAuth.js';
 import { createBilling } from './server/billing.js';
+import { createAiColoringStore } from './server/aiColoringStore.js';
+import { AI_COLORING_CONSENT_VERSION, getColoringRecipe } from './src/data/aiColoring.js';
 import { createEconomy } from './server/economy.js';
 import { scan } from './server/moderation/textFilter.js';
 import { digestChat, summarizeReports, userRisk, riskBand } from './server/moderation/console.js';
@@ -329,7 +331,10 @@ app.use((_req, res, next) => {
   if (!shuttingDown) return next();
   res.set('Connection', 'close').status(503).json({ error: 'server_restarting' });
 });
+const aiColoringEnabled = Boolean(ACCOUNTS_CONFIGURED && process.env.AI_COLORING_ENABLED === 'true' && process.env.OPENROUTER_API_KEY?.trim());
+const aiColoring = createAiColoringStore(DATA_DIR, aiSheetPinned);
 const billing = createBilling({
+  aiColoringEnabled,
   dataDir: DATA_DIR,
   verifyAccessToken,
   onEntitlementChange: refreshFamilyRoomEntitlement,
@@ -1578,7 +1583,7 @@ function loadRoom(roomId) {
       historyOnDisk: stored.onDisk, // false → first save migrates it into .history.json
       featuredVersion: typeof data.featuredVersion === 'string' ? data.featuredVersion : null,
       featuredContributors: Array.isArray(data.featuredContributors) ? data.featuredContributors.filter((id) => typeof id === 'string') : [],
-      sheetId: data.sheetId || null,
+      sheetId: typeof data.sheetId === 'string' ? data.sheetId || null : null,
       // Only the opaque profile id is persisted, never a human-readable name -
       // so a deleted account leaves no identifying data on disk. Display names
       // come live from the connected roster.
@@ -2535,7 +2540,8 @@ function getRoom(roomId) {
       snapshotOpId: CLIENT_SNAPSHOTS_ENABLED ? loadRoomSnapshot(roomId)?.opId || 0 : 0,
       snapshotRequestedAt: 0,
       snapshotRequest: null,
-      sheetId: saved.sheetId,
+      sheetId: saved.sheetId?.startsWith('ai_') && !(audience === 'friends' && aiColoring.belongs(saved.sheetId, roomId, saved.ownerProfileId))
+        ? null : saved.sheetId,
       // Featured anchor rooms (MAIN, DOODLE, …) are communal and must never be
       // owned. An older build let the first signed-in visitor claim them, which
       // host-gated Clear and let the mural stack up un-wipeable, strip any stale
@@ -2897,6 +2903,10 @@ function roomLastSavedMs(roomId, data) {
 function closeRoom(roomId, reason) {
   featuredRooms?.scrubSources((code) => code === roomId);
   const room = rooms.get(roomId);
+  if (!room || room.ownerProfileId) {
+    try { aiColoring.closeRoom(roomId); }
+    catch { console.warn('[ai-coloring] Could not finish closed-room file cleanup'); }
+  }
   if (room) {
     room.users.forEach((u) => {
       try {
@@ -2975,6 +2985,7 @@ function autoCloseSweep() {
       const lastSaved = roomLastSavedMs(id, data);
       const pseudo = { opCount: Number.isFinite(data.opCount) ? data.opCount : (data.history || []).length, userSeconds: Number(data.userSeconds) || 0, ownerProfileId: data.ownerProfileId || null, audience: typeof data.audience === 'string' ? data.audience : null, sketchbook: normalizeSketchbookRef(data.sketchbook) };
       if (now - lastSaved > allowedIdleMs(pseudo)) {
+        if (data.ownerProfileId) aiColoring.closeRoom(id);
         unlinkSync(path);
         try { unlinkSync(historyFile(id)); } catch { /* no history base */ }
         try { unlinkSync(opLogFile(id)); } catch { /* no op log */ }
@@ -3441,7 +3452,9 @@ function resolveWipeRequest(roomId, reqId) {
   if (!req || req.id !== reqId) return;
   const asker = room.users.get(req.byId);
   if (!asker) return endWipeRequest(room, 'left');
-  if (wipeRequestBlock(room, asker)) return endWipeRequest(room, 'blocked');
+  if (wipeRequestBlock(room, asker) || (req.sheetId?.startsWith('ai_') && !mayInstallAiSheet(room, asker, req.sheetId))) {
+    return endWipeRequest(room, 'blocked');
+  }
   let tally = null;
   if (req.mode === 'vote') {
     tally = wipeTally(room);
@@ -3787,6 +3800,33 @@ function roomHasFamilyEntitlement(room) {
     room.ownerProfileId &&
     billing.isProfileEntitled(room.ownerProfileId)
   );
+}
+
+// Generated ink is bound to its source private room. Its active sheet and
+// an undo/countdown backup must survive cleanup, even while a room is offline.
+function aiSheetPinned(code, sheetId) {
+  const room = rooms.get(code);
+  if (room) return room.sheetId === sheetId || room.lastClearedSheet === sheetId || room.wipeReq?.sheetId === sheetId;
+  try { return JSON.parse(readFileSync(roomFile(code), 'utf8')).sheetId === sheetId; }
+  catch (err) { return err.code !== 'ENOENT'; } // retain ink if the room file could not be read
+}
+
+function liveColoringMember(room, profileId) {
+  if (!profileId || room?.audience !== 'friends') return null;
+  for (const user of room.users.values()) {
+    if (user.profileId === profileId && user.ws.readyState === 1) return user;
+  }
+  return null;
+}
+
+function eligibleColoringOwner(room, user) {
+  return Boolean(user?.profileId && user.profileId === room?.ownerProfileId && !user.muted && user.canPaint &&
+    !room.gameEnabled && !room.phoneEnabled && !room.storybook?.enabled && !room.animationEnabled &&
+    !room.sketchbook && roomHasFamilyEntitlement(room));
+}
+
+function mayInstallAiSheet(room, user, sheetId) {
+  return eligibleColoringOwner(room, user) && aiColoring.belongs(sheetId, room.code, user.profileId);
 }
 
 function familyBenefits(room, user) {
@@ -5533,6 +5573,15 @@ wss.on('connection', async (ws, req) => {
         // handlers (each binds an id to this room). Rejecting trace_/pp_ ids here
         // stops re-broadcasting another room's, or another player's, private image.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
+        if (nextSheet?.startsWith('ai_')) {
+          if (!mayInstallAiSheet(room, user, nextSheet) || room.sheetId === nextSheet) break;
+          // Someone could start painting between the preview and the owner's
+          // click. Honor the ordinary countdown for that newly occupied canvas.
+          if (room.history.length || room.sheetId) {
+            startWipeRequest(room, id, user, nextSheet);
+            break;
+          }
+        }
         dropRoomTracePhoto(room); // replacing/clearing frees the old photo
         room.sheetId = nextSheet;
         invalidateRoomSnapshot(room);
@@ -5783,6 +5832,10 @@ wss.on('connection', async (ws, req) => {
         // Same rule as set_sheet: trace photos and Draw Phone pages are only
         // ever set by their own minting handlers.
         if (nextSheet && (nextSheet.startsWith('trace_') || nextSheet.startsWith('pp_'))) break;
+        if (nextSheet?.startsWith('ai_') && !mayInstallAiSheet(room, user, nextSheet)) {
+          denyWipeRequest(user, 'blocked');
+          break;
+        }
         startWipeRequest(room, id, user, nextSheet);
         break;
       }
@@ -6247,7 +6300,7 @@ wss.on('connection', async (ws, req) => {
           if (m) seq = Math.max(seq, Number(m[1]));
         }
         fork.opSeq = seq;
-        fork.sheetId = room.sheetId && !room.sheetId.startsWith('trace_') && !room.sheetId.startsWith('pp_')
+        fork.sheetId = room.sheetId && !/^(?:trace_|pp_|ai_)/.test(room.sheetId)
           ? room.sheetId
           : null;
         recountFrameOps(fork);
@@ -8225,6 +8278,8 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   // cleanup removes the mapping; a Stripe outage leaves a durable retry record
   // that revokes entitlement and retains only the ids needed to cancel later.
   const billingScrubbed = await billing.cancelAndDeleteProfile(pid);
+  try { aiColoring.scrub(pid); }
+  catch { return res.status(503).json({ error: 'coloring_erasure_failed' }); }
   // 5) ARTIST STUDIOS: unpublish every studio this account owns and cut the
   //    account from every painter/co-host ACL: INCLUDING persisted OFFLINE
   //    room files (a restart must not resurrect access). Ownership itself is
@@ -8233,6 +8288,16 @@ app.post('/api/account/scrub-chat', async (req, res) => {
   let artistRoomsScrubbed = 0;
   for (const [code, room] of rooms) {
     let touched = false;
+    if (room.ownerProfileId === pid) {
+      if (room.wipeReq?.sheetId?.startsWith('ai_')) cancelWipeRequest(room, 'blocked');
+      if (room.lastClearedSheet?.startsWith('ai_')) room.lastClearedSheet = null;
+      if (room.sheetId?.startsWith('ai_')) {
+        room.sheetId = null;
+        invalidateRoomSnapshot(room);
+        broadcast(code, { type: 'sheet', sheetId: null });
+        touched = true;
+      }
+    }
     if (Array.isArray(room.painters) && room.painters.includes(pid)) {
       room.painters = room.painters.filter((p) => p !== pid);
       touched = true;
@@ -8264,6 +8329,12 @@ app.post('/api/account/scrub-chat', async (req, res) => {
       let data;
       try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
       let touched = false;
+      if (data.ownerProfileId === pid && data.sheetId?.startsWith('ai_')) {
+        data.sheetId = null;
+        try { unlinkSync(thumbFile(id)); } catch { /* no thumbnail */ }
+        try { unlinkSync(snapshotFile(id)); } catch { /* no snapshot */ }
+        touched = true;
+      }
       if (Array.isArray(data.featuredContributors) && data.featuredContributors.includes(pid)) {
         data.featuredContributors = data.featuredContributors.filter((id) => id !== pid);
         touched = true;
@@ -10409,6 +10480,9 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     // hold it) or surface a blank studio preview, so the conversion is
     // refused with a clear conflict instead, and the private room is left
     // exactly as it was. Turn the mode off, then publish.
+    if (room.sheetId?.startsWith('ai_')) {
+      return res.status(409).json({ error: 'private_sheet', message: 'Remove the private AI coloring page before publishing this room.' });
+    }
     const conflicts = [];
     if (room.gameEnabled || (room.game && room.game.phase)) conflicts.push('draw_guess');
     if (room.phoneEnabled || phoneActive(room)) conflicts.push('draw_phone');
@@ -10423,6 +10497,8 @@ app.post('/api/rooms/:code/publish', async (req, res) => {
     }
     // The explicit conversion: public viewing by link, NO inherited access -
     // friends who were drawing keep watching but must be approved to paint.
+    if (room.lastClearedSheet?.startsWith('ai_')) room.lastClearedSheet = null;
+    if (room.wipeReq?.sheetId?.startsWith('ai_')) cancelWipeRequest(room, 'blocked');
     room.audience = ARTIST_AUDIENCE;
     room.listed = false; // the kid-safe lobby flag never applies to studios
     room.painters = [];
@@ -11547,7 +11623,7 @@ app.get('/api/rooms/public', (_req, res) => {
       ops: room.history.length, // "things done", drawn ops, for the join modal
       // NEVER leak a trace-photo id here: the id is the access token, so an
       // unauthenticated lobby scrape must not expose a room's uploaded photo.
-      sheetId: room.sheetId && !room.sheetId.startsWith('trace_') && !room.sheetId.startsWith('pp_') ? room.sheetId : null,
+      sheetId: room.sheetId && !/^(?:trace_|pp_|ai_)/.test(room.sheetId) ? room.sheetId : null,
       lastActivity: room.lastActivity || 0,
       hasHost: Array.from(room.users.values()).some((u) => isHost(room, u)),
       featured,
@@ -11582,6 +11658,63 @@ function persistSheets() {
   try { writeFileSync(SHEETS_FILE, JSON.stringify(sheets)); } catch { /* ignore */ }
 }
 
+const coloringRoute = '/api/rooms/:code/ai-coloring';
+app.all(coloringRoute, async (req, res, next) => {
+  res.set('Cache-Control', 'private, no-store').vary('Authorization');
+  const identity = await sketchbookOptionalIdentity(req);
+  if (!ACCOUNTS_CONFIGURED || !identity?.profileId) return res.status(401).json({ error: 'unauthorized' });
+  const code = req.params.code.toUpperCase();
+  const room = /^[A-Z0-9_-]{1,16}$/.test(code) ? rooms.get(code) : null;
+  if (!eligibleColoringOwner(room, liveColoringMember(room, identity.profileId))) {
+    return res.status(403).json({ error: 'not_eligible' });
+  }
+  res.locals.coloringProfile = identity.profileId;
+  res.locals.coloringRoom = room;
+  next();
+});
+
+app.get(coloringRoute, (_req, res) => {
+  const profile = res.locals.coloringProfile;
+  try {
+    const budget = aiColoring.usage(profile);
+    const recent = aiColoringEnabled && aiColoring.latest(profile, res.locals.coloringRoom.code);
+    res.json({ enabled: aiColoringEnabled, ...budget, page: recent ? aiColoring.page(recent) : null });
+  } catch {
+    res.status(503).json({ error: 'unavailable' });
+  }
+});
+
+app.post(coloringRoute, async (req, res) => {
+  if (!aiColoringEnabled) return res.status(503).json({ error: 'unavailable' });
+  if (req.body?.consentVersion !== AI_COLORING_CONSENT_VERSION) return res.status(400).json({ error: 'consent_required' });
+  const recipe = getColoringRecipe(req.body);
+  if (!recipe) return res.status(400).json({ error: 'invalid_recipe' });
+  const key = req.get('idempotency-key');
+  if (key !== undefined && !/^[a-z0-9_-]{8,64}$/i.test(key)) return res.status(400).json({ error: 'invalid_request_key' });
+  const profile = res.locals.coloringProfile;
+  const room = res.locals.coloringRoom;
+  let entry;
+  try {
+    const reservation = aiColoring.begin(profile, room.code, key, AI_COLORING_CONSENT_VERSION);
+    if (reservation.existing) return res.json({ ...aiColoring.page(reservation.existing), ...aiColoring.usage(profile) });
+    entry = reservation.entry;
+    const { generateColoringPage } = await import('./server/aiColoringProvider.js');
+    const image = await generateColoringPage(recipe, { apiKey: process.env.OPENROUTER_API_KEY, model: process.env.AI_COLORING_MODEL || undefined });
+    if (rooms.get(room.code) !== room || !eligibleColoringOwner(room, liveColoringMember(room, profile))) {
+      return res.status(403).json({ error: 'not_eligible' });
+    }
+    res.json({ ...aiColoring.finish(entry, image), ...aiColoring.usage(profile) });
+  } catch (err) {
+    if (err.code === 'content_blocked') return res.status(422).json({ error: 'content_blocked', stage: err.stage });
+    if (err.code === 'unusable_page') return res.status(422).json({ error: 'unusable_page' });
+    if (err.code === 'provider_unavailable') return res.status(502).json({ error: 'generation_failed' });
+    if (err.status) return res.status(err.status).json({ error: err.code });
+    res.status(503).json({ error: 'unavailable' });
+  } finally {
+    if (entry) aiColoring.release(entry);
+  }
+});
+
 app.get('/api/sheets', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({ sheets: sheets.map((s) => ({ id: s.id, name: s.name, thumb: s.thumb })) });
@@ -11589,8 +11722,25 @@ app.get('/api/sheets', (_req, res) => {
 
 app.get('/api/sheets/:id', async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  // User trace photos ride the same route (id "trace_…") so the client loader
-  // needs no new branch.
+  // A generated page never appears in the public library. While the private
+  // room has it on the canvas, every signed-in painter there can load its ink.
+  if (req.params.id.startsWith('ai_')) {
+    res.set('Cache-Control', 'private, no-store').vary('Authorization');
+    const identity = await sketchbookOptionalIdentity(req);
+    if (!ACCOUNTS_CONFIGURED || !identity?.profileId) return res.status(404).json({ error: 'not found' });
+    try {
+      const entry = aiColoring.find(req.params.id);
+      const room = entry && rooms.get(entry.room);
+      if (!liveColoringMember(room, identity.profileId) || !aiColoring.belongs(req.params.id, room.code, room.ownerProfileId) ||
+          (room.sheetId !== req.params.id && room.ownerProfileId !== identity.profileId)) {
+        return res.status(404).json({ error: 'not found' });
+      }
+      const { id, title: name, image } = aiColoring.page(entry);
+      return res.json({ id, name, image });
+    } catch {
+      return res.status(503).json({ error: 'unavailable' });
+    }
+  }
   if (req.params.id.startsWith('trace_')) {
     const photo = tracePhotos.get(req.params.id);
     if (!photo || !await canReadSourceAsset(req, photo.roomId)) return res.status(404).json({ error: 'not found' });

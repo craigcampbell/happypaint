@@ -85,6 +85,28 @@ postcard export. The server sends each member their individual `adFree`
 status and the separate `familyRoom` flag, including after webhook changes.
 Other visitors to a public room keep the ordinary free experience.
 
+## Custom coloring pages
+
+The owner of a private Family drawing room can describe a scene in **Coloring
+sheets**, preview the generated line art, and download a PNG or apply the page
+for everyone in the room. Creating a preview uses one of five pages per
+Family owner per UTC calendar month, shared across their rooms. There is also
+a ceiling of twelve generation attempts in that month, including rejected
+or interrupted requests. Downloading or applying an existing page is free.
+
+Set `OPENROUTER_API_KEY` and `AI_COLORING_ENABLED=true` in the server
+environment, then recreate the app container to apply them. The provider
+account pays for generation and safety reviews. The default image model
+is Grok Imagine Image 2.0. `AI_COLORING_MODEL` can select another model
+that supports the same OpenRouter image request. The standard library
+works with all three settings unset.
+
+The server checks the submitted description, generates one image, and checks
+its content before releasing a page. Only the description and generated image
+are used for these calls. Drawesome keeps the resulting page and usage data
+under `DATA_DIR`. The submitted description is omitted from the stored
+record. [OpenRouter image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation)
+
 ## Advertising
 
 Use Google Ad Manager only after the site and creatives are approved for a

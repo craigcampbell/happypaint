@@ -9,7 +9,7 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "audit:ui": "node scripts/ui-audit.mjs",
-    "test:family": "node scripts/test-family-entitlement.mjs && node scripts/test-billing-hardening.mjs"
+    "test:family": "node scripts/test-family-entitlement.mjs && node scripts/test-billing-hardening.mjs && node scripts/test-ai-coloring.mjs"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",

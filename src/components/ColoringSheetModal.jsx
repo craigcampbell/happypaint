@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { sheetThumbUrl } from "../utils/sheetAssets";
+import FamilyColoringPicker from "./FamilyColoringPicker";
 
 let cachedSheets = null; // module-level cache so reopening is instant
 
@@ -47,7 +48,7 @@ function shuffled(arr) {
   return a;
 }
 
-export default function ColoringSheetModal({ onClose, onApply }) {
+function SheetLibrary({ onClose, onApply }) {
   const [all, setAll] = useState(cachedSheets || []);
   const [loading, setLoading] = useState(!cachedSheets);
   const [query, setQuery] = useState("");
@@ -98,6 +99,99 @@ export default function ColoringSheetModal({ onClose, onApply }) {
     return out;
   }, [query, category, browseOrder]);
 
+  return <>
+    <input
+      className="sheet-search"
+      type="search"
+      value={query}
+      onChange={(e) => setQuery(e.target.value)}
+      placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets, try “dinosaur”, “butterfly”…`}
+    />
+
+    <div className="sheet-cats" role="tablist" aria-label="Categories">
+      {CATEGORIES.filter((c) => c.key === "all" || (catCounts[c.key] || 0) > 0).map((c) => (
+        <button
+          key={c.key}
+          type="button"
+          role="tab"
+          aria-selected={category === c.key}
+          className={`sheet-cat ${category === c.key ? "is-active" : ""}`}
+          onClick={() => setCategory(c.key)}
+        >
+          <span aria-hidden="true">{c.emoji}</span> {c.label}
+        </button>
+      ))}
+    </div>
+
+    <p className="sheet-count">
+      {loading
+        ? "Loading…"
+        : `${results.length}${results.length >= 240 ? "+" : ""} ${results.length === 1 ? "sheet" : "sheets"}`}
+    </p>
+
+    <div className="sheet-grid">
+      {results.map((s, i) => (
+        <button
+          key={s.id}
+          type="button"
+          className={`sheet-card ${selected?.id === s.id ? "is-selected" : ""}${broken.has(s.id) ? " img-broken" : ""}`}
+          onClick={() => setSelected(s)}
+          title={s.title}
+        >
+          <img
+            src={sheetThumbUrl(s.id)}
+            alt={s.title}
+            // First screenful pops immediately; the rest stream in as the
+            // kid scrolls. A missing thumb collapses to a placeholder
+            // instead of the broken-image glyph.
+            loading={i < 12 ? "eager" : "lazy"}
+            onError={() => setBroken((prev) => (prev.has(s.id) ? prev : new Set(prev).add(s.id)))}
+          />
+          <span>{s.title}</span>
+        </button>
+      ))}
+      {!loading && results.length === 0 ? (
+        <p className="sheet-empty">No sheets here. Try another category or search word.</p>
+      ) : null}
+    </div>
+
+    <div className="sheet-footer">
+      {selected ? (
+        <>
+          <div className="sheet-preview">
+            <img src={sheetThumbUrl(selected.id)} alt={selected.title} />
+            <div className="sheet-preview-text">
+              <span className="sheet-selected-name">{selected.title}</span>
+              {/*
+                sheet metadata from coloring-library/index.json (built by
+                scripts/enrich-index.py): the measured number of enclosed
+                areas is the honest difficulty signal for a coloring page.
+              */}
+              {metaLine(selected) ? (
+                <span className="sheet-meta" title={selected.desc || undefined}>
+                  {metaLine(selected)}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="sheet-footer-actions">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="button" className="primary-action" onClick={() => onApply(selected)}>
+              Use this sheet
+            </button>
+          </div>
+        </>
+      ) : (
+        <span className="sheet-hint">Pick a category or search, tap a sheet to preview, then add it.</span>
+      )}
+    </div>
+  </>;
+}
+
+export default function ColoringSheetModal({ onClose, onApply, roomCode, ownerToken }) {
+  const library = <SheetLibrary onClose={onClose} onApply={onApply} />;
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <section
@@ -113,94 +207,11 @@ export default function ColoringSheetModal({ onClose, onApply }) {
             Close
           </button>
         </div>
-
-        <input
-          className="sheet-search"
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={loading ? "Loading sheets…" : `Search ${all.length.toLocaleString()} sheets, try “dinosaur”, “butterfly”…`}
-        />
-
-        <div className="sheet-cats" role="tablist" aria-label="Categories">
-          {CATEGORIES.filter((c) => c.key === "all" || (catCounts[c.key] || 0) > 0).map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              role="tab"
-              aria-selected={category === c.key}
-              className={`sheet-cat ${category === c.key ? "is-active" : ""}`}
-              onClick={() => setCategory(c.key)}
-            >
-              <span aria-hidden="true">{c.emoji}</span> {c.label}
-            </button>
-          ))}
-        </div>
-
-        <p className="sheet-count">
-          {loading
-            ? "Loading…"
-            : `${results.length}${results.length >= 240 ? "+" : ""} ${results.length === 1 ? "sheet" : "sheets"}`}
-        </p>
-
-        <div className="sheet-grid">
-          {results.map((s, i) => (
-            <button
-              key={s.id}
-              type="button"
-              className={`sheet-card ${selected?.id === s.id ? "is-selected" : ""}${broken.has(s.id) ? " img-broken" : ""}`}
-              onClick={() => setSelected(s)}
-              title={s.title}
-            >
-              <img
-                src={sheetThumbUrl(s.id)}
-                alt={s.title}
-                // First screenful pops immediately; the rest stream in as the
-                // kid scrolls. A missing thumb collapses to a placeholder
-                // instead of the broken-image glyph.
-                loading={i < 12 ? "eager" : "lazy"}
-                onError={() => setBroken((prev) => (prev.has(s.id) ? prev : new Set(prev).add(s.id)))}
-              />
-              <span>{s.title}</span>
-            </button>
-          ))}
-          {!loading && results.length === 0 ? (
-            <p className="sheet-empty">No sheets here. Try another category or search word.</p>
-          ) : null}
-        </div>
-
-        <div className="sheet-footer">
-          {selected ? (
-            <>
-              <div className="sheet-preview">
-                <img src={sheetThumbUrl(selected.id)} alt={selected.title} />
-                <div className="sheet-preview-text">
-                  <span className="sheet-selected-name">{selected.title}</span>
-                  {/*
-                    sheet metadata from coloring-library/index.json (built by
-                    scripts/enrich-index.py): the measured number of enclosed
-                    areas is the honest difficulty signal for a coloring page.
-                  */}
-                  {metaLine(selected) ? (
-                    <span className="sheet-meta" title={selected.desc || undefined}>
-                      {metaLine(selected)}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              <div className="sheet-footer-actions">
-                <button type="button" onClick={onClose}>
-                  Cancel
-                </button>
-                <button type="button" className="primary-action" onClick={() => onApply(selected)}>
-                  Use this sheet
-                </button>
-              </div>
-            </>
-          ) : (
-            <span className="sheet-hint">Pick a category or search, tap a sheet to preview, then add it.</span>
-          )}
-        </div>
+        {ownerToken ? (
+          <FamilyColoringPicker key={roomCode + ownerToken} roomCode={roomCode} token={ownerToken} onApply={onApply}>
+            {library}
+          </FamilyColoringPicker>
+        ) : library}
       </section>
     </div>
   );

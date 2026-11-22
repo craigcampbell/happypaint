@@ -86,6 +86,9 @@ export default function SafetyPage({ onNavigate }) {
             <strong>Local creative helpers.</strong> The current AI Assist helpers run on your device.
             Sharing artwork in a room or posting it to the Wall still sends that artwork to the server.
           </li>
+          <li>
+            <strong>Custom coloring pages.</strong> In eligible private Family rooms, the grown-up who owns the room can send a scene description to OpenRouter. The generator screens descriptions and pictures for sexual or violent material. The grown-up previews each page before sharing it with the room.
+          </li>
         </ul>
         <p className="safety-note">
           Questions or something to report? Use the report control in a room or email <a href="mailto:safety@drawesome.art">safety@drawesome.art</a>.

@@ -140,6 +140,10 @@ export default function FamilyPage({ onNavigate }) {
           <div className="family-benefits">
             <h2 id="family-plan-title">Inside the Family plan</h2>
             <dl>
+              {isCloudConfigured && config?.aiColoringEnabled && <>
+                <dt>Make your own coloring pages</dt>
+                <dd>Ask for a scene like “a red panda running a bakery on the moon.” In a private drawing room you own, open Coloring sheets to generate up to five pages per calendar month. Download a page to print or put it on the canvas for everyone to color.</dd>
+              </>}
               <dt>Art postcards</dt>
               <dd>Open Invite in your room, choose <strong>Make an art postcard</strong> and add a note. Save the PNG to attach to an email, or share it through a supported app on your device.</dd>
               <dt>Ad-free painting for you</dt>
@@ -159,6 +163,9 @@ export default function FamilyPage({ onNavigate }) {
                   : "Update your payment method or review the subscription securely in Stripe."}</p>
                 {billing.renewsAt ? <p className="family-renewal">{billing.cancelAtPeriodEnd ? "Ends" : "Renews"} {new Date(billing.renewsAt).toLocaleDateString()}</p> : null}
                 {billing.active && <button type="button" className="primary-action" onClick={openRoom}>Open a Family room</button>}
+                {billing.active && isCloudConfigured && config?.aiColoringEnabled && (
+                  <button type="button" className="family-manage" onClick={() => onNavigate(`/join/${createInviteCode()}?color=1`)}>Open a room for coloring</button>
+                )}
                 <button type="button" className="family-manage" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
               </>
             ) : (

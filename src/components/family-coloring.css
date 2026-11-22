@@ -1,0 +1,45 @@
+.sheet-modal .ai-sheet-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 14px;
+  background: #e9edf0;
+}
+.ai-sheet-switch button {
+  min-height: 40px;
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #374351;
+  font: inherit;
+  font-weight: 700;
+}
+.ai-sheet-switch button[aria-pressed="true"] { background: white; box-shadow: 0 1px 4px #17212b26; color: #18232d; }
+.ai-sheet-body { overflow-y: auto; min-height: 0; padding: 2px 3px 5px; }
+.ai-sheet-quota { font-size: .875rem; font-weight: 650; color: #475569; margin: 3px 0 14px; }
+.ai-sheet-form, .ai-sheet-result { display: grid; gap: 9px; }
+.ai-sheet-form > label { font-weight: 750; }
+.ai-sheet-form :is(textarea, select) {
+  width: 100%; box-sizing: border-box; font: inherit;
+  border: 1px solid #98a6b2; border-radius: 9px; background: white; color: #17212b; padding: 10px 12px;
+}
+.ai-sheet-form textarea { resize: vertical; min-height: 74px; max-height: 25vh; }
+.ai-sheet-form select { min-height: 44px; }
+.ai-sheet-prompt-tools { display: flex; justify-content: space-between; align-items: center; margin: -6px 0 1px; }
+.ai-sheet-prompt-tools button, .ai-sheet-another, .ai-sheet-retry button {
+  background: transparent; border: 0; padding: 4px 2px; min-height: 40px; font: inherit; color: #364f68;
+  font-weight: 650; text-decoration: underline; text-underline-offset: 3px;
+}
+.ai-sheet-prompt-tools small, .ai-sheet-note { color: #485564; font-size: .87rem; line-height: 1.45; }
+.ai-sheet-note { margin: 2px 0; }
+.ai-sheet-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 15px; margin-top: 4px; }
+.ai-sheet-actions :is(button, a) { min-height: 44px; display: inline-flex; align-items: center; }
+.ai-sheet-actions a { color: #253e5a; font-weight: 700; text-underline-offset: 3px; }
+.ai-sheet-result figure { margin: 0; padding: 10px; border: 1px solid #ccd4d8; border-radius: 10px; background: #fff; }
+.ai-sheet-result img { display: block; object-fit: contain; width: 100%; height: min(43vh, 400px); }
+.ai-sheet-another { justify-self: start; }
+.ai-sheet-problem { margin: 8px 0 0; color: #803b2a; line-height: 1.4; }
+.ai-sheet-retry { margin: 0; }

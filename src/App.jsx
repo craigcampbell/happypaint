@@ -1009,6 +1009,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const [reportReason, setReportReason] = useState("");
   // Coloring sheet: a shared, locked line-art overlay artists color under/over.
   const sheetImageRef = useRef(null);
+  const sheetLoadVersion = useRef(0);
   const sheetRectRef = useRef(null);
   const sheetModeRef = useRef("over"); // 'over' = lines on top (color under)
   const [sheetId, setSheetId] = useState(null);
@@ -7764,6 +7765,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // Load (or clear) the room's coloring sheet image and re-render.
   const loadSheetImage = useCallback(
     (id) => {
+      const version = ++sheetLoadVersion.current;
       if (!id) {
         sheetImageRef.current = null;
         sheetRectRef.current = null;
@@ -7774,6 +7776,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         const img = new Image();
         img.crossOrigin = "anonymous"; // keep the export canvas untainted
         img.onload = () => {
+          if (version !== sheetLoadVersion.current) return;
           const scale = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
           const w = img.width * scale;
           const h = img.height * scale;
@@ -10220,19 +10223,21 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     }
   }, [loadSheetImage, showToast, initialLocal]);
 
-  // Apply a library sheet from the modal. Picking a sheet starts a fresh page,
+  // Apply a library sheet or a private generated page from the modal. Picking a sheet starts a fresh page,
   // so if there's existing art (or a sheet) we confirm, then wipe + set.
-  const applyLibrarySheet = useCallback(
-    (sheet) => {
+  const applyColoringSheet = useCallback(
+    (sheet, generated = false) => {
       if (!sheet?.id) return;
+      if (generated && (initialLocal || roomAnimationRef.current || !mpConnectedRef.current)) return;
+      const nextSheetId = generated ? sheet.id : `lib:${sheet.id}`;
       // Artist-studio watchers: a sheet wipe/set is a shared mutation.
       if (paintGate("coloring sheets")) return;
       const hasContent = Boolean(sheetId) || historyCount > 0;
       if (initialLocal) {
         if (hasContent && !window.confirm("Start a fresh page with this coloring sheet? It clears your local canvas.")) return;
         if (hasContent) clearCanvas();
-        setSheetId(`lib:${sheet.id}`);
-        loadSheetImage(`lib:${sheet.id}`);
+        setSheetId(nextSheetId);
+        loadSheetImage(nextSheetId);
         setShowSheetModal(false);
         return;
       }
@@ -10244,7 +10249,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           showToast("Reconnecting to the room, try again in a moment.");
           return;
         }
-        mpRef.current?.sendWipeRequest?.(`lib:${sheet.id}`);
+        mpRef.current?.sendWipeRequest?.(nextSheetId);
         setShowSheetModal(false);
         if (layoutTierRef.current !== "desktop") setToolsOpen(false); // don't hide the countdown
         return;
@@ -10253,7 +10258,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         return;
       }
       if (hasContent) mpRef.current?.sendClear?.();
-      mpRef.current?.sendSheet?.(`lib:${sheet.id}`);
+      mpRef.current?.sendSheet?.(nextSheetId);
       setShowSheetModal(false);
       showToast(`Coloring sheet: ${sheet.title}`);
     },
@@ -11167,6 +11172,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
   const postcardAvailable = Boolean(session) && mp.connected && mp.familyRoom && mp.canPaint
     && roomAudience === "friends" && joinStep >= 3 && !initialLocal;
+  const canGenerateColoring = postcardAvailable && isRoomOwner && !roomAnimation
+    && !inkOnly && !roomPhone && !roomGame && !storybook?.enabled && !mpSketchbookPage;
   useEffect(() => {
     if (!postcardAvailable) setShowPostcard(false);
   }, [postcardAvailable]);
@@ -12717,7 +12724,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
         <section className="tool-section rail-top rail-top-0">
           <div className="section-title-row">
-            <h2>Coloring sheet</h2>
+            <h2>{sheetId?.startsWith("ai_") ? "AI coloring page" : "Coloring sheet"}</h2>
             {sheetId && !pinnedFlagSheet ? (
               <button type="button" onClick={() => applySheet(null)}>
                 Remove
@@ -13563,7 +13570,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       ) : null}
 
       {showSheetModal ? (
-        <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyLibrarySheet} />
+        <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyColoringSheet}
+          roomCode={roomId} ownerToken={canGenerateColoring ? session.access_token : null} />
       ) : null}
 
       {showPostcard && postcardAvailable && <ArtPostcard getArt={getInviteArt} onClose={() => setShowPostcard(false)} />}
