@@ -770,8 +770,8 @@ export function createBilling({
             allow_promotion_codes: allowPromotionCodes,
             automatic_tax: { enabled: automaticTax },
             ...(automaticTax ? { customer_update: { address: 'auto' } } : {}),
-            success_url: `${publicOrigin}/family?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${publicOrigin}/family?checkout=canceled`,
+            success_url: `${publicOrigin}/jam-pass?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${publicOrigin}/jam-pass?checkout=canceled`,
             metadata: { profile_id: profileId },
             subscription_data: {
               metadata: { profile_id: profileId },
@@ -870,7 +870,7 @@ export function createBilling({
         const session = await stripe.billingPortal.sessions.create({
           customer: record.customerId,
           configuration: portalConfigurationId,
-          return_url: `${publicOrigin}/family`,
+          return_url: `${publicOrigin}/jam-pass`,
         });
         return res.json({ url: session.url });
       } catch (error) {

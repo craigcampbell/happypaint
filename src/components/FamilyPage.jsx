@@ -56,7 +56,7 @@ export default function FamilyPage({ onNavigate }) {
         .then(({ ok, data }) => {
           if (!active || !ok || !data) return;
           setBilling(data);
-          if (data.active) setMessage("Family is active, welcome!");
+          if (data.active) setMessage("Your Jam Pass is active.");
         })
         .catch(() => {});
     }
@@ -71,13 +71,13 @@ export default function FamilyPage({ onNavigate }) {
 
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get("checkout");
-    if (result === "success") setMessage("Family is activating, welcome! It may take a few seconds to update.");
+    if (result === "success") setMessage("Stripe is confirming your Jam Pass. This may take a few seconds.");
     // Accepts the legacy ?checkout=cancelled spelling on old Stripe cancel URLs.
     if (isCanceled(result)) setMessage("Nothing was charged. You can come back whenever you're ready.");
   }, []);
 
   const callBilling = async (path, body) => {
-    if (!session?.access_token) { onNavigate("/signup?return=/family"); return; }
+    if (!session?.access_token) { onNavigate("/signup?return=/jam-pass"); return; }
     setBusy(true);
     setMessage("");
     try {
@@ -122,15 +122,14 @@ export default function FamilyPage({ onNavigate }) {
 
   return (
     <div className="family-page">
-      <SiteNav onNavigate={onNavigate} current="/family" />
+      <SiteNav onNavigate={onNavigate} current="/jam-pass" />
       <main className="family-main">
         <section className="family-hero" aria-labelledby="family-title">
           <div>
-            <p className="family-kicker">Drawesome Family</p>
-            <h1 id="family-title">Send a little <em>art.</em></h1>
-            <p className="family-lead">Turn a drawing you made together into a postcard for someone you love.</p>
+            <h1 id="family-title">Drawesome <em>Jam Pass.</em></h1>
+            <p className="family-lead">Host an ad-free Art Jam, make coloring pages for your group, and send someone a postcard you painted together.</p>
             <a href="#family-membership" className="family-jump">
-              {billing?.active ? "Your Family membership" : "Explore the Family plan"}
+              {billing?.active ? "Your Jam Pass" : "Get a Jam Pass"}
               {!billing?.active && config?.configured && isCloudConfigured && config.display?.monthly ? ` · ${config.display.monthly}` : ""} ↓
             </a>
           </div>
@@ -142,41 +141,46 @@ export default function FamilyPage({ onNavigate }) {
 
         <section className="family-offer" aria-labelledby="family-plan-title">
           <div className="family-benefits">
-            <h2 id="family-plan-title">Inside the Family plan</h2>
+            <h2 id="family-plan-title">What’s in a Jam Pass?</h2>
             <dl>
               {isCloudConfigured && config?.aiColoringEnabled && <>
                 <dt>Make your own coloring pages</dt>
-                <dd>Sign in with a paid Family account to make up to five AI coloring pages per calendar month. In a private room you own, ask for a scene like “a red panda running a bakery on the moon.” Preview the page, download it to print, or share it on the canvas. Your signed-in guests can color it with you for free.</dd>
+                <dd>Make up to five AI outlines per calendar month with your paid pass. Describe a scene, like a red panda running a bakery on the moon, then print the page or invite friends to color it together.</dd>
+              </>}
+              {isCloudConfigured && <>
+                <dt>My Coloring Book</dt>
+                <dd>Your generated outlines go into a private book. Choose <strong>Keep this version</strong> after an Art Jam to keep everyone’s brushstrokes beside the original. Print a favorite or color the same outline another day.</dd>
               </>}
               <dt>Art postcards</dt>
               <dd>Open Invite in your room, choose <strong>Make an art postcard</strong> and add a note. Save the PNG to attach to an email, or share it through a supported app on your device.</dd>
               <dt>Ad-free painting for you</dt>
-              <dd>Sign in with your Family account to paint ad-free in any drawing room you visit.</dd>
-              <dt>One plan for the room</dt>
-              <dd>Everyone who draws in a private room you own can paint ad-free and make postcards. Your guests join for free.</dd>
+              <dd>Sign in with your Jam Pass to paint ad-free in any room.</dd>
+              <dt>Bring your whole group</dt>
+              <dd>One pass covers a private Art Jam you host. Your signed-in guests can paint ad-free and make postcards for free.</dd>
             </dl>
           </div>
 
           <div className="family-card" id="family-membership">
             {billing?.active || billing?.manageable ? (
               <>
-                <span className="family-active-badge">{billing.active ? "Family active" : "Billing needs attention"}</span>
-                <h2>{billing.active ? "Your Family plan" : "Keep your Family plan running"}</h2>
+                <span className="family-active-badge">{billing.active ? "Pass active" : "Billing needs attention"}</span>
+                <h2>{billing.active ? "Your Jam Pass" : "Manage your Jam Pass"}</h2>
                 <p>{billing.active
-                  ? "Start a private room and share its invite link. Your guests get the room’s Family benefits as soon as they join."
+                  ? "Start an Art Jam and share the room link to invite someone to draw with you."
                   : "Update your payment method or review the subscription securely in Stripe."}</p>
                 {billing.renewsAt ? <p className="family-renewal">{billing.cancelAtPeriodEnd ? "Ends" : "Renews"} {new Date(billing.renewsAt).toLocaleDateString()}</p> : null}
-                {billing.active && <button type="button" className="primary-action" onClick={openRoom}>Open a Family room</button>}
+                {billing.active && <button type="button" className="primary-action" onClick={openRoom}>Start an Art Jam</button>}
                 {isCloudConfigured && config?.aiColoringEnabled && (
                   billing.aiColoringPaid === true
                     ? <button type="button" className="family-manage" onClick={() => onNavigate(`/join/${createInviteCode()}?color=1`)}>Open a room for coloring</button>
                     : <p>AI coloring pages unlock when Stripe confirms payment for your current billing period.</p>
                 )}
+                {isCloudConfigured && billing.aiColoringPaid === true && <button type="button" className="family-manage" onClick={() => onNavigate("/coloring-book")}>My Coloring Book</button>}
                 <button type="button" className="family-manage" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
               </>
             ) : (
               <>
-                <h2>Family membership</h2>
+                <h2>Get a Jam Pass</h2>
                 {price && <>
                   <div className="family-price-toggle" role="group" aria-label="Billing frequency">
                     <button type="button" aria-pressed={interval === "monthly"} className={interval === "monthly" ? "is-on" : ""} onClick={() => setInterval("monthly")}>Monthly</button>
@@ -201,13 +205,13 @@ export default function FamilyPage({ onNavigate }) {
                     interval,
                     adultConfirmed,
                     termsVersion: config?.termsVersion,
-                  }) : onNavigate("/signup?return=/family")}
+                  }) : onNavigate("/signup?return=/jam-pass")}
                 >
-                  {busy ? "Opening secure checkout…" : !config ? "Checking availability…" : !configuredForPlan ? "Subscriptions opening soon" : !session ? "Create an account or sign in" : "Start Drawesome Family"}
+                  {busy ? "Opening secure checkout…" : !config ? "Checking availability…" : !configuredForPlan ? "Subscriptions opening soon" : !session ? "Create an account or sign in" : "Get Jam Pass"}
                 </button>
                 {!configuredForPlan ? (
                   <div className="family-setup-note" role="status">
-                    <p>{config ? "Family checkout is currently unavailable. You can still draw together for free." : "You can start drawing while we check."}</p>
+                    <p>{config ? "Jam Pass checkout is currently unavailable. You can still draw together for free." : "You can start drawing while we check."}</p>
                     <button type="button" onClick={() => isCloudConfigured && !session ? onNavigate("/friends") : openRoom()}>Draw with friends for free</button>
                   </div>
                 ) : null}

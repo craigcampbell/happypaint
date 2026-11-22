@@ -4,7 +4,7 @@ import { getDiscoverySeo, DISCOVERY_PATHS } from '../src/data/discoverySeo.js';
 import { renderDiscoveryLanding } from '../server/discoverySeo.js';
 
 test('new discovery pages have unique canonical metadata without changing legacy URLs', () => {
-  assert.deepEqual(DISCOVERY_PATHS, ['/friends', '/gallery', '/studios', '/events', '/draw', '/events/draw-for-rhoam', '/events/little-joys']);
+  assert.deepEqual(DISCOVERY_PATHS, ['/friends', '/jam-pass', '/gallery', '/studios', '/events', '/draw', '/events/draw-for-rhoam', '/events/little-joys']);
   const titles = new Set(DISCOVERY_PATHS.map((path) => getDiscoverySeo(path).title));
   assert.equal(titles.size, DISCOVERY_PATHS.length);
   assert.equal(getDiscoverySeo('/events/no-such-event'), null);

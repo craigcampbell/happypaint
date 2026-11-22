@@ -21,7 +21,7 @@ import "../seasonal.css";
 const PRIMARY = [
   { href: "/friends", label: "Friends" },
   { href: "/gallery", label: "Gallery" },
-  { href: "/family", label: "Family plan" },
+  { href: "/jam-pass", label: "Jam Pass" },
 ];
 
 // Grouped destinations: dropdowns at desktop, headed sections in the sheet.

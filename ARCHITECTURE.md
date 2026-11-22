@@ -310,7 +310,7 @@ token)`), returns `send*` emitters + `disconnect()`.
   bound to `mutedProfileIds` (survives reconnect), and a locked room **auto-unlocks
   when the last host leaves** (no bricked canvases). Only the opaque profile id is
   persisted, never a display name (PII).
-- **Family entitlement**: Stripe webhooks maintain an atomic, event-deduplicated
+- **Jam Pass entitlement**: Stripe webhooks maintain an atomic, event-deduplicated
   profile-to-subscription mapping in `.billing.json`. Access is bounded by the
   last paid-through time (plus a short configured past-due grace), reconciled
   against Stripe. A subscriber paints ad-free in any drawing room. Every
@@ -344,22 +344,25 @@ token)`), returns `send*` emitters + `disconnect()`.
 - Studio: `ColoringSheetModal` (search/grid/preview/Add). A room has **one**
   active sheet; changing it clears the canvas (confirm). Library sheet ids are
   prefixed `lib:` in the `set_sheet` protocol and loaded as static PNGs.
-- Private Family room owners can also request an AI coloring page at
+- Private room owners with Jam Pass can also request an AI coloring page at
   `GET|POST /api/rooms/:code/ai-coloring`. The Node server checks a submitted
   scene description through OpenRouter, generates one image, reviews the
   raster and converts it to black ink on transparency. The owner can preview
   the page before sharing it through the room's sheet/wipe flow. Site
   moderators can inspect previews and applied sheets at `/admin#ai-coloring`.
   AI access requires a signed-in owner and a positive Stripe invoice payment
-  covering the current Family period. The ordinary Family grace period only
+  covering the current Jam Pass period. The ordinary subscription grace period only
   applies to other benefits. Each provider call and delivery rechecks access.
   A signed-in invitee can paint on the owner's applied page while that paid
   period lasts. A billing update or expiry hides the outline and preserves
   strokes. The server resumes the selected outline when paid coverage returns.
   Applied `ai_` sheets load through the authenticated `/api/sheets/:id`
-  route. Assets and monthly accounting live under `DATA_DIR/.ai-coloring`
+  route with an explicit room code when reused. My Coloring Book at
+  `/coloring-book` lists the owner’s saved originals and colored versions via
+  `/api/me/coloring-book`. Both survive room closure. Moderator takedowns and
+  account erasure cascade to the private book. Assets and monthly accounting live under `DATA_DIR/.ai-coloring`
   and are scrubbed on account erasure. See [MONETIZATION.md](MONETIZATION.md#custom-coloring-pages)
-  for the runtime flags and Family allowance.
+  for the runtime flags and Jam Pass allowance.
 
 ## Economy, play-money only
 
@@ -393,7 +396,7 @@ everything:
   hashed device keys (ip|ua, no PII) with last-seen / last-painted /
   last-watched stamps plus per-minute event buckets, 36h deep, so "today so
   far" survives a deploy.
-- `.billing.json`, opaque Stripe ids, Family paid-through state, processed
+- `.billing.json`, opaque Stripe ids, Jam Pass paid-through state, processed
   webhook ids, pending cancellation retries, and adult-attestation version,
   keyed by the PocketBase profile id. Card data and billing email never enter
   this store.
@@ -411,7 +414,7 @@ sockets, devices seen in 5 min; what the host's hp* monitors read);
 (now / 30m / 4h / today windows), sheet-theme);
 `/api/sheets` (custom uploads); `/api/coloring-sheets` + `/today` (library);
 `/api/billing/config|me|checkout|checkout/confirm|portal|webhook` (env-gated
-Stripe Family plan); `/api/admin/billing` (non-secret billing health and retry
+Stripe Jam Pass plan); `/api/admin/billing` (non-secret billing health and retry
 counts behind the admin key);
 `/coloring-sheets/full|thumbs/*` (static). SPA fallback 404s on `/api/` +
 `/coloring-sheets/` misses.

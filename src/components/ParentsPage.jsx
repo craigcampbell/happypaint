@@ -32,8 +32,8 @@ const PILLARS = [
   },
   {
     icon: "🚫",
-    title: "Free drawing, optional adult-owned Family plan",
-    body: "Public rooms are free to join as a guest. Drops are play money, with no paid coins or cash tips. Free spaces may display contextual ads. An optional Family subscription gives the member ad-free painting and lets everyone in their private rooms make art postcards.",
+    title: "Free Art Jams, optional Jam Pass",
+    body: "Public rooms are free to join as a guest. Drops are play money, with no paid coins or cash tips. Free spaces may display contextual ads. An adult can buy a Jam Pass to host ad-free Art Jams, make coloring pages and turn shared drawings into art postcards.",
   },
   {
     icon: "🧽",

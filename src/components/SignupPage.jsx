@@ -31,17 +31,18 @@ export default function SignupPage({ onNavigate }) {
   // Where to go afterwards. Only our own few destinations are honored (never an
   // arbitrary URL, that would be an open redirect): a room the person was
   // trying to enter (the private-room gate sends `/join/CODE`), their rooms, or
-  // the family page.
+  // the Jam Pass page.
   const returnPath = (() => {
     const requested = new URLSearchParams(window.location.search).get("return") || "";
     return safeSignInReturn(requested);
   })();
   const friendsReturn = returnPath === "/friends";
-  const familyReturn = returnPath === "/family";
+  const passReturn = returnPath === "/jam-pass" || returnPath === "/family";
+  const bookReturn = returnPath === "/coloring-book";
   const promptReturn = returnPath.startsWith("/draw?");
   // A rejected token may still look valid to the local PocketBase store.
   // The prompt's explicit reauthentication link opens the form in that case.
-  const reauthenticate = (promptReturn || friendsReturn) && new URLSearchParams(window.location.search).get("reauth") === "1";
+  const reauthenticate = (promptReturn || friendsReturn || passReturn || bookReturn) && new URLSearchParams(window.location.search).get("reauth") === "1";
   const showSignedIn = session && !reauthenticate;
   const newRoomPath = () => {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -55,7 +56,7 @@ export default function SignupPage({ onNavigate }) {
   const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
   // A guest can't enter a private room (the door asks for an account), so the
   // guest exit goes to the open studio rather than a random private code.
-  const guestPath = friendsReturn ? "/friends" : promptReturn ? "/draw" : familyReturn ? returnPath : "/join/MAIN";
+  const guestPath = friendsReturn ? "/friends" : promptReturn ? "/draw" : (passReturn || bookReturn) ? "/jam-pass" : "/join/MAIN";
   // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
   // "" until answered; signup stays disabled until one option is picked.
   const [ageBand, setAgeBand] = useState("");
@@ -130,14 +131,16 @@ export default function SignupPage({ onNavigate }) {
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
         <h1>{showSignedIn ? "You’re signed in"
-          : familyReturn ? "Your Drawesome Family account"
+          : bookReturn ? "Sign in to My Coloring Book"
+          : passReturn ? "Your Drawesome Jam Pass"
           : mode === "login" ? "Welcome back"
           : friendsReturn ? "Sign up to draw with friends"
           : promptReturn ? "Sign up for your drawing prompt"
           : "Keep your gallery across devices"}</h1>
         <p className="site-lead">
-          {familyReturn && showSignedIn ? "Continue to Family to see the plan on this account."
-            : familyReturn ? "Already subscribed? Sign in with the Drawesome account you used at checkout. New to Family? Create a free account, then choose a paid plan through Stripe."
+          {bookReturn ? "Open the private collection of outlines and finished paintings saved with your Jam Pass."
+            : passReturn && showSignedIn ? "Continue to Jam Pass to see the subscription on this account."
+            : passReturn ? "Already have a Jam Pass? Sign in with the Drawesome account you used at checkout. To get a pass, create a free account and choose a plan through Stripe."
             : friendsReturn ? "Choose a nickname and exchange friend codes to draw and color together."
             : promptReturn ? "Your selected prompt opens on a private canvas after you sign in. You can also start with a blank canvas as a guest."
             : <>You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find it on any device.</>}
@@ -148,10 +151,10 @@ export default function SignupPage({ onNavigate }) {
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
               <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/rooms")}>
-                {familyReturn ? "Continue to Family →" : friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
+                {bookReturn ? "Open My Coloring Book →" : passReturn ? "Continue to Jam Pass →" : friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
               </button>
               <button type="button" className="signup-guest" onClick={() => onNavigate(newRoomPath())}>
-                ✨ Start a new private room
+                ✨ Start a private Art Jam
               </button>
               {/* Without a way out, a stale sign-in here could never be fixed. */}
               <button
@@ -270,7 +273,7 @@ export default function SignupPage({ onNavigate }) {
               ) : null}
 
               <button type="button" className="signup-guest" onClick={() => onNavigate(guestPath)}>
-                {familyReturn ? "Back to the Family plan →" : friendsReturn ? "Back to Friends →" : promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
+                {(passReturn || bookReturn) ? "Explore Jam Pass →" : friendsReturn ? "Back to Friends →" : promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
               </button>
             </>
           )}

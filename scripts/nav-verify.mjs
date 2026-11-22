@@ -1,3 +1,4 @@
+/* global document, getComputedStyle, innerWidth, innerHeight */
 // Nav redesign verify: isolated server + Playwright at phone/tablet/desktop widths.
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -64,7 +65,7 @@ try {
           return { links, menuBottom: mr.bottom, vh: innerHeight, mW: mr.width, scrollable: m.scrollHeight > m.clientHeight, expanded: document.querySelector(".site-nav-toggle").getAttribute("aria-expanded"), locked: getComputedStyle(document.documentElement).overflow };
         });
         const texts = open.links.map((l) => l.t).join(" | ");
-        check(`${tag}: sheet lists every destination`, ["Live rooms", "Gallery", "The Wall", "Inktober", "Painted Planet", "Parent & teacher guide", "Safety & FAQ", "Family plan", "Privacy"].every((t) => texts.includes(t)), texts);
+        check(`${tag}: sheet lists every destination`, ["Live rooms", "Gallery", "The Wall", "Inktober", "Painted Planet", "Parent & teacher guide", "Room safety", "Common questions", "Jam Pass", "Privacy"].every((t) => texts.includes(t)), texts);
         check(`${tag}: sheet rows are ≥44px tall`, open.links.every((l) => l.h >= 44), String(Math.min(...open.links.map((l) => l.h))));
         check(`${tag}: sheet fits viewport (or scrolls inside itself)`, open.menuBottom <= open.vh + 1, `${Math.round(open.menuBottom)}/${open.vh} scroll=${open.scrollable}`);
         check(`${tag}: aria-expanded true + page scroll locked`, open.expanded === "true" && open.locked === "hidden");

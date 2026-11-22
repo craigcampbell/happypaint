@@ -10,8 +10,11 @@ const ATTEMPT_LIMIT = 12;
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_PNG = 4 * 1024 * 1024;
 const MAX_ENTRIES = 16384;
+const MAX_VERSION_BYTES = 1024 * 1024 * 1024;
+const MAX_VERSIONS_PER_PAGE = 24;
 const DAY = 86400000;
 const PATTERN = /^(ai_[0-9a-f]{24})\.([a-f0-9]{64})\.([A-Z0-9_-]{1,16})\.(\d{13})\.([0-9a-f]{64}|none)\.[a-zA-Z0-9_-]{1,48}\.(?:entry|r([a-z0-9]{8,10}))$/;
+const VERSION_PATTERN = /^(ai_[0-9a-f]{24})\.(v_[0-9a-f]{24})\.(\d{13})\.([a-f0-9]{64})\.png$/;
 const TITLE = 'Custom coloring page';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -47,18 +50,20 @@ function replaceContents(entry, bytes) {
   entry.size = bytes.length;
 }
 
-export function createAiColoringStore(dataDir, isPinned) {
+export function createAiColoringStore(dataDir) {
   const directory = join(dataDir, '.ai-coloring');
   let entries;
   let lastPruned = 0;
+  let versionBytes = 0;
   const pending = new Map();
 
   function load() {
     if (entries) return entries;
     const records = new Map();
     if (existsSync(directory)) {
-      for (const name of readdirSync(directory)) {
-        if (name.endsWith('.tmp') && PATTERN.test(name.slice(0, -4))) {
+      const names = readdirSync(directory);
+      for (const name of names) {
+        if (name.endsWith('.tmp') && (PATTERN.test(name.slice(0, -4)) || VERSION_PATTERN.test(name.slice(0, -4)))) {
           unlinkSync(join(directory, name)); // incomplete image from an interrupted write
           continue;
         }
@@ -69,6 +74,23 @@ export function createAiColoringStore(dataDir, isPinned) {
         const size = statSync(path).size;
         records.set(id, { id, owner, room, created: Number(created), requestKey, path, size, ...readStatus(path, size, reviewed) });
       }
+      let total = 0;
+      for (const name of names) {
+        const match = VERSION_PATTERN.exec(name);
+        if (!match) continue;
+        const [, pageId, id, createdAt, requestKey] = match;
+        const entry = records.get(pageId);
+        const path = join(directory, name);
+        const { size, mtimeMs } = statSync(path);
+        if (!hasPage(entry) || (!size && mtimeMs + DAY <= Date.now())) {
+          // Finish an interrupted takedown before serving any archive reads.
+          unlinkSync(path);
+          continue;
+        }
+        (entry.versions ??= []).push({ id, createdAt: Number(createdAt), requestKey, size, path, deletedAt: size ? null : mtimeMs });
+        total += size;
+      }
+      versionBytes = total;
     }
     entries = records;
     return entries;
@@ -88,6 +110,7 @@ export function createAiColoringStore(dataDir, isPinned) {
   }
 
   function remove(record) {
+    eraseVersions(record);
     try { unlinkSync(record.path); }
     catch (err) { if (err.code !== 'ENOENT') throw err; }
     entries.delete(record.id);
@@ -98,9 +121,9 @@ export function createAiColoringStore(dataDir, isPinned) {
     const keepSince = Math.min(monthStart(now), now.getTime() - DAY);
     let bytes = 0;
     for (const entry of load().values()) {
-      // Retain a takedown decision until room/account deletion. Even an old
-      // idempotency key must never be sent back to the provider after removal.
-      if (due && entry.created < keepSince && entry.status !== 'removed' && (!hasPage(entry) || !isPinned(entry.room, entry.id))) remove(entry);
+      // Delivered originals form the owner's coloring book. Only expired
+      // usage markers are disposable. Keep takedowns for idempotent retries.
+      if (due && entry.created < keepSince && entry.status !== 'removed' && !hasPage(entry)) remove(entry);
       else bytes += entry.size;
     }
     if (due) lastPruned = now.getTime();
@@ -178,20 +201,79 @@ export function createAiColoringStore(dataDir, isPinned) {
   }
 
   function closeRoom(code) {
-    for (const entry of load().values()) {
-      if (entry.room !== code) continue;
-      if (pending.get(entry.owner) === entry) pending.delete(entry.owner);
-      if (entry.status === 'blocked') {
-        replaceContents(entry, Buffer.alloc(0));
-        entry.status = 'attempt';
-        delete entry.stage;
-      }
-      if (!wasDelivered(entry) || entry.status === 'closed') continue;
-      // Removing a room erases the private art immediately. A single byte
-      // still counts the delivered page until the monthly budget rolls over.
-      replaceContents(entry, Buffer.of(0));
-      entry.status = 'closed';
+    // Closing a room cancels outstanding work. The account keeps its book.
+    for (const [owner, entry] of pending) {
+      if (entry.room === code) pending.delete(owner);
     }
+  }
+
+  function ownedPage(profile, id) {
+    const entry = load().get(id);
+    if (!hasPage(entry) || !profile || entry.owner !== hash(profile)) throw reject(404, 'page_not_found');
+    return entry;
+  }
+
+  const versionMeta = ({ id, createdAt }) => ({ id, createdAt });
+
+  function versionForKey(profile, id, key) {
+    const entry = ownedPage(profile, id);
+    const requestKey = hash(key);
+    const version = entry.versions?.find(item => item.requestKey === requestKey);
+    if (version && !version.size) throw reject(410, 'version_removed');
+    return version ? versionMeta(version) : null;
+  }
+
+  function book(profile, offset, limit) {
+    const owner = hash(profile);
+    const rows = [...load().values()].filter(entry => hasPage(entry) && entry.owner === owner);
+    rows.sort((a, b) => b.created - a.created || b.id.localeCompare(a.id));
+    return {
+      items: rows.slice(offset, offset + limit).map(entry => ({
+        id: entry.id, title: TITLE, createdAt: entry.created,
+        versions: (entry.versions || []).filter(item => item.size).map(versionMeta)
+          .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)),
+      })),
+      total: rows.length,
+    };
+  }
+
+  function ownedVersion(entry, id) {
+    const version = entry.versions?.find(item => item.id === id);
+    if (!version) throw reject(404, 'version_not_found');
+    return version;
+  }
+
+  function removeVersion(entry, version) {
+    try { unlinkSync(version.path); }
+    catch (err) { if (err.code !== 'ENOENT') throw err; }
+    entry.versions.splice(entry.versions.indexOf(version), 1);
+    versionBytes -= version.size;
+  }
+
+  function eraseVersions(entry) {
+    for (const version of [...(entry.versions || [])]) removeVersion(entry, version);
+  }
+
+  function saveVersion(profile, pageId, key, png) {
+    const entry = ownedPage(profile, pageId);
+    const versions = entry.versions ??= [];
+    const now = Date.now();
+    for (const version of versions.filter(item => !item.size && item.deletedAt + DAY <= now)) removeVersion(entry, version);
+    const requestKey = hash(key);
+    const existing = versions.find(item => item.requestKey === requestKey);
+    if (existing && !existing.size) throw reject(410, 'version_removed');
+    if (existing) return versionMeta(existing);
+    if (versions.filter(item => item.size).length >= MAX_VERSIONS_PER_PAGE) throw reject(409, 'version_limit');
+    if (!Buffer.isBuffer(png) || png.length > MAX_PNG) throw reject(413, 'image_too_large');
+    if (versionBytes + png.length > MAX_VERSION_BYTES) throw reject(503, 'storage_full');
+    const id = 'v_' + randomBytes(12).toString('hex');
+    const createdAt = now;
+    const path = join(directory, [pageId, id, createdAt, requestKey, 'png'].join('.'));
+    const version = { id, createdAt, requestKey, path };
+    replaceContents(version, png);
+    versions.push(version);
+    versionBytes += version.size;
+    return versionMeta(version);
   }
 
   function noteBlocked(entry, stage) {
@@ -231,7 +313,10 @@ export function createAiColoringStore(dataDir, isPinned) {
     if (status !== 'reviewed' && status !== 'removed') throw reject(400, 'invalid_decision');
     const entry = load().get(id);
     if (!hasPage(entry) && entry?.status !== 'removed') throw reject(404, 'page_not_found');
-    if (entry.status === status) return moderationRow(entry);
+    if (entry.status === status) {
+      if (status === 'removed') eraseVersions(entry);
+      return moderationRow(entry);
+    }
     if (entry.status === 'removed') throw reject(409, 'page_removed');
     const reviewedAt = Date.now();
     if (status === 'reviewed') {
@@ -239,23 +324,40 @@ export function createAiColoringStore(dataDir, isPinned) {
       renameSync(entry.path, path);
       entry.path = path;
     } else {
-      // This atomic replacement destroys the only PNG and commits its
-      // takedown together. No second image or sidecar can survive a crash.
+      // Commit the takedown with the deletion of the original. All version
+      // reads require that original. Boot finishes an interrupted cleanup.
       replaceContents(entry, Buffer.from('removed:' + reviewedAt));
     }
     entry.status = status;
     entry.reviewedAt = reviewedAt;
+    if (status === 'removed') eraseVersions(entry);
     return moderationRow(entry);
   }
 
   return {
     usage, latest, page, begin, finish, release, scrub, closeRoom, noteBlocked, listModeration, preview, moderate,
+    book, saveVersion, versionForKey,
+    bookImage(profile, id, versionId) {
+      const entry = ownedPage(profile, id);
+      if (!versionId) return readFileSync(entry.path);
+      const version = ownedVersion(entry, versionId);
+      if (!version.size) throw reject(404, 'version_not_found');
+      return readFileSync(version.path);
+    },
+    deleteVersion(profile, id, versionId) {
+      const version = ownedVersion(ownedPage(profile, id), versionId);
+      if (!version.size) return;
+      const size = version.size;
+      // Retain only a request-key marker briefly so a delayed retry cannot
+      // recreate a version the owner just erased.
+      replaceContents(version, Buffer.alloc(0));
+      version.deletedAt = Date.now();
+      versionBytes -= size;
+    },
     find(id) { const entry = load().get(id); return hasPage(entry) ? entry : null; },
-    belongs(id, room, profile) {
-      try {
-        const entry = load().get(id);
-        return Boolean(hasPage(entry) && entry.room === room && profile && entry.owner === hash(profile));
-      } catch { return false; } // Unreadable private ink cannot block room entry or authorize a wipe.
+    belongs(id, profile) {
+      try { return Boolean(ownedPage(profile, id)); }
+      catch { return false; } // An unreadable archive cannot authorize a wipe.
     },
   };
 }

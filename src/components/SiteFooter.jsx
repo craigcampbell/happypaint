@@ -20,7 +20,7 @@ export default function SiteFooter({ onNavigate }) {
         { href: "/friends", label: "Friends & room codes" },
         { href: "/draw", label: "Solo drawing" },
         { href: "/join/DAILY", label: "Daily challenge" },
-        { href: "/family", label: "Family & art postcards" },
+        { href: "/jam-pass", label: "Jam Pass & art postcards" },
       ],
     },
     {

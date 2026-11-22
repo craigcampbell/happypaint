@@ -153,6 +153,7 @@ import StepBackPreview from "./components/StepBackPreview";
 import { createNsfwWatcher, isWatcherCapable } from "./utils/nsfwWatcher";
 import { classifyImageNsfw } from "./utils/nsfwCheck";
 import ColoringSheetModal from "./components/ColoringSheetModal";
+import KeepColoringVersion from "./components/KeepColoringVersion";
 import GameHud from "./components/GameHud";
 import WipeCountdown from "./components/WipeCountdown";
 import DrawPhonePanel from "./components/DrawPhonePanel";
@@ -642,7 +643,7 @@ async function migrateDeviceArtToAccount(deviceKey, token) {
   }
 }
 
-export default function StudioApp({ initialJoinCode = "", initialPrompt = "", initialLocal = false, initialEvent = "", initialColoring = false }) {
+export default function StudioApp({ initialJoinCode = "", initialPrompt = "", initialLocal = false, initialEvent = "", initialColoring = false, initialBookOutline, initialMakePage = false }) {
   const drawingEvent = initialLocal ? getCommunityEvent(initialEvent) : null;
   const displayCanvasRef = useRef(null);
   const displayContextRef = useRef(null);
@@ -1235,11 +1236,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const [privateNoticeDismissed, setPrivateNoticeDismissed] = useState(false);
   const [showSheetModal, setShowSheetModal] = useState(false);
   const colorEntryRef = useRef(initialColoring ? "joining" : "");
-  useEffect(() => {
-    if (joinStep < 3 || colorEntryRef.current !== "choose") return;
-    colorEntryRef.current = "";
-    setShowSheetModal(true);
-  }, [joinStep]);
+  const requestedOutline = useRef(/^ai_[a-f0-9]{24}$/.test(initialBookOutline || "") ? initialBookOutline : null);
+  const [startWithGenerator, setStartWithGenerator] = useState(initialMakePage);
+  const [awaitingBookSheet, setAwaitingBookSheet] = useState("");
 
   // ---- Artist studios: the local mutation gate -----------------------------
   // A watcher in an artist studio must never change local canvas state, the
@@ -7778,6 +7777,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         img.crossOrigin = "anonymous"; // keep the export canvas untainted
         img.onload = () => {
           if (version !== sheetLoadVersion.current) return;
+          img.dataset.sheetId = id;
           const scale = Math.min(CANVAS_WIDTH / img.width, CANVAS_HEIGHT / img.height);
           const w = img.width * scale;
           const h = img.height * scale;
@@ -7807,14 +7807,15 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         return;
       }
       // Custom admin uploads AND user trace photos come back as a data URL.
-      fetch(`/api/sheets/${id}`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) })
+      const roomQuery = id.startsWith("ai_") ? "?room=" + encodeURIComponent(roomId) : "";
+      fetch(`/api/sheets/${id}${roomQuery}`, { cache: "no-store", headers: filmAuthHeaders(tokenRef.current) })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.image) applySrc(data.image);
         })
         .catch(() => {});
     },
-    [renderDisplay],
+    [renderDisplay, roomId],
   );
 
   // Trace-a-photo: read a chosen photo, downscale it, run a best-effort NSFW
@@ -11187,6 +11188,45 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const canGenerateColoring = inPrivateDrawingRoom && mp.aiColoringPaid && isRoomOwner && !roomAnimation
     && !inkOnly && !roomPhone && !roomGame && !storybook?.enabled && !mpSketchbookPage;
   useEffect(() => {
+    if (joinStep < 3 || colorEntryRef.current !== "choose") return;
+    colorEntryRef.current = "";
+    const id = requestedOutline.current;
+    requestedOutline.current = null;
+    if (id || initialMakePage) window.history.replaceState({}, "", window.location.href);
+    if (id && canGenerateColoring && !historyCount) {
+      setAwaitingBookSheet(id);
+      mpRef.current?.sendSheet(id);
+    } else {
+      setShowSheetModal(true);
+    }
+  }, [joinStep, canGenerateColoring, historyCount, initialMakePage]);
+  useEffect(() => {
+    if (!awaitingBookSheet) return;
+    if (sheetId === awaitingBookSheet) { setAwaitingBookSheet(""); return; }
+    const timer = window.setTimeout(() => {
+      setAwaitingBookSheet("");
+      setShowSheetModal(true);
+      showToast("This outline couldn’t be opened. Choose a page to try again.");
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [awaitingBookSheet, sheetId, showToast]);
+  const captureColoringVersion = async id => {
+    const image = sheetImageRef.current;
+    if (!image || image.dataset.sheetId !== id) throw new Error("Wait for the outline to load, then try again.");
+    const version = sheetLoadVersion.current;
+    const canvas = await composeCanvas({ width: 1600, height: 1000 });
+    let png = await canvasToDataUrl(canvas);
+    // Dense paint or paper textures may exceed the upload limit at 1600 px.
+    if (png.length > 4 * Math.ceil((4 * 1024 * 1024) / 3) + 22) {
+      const smaller = document.createElement("canvas");
+      smaller.width = 1200; smaller.height = 750;
+      smaller.getContext("2d").drawImage(canvas, 0, 0, smaller.width, smaller.height);
+      png = await canvasToDataUrl(smaller);
+    }
+    if (!png || version !== sheetLoadVersion.current) throw new Error("The canvas changed. Try keeping the current version.");
+    return png;
+  };
+  useEffect(() => {
     if (sheetId?.startsWith("ai_") && (!session || !mp.connected)) {
       setSheetId(null);
       loadSheetImage(null);
@@ -12757,6 +12797,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
               🎨 {sheetId ? "Change coloring sheet" : "Browse 6,000+ coloring sheets"}
             </button>
           ) : null}
+          {canGenerateColoring && sheetId?.startsWith("ai_") && <KeepColoringVersion key={sheetId + session.access_token}
+            sheetId={sheetId} room={roomId} token={session.access_token} capture={captureColoringVersion} />}
           {/* Trace-a-photo: private rooms (friends) or the host of an owned
               public room. The hostless public drawing rooms never see it, a
               photo shows on every screen instantly, so it needs an accountable
@@ -13588,7 +13630,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       ) : null}
 
       {showSheetModal ? (
-        <ColoringSheetModal onClose={() => setShowSheetModal(false)} onApply={applyColoringSheet}
+        <ColoringSheetModal onClose={() => { setShowSheetModal(false); setStartWithGenerator(false); }} onApply={applyColoringSheet} initialMakePage={startWithGenerator}
           roomCode={roomId} ownerToken={canGenerateColoring ? session.access_token : null} removedAiSheets={removedAiSheets} />
       ) : null}
 

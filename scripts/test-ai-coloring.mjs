@@ -1,4 +1,4 @@
-// Exercise the private Family sheet from provider request through late join and erasure.
+// Exercise a Jam Pass coloring book from generation through room reuse, saving versions and erasure.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -116,6 +116,10 @@ async function api(path, token, body, key) {
 function admin(suffix = '', method = 'GET', headers = { 'x-admin-key': adminKey }) {
   return fetch(base + '/api/admin/ai-coloring' + suffix, { method, headers });
 }
+const bookPath = '/api/me/coloring-book';
+function bookImage(path, token) {
+  return fetch(base + bookPath + path, { headers: { Authorization: 'Bearer ' + token } });
+}
 async function painter(room, token = '') {
   const ws = new WebSocket(base.replace('http:', 'ws:') + '/ws?room=' + room);
   sockets.add(ws);
@@ -156,6 +160,7 @@ try {
   assert.equal((await api('/api/billing/config')).body.aiColoringEnabled, false);
   assert(Array.isArray((await api('/api/coloring-sheets')).body.sheets));
   await painter('MAIN');
+  assert.equal((await api(bookPath)).status, 401);
   assert((await api(sheetApi, '', request)).status >= 400);
   assert.equal(calls.length, 0);
   await stop();
@@ -167,6 +172,7 @@ try {
   assert.equal(owner.connected.aiColoringPaid, true);
   assert.equal(friend.connected.aiColoringPaid, false, 'a paid room does not grant an invitee generation rights');
   for (const token of ['', 'invalid-token']) {
+    assert.equal((await api(bookPath, token)).status, 401);
     assert.equal((await api(sheetApi, token)).status, 401);
     assert.equal((await api(sheetApi, token, request, randomUUID())).status, 401);
   }
@@ -178,6 +184,7 @@ try {
     const member = await painter(code, profile);
     assert.equal(member.connected.isOwner, true);
     assert.equal(member.connected.aiColoringPaid, false, profile);
+    assert.equal((await api(bookPath, profile)).status, 403);
     assert.equal((await api(ownApi, profile)).status, 403, profile);
     assert.equal((await api(ownApi, profile, request, randomUUID())).status, 403, profile);
     member.close();
@@ -210,6 +217,20 @@ try {
   const repeated = await api(sheetApi, 'owner', request, key);
   assert.equal(repeated.body.id, id);
   assert.equal(calls.length, 0);
+  const bookEntry = '/' + id;
+  const versionsPath = bookPath + bookEntry + '/versions';
+  const finishedImage = await sharp(drawing).tint('#cd4c32').png().toBuffer();
+  const capture = { room, image: 'data:image/png;base64,' + finishedImage.toString('base64') };
+  const list = await api(bookPath, 'owner');
+  assert.equal(list.status, 200);
+  assert.equal(list.body.total, 1);
+  assert.equal(list.body.items[0].id, id);
+  assert.equal((await api(bookPath, 'other')).body.total, 0);
+  const outline = await bookImage(bookEntry + '/image', 'owner');
+  assert.match(outline.headers.get('cache-control'), /no-store/);
+  assert.deepEqual(Buffer.from(await outline.arrayBuffer()), Buffer.from(image.split(',')[1], 'base64'));
+  assert.equal((await bookImage(bookEntry + '/image', 'other')).status, 404);
+  assert((await api(versionsPath, 'owner', capture, randomUUID())).status >= 400, 'only an applied outline can get a finished version');
 
   const imagePath = '/' + id + '/image';
   const reviewPath = '/' + id + '/review';
@@ -249,12 +270,47 @@ try {
   outsider.send({ type: 'set_sheet', sheetId: id });
   owner.send({ type: 'set_sheet', sheetId: id });
   await friend.message(e => e.type === 'sheet' && e.sheetId === id);
+  assert((await api(versionsPath, 'friend', capture, randomUUID())).status >= 400);
+  assert((await api(versionsPath, 'other', capture, randomUUID())).status >= 400);
+  assert((await api(versionsPath, 'owner', { room, image: 'not an image' }, randomUUID())).status >= 400);
+  const saveKey = randomUUID();
+  const versions = await Promise.all([api(versionsPath, 'owner', capture, saveKey), api(versionsPath, 'owner', capture, saveKey)]);
+  assert(versions.every(v => v.status === 200 || v.status === 201), 'simultaneous retries save the same finished version');
+  assert.equal(versions[0].body.id, versions[1].body.id);
+  const savedVersion = versions[0].body.id;
+  const secondSaveKey = randomUUID();
+  const secondCapture = { room, image: 'data:image/png;base64,' + drawing.toString('base64') };
+  const nextVersion = await api(versionsPath, 'owner', secondCapture, secondSaveKey);
+  assert(nextVersion.status === 200 || nextVersion.status === 201);
+  assert.notEqual(nextVersion.body.id, savedVersion);
+  const savedImagePath = bookEntry + '/versions/' + savedVersion + '/image';
+  const finished = await bookImage(savedImagePath, 'owner');
+  assert.equal(finished.status, 200);
+  assert.equal(finished.headers.get('content-type'), 'image/png');
+  assert.equal((await sharp(Buffer.from(await finished.arrayBuffer())).metadata()).width, 512);
+  assert.equal((await bookImage(savedImagePath, 'other')).status, 404);
+  assert.equal((await api(bookPath, 'owner')).body.items[0].versions.length, 2);
+  const secondVersionPath = base + versionsPath + '/' + nextVersion.body.id;
+  assert.equal((await fetch(secondVersionPath, { method: 'DELETE', headers: { Authorization: 'Bearer other' } })).status, 404);
+  assert.equal((await fetch(secondVersionPath, { method: 'DELETE', headers: { Authorization: 'Bearer owner' } })).status, 200);
+  assert.equal((await api(versionsPath, 'owner', secondCapture, secondSaveKey)).status, 410);
+  assert.equal((await bookImage(bookEntry + '/versions/' + nextVersion.body.id + '/image', 'owner')).status, 404);
+  assert.equal((await api(sheetApi, 'owner')).body.remaining, 4, 'saving versions is free of generation charges');
+  const otherJam = 'JAM_TOGETHER';
+  const jamOwner = await painter(otherJam, 'owner');
+  const jamGuest = await painter(otherJam, 'early');
+  jamOwner.send({ type: 'set_sheet', sheetId: id });
+  await jamGuest.message(e => e.type === 'sheet' && e.sheetId === id);
+  assert.equal((await api(read + '?room=' + otherJam, 'early')).body.image, image);
+  assert.equal((await api(read + '?room=' + room, 'early')).status, 404);
+  assert.equal(calls.length, 0);
   assert.equal((await api(read, 'friend')).body.image, image);
   assert.equal((await api(read)).status, 404);
   assert.equal((await api(read, 'other')).status, 404);
   assert(!outsider.events.some(e => e.type === 'sheet' && e.sheetId === id));
   await stop();
   await start();
+  assert.equal((await api(bookPath, 'owner')).body.items[0].versions.length, 1);
   const rejoined = await painter(room, 'friend');
   await rejoined.message(e => e.type === 'sheet' && e.sheetId === id);
   assert.equal((await api(read, 'friend')).body.image, image);
@@ -270,6 +326,9 @@ try {
   assert.equal((await api(read, 'owner')).status, 404);
   assert.equal((await api(read, 'friend')).status, 404);
   assert.equal((await admin(imagePath)).status, 404);
+  assert.equal((await api(bookPath, 'owner')).body.total, 0);
+  assert.equal((await bookImage(savedImagePath, 'owner')).status, 404);
+  assert.equal((await painter(otherJam, 'early')).connected.hasSheet, false, 'takedown clears a second dormant room');
   assert.equal((await admin(removePath, 'POST')).status, 200);
   assert.equal((await admin(reviewPath, 'POST')).status, 409);
   const removed = await (await admin('?status=removed')).json();
@@ -310,6 +369,11 @@ try {
   const privateSheet = '/api/sheets/' + second.body.id;
   assert.equal((await api(activeSheet, 'friend')).status, 200);
   assert.equal((await api(privateSheet, 'other')).status, 200);
+  const secondVersionApi = bookPath + '/' + first.body.id + '/versions';
+  const keepKey = randomUUID();
+  const keepData = { ...capture, room: secondRoom };
+  const keep = await api(secondVersionApi, 'other', keepData, keepKey);
+  assert(keep.status === 200 || keep.status === 201);
   await stop();
   const thumbnail = await sharp(drawing).resize(128, 128).jpeg().toBuffer();
   const thumbPath = join(dir, '.thumbs', secondRoom + '.jpg');
@@ -346,6 +410,7 @@ try {
   assert.equal((await api(activeSheet, 'friend')).status, 404);
   assert.equal((await api(activeSheet, 'other')).status, 404);
   assert.equal((await api(privateSheet, 'other')).status, 404);
+  assert.equal((await api(bookPath, 'other')).status, 403, 'lapsed accounts retain their data privately until renewal');
   await expiringHost.message(e => e.type === 'billing_entitlement' && e.aiColoringPaid === false);
   await expiringGuest.message(e => e.type === 'sheet' && e.sheetId === null);
   expiringHost.send({ type: 'set_sheet', sheetId: second.body.id });
@@ -368,8 +433,20 @@ try {
   const renewedGuest = await painter(secondRoom, 'friend');
   await renewedGuest.message(e => e.type === 'sheet' && e.sheetId === first.body.id);
   assert.equal((await api(activeSheet, 'friend')).body.image, first.body.image, 'renewal restores the purchased room’s original sheet');
+  const beforeClosing = await api(bookPath, 'other');
+  assert.equal(beforeClosing.body.total, 2);
+  const closed = await fetch(base + '/api/admin/rooms/' + secondRoom + '/delete', { method: 'POST', headers: { 'x-admin-key': adminKey } });
+  assert.equal(closed.status, 200);
+  await stop();
+  await start(true, false); // Archive survives both room closure and a disabled provider.
+  assert.equal((await api(bookPath, 'other')).body.total, 2);
+  assert.equal((await bookImage('/' + first.body.id + '/image', 'other')).status, 200);
+  assert.equal((await bookImage('/' + first.body.id + '/versions/' + keep.body.id + '/image', 'other')).status, 200);
+  assert.equal((await api(secondVersionApi, 'other', keepData, keepKey)).body.id, keep.body.id, 'a delayed retry after room closure recovers the saved version');
+  assert.equal((await api('/api/account/scrub-chat', 'other', {})).status, 200);
+  assert.equal((await (await admin('?status=all&room=' + secondRoom)).json()).total, 0);
   assert.equal(calls.length, 0, 'restoring a purchased page is free');
-  console.log('Family AI coloring passed for anonymous library, Stripe-paid owner access, expiry during generation, shared sheets, moderation, restart, quota and erasure.');
+  console.log('Jam Pass coloring passed for private books, saved versions, room reuse and closure, Stripe access, moderation, quota, restart and erasure.');
 } finally {
   await stop();
   if (mock.listening) await new Promise(resolve => mock.close(resolve));

@@ -44,7 +44,7 @@ function RoomTools({ onNavigate, local }) {
   const roomCode = normalizeInviteCode(code);
   return <aside className="friends-room-tools" aria-label="Drawing rooms">
     {local && <div className="friends-room-section">
-      <h2>Start a room</h2>
+      <h2>Start an Art Jam</h2>
       <p>Make a room code and share its link with someone you know.</p>
       {invite ? <div className="friends-invite">
         <strong className="friends-code">{invite}</strong>
@@ -54,7 +54,7 @@ function RoomTools({ onNavigate, local }) {
       </div> : <button className="friends-primary" type="button" onClick={() => setInvite(createInviteCode())}>Make a room code <span aria-hidden="true">＋</span></button>}
     </div>}
     <div className="friends-room-section">
-      <h2>Join a room</h2>
+      <h2>Join an Art Jam</h2>
       <form onSubmit={event => { event.preventDefault(); if (roomCode) onNavigate('/join/' + roomCode); }}>
         <label htmlFor="friends-room-code">Room code</label>
         <div className="friends-input-action">
@@ -214,7 +214,7 @@ function FriendList({ token, onNavigate }) {
             <span>Remove {person.name} from your friends?</span>
             <div className="friends-actions"><button className="friends-secondary" type="button" disabled={busy} onClick={() => setRemoveCode("")}>Keep friend</button><button className="friends-quiet" type="button" disabled={busy} onClick={() => remove(person, "Friend removed.")}>Confirm removal</button></div>
           </div> : <div className="friends-actions">
-            <DiscoveryLink href={'/join/' + encodeURIComponent(person.roomCode)} onNavigate={onNavigate} className="friends-primary" aria-label={'Draw together with ' + person.name}>Draw together <span aria-hidden="true">↗</span></DiscoveryLink>
+            <DiscoveryLink href={'/join/' + encodeURIComponent(person.roomCode)} onNavigate={onNavigate} className="friends-primary" aria-label={'Start an Art Jam with ' + person.name}>Start an Art Jam <span aria-hidden="true">↗</span></DiscoveryLink>
             <DiscoveryLink href={'/join/' + encodeURIComponent(person.roomCode) + '?color=1'} onNavigate={onNavigate} className="friends-secondary" aria-label={'Color together with ' + person.name}>Color together <span aria-hidden="true">↗</span></DiscoveryLink>
             <button type="button" className="friends-quiet" disabled={busy} onClick={() => setRemoveCode(person.code)}>Remove</button>
           </div>}

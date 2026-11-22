@@ -61,7 +61,7 @@ export default function RoomFinderPage({ onNavigate }) {
         <header className="directory-heading">
           <h1>Public drawing rooms</h1>
           <p className="site-lead">Pick a shared canvas by theme or let us find a room with people painting. Use a room code to meet someone you already know.</p>
-          <a className="directory-shuffle" href={QUICK_JOIN_PATH}>Join a random room</a>
+          <a className="directory-shuffle" href={QUICK_JOIN_PATH}>Join an Art Jam</a>
         </header>
 
         {session || hasRecent ? (

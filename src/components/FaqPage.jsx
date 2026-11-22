@@ -45,11 +45,11 @@ export default function FaqPage({ onNavigate }) {
         </QA>
 
         <QA q="Who are Pip and Fern?">
-          <p>They’re drawing bots in the recorded homepage demo. To paint with other visitors, choose <strong>Join a random room</strong>. Open Rooms inside the studio to try another public canvas.</p>
+          <p>They’re drawing bots in the recorded homepage demo. To paint with other visitors, choose <strong>Join an Art Jam</strong>. Open Rooms inside the studio to try another public canvas.</p>
         </QA>
 
         <QA q="Can I email a drawing?">
-          <p>Download your drawing and attach the image to an email. In an eligible Family room you can also turn the canvas into an art postcard with a personal note. <a href="/family">See the Family plan</a>.</p>
+          <p>Download your drawing and attach the image to an email. In a private Art Jam hosted by a Jam Pass member, you can also turn the canvas into an art postcard with a personal note. <a href="/jam-pass">Explore Jam Pass</a>.</p>
         </QA>
 
         <QA q="Do you need an account?">

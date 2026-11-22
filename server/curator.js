@@ -24,6 +24,7 @@ function validStore(stored) {
 
 const previousCopy = {
   home: [
+    { kicker: 'Multiplayer drawing', title: 'Come draw\nwith us.', description: 'Jump into a public room and draw something awesome with someone new. Or share a canvas with friends and family.', note: 'Free to join · Ad-supported rooms', ctaLabel: 'Join a random room', ctaHref: '/api/rooms/quick-join' },
     { kicker: '', title: 'Draw all over\nthis page.', description: 'Doodle right here, or open a canvas to save your art.', note: '', ctaLabel: 'Open a canvas', ctaHref: '/draw' },
     { kicker: 'An open invitation to make something.', title: 'MAKE A\nBEAUTIFUL\nMESS.', description: 'A blank canvas. A wild idea. A little time to play.', note: 'no perfect lines required.', ctaLabel: 'Draw now', ctaHref: '/draw' },
   ],

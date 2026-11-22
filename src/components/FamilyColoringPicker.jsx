@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AI_COLORING_CONSENT_VERSION, COLORING_DETAILS, COLORING_IDEAS, MAX_COLORING_PROMPT } from "../data/aiColoring";
+import ColoringBook from "./ColoringBook";
 import "./family-coloring.css";
 
 function validPage(page) {
@@ -27,11 +28,11 @@ function problemMessage(code, stage) {
   }
 }
 
-export default function FamilyColoringPicker({ roomCode, token, onApply, removedAiSheets, children }) {
+export default function FamilyColoringPicker({ roomCode, token, onApply, removedAiSheets, initialMakePage, children }) {
   const [availability, setAvailability] = useState(null);
   const [checkFailed, setCheckFailed] = useState(false);
   const [check, setCheck] = useState(0);
-  const [creating, setCreating] = useState(false);
+  const [source, setSource] = useState(initialMakePage ? "generate" : "library");
   const [prompt, setPrompt] = useState("");
   const [detail, setDetail] = useState(COLORING_DETAILS[0].id);
   const [preview, setPage] = useState(null);
@@ -114,7 +115,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, removed
       if (response.status === 401 || response.status === 403) {
         setAvailability({ enabled: false });
         setPage(null);
-        setCreating(false);
+        setSource("library");
         return;
       }
       if (!response.ok) {
@@ -141,22 +142,23 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, removed
     }
   };
 
-  if (!availability?.enabled) return <>
-    {checkFailed && <p className="ai-sheet-retry" role="status">
-      Couldn’t check your Family pages. <button type="button" onClick={() => setCheck(n => n + 1)}>Try again</button>
-    </p>}
-    {children}
-  </>;
-
+  const showGenerator = source === "generate" && availability?.enabled;
   return <>
     <div className="ai-sheet-switch" role="group" aria-label="Coloring page source">
-      <button type="button" aria-pressed={!creating} onClick={() => setCreating(false)}>Sheet library</button>
-      <button type="button" aria-pressed={creating} onClick={() => setCreating(true)}>Make an AI page</button>
+      <button type="button" aria-pressed={source === "library"} onClick={() => setSource("library")}>Sheet library</button>
+      <button type="button" aria-pressed={source === "book"} onClick={() => setSource("book")}>My Coloring Book</button>
+      {availability?.enabled && <button type="button" aria-pressed={showGenerator} onClick={() => setSource("generate")}>Make an AI page</button>}
     </div>
-    {!creating ? children : <div className="ai-sheet-body">
+    {checkFailed && <p className="ai-sheet-retry" role="status">
+      Couldn’t check the page generator. <button type="button" onClick={() => setCheck(n => n + 1)}>Try again</button>
+    </p>}
+    {source === "book" ? <div className="book-embedded">
+      <ColoringBook token={token} inRoom removedAiSheets={removedAiSheets} onUse={page => onApply(page, true)}
+        onCreate={availability?.enabled ? () => setSource("generate") : undefined} />
+    </div> : !showGenerator ? children : <div className="ai-sheet-body">
       <p className="ai-sheet-quota" role="status">
         {availability.attemptsRemaining === 0 && availability.remaining > 0 ? problemMessage("attempt_limit")
-          : `Your paid Family plan has ${availability.remaining} of ${availability.limit} pages left this month.`}
+          : `Your Jam Pass has ${availability.remaining} of ${availability.limit} pages left this month.`}
       </p>
       {editing ? <form onSubmit={generate} className="ai-sheet-form">
         <label htmlFor="ai-sheet-prompt">What would you like to color?</label>
@@ -184,6 +186,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, removed
         </div>
         {busy && <p role="status" className="ai-sheet-note">Drawing the outlines and checking the image. This can take a minute.</p>}
       </form> : page && <div className="ai-sheet-result">
+        <p className="ai-sheet-note">Saved in My Coloring Book.</p>
         <figure><img src={page.image} alt="Preview of your generated coloring page" /></figure>
         <div className="ai-sheet-actions">
           <button type="button" className="primary-action" onClick={() => onApply(page, true)}>Use in this room</button>

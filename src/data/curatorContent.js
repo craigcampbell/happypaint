@@ -10,7 +10,7 @@ export const CURATOR_ART = ['ink', 'orbit', 'none'];
 export const QUICK_JOIN_PATH = '/api/rooms/quick-join';
 export const CURATOR_LINKS = [QUICK_JOIN_PATH, '/wall', '/draw', '/gallery', '/events', '/studios', '/rooms', '/inktober', '/events/little-joys', '/events/draw-for-rhoam'];
 const defaults = {
-  home: { kicker: 'Multiplayer drawing', title: 'Come draw\nwith us.', description: 'Jump into a public room and draw something awesome with someone new. Or share a canvas with friends and family.', note: 'Free to join · Ad-supported rooms', ctaLabel: 'Join a random room', ctaHref: QUICK_JOIN_PATH, palette: 'acid', art: 'ink' },
+  home: { kicker: 'Multiplayer drawing', title: 'Come draw\nwith us.', description: 'Join a public Art Jam to draw with someone new, or share a private canvas with friends and family.', note: 'Free to join · Ad-supported rooms', ctaLabel: 'Join an Art Jam', ctaHref: QUICK_JOIN_PATH, palette: 'acid', art: 'ink' },
   gallery: { kicker: '', title: 'Community\ngallery.', description: 'Browse finished drawings, look up an artist, or open a sketchbook to see how an idea developed.', note: '', ctaLabel: 'Open the Fridge Wall', ctaHref: '/wall', palette: 'paper', art: 'orbit' },
   events: { kicker: '', title: 'Drawing\ninvitations.', description: 'Choose a community prompt. Each invitation opens its own drawing activity and explains how to share your contribution.', note: '', ctaLabel: 'Explore Inktober', ctaHref: '/inktober', palette: 'paper', art: 'ink' },
   studios: { kicker: '', title: 'Artist\nstudios.', description: 'Pick a public studio to watch its canvas as it changes. The artist chooses who can join them to paint.', note: '', ctaLabel: 'Find a shared canvas', ctaHref: '/rooms', palette: 'paper', art: 'orbit' },

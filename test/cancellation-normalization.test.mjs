@@ -113,7 +113,7 @@ test('server emits the canonical wipe outcome and Stripe cancel URLs', () => {
   assert.match(server, /endWipeRequest\(room, 'canceled'\)/);
   assert.doesNotMatch(server, /'cancelled'/);
   const billing = readFileSync(`${ROOT}/server/billing.js`, 'utf8');
-  assert.match(billing, /family\?checkout=canceled/);
+  assert.match(billing, /jam-pass\?checkout=canceled/);
   assert.doesNotMatch(billing, /checkout=cancelled/);
   const economy = readFileSync(`${ROOT}/server/economy.js`, 'utf8');
   assert.match(economy, /\?drops=canceled/);

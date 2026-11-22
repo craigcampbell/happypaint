@@ -36,7 +36,7 @@ const SAFETY = [
   {
     icon: "🚫",
     title: "How free rooms are funded",
-    body: "Free spaces may show contextual, non-personalized ads marked child-directed. The in-app \"drops\" remain play-money earned by drawing; the optional Family subscription is bought and managed by an adult outside the canvas.",
+    body: "Free spaces may show contextual, non-personalized ads marked child-directed. The in-app \"drops\" remain play-money earned by drawing; an adult can buy and manage an optional Jam Pass outside the canvas.",
   },
 ];
 
@@ -87,7 +87,7 @@ export default function SafetyPage({ onNavigate }) {
             Sharing artwork in a room or posting it to the Wall still sends that artwork to the server.
           </li>
           <li>
-            <strong>Custom coloring pages.</strong> In eligible private Family rooms, the grown-up who owns the room can send a scene description to OpenRouter. The generator screens descriptions and pictures for sexual or violent material. The grown-up previews each page before sharing it with the room.
+            <strong>Custom coloring pages.</strong> A grown-up with a paid Jam Pass can send a scene description to OpenRouter from a private room they own. The generator screens descriptions and pictures for sexual or violent material. The grown-up previews each page before sharing it with the room.
           </li>
         </ul>
         <p className="safety-note">

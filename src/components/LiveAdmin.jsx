@@ -848,7 +848,7 @@ export default function LiveAdmin({ onNavigate }) {
 
       {billing ? (
         <section className="admin-section">
-          <h2>Family billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : billing.mode === "paused" ? "checkout paused" : "check setup"}</span></h2>
+          <h2>Jam Pass billing <span className="admin-badge">{billing.mode === "ready" ? "ready" : billing.mode === "disabled" ? "free mode" : billing.mode === "paused" ? "checkout paused" : "check setup"}</span></h2>
           <div className="metric-grid">
             <div className="metric">
               <span className={`metric-num ${billing.mode === "misconfigured" ? "is-bad" : "is-ok"}`}>{billing.mode === "ready" ? "On" : billing.mode === "paused" ? "Paused" : "Off"}</span>
@@ -857,7 +857,7 @@ export default function LiveAdmin({ onNavigate }) {
             </div>
             <div className="metric">
               <span className="metric-num">{formatCount(billing.activeFamilies)}</span>
-              <span className="metric-label">Active families</span>
+              <span className="metric-label">Active passes</span>
               <span className="metric-sub">{formatCount(billing.cancelAtPeriodEnd)} ending at period close</span>
             </div>
             <div className="metric">

@@ -20,15 +20,17 @@ export default function PrivacyPage({ onNavigate }) {
         <ul>
           <li><strong>Guest drawing.</strong> You do not need to provide an email or real name. Rooms assign a session identifier and nickname. A separate random identifier saved in your browser connects guest server saves to this device.</li>
           <li><strong>Art and browser storage.</strong> Drafts, gallery items, brushes and preferences use browser storage. Saved art can also be stored on our server under your device identifier or account. Shared canvas history is stored so later visitors can see the drawing.</li>
-          <li><strong>Optional accounts.</strong> Signing in stores account details such as your email, name and account identifier, and connects features such as gallery sync, room ownership and optional Family billing.</li>
+          <li><strong>Optional accounts.</strong> Signing in stores account details such as your email, name and account identifier, and connects features such as gallery sync, room ownership and optional Jam Pass billing.</li>
           <li><strong>Art postcards.</strong> Your device creates the postcard image and note. You choose the app or email recipient when you share it. Drawesome does not collect a mailing list for postcards.</li>
-          <li><strong>AI coloring pages.</strong> When a Family room owner requests a page, Drawesome sends the scene description through OpenRouter to check it and generate an image. A second check reviews the image before you see it. Leave names, contact details and other personal information out of descriptions. Drawesome stores generated pages for the room and tracks the owner’s allowance. Site moderators can inspect generated pages, including private previews, and remove them. See <a href="https://openrouter.ai/privacy/" target="_blank" rel="noreferrer">OpenRouter’s privacy policy</a> for how it handles requests.</li>
+          <li><strong>AI coloring pages.</strong> When a Jam Pass member requests a page, Drawesome sends the scene description through OpenRouter to check it and generate an image. A second check reviews the image before you see it. Leave names, contact details and other personal information out of descriptions. Drawesome stores the outline and any finished versions the owner saves in their private coloring book. The book stays with the account after the room closes. Drawesome tracks the owner’s monthly allowance and saves no copy of the original scene description. Site moderators can inspect private previews. Removing an outline also removes its saved versions and takes the outline off any shared canvases using it. See <a href="https://openrouter.ai/privacy/" target="_blank" rel="noreferrer">OpenRouter’s privacy policy</a> for how it handles requests.</li>
           <li><strong>Friends.</strong> If you set up Friends, we store the nickname you choose, your friend code, requests, accepted connections and shared room codes. People you exchange requests with can see your friend nickname and code. Account deletion removes your friend profile and connections.</li>
           <li><strong>Chat and reports.</strong> Room chat history is stored with nicknames and messages; moderation logs also include an account identifier when signed in. Reports may keep the reported reason, reporter nickname and recent chat, including shared doodle images, for moderator review.</li>
           <li><strong>Usage statistics.</strong> We keep totals and records of drawing sessions: rooms visited, session times, drawing and chat counts, brushes and saves. These can include a guest nickname or account identifier, country when available, language, time zone, device type, input type and approximate screen size. Administrators use these records to understand use and performance. Network addresses are also used for connection security and abuse limits; raw network addresses are not saved in these usage statistics.</li>
-          <li><strong>Family billing, when available.</strong> Stripe handles checkout and card details. Drawesome keeps billing identifiers, subscription status, payment period information and the time and version of the adult purchase confirmation. If cancellation needs to be retried, the necessary identifiers remain until it succeeds. A one-way account marker is retained temporarily to prevent old payment events from restoring a deleted account&apos;s billing link.</li>
+          <li><strong>Jam Pass billing, when available.</strong> Stripe handles checkout and card details. Drawesome keeps billing identifiers, subscription status, payment period information and the time and version of the adult purchase confirmation. If cancellation needs to be retried, the necessary identifiers remain until it succeeds. A one-way account marker is retained temporarily to prevent old payment events from restoring a deleted account&apos;s billing link.</li>
           <li><strong>Advertising, when enabled.</strong> Free spaces may request ads from Google Ad Manager. These requests are marked as child-directed, under-age-of-consent and non-personalized, with restricted data processing. The ad script is not loaded when ad placements are unconfigured.</li>
         </ul>
+
+        <p>Only the owner can open their coloring book. When they use an outline in their private Art Jam, signed-in painters in that room can see and color it together. Downloads and printed copies stay with the person who made them.</p>
 
         <h2>What other people can see</h2>
         <p>
@@ -54,7 +56,7 @@ export default function PrivacyPage({ onNavigate }) {
         <h2>Our approach</h2>
         <ul>
           <li>No behavioral ad targeting and no selling personal data.</li>
-          <li>No paid coins, cash tips, or child-facing purchases. Family is an optional adult-owned subscription.</li>
+          <li>No paid coins, cash tips, or child-facing purchases. Jam Pass is an optional adult-owned subscription.</li>
           <li>No public people-search, you find <em>rooms</em>, not individual kids.</li>
         </ul>
 
@@ -69,7 +71,7 @@ export default function PrivacyPage({ onNavigate }) {
         <p>
           When signed in, the same control also requests cloud account deletion and cleanup of
           account-owned server saves and wall posts, identifiable account-linked chat, and account
-          links in usage records. It cancels an attached Family subscription or queues a retry.
+          links in usage records. It also deletes your private coloring book, including saved versions, and cancels your Jam Pass subscription or queues a retry.
           If cloud deletion cannot complete, the Account panel asks you to sign in and retry.
         </p>
         <p>

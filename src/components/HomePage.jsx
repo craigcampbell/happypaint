@@ -114,12 +114,12 @@ export default function HomePage({ onNavigate }) {
 
       <section className="home-postcards" aria-labelledby="home-postcard-title">
         <div className="postcard-intro">
-          <p className="postcard-plan">Drawesome Family</p>
+          <p className="postcard-plan">Drawesome Jam Pass</p>
           <h2 id="home-postcard-title">Send a little art.</h2>
-          <p>Turn a drawing from your Family room into a postcard. Add a note in the margin and send it to someone who’d love to find it in their inbox.</p>
-          <DiscoveryLink href="/family" onNavigate={onNavigate}>Explore the Family plan <span aria-hidden="true">↗</span></DiscoveryLink>
+          <p>Turn a drawing from your Art Jam into a postcard. Add a note in the margin and send it to someone who’d love to find it in their inbox.</p>
+          <DiscoveryLink href="/jam-pass" onNavigate={onNavigate}>Explore Jam Pass <span aria-hidden="true">↗</span></DiscoveryLink>
         </div>
-        <img src="/media/family-postcard.webp" alt="A finished Family art postcard with a whale drawing and a personal note for Nana." width="900" height="600" loading="lazy" />
+        <img src="/media/family-postcard.webp" alt="A finished art postcard with a whale drawing and a personal note for Nana." width="900" height="600" loading="lazy" />
       </section>
 
       <section className="artwall-idea" aria-labelledby="home-idea-title">

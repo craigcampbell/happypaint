@@ -32,9 +32,9 @@ export const LEGACY_PAGE_META = {
     "title": "About Drawesome",
     "description": "A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls."
   },
-  "/family": {
-    "title": "Drawesome Family, ad-free creative spaces",
-    "description": "Draw together ad-free and turn a private Family room’s artwork into a postcard to keep or share. Explore the adult-owned Family plan."
+  "/coloring-book": {
+    "title": "My Coloring Book | Drawesome",
+    "description": "Your private collection of coloring outlines and the paintings you made with them."
   },
   "/faq": {
     "title": "Safety & FAQ: Drawesome",

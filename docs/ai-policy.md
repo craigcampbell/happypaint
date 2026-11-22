@@ -2,15 +2,15 @@
 
 Policy version: 2026-06-15
 Local AI Assist consent version: `2026-06-15`
-Family coloring page request version: `family-page-2026-11-21`
+Jam Pass coloring page request version: `family-page-2026-11-21`
 
 This is the AI safety, consent, and rollout policy for Happy Paint. Happy Paint is a youth-focused social drawing app with a primary audience of preteens and teens. AI in Happy Paint exists to help people make art, not to make art for them and not to replace the reason they came.
 
 This document is a policy/spec, not code. It is written to stay consistent with the backend schema (`ai_consent`, `ai_generations`, `ai_credits`, `asset_moderation_queue`) and with `docs/product-research.md` (§"AI Assist, Not AI Replacement", §"Safety and Compliance Notes") and `docs/paint-economy.md` (§"AI assist credits").
 
-## Family coloring pages
+## Jam Pass coloring pages
 
-In the PocketBase deployment, a signed-in Family owner in their private drawing
+In the PocketBase deployment, a signed-in Jam Pass owner in their private drawing
 room can request an outline to color together. Each submission authorizes
 OpenRouter to process that description for one page. The submit control
 names the provider, and the server checks the consent version on each
@@ -19,7 +19,7 @@ generation. Invited painters can color a page the owner chooses to share.
 
 The server checks the description and reviews the generated raster for
 child-appropriate content before showing the owner a preview. Drawesome
-stores usage and approved pages in the private room asset store. It omits
+stores approved outlines and saved coloring versions in the creator’s private book and tracks usage. It omits
 the submitted description. The free library and local AI Assist keep their
 existing access and consent rules. [Deployment and allowances](../MONETIZATION.md#custom-coloring-pages)
 

@@ -60,7 +60,7 @@ services:
       - TRUSTED_PROXY_HOSTS=${TRUSTED_PROXY_HOSTS-cloudflared}
       # Server-internal PocketBase URL for token validation (not the public URL).
       - PB_URL=http://pocketbase:8090
-      # Adult-owned Family subscriptions. Empty = pricing page stays visible,
+      # Adult-owned Jam Pass subscriptions. Empty = pricing page stays visible,
       # but checkout is safely disabled and anonymous drawing is unchanged.
       - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-https://drawesome.art}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -75,7 +75,7 @@ services:
       - STRIPE_PAST_DUE_GRACE_DAYS=${STRIPE_PAST_DUE_GRACE_DAYS:-3}
       - STRIPE_PAST_DUE_GRACE_HOURS=${STRIPE_PAST_DUE_GRACE_HOURS:-}
       - FAMILY_TERMS_VERSION=${FAMILY_TERMS_VERSION:-2026-09-04}
-      # Optional Family image generation, read by Node at runtime.
+      # Optional Jam Pass image generation, read by Node at runtime.
       - AI_COLORING_ENABLED=${AI_COLORING_ENABLED:-false}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - AI_COLORING_MODEL=${AI_COLORING_MODEL:-x-ai/grok-imagine-image-2.0}

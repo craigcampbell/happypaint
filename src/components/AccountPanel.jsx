@@ -202,13 +202,14 @@ export default function AccountPanel({ onClose, onDeleted }) {
         </div>
 
         <div className="ps-group account-section">
-          <h3>Drawesome Family</h3>
+          <h3>Drawesome Jam Pass</h3>
           <p className="account-note">
-            Paint ad-free with a Family membership. Everyone in a private room you own can turn the shared drawing into an Art postcard.
+            Host ad-free Art Jams, make coloring pages, and turn a shared painting into an art postcard.
           </p>
-          <button type="button" className="primary-action" onClick={() => { window.location.href = "/family"; }}>
-            View Family plan
+          <button type="button" className="primary-action" onClick={() => { window.location.href = "/jam-pass"; }}>
+            View Jam Pass
           </button>
+          {session && <button type="button" onClick={() => { window.location.href = "/coloring-book"; }}>My Coloring Book</button>}
         </div>
 
         {message ? <p className="account-status">{message}</p> : null}
@@ -219,7 +220,7 @@ export default function AccountPanel({ onClose, onDeleted }) {
             Local cleanup is <strong>free</strong> and available without an account. It clears drafts,
             gallery items, Paint Space, wallet, replays and brush packs from this browser, then signs
             you out. Some browser identifiers and preferences may remain. Sign in before deleting
-            to also request cloud account deletion and cancellation of an attached Family subscription.
+            to also request cloud account deletion and cancellation of your Jam Pass subscription.
           </p>
           <p className="account-note">
             Guest server saves, shared canvas drawings and some chat or report copies can remain.

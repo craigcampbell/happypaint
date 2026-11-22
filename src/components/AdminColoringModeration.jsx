@@ -71,8 +71,8 @@ function PagePreview({ item, request, onComplete }) {
 
       {confirmRemove ? (
         <div className="coloring-confirm">
-          <strong>Remove this page from {item.room}?</strong>
-          <p>This permanently deletes the generated outline and clears it from the room if it’s in use. The painters’ brushstrokes stay on the canvas.</p>
+          <strong>Remove this outline and its saved versions?</strong>
+          <p>This permanently deletes the outline and all its saved versions from the creator’s coloring book. Every room using the outline loses it. Painters keep their brushstrokes on the canvas.</p>
           <div className="coloring-actions">
             <button type="button" disabled={working} onClick={() => { setActionError(""); setConfirmRemove(false); }}>Keep page</button>
             <button className="admin-danger" type="button" disabled={working} onClick={() => act("remove")}>{working ? "Removing…" : "Confirm removal"}</button>
@@ -138,14 +138,14 @@ export default function AdminColoringModeration({ adminKey, onUnauthorized }) {
     setData(null);
     setQuery({ ...query, ...next });
   };
-  const complete = (action, room) => reload({}, action === "review" ? `Page marked reviewed in ${room}.` : `Page removed from ${room}.`);
+  const complete = (action, room) => reload({}, action === "review" ? `Page marked reviewed in ${room}.` : `Outline and saved versions removed.`);
   const counts = data?.counts;
   return (
     <section className="admin-section admin-coloring" aria-labelledby="coloring-title">
       <div className="coloring-head">
         <div>
           <h2 id="coloring-title">AI coloring pages</h2>
-          <p>These outlines passed the automatic checks. Review private previews and pages already shared on a room’s canvas.</p>
+          <p>These outlines passed the automatic checks. Review private outlines and pages shared in Art Jams. Each room code identifies where the outline was generated.</p>
         </div>
         <button type="button" onClick={() => reload()}>Refresh queue</button>
       </div>
@@ -166,7 +166,7 @@ export default function AdminColoringModeration({ adminKey, onUnauthorized }) {
             <option value="all">All pages</option>
           </select>
         </label>
-        <label>Room code
+        <label>Origin room code
           <input value={roomDraft} onChange={(event) => setRoomDraft(event.target.value)} placeholder="All rooms"
             maxLength={16} pattern={"[a-zA-Z0-9_\\-]*"} title="Use letters, numbers, underscores, or hyphens."
             autoCapitalize="characters" spellCheck={false} />
@@ -187,7 +187,7 @@ export default function AdminColoringModeration({ adminKey, onUnauthorized }) {
                 <li key={item.id}>
                   <div className="coloring-row">
                     <div>
-                      <strong>Room {item.room}</strong>
+                      <strong>Created in {item.room}</strong>
                       <small><time dateTime={new Date(item.createdAt).toISOString()}>{dateFormat.format(item.createdAt)}</time> · {STATES[item.status]}</small>
                     </div>
                     {item.status !== "removed" && <button type="button" aria-expanded={selected === item.id}

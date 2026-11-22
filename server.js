@@ -35,7 +35,7 @@ import { digestChat, summarizeReports, userRisk, riskBand } from './server/moder
 import { pickWordChoices } from './server/gameWords.js';
 import { dailyChallenge } from './server/dailyChallenges.js';
 import { COMMUNITY_EVENTS, getCommunityEvent } from './src/data/communityEvents.js';
-import { getDiscoverySeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
+import { getDiscoverySeo, getPageSeo, DISCOVERY_PATHS } from './src/data/discoverySeo.js';
 import { renderDiscoveryLanding } from './server/discoverySeo.js';
 import { drawingPrompts } from './server/drawingPrompts.js';
 import { createCurator } from './server/curator.js';
@@ -332,7 +332,7 @@ app.use((_req, res, next) => {
   res.set('Connection', 'close').status(503).json({ error: 'server_restarting' });
 });
 const aiColoringEnabled = Boolean(ACCOUNTS_CONFIGURED && process.env.AI_COLORING_ENABLED === 'true' && process.env.OPENROUTER_API_KEY?.trim());
-const aiColoring = createAiColoringStore(DATA_DIR, aiSheetPinned);
+const aiColoring = createAiColoringStore(DATA_DIR);
 const paidColoringTimers = new Map();
 const billing = createBilling({
   aiColoringEnabled,
@@ -2540,7 +2540,7 @@ function getRoom(roomId) {
       snapshotOpId: CLIENT_SNAPSHOTS_ENABLED ? loadRoomSnapshot(roomId)?.opId || 0 : 0,
       snapshotRequestedAt: 0,
       snapshotRequest: null,
-      sheetId: saved.sheetId?.startsWith('ai_') && !(audience === 'friends' && aiColoring.belongs(saved.sheetId, roomId, saved.ownerProfileId))
+      sheetId: saved.sheetId?.startsWith('ai_') && !(audience === 'friends' && aiColoring.belongs(saved.sheetId, saved.ownerProfileId))
         ? null : saved.sheetId,
       // Featured anchor rooms (MAIN, DOODLE, …) are communal and must never be
       // owned. An older build let the first signed-in visitor claim them, which
@@ -3802,15 +3802,6 @@ function roomHasFamilyEntitlement(room) {
   );
 }
 
-// Generated ink is bound to its source private room. Its active sheet and
-// an undo/countdown backup must survive cleanup, even while a room is offline.
-function aiSheetPinned(code, sheetId) {
-  const room = rooms.get(code);
-  if (room) return room.sheetId === sheetId || room.lastClearedSheet === sheetId || room.wipeReq?.sheetId === sheetId;
-  try { return JSON.parse(readFileSync(roomFile(code), 'utf8')).sheetId === sheetId; }
-  catch (err) { return err.code !== 'ENOENT'; } // retain ink if the room file could not be read
-}
-
 function liveColoringMember(room, profileId) {
   if (!profileId || room?.audience !== 'friends') return null;
   for (const user of room.users.values()) {
@@ -3830,7 +3821,7 @@ function eligibleColoringOwner(room, user) {
 }
 
 function mayInstallAiSheet(room, user, sheetId) {
-  return eligibleColoringOwner(room, user) && aiColoring.belongs(sheetId, room.code, user.profileId);
+  return eligibleColoringOwner(room, user) && aiColoring.belongs(sheetId, user.profileId);
 }
 
 // Expiry closes an open owner preview and hides shared outlines even when
@@ -10320,7 +10311,9 @@ app.get('/api/me/rooms/:code/thumb', async (req, res) => {
   if (!myRoomsFor(pid).some((r) => r.code === code)) return res.status(404).json({ error: 'not_found' });
   try {
     const room = rooms.get(code) || JSON.parse(readFileSync(roomFile(code), 'utf8'));
-    if (room.sheetId?.startsWith('ai_') && !roomHasPaidColoring(room)) return res.status(404).json({ error: 'no_thumbnail' });
+    if (room.sheetId?.startsWith('ai_') && (!roomHasPaidColoring(room) || !aiColoring.belongs(room.sheetId, room.ownerProfileId))) {
+      return res.status(404).json({ error: 'no_thumbnail' });
+    }
     res.type('image/jpeg').send(readFileSync(thumbFile(code)));
   } catch {
     res.status(404).json({ error: 'no_thumbnail' });
@@ -11711,14 +11704,38 @@ function persistSheets() {
 
 function removeGeneratedPage(id) {
   const existing = aiColoring.find(id);
-  if (existing) {
-    // An interrupted takedown must never leave a readable thumbnail or a
-    // join snapshot after the original PNG has been revoked.
-    invalidateRoomSnapshot(rooms.get(existing.room) || { code: existing.room }, true);
+  // Repeated takedowns also finish an interrupted metadata cleanup.
+  if (!existing) aiColoring.moderate(id, 'removed');
+  const active = [];
+  for (const room of rooms.values()) {
+    const shared = room.sheetId === id || room.lastClearedSheet === id || room.wipeReq?.sheetId === id;
+    const ownerPreview = existing && room.users.size && room.ownerProfileId && aiColoring.belongs(id, room.ownerProfileId);
+    if (shared || ownerPreview) active.push({ room, shared });
   }
-  const { room: code } = aiColoring.moderate(id, 'removed');
-  const room = rooms.get(code);
-  if (room) {
+  const cold = [];
+  const files = existsSync(ROOM_DIR) ? readdirSync(ROOM_DIR) : [];
+  for (const name of files) {
+    if (!/^[A-Z0-9_-]{1,16}\.json$/.test(name)) continue;
+    const code = name.slice(0, -5);
+    if (rooms.has(code)) continue;
+    const path = roomFile(code);
+    let saved;
+    try { saved = JSON.parse(readFileSync(path, 'utf8')); }
+    catch (err) {
+      if (err instanceof SyntaxError) continue; // corrupt metadata cannot authorize a thumbnail
+      throw err;
+    }
+    if (saved.sheetId === id) cold.push({ code, path, saved });
+  }
+  // Clear renders before revoking the original so a partial failure cannot
+  // leave an accessible cached copy. Do not invalidate unrelated rooms.
+  for (const { room, shared } of active) {
+    if (shared) invalidateRoomSnapshot(room, true);
+  }
+  for (const { code } of cold) invalidateRoomSnapshot({ code }, true);
+  aiColoring.moderate(id, 'removed');
+  for (const { room, shared } of active) {
+    const code = room.code;
     if (room.wipeReq?.sheetId === id) cancelWipeRequest(room, 'blocked');
     if (room.lastClearedSheet === id) room.lastClearedSheet = null;
     if (room.sheetId === id) {
@@ -11726,17 +11743,16 @@ function removeGeneratedPage(id) {
       broadcast(code, { type: 'sheet', sheetId: null });
       persistRoom(code);
     }
-    // The owner's generation dialog can still hold an uninstalled preview.
-    broadcast(code, { type: 'ai_coloring_removed', sheetId: id });
-    return;
+    const event = { type: 'ai_coloring_removed', sheetId: id };
+    if (shared) broadcast(code, event);
+    else {
+      // Only the owner can have previewed this unshared book page.
+      for (const user of room.users.values()) {
+        if (user.profileId === room.ownerProfileId) sendReliable(user.ws, JSON.stringify(event));
+      }
+    }
   }
-  // Only edit metadata in an offline room. Older, unsplit room files can
-  // also contain the original strokes, so preserve all other fields.
-  const path = roomFile(code);
-  let saved;
-  try { saved = JSON.parse(readFileSync(path, 'utf8')); }
-  catch (err) { if (err.code === 'ENOENT') return; throw err; }
-  if (saved.sheetId === id) {
+  for (const { path, saved } of cold) {
     saved.sheetId = null;
     const tmp = path + '.moderation.tmp';
     writeFileSync(tmp, JSON.stringify(saved), { mode: 0o600 });
@@ -11779,6 +11795,80 @@ app.post(adminColoringRoute + '/:id/review', adminColoringHandler((req, res) => 
 app.post(adminColoringRoute + '/:id/remove', adminColoringHandler((req, res) => {
   removeGeneratedPage(req.params.id);
   res.json({ ok: true });
+}));
+
+const bookRoute = '/api/me/coloring-book';
+const bookImageLimit = 4 * 1024 * 1024;
+let bookImagesDecoding = 0;
+
+function bookHandler(action) {
+  return async (req, res) => {
+    res.set('Cache-Control', 'private, no-store').vary('Authorization');
+    res.set('X-Content-Type-Options', 'nosniff');
+    try {
+      const identity = await sketchbookOptionalIdentity(req);
+      if (!ACCOUNTS_CONFIGURED || !identity?.profileId) return res.status(401).json({ error: 'unauthorized' });
+      const paidUntil = billing.aiColoringPaidUntil(identity.profileId);
+      if (!paidUntil) return res.status(403).json({ error: 'not_eligible' });
+      return await action(req, res, identity.profileId, paidUntil);
+    } catch (err) {
+      return res.status(err.status || 503).json({ error: err.status ? err.code : 'unavailable' });
+    }
+  };
+}
+
+app.get(bookRoute, bookHandler((req, res, profile, paidUntil) => {
+  const { limit = '20', offset = '0' } = req.query;
+  if (typeof limit !== 'string' || !/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 100 ||
+      typeof offset !== 'string' || !/^\d+$/.test(offset) || !Number.isSafeInteger(Number(offset))) {
+    return res.status(400).json({ error: 'invalid_filters' });
+  }
+  return res.json({ ...aiColoring.book(profile, Number(offset), Number(limit)), paidUntil });
+}));
+
+app.get([bookRoute + '/:id/image', bookRoute + '/:id/versions/:versionId/image'], bookHandler((req, res, profile) => {
+  res.type('image/png').send(aiColoring.bookImage(profile, req.params.id, req.params.versionId));
+}));
+app.delete(bookRoute + '/:id/versions/:versionId', bookHandler((req, res, profile) => {
+  aiColoring.deleteVersion(profile, req.params.id, req.params.versionId);
+  res.json({ ok: true });
+}));
+
+app.post(bookRoute + '/:id/versions', bookHandler(async (req, res, profile) => {
+  const key = req.get('Idempotency-Key');
+  if (!key || !/^[a-z0-9_-]{8,64}$/i.test(key)) return res.status(400).json({ error: 'invalid_request_key' });
+  const id = req.params.id;
+  // A response may be lost just before a room closes or changes sheets.
+  // Such a retry returns only this owner's already committed version.
+  const saved = aiColoring.versionForKey(profile, id, key);
+  if (saved) return res.json(saved);
+  const code = typeof req.body?.room === 'string' && req.body.room.toUpperCase();
+  const room = rooms.get(code);
+  const eligible = () => room && rooms.get(code) === room && room.sheetId === id &&
+    mayInstallAiSheet(room, liveColoringMember(room, profile), id);
+  if (!eligible()) return res.status(403).json({ error: 'not_eligible' });
+  const image = req.body?.image;
+  const prefix = 'data:image/png;base64,';
+  if (typeof image !== 'string' || !image.startsWith(prefix)) return res.status(400).json({ error: 'invalid_image' });
+  if (image.length > prefix.length + 4 * Math.ceil(bookImageLimit / 3)) return res.status(413).json({ error: 'image_too_large' });
+  const bytes = Buffer.from(image.slice(prefix.length), 'base64');
+  if (bytes.length > bookImageLimit) return res.status(413).json({ error: 'image_too_large' });
+  if (bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return res.status(400).json({ error: 'invalid_image' });
+  if (!rateOk('book-version:' + profile, 30, 60_000)) return res.status(429).json({ error: 'rate_limited' });
+  if (bookImagesDecoding >= 4) return res.status(503).json({ error: 'busy' });
+  bookImagesDecoding++;
+  try {
+    const { default: sharp } = await import('sharp');
+    let png;
+    try {
+      // Fully decode and re-encode the canvas, stripping metadata and tails.
+      png = await sharp(bytes, { limitInputPixels: 4 * 1024 * 1024, failOn: 'warning' }).png().toBuffer();
+    } catch {
+      return res.status(400).json({ error: 'invalid_image' });
+    }
+    if (!eligible()) return res.status(403).json({ error: 'not_eligible' });
+    return res.json(aiColoring.saveVersion(profile, id, key, png));
+  } finally { bookImagesDecoding--; }
 }));
 
 const coloringRoute = '/api/rooms/:code/ai-coloring';
@@ -11859,9 +11949,13 @@ app.get('/api/sheets/:id', async (req, res) => {
     if (!ACCOUNTS_CONFIGURED || !identity?.profileId) return res.status(404).json({ error: 'not found' });
     try {
       const entry = aiColoring.find(req.params.id);
-      const room = entry && rooms.get(entry.room);
+      // A book page can travel with its owner. The original room is the
+      // fallback for clients deployed before room-scoped image requests.
+      const code = req.query.room === undefined ? entry?.room :
+        typeof req.query.room === 'string' ? req.query.room.toUpperCase() : null;
+      const room = entry && rooms.get(code);
       const member = liveColoringMember(room, identity.profileId);
-      if (!member || !roomHasPaidColoring(room) || !aiColoring.belongs(req.params.id, room.code, room.ownerProfileId) ||
+      if (!member || !roomHasPaidColoring(room) || !aiColoring.belongs(req.params.id, room.ownerProfileId) ||
           (room.sheetId !== req.params.id && !eligibleColoringOwner(room, member))) {
         return res.status(404).json({ error: 'not found' });
       }
@@ -12611,7 +12705,6 @@ const PAGE_META = {
     description: 'Browse public artist studios: watch verified artists paint live, search by title, description and tags, and open a studio to watch. Anyone can view; only approved painters draw.',
   },
   '/about': { title: 'About Drawesome', description: 'A free browser studio for drawing, coloring, and painting together. Learn about shared rooms, drawing tools, saving art, and available room controls.' },
-  '/family': { title: 'Drawesome Family, ad-free creative spaces', description: 'Draw together ad-free and turn a private Family room’s artwork into a postcard to keep or share. Explore the adult-owned Family plan.' },
   '/faq': {
     title: 'Safety & FAQ: Drawesome',
     description: 'How moderation works, what data we store, how to report, and house rules, written to match how the app actually works.',
@@ -12672,6 +12765,7 @@ function seoOverridesFor(reqPath) {
       url: `${SITE_ORIGIN}${path}`,
     };
   }
+  if (path === '/coloring-book') return { ...getPageSeo(path), url: `${SITE_ORIGIN}${path}` };
   if (PAGE_META[path]) {
     const over = { ...PAGE_META[path], url: `${SITE_ORIGIN}${path}` };
     if (path === '/faq') over.jsonLd = FAQ_JSON_LD;
@@ -12725,6 +12819,13 @@ function seoOverridesFor(reqPath) {
   return null;
 }
 
+// Existing bookmarks and Stripe return links can include a checkout session query.
+app.get('/family', (req, res) => {
+  const queryAt = req.originalUrl.indexOf('?');
+  if (queryAt >= 0) res.set('Cache-Control', 'private, no-store');
+  res.redirect(308, '/jam-pass' + (queryAt < 0 ? '' : req.originalUrl.slice(queryAt)));
+});
+
 app.get('/robots.txt', (_req, res) => {
   res.type('text/plain').send(
     `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /join/\nDisallow: /watch/\n\nSitemap: ${SITE_ORIGIN}/sitemap.xml\n`,
@@ -12761,7 +12862,7 @@ app.get('/sitemap.xml', (_req, res) => {
 app.use((req, res, next) => {
   const path = req.path.replace(/\/+$/, '') || '/';
   const invalidEvent = path.startsWith('/events/') && !getDiscoverySeo(path);
-  if (invalidEvent || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
+  if (invalidEvent || path === '/coloring-book' || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
     res.set('X-Robots-Tag', 'noindex, nofollow');
     if (invalidEvent) res.status(404);
   }

@@ -43,3 +43,8 @@
 .ai-sheet-another { justify-self: start; }
 .ai-sheet-problem { margin: 8px 0 0; color: #803b2a; line-height: 1.4; }
 .ai-sheet-retry { margin: 0; }
+.sheet-modal .ai-sheet-switch { flex-wrap: wrap; }
+@media (max-width: 480px) {
+  .sheet-modal .ai-sheet-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-self: stretch; }
+  .sheet-modal .ai-sheet-switch button { font-size: .84rem; padding: 5px; line-height: 1.15; min-height: 44px; }
+}

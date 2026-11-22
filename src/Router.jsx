@@ -18,6 +18,7 @@ const RoomFinderPage = lazy(() => import("./components/RoomFinderPage"));
 const SafetyPage = lazy(() => import("./components/SafetyPage"));
 const ParentsPage = lazy(() => import("./components/ParentsPage"));
 const FamilyPage = lazy(() => import("./components/FamilyPage"));
+const ColoringBookPage = lazy(() => import("./components/ColoringBookPage"));
 const FaqPage = lazy(() => import("./components/FaqPage"));
 const LiveAdmin = lazy(() => import("./components/LiveAdmin"));
 const RoomRadar = lazy(() => import("./components/RoomRadar"));
@@ -62,8 +63,8 @@ export default function Router() {
   // inktober-2026 → plain /gallery from the nav) remounts with fresh state
   // instead of silently keeping the previous page's filters.
   const [locKey, setLocKey] = useState(() => window.location.pathname + window.location.search);
-  const navigate = useCallback((nextPath) => {
-    window.history.pushState({}, "", nextPath);
+  const navigate = useCallback((nextPath, state = {}) => {
+    window.history.pushState(state, "", nextPath);
     setPath(window.location.pathname);
     setLocKey(window.location.pathname + window.location.search);
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -101,7 +102,7 @@ export default function Router() {
 
   let page;
   const drawing = path === "/draw" || (path.startsWith("/studio") && !path.startsWith("/studios")) || path.startsWith("/join");
-  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar"].some(prefix => path.startsWith(prefix));
+  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar", "/coloring-book"].some(prefix => path.startsWith(prefix));
   if (path === "/draw") {
     const params = new URLSearchParams(window.location.search);
     const event = getCommunityEvent(params.get("event"));
@@ -119,7 +120,8 @@ export default function Router() {
   } else if (path.startsWith("/join")) {
     const code = (path.split("/")[2] || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "MAIN";
     // A new room must get a fresh canvas, socket, and undo history.
-    page = <StudioApp key={`room-${code}`} initialJoinCode={code} initialColoring={new URLSearchParams(window.location.search).get("color") === "1"} />;
+    page = <StudioApp key={`room-${code}`} initialJoinCode={code} initialColoring={new URLSearchParams(window.location.search).get("color") === "1"}
+      initialBookOutline={window.history.state?.bookOutline} initialMakePage={window.history.state?.makePage === true} />;
   } else if (path.startsWith("/watch")) {
     // The admin glass-room. Not a drawing route: no studio bundle, no canvas
     // tools, the watch view is read-only by construction.
@@ -150,7 +152,9 @@ export default function Router() {
     page = <SafetyPage onNavigate={navigate} />;
   } else if (path.startsWith("/parents")) {
     page = <ParentsPage onNavigate={navigate} />;
-  } else if (path.startsWith("/family")) {
+  } else if (path === "/coloring-book") {
+    page = <ColoringBookPage onNavigate={navigate} />;
+  } else if (path === "/jam-pass" || path.startsWith("/family")) {
     page = <FamilyPage onNavigate={navigate} />;
   } else if (path.startsWith("/faq")) {
     page = <FaqPage onNavigate={navigate} />;

@@ -1,18 +1,22 @@
 import { COMMUNITY_EVENTS } from './communityEvents.js';
 import { LEGACY_PAGE_META } from './legacyPageMeta.js';
 
-// Existing landing URLs remain canonical. Additive only: /wall, /rooms,
-// /inktober and every old sitemap entry retain their addresses.
+// Public landing pages have shareable metadata and appear in the sitemap.
 const PAGES = {
   '/': {
     title: 'Draw Together Online for Free | Drawesome',
-    description: 'Join a random public drawing room or share a canvas with friends and family. Paint together in real time. Public rooms are free and ad-supported.',
+    description: 'Join a public Art Jam to draw with someone new or invite friends and family to a shared canvas. Paint together in real time. Public rooms are free and ad-supported.',
     heading: 'Come draw with us.',
   },
   '/friends': {
     title: 'Draw and Color with Friends | Drawesome',
     description: 'Exchange friend codes, meet on a shared canvas and color a page together.',
     heading: 'Draw with friends',
+  },
+  '/jam-pass': {
+    title: 'Drawesome Jam Pass | Art Jams & My Coloring Book',
+    description: 'Host ad-free Art Jams, make AI coloring pages, save your favorite versions in My Coloring Book and share a painting as a postcard.',
+    heading: 'Drawesome Jam Pass',
   },
   '/gallery': {
     title: 'Community Art Gallery: Drawings & Doodles | Drawesome',
@@ -41,11 +45,11 @@ const PAGES = {
   },
 };
 
-export const DISCOVERY_PATHS = ['/friends', '/gallery', '/studios', '/events', '/draw', ...COMMUNITY_EVENTS.filter((event) => event.path.startsWith('/events/')).map((event) => event.path)];
+export const DISCOVERY_PATHS = ['/friends', '/jam-pass', '/gallery', '/studios', '/events', '/draw', ...COMMUNITY_EVENTS.filter((event) => event.path.startsWith('/events/')).map((event) => event.path)];
 
 export function getPageSeo(rawPath) {
   const path = String(rawPath).split(/[?#]/)[0].replace(/\/+$/, '') || '/';
-  const discovery = getDiscoverySeo(path);
+  const discovery = getDiscoverySeo(path === '/family' ? '/jam-pass' : path);
   if (discovery) return discovery;
   if (LEGACY_PAGE_META[path]) return { ...LEGACY_PAGE_META[path], path };
   return null;

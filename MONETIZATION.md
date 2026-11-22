@@ -3,15 +3,15 @@
 The implementation is deliberately anonymous-first. With every value below
 empty, drawing, rooms, invitations, saves, and games behave exactly as before.
 
-## Family subscriptions
+## Jam Pass subscriptions
 
-1. In Stripe, create one recurring product named **Drawesome Family** with:
+1. Use the existing subscription product in Stripe, or create **Drawesome Jam Pass** for a new catalog. The supported prices are
    - monthly price: **$2.99 USD**
    - yearly price: **$15 USD**
 2. Copy the `prod_...` id to `STRIPE_PRODUCT_FAMILY` and the two `price_...`
    ids to `STRIPE_PRICE_FAMILY_MONTHLY` and
    `STRIPE_PRICE_FAMILY_YEARLY`. The server verifies that both prices are
-   active, billed per unit in USD, and belong to that product. The Family
+   active, billed per unit in USD, and belong to that product. The Jam Pass
    page shows the verified price. An invalid or unavailable catalog suppresses
    the price and disables checkout.
 
@@ -43,7 +43,7 @@ empty, drawing, rooms, invitations, saves, and games behave exactly as before.
    Stripe client, and update both deliberately when upgrading Stripe.
 5. Copy the webhook signing secret to `STRIPE_WEBHOOK_SECRET`.
 6. Create a dedicated Customer Portal configuration that exposes only the two
-   Drawesome Family prices, payment-method updates, and cancellation at period
+   Jam Pass prices, payment-method updates, and cancellation at period
    end, with quantity adjustment disabled. Put its `bpc_...` id in
    `STRIPE_PORTAL_CONFIGURATION_ID`; the server validates these safety settings
    before enabling checkout.
@@ -71,10 +71,10 @@ processed webhook ids, and the PocketBase profile id in
 are atomic, and failed account-deletion cancellations stay in a durable retry
 queue so an erased account cannot remain silently billed.
 
-After Stripe returns to `/family`, the signed-in client confirms that exact
+After Stripe returns to `/jam-pass`, the signed-in client confirms that exact
 Checkout Session with the server. The server verifies both the owning profile
 and Stripe customer before refreshing entitlement, so a delayed webhook does
-not leave a paid family waiting. Webhooks remain the durable source of truth.
+not leave a subscriber waiting. Webhooks remain the durable source of truth.
 The admin overview shows catalog readiness, active/attention counts, the last
 processed Stripe event, and any deletion-cancellation retries without exposing
 keys or customer identifiers.
@@ -85,21 +85,37 @@ postcard export. The server sends each member their individual `adFree`
 status and the separate `familyRoom` flag, including after webhook changes.
 Other visitors to a public room keep the ordinary free experience.
 
+Existing Stripe product and price IDs and the `STRIPE_*_FAMILY*` deployment settings
+continue to identify the same subscription. Existing bookmarks and Checkout returns
+to `/family` still work.
+
 ## Custom coloring pages
 
-The signed-in owner of a private Family drawing room can describe a scene in
+The signed-in owner of a private room with Jam Pass can describe a scene in
 **Coloring sheets**, preview the generated line art, download a PNG and share
 it on the canvas. These controls require a live Stripe payment covering the
-current Family subscription period. Stripe test checkout exercises billing
+current Jam Pass subscription period. Stripe test checkout exercises billing
 without unlocking OpenRouter generation. Free accounts, trials, fully discounted periods and
 past-due grace after paid coverage ends have access to the ordinary sheet library.
 Signed-in invitees can paint on an applied page while the owner's paid coverage
 is current. If coverage lapses, the shared outline is hidden and brushstrokes
 remain. Renewing coverage restores the outline if the room still has it selected.
 Creating a preview uses one of five pages per
-Family owner per UTC calendar month, shared across their rooms. There is also
+Jam Pass owner per UTC calendar month, shared across their rooms. There is also
 a ceiling of twelve generation attempts in that month, including rejected
-or interrupted requests. Downloading or applying an existing page is free.
+or interrupted requests. Opening, printing or applying an existing page uses no additional generation allowance.
+
+Every approved outline is kept in the creator’s private **My Coloring Book** at
+`/coloring-book`. The owner can reuse it in another private Art Jam and choose
+**Keep this version** to store a finished picture beside the original. Closing a
+room leaves the book intact. The book remains stored during a subscription lapse,
+and access resumes with paid coverage. A moderator takedown or account deletion
+removes the affected stored outlines and their versions.
+
+A page holds up to 24 finished versions. The owner can download a version
+and delete it from the book to free a slot. The server limits outlines to
+512 MiB and saved versions to 1 GiB total. At capacity it declines new saves
+and preserves existing artwork. Include `DATA_DIR/.ai-coloring` in backups.
 
 Set `OPENROUTER_API_KEY` and `AI_COLORING_ENABLED=true` in the project-root
 `.env` on the machine running the app. Docker Compose reads the file when you
@@ -134,7 +150,7 @@ child-directed experience. Create:
 Set their full unit paths in `VITE_GAM_AD_UNIT_CHAT` and
 `VITE_GAM_AD_UNIT_INTERSTITIAL`, then rebuild. The existing `CHAT` variable now controls the
 banner above the canvas. It appears when inventory fills in a connected,
-ad-supported room. Private Family rooms, finger-paint rooms, sketchbook pages
+ad-supported room. Private Jam Pass rooms, finger-paint rooms, sketchbook pages
 and local drawing skip this placement. Every GPT request is tagged as
 child-directed, under-age-of-consent, non-personalized, and restricted-data-
 processing. Empty unit paths mean the GPT script is never requested.
@@ -153,7 +169,7 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
 
 - With all billing/ad variables blank: open a fresh private room anonymously,
   draw, invite another browser, save/export, and confirm there are no ad calls.
-- With Stripe test keys: subscribe from `/family`, replay the webhook, reopen
+- With Stripe test keys: subscribe from `/jam-pass`, replay the webhook, reopen
   the owner’s private room, and confirm both owner and invitee receive
   `adFree: true` and `familyRoom: true` in the WebSocket `connected` payload.
 - In a public room, confirm the subscriber receives `adFree: true`, another
@@ -163,5 +179,5 @@ rules. No ad interrupts an active stroke or pauses the shared WebSocket room.
 - With Google test inventory: join an ordinary free room and confirm the banner above the canvas; shorten
   `VITE_AD_BREAK_MINUTES` only in a local build to exercise natural breaks.
 - `node scripts/price-ads-verify.mjs`, isolated boot that asserts the served
-  Family prices, the `/ads.txt` 404-when-unset / GAM-line-when-set gate, and
-  that no stale price leaks into the `/family` HTML.
+  Jam Pass prices, the `/ads.txt` 404-when-unset / GAM-line-when-set gate, and
+  that no stale price leaks into the `/jam-pass` HTML.

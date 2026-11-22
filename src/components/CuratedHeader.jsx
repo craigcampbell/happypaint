@@ -50,7 +50,7 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
         {content.description && <p className="print-deck">{content.description}</p>}
         <div className="print-actions">
           <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
-          <HeaderLink ink href="/friends" className="print-browse" preview={preview} onNavigate={onNavigate}>Invite friends &amp; family<NavInkMark kind="underline" /></HeaderLink>
+          <HeaderLink ink href="/friends" className="print-browse" preview={preview} onNavigate={onNavigate}>Start an Art Jam with friends<NavInkMark kind="underline" /></HeaderLink>
         </div>
         {content.note && <p className="print-note">{content.note}</p>}
       </div>

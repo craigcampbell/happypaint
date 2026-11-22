@@ -31,12 +31,12 @@ same backend later.
   studio search modal (search/preview/add); one-sheet-per-room with wipe-on-change;
   "Today's theme" (admin → holiday → daily rotation). Plus admin custom uploads.
 - **Play-money "drops"**: earn by painting, spend on cosmetics; real-money OFF.
-- **Monetization foundation**: adult-owned Drawesome Family ($2.99/month or
+- **Monetization foundation**: adult-owned Drawesome Jam Pass ($2.99/month or
   $15/year, with legacy monthly prices honored) with Stripe-hosted checkout/portal,
   personal ad-free painting, private room benefits including Art postcards for
   invitees, child-treated room display inventory, and manual
   interstitials triggered only at saves/exports/game-round breaks. All rails are
-  env-gated; Family prices are verified against Stripe, webhook state is
+  env-gated; Jam Pass prices are verified against Stripe, webhook state is
   durable/order-safe, payment failure has a bounded grace window, and account
   deletion queues cancellation until Stripe confirms it. Paid coins, tips,
   payouts, and child-facing purchases remain OFF.
