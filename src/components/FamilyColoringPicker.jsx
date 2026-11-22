@@ -156,7 +156,7 @@ export default function FamilyColoringPicker({ roomCode, token, onApply, removed
     {!creating ? children : <div className="ai-sheet-body">
       <p className="ai-sheet-quota" role="status">
         {availability.attemptsRemaining === 0 && availability.remaining > 0 ? problemMessage("attempt_limit")
-          : `${availability.remaining} of ${availability.limit} Family pages left this month`}
+          : `Your paid Family plan has ${availability.remaining} of ${availability.limit} pages left this month.`}
       </p>
       {editing ? <form onSubmit={generate} className="ai-sheet-form">
         <label htmlFor="ai-sheet-prompt">What would you like to color?</label>

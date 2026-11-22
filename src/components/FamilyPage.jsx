@@ -8,7 +8,8 @@ import { isCanceled } from "../utils/cancellation";
 export default function FamilyPage({ onNavigate }) {
   const [session, setSession] = useState(null);
   const [config, setConfig] = useState(null);
-  const [billing, setBilling] = useState(null);
+  const [billingSnapshot, setBillingSnapshot] = useState(null);
+  const billing = session && billingSnapshot?.profileId === session.user.id ? billingSnapshot.status : null;
   const [interval, setInterval] = useState("monthly");
   const [adultConfirmed, setAdultConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -26,15 +27,18 @@ export default function FamilyPage({ onNavigate }) {
   }, []);
 
   useEffect(() => {
-    if (!session?.access_token) { setBilling(null); return; }
+    if (!session?.access_token) { setBillingSnapshot(null); return; }
     let active = true;
+    const setBilling = (status) => {
+      if (active) setBillingSnapshot({ profileId: session.user.id, status });
+    };
     const load = () => fetch("/api/billing/me", {
         cache: "no-store",
         headers: { Authorization: `Bearer ${session.access_token}` },
       })
         .then((res) => (res.ok ? res.json() : null))
-        .then((value) => active && setBilling(value))
-        .catch(() => active && setBilling(null));
+        .then(setBilling)
+        .catch(() => setBilling(null));
     load();
     // Stripe redirects before its webhook is guaranteed to finish. On a
     // successful return, reconcile the exact Checkout Session immediately and
@@ -95,7 +99,7 @@ export default function FamilyPage({ onNavigate }) {
           cache: "no-store",
           headers: { Authorization: `Bearer ${session.access_token}` },
         }).then((res) => (res.ok ? res.json() : null)).catch(() => null);
-        if (current) setBilling(current);
+        if (current) setBillingSnapshot({ profileId: session.user.id, status: current });
       }
       const friendly = {
         billing_not_configured: "Subscriptions are not connected yet.",
@@ -142,7 +146,7 @@ export default function FamilyPage({ onNavigate }) {
             <dl>
               {isCloudConfigured && config?.aiColoringEnabled && <>
                 <dt>Make your own coloring pages</dt>
-                <dd>Ask for a scene like “a red panda running a bakery on the moon.” In a private drawing room you own, open Coloring sheets to generate up to five pages per calendar month. Download a page to print or put it on the canvas for everyone to color.</dd>
+                <dd>Sign in with a paid Family account to make up to five AI coloring pages per calendar month. In a private room you own, ask for a scene like “a red panda running a bakery on the moon.” Preview the page, download it to print, or share it on the canvas. Your signed-in guests can color it with you for free.</dd>
               </>}
               <dt>Art postcards</dt>
               <dd>Open Invite in your room, choose <strong>Make an art postcard</strong> and add a note. Save the PNG to attach to an email, or share it through a supported app on your device.</dd>
@@ -163,8 +167,10 @@ export default function FamilyPage({ onNavigate }) {
                   : "Update your payment method or review the subscription securely in Stripe."}</p>
                 {billing.renewsAt ? <p className="family-renewal">{billing.cancelAtPeriodEnd ? "Ends" : "Renews"} {new Date(billing.renewsAt).toLocaleDateString()}</p> : null}
                 {billing.active && <button type="button" className="primary-action" onClick={openRoom}>Open a Family room</button>}
-                {billing.active && isCloudConfigured && config?.aiColoringEnabled && (
-                  <button type="button" className="family-manage" onClick={() => onNavigate(`/join/${createInviteCode()}?color=1`)}>Open a room for coloring</button>
+                {isCloudConfigured && config?.aiColoringEnabled && (
+                  billing.aiColoringPaid === true
+                    ? <button type="button" className="family-manage" onClick={() => onNavigate(`/join/${createInviteCode()}?color=1`)}>Open a room for coloring</button>
+                    : <p>AI coloring pages unlock when Stripe confirms payment for your current billing period.</p>
                 )}
                 <button type="button" className="family-manage" disabled={busy} onClick={() => callBilling("/api/billing/portal")}>Manage billing</button>
               </>
@@ -197,7 +203,7 @@ export default function FamilyPage({ onNavigate }) {
                     termsVersion: config?.termsVersion,
                   }) : onNavigate("/signup?return=/family")}
                 >
-                  {busy ? "Opening secure checkout…" : !config ? "Checking availability…" : !configuredForPlan ? "Subscriptions opening soon" : !session ? "Sign in as a parent" : "Start Drawesome Family"}
+                  {busy ? "Opening secure checkout…" : !config ? "Checking availability…" : !configuredForPlan ? "Subscriptions opening soon" : !session ? "Create an account or sign in" : "Start Drawesome Family"}
                 </button>
                 {!configuredForPlan ? (
                   <div className="family-setup-note" role="status">
@@ -213,7 +219,7 @@ export default function FamilyPage({ onNavigate }) {
 
         <section className="family-plain-language">
           <h2>What can we do for free?</h2>
-          <p>Open a public room as a guest, paint on a shared canvas and save your drawing. Friends and family can meet by room code. On a site with accounts, sign in to enter a private room.</p>
+          <p>Open a public room as a guest, choose a sheet from the free coloring library, paint together and save your drawing. Friends and family can meet by room code. On a site with accounts, sign in to enter a private room.</p>
           <a href="/rooms" onClick={event => {
             if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
             event.preventDefault();

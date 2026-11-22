@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBilling } from '../server/billing.js';
@@ -10,6 +10,7 @@ const originalEnv = { ...process.env };
 const dataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-hardening-'));
 const badDataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-bad-catalog-'));
 const badPortalDataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-bad-portal-'));
+const legacyDataDir = await mkdtemp(join(tmpdir(), 'drawesome-billing-previous-record-'));
 let server;
 let badServer;
 let badPortalServer;
@@ -42,10 +43,13 @@ let lastPortalParams;
 const subscriptions = new Map();
 const sessions = new Map();
 const customersByProfile = new Map();
+const invoiceHistory = new Map();
+const laterInvoiceLines = new Map();
 
 function familySubscription(id, profileId, customerId, overrides = {}) {
-  return {
+  const sub = {
     id,
+    livemode: true,
     customer: customerId,
     status: 'active',
     current_period_end: Math.floor(currentTime / 1000) + 3600,
@@ -58,9 +62,20 @@ function familySubscription(id, profileId, customerId, overrides = {}) {
         price: { id: 'price_monthly', product: { id: 'prod_family', active: true } },
       }],
     },
-    latest_invoice: { status: 'paid' },
     ...overrides,
   };
+  if (!Object.hasOwn(overrides, 'latest_invoice')) {
+    sub.latest_invoice = {
+      id: 'in_' + id, livemode: true, status: 'paid', amount_paid: 299,
+      parent: { subscription_details: { subscription: id } },
+      lines: { data: [{
+        amount: 299, parent: { subscription_item_details: { subscription: id } },
+        pricing: { price_details: { price: sub.items.data[0].price.id } },
+        period: { start: Math.floor(currentTime / 1000) - 3600, end: sub.current_period_end },
+      }] },
+    };
+  }
+  return sub;
 }
 
 function makeStripe({ badCatalog = false, badPortal = false, monthlyAmount = 299 } = {}) {
@@ -83,6 +98,13 @@ function makeStripe({ badCatalog = false, badPortal = false, monthlyAmount = 299
       constructEvent(body, signature, secret) {
         if (signature !== 'valid' || secret !== 'whsec_mock') throw new Error('bad signature');
         return JSON.parse(Buffer.from(body).toString('utf8'));
+      },
+    },
+    invoices: {
+      list: ({ subscription }) => invoiceHistory.get(subscription) || [],
+      listLineItems: (id, { starting_after }) => {
+        assert.equal(starting_after, 'il_adjustment');
+        return laterInvoiceLines.get(id) || [];
       },
     },
     customers: {
@@ -257,6 +279,7 @@ try {
   assert.match(lastCheckoutParams.success_url, /\{CHECKOUT_SESSION_ID\}/);
   assert.equal(lastCheckoutParams.allow_promotion_codes, false);
   assert.match(lastCheckoutOptions.idempotencyKey, /^drawesome-family-checkout-v2-/);
+  assert.equal(billing.isProfilePaidForAiColoring('parent_profile'), false, 'opening checkout cannot fund generation');
 
   const changedPlan = await postJson(appOrigin, '/api/billing/checkout', 'parent_profile', {
     interval: 'yearly', adultConfirmed: true, termsVersion: 'test-terms-v1',
@@ -280,7 +303,10 @@ try {
     sessionId: 'cs_parent_profile',
   });
   assert.equal(confirmed.status, 200);
-  assert.equal((await confirmed.json()).active, true, 'return-page confirmation repairs a delayed webhook');
+  const confirmedStatus = await confirmed.json();
+  assert.equal(confirmedStatus.active, true, 'return-page confirmation repairs a delayed webhook');
+  assert.equal(confirmedStatus.aiColoringPaid, true, 'checkout confirmed the real paid Family line');
+  assert.equal(billing.aiColoringPaidUntil('parent_profile'), parentSub.current_period_end * 1000);
   assert.deepEqual(entitlementChanges.at(-1), { profileId: 'parent_profile', active: true });
   const operational = await billing.getOperationalStatus();
   assert.equal(operational.mode, 'ready');
@@ -294,6 +320,7 @@ try {
   assert.equal((await sendEvent(appOrigin, paidEvent)).status, 200);
   const paid = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('parent_profile') }).then((res) => res.json());
   assert.equal(paid.active, true, 'invoice.paid grants paid-through access');
+  assert.equal(paid.aiColoringPaid, true);
 
   const retrievesBeforeDuplicate = subscriptionRetrieves;
   const duplicate = await sendEvent(appOrigin, paidEvent);
@@ -307,6 +334,7 @@ try {
   currentTime += 2 * 3600000;
   const expired = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('parent_profile') }).then((res) => res.json());
   assert.equal(expired.active, false, 'status alone never outlives paid-through');
+  assert.equal(expired.aiColoringPaid, false);
   currentTime -= 2 * 3600000;
 
   const badSub = familySubscription('sub_bad', 'bad_profile', 'cus_bad', {
@@ -319,6 +347,50 @@ try {
   const badStatus = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('bad_profile') }).then((res) => res.json());
   assert.equal(badStatus.active, false, 'wrong product/price never grants Family');
   assert.equal(badStatus.status, 'invalid_product');
+  assert.equal(badStatus.aiColoringPaid, false);
+
+  // A Stripe subscription can be active with a zero-dollar invoice. Its
+  // general Family benefits still apply. The separately metered AI needs
+  // money received for this particular subscription line and service period.
+  for (const [name, alter, allowed] of [
+    ['coupon', invoice => { invoice.amount_paid = 0; }, false],
+    ['discount', invoice => { invoice.amount_paid = 99; invoice.lines.data[0].discount_amounts = [{ amount: 200 }]; }, true],
+    ['other_fee', invoice => { invoice.lines.data[0].discount_amounts = [{ amount: 299 }]; }, false],
+    ['off_stripe', invoice => { invoice.amount_paid_off_stripe = invoice.amount_paid; }, false],
+    ['test_invoice', invoice => { invoice.livemode = false; }, false],
+    ['unknown_invoice_mode', invoice => { delete invoice.livemode; }, false],
+    ['unfinished', invoice => { invoice.status = 'open'; }, false],
+    ['other_sub', invoice => { invoice.parent.subscription_details.subscription = 'sub_other'; }, false],
+    ['other_line', invoice => { invoice.lines.data[0].pricing.price_details.price = 'price_else'; }, false],
+    ['prior_month', invoice => { invoice.lines.data[0].period.end = Math.floor(currentTime / 1000) - 1; }, false],
+  ]) {
+    const sub = familySubscription('sub_' + name, name, 'cus_' + name);
+    alter(sub.latest_invoice);
+    subscriptions.set(sub.id, sub);
+    assert.equal((await sendEvent(appOrigin, event('evt_' + name, 'customer.subscription.updated', sub, 214))).status, 200);
+    const status = await fetch(appOrigin + '/api/billing/me', { headers: auth(name) }).then(res => res.json());
+    assert.equal(status.aiColoringPaid, allowed, name);
+    if (name === 'coupon') assert.equal(status.active, true);
+  }
+  const trial = familySubscription('sub_trial', 'trial', 'cus_trial', { status: 'trialing' });
+  subscriptions.set(trial.id, trial);
+  await sendEvent(appOrigin, event('evt_trial', 'customer.subscription.updated', trial, 215));
+  assert.equal(billing.isProfilePaidForAiColoring('trial'), false);
+  const mode = familySubscription('sub_mode', 'mode', 'cus_mode');
+  subscriptions.set(mode.id, mode);
+  for (const [index, live] of [true, false, undefined].entries()) {
+    mode.livemode = live;
+    await sendEvent(appOrigin, event('evt_mode_' + index, 'customer.subscription.updated', mode, 216 + index));
+    assert.equal(billing.isProfileEntitled('mode'), true, 'Family supports Stripe test checkout');
+    assert.equal(billing.isProfilePaidForAiColoring('mode'), live === true, 'only verified live payments fund AI');
+  }
+  mode.livemode = true;
+  mode.latest_invoice = { status: 'open' };
+  await sendEvent(appOrigin, event('evt_mode_rebind', 'customer.subscription.updated', mode, 219));
+  assert.equal(billing.isProfilePaidForAiColoring('mode'), false, 'mode change cannot transfer the old proof');
+  const actualPayment = familySubscription(mode.id, 'mode', mode.customer).latest_invoice;
+  await sendEvent(appOrigin, event('evt_real_payment', 'invoice.paid', actualPayment, 220));
+  assert.equal(billing.isProfilePaidForAiColoring('mode'), true, 'signed payment can establish coverage despite a newer unpaid adjustment');
 
   const graceSub = familySubscription('sub_grace', 'grace_profile', 'cus_grace');
   subscriptions.set(graceSub.id, graceSub);
@@ -331,19 +403,48 @@ try {
   await sendEvent(appOrigin, event('evt_grace_due', 'customer.subscription.updated', structuredClone(graceSub), 230));
   const inGrace = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('grace_profile') }).then((res) => res.json());
   assert.equal(inGrace.active, true, 'a previously paid family keeps the configured recovery grace');
+  assert.equal(inGrace.aiColoringPaid, false, 'grace cannot spend OpenRouter credits');
+  assert.equal(billing.aiColoringPaidUntil('grace_profile'), 0);
   currentTime += 73 * 3600000;
   const beyondGrace = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('grace_profile') }).then((res) => res.json());
   assert.equal(beyondGrace.active, false, 'past-due access ends after the grace window');
+  const oldInvoice = familySubscription(graceSub.id, 'grace_profile', 'cus_grace').latest_invoice;
+  oldInvoice.lines.data[0].period.end = Math.floor(currentTime / 1000) - 3600;
+  graceSub.current_period_end += 30 * 86400;
+  await sendEvent(appOrigin, event('evt_grace_late_payment', 'invoice.paid', oldInvoice, 231));
+  assert.equal(billing.isProfilePaidForAiColoring('grace_profile'), false, 'old paid webhook cannot pay for a later renewal');
   currentTime -= 75 * 3600000;
 
+  const capturedActive = Promise.withResolvers();
+  const resumeOldRead = Promise.withResolvers();
+  const retrieve = stripe.subscriptions.retrieve;
+  stripe.subscriptions.retrieve = async (id, options) => {
+    const result = await retrieve(id, options);
+    if (id === parentSub.id && result.status === 'active') {
+      capturedActive.resolve();
+      await resumeOldRead.promise;
+    }
+    return result;
+  };
+  const earlierFetch = sendEvent(appOrigin, event('evt_in_flight', 'customer.subscription.updated', parentSub, 299));
+  await capturedActive.promise;
   parentSub.status = 'canceled';
   await sendEvent(appOrigin, event('evt_deleted', 'customer.subscription.deleted', structuredClone(parentSub), 300));
-  parentSub.status = 'canceled';
+  resumeOldRead.resolve();
+  assert.equal((await earlierFetch).status, 200);
+  stripe.subscriptions.retrieve = retrieve;
+  assert.equal(billing.isProfileEntitled('parent_profile'), false, 'old Stripe read completed after terminal cancellation');
+  assert.equal(billing.isProfilePaidForAiColoring('parent_profile'), false);
   const staleActiveSnapshot = { ...structuredClone(parentSub), status: 'active' };
   await sendEvent(appOrigin, event('evt_stale_active', 'customer.subscription.updated', staleActiveSnapshot, 100));
   const afterStale = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('parent_profile') }).then((res) => res.json());
   assert.equal(afterStale.active, false, 'out-of-order active snapshot cannot revive canceled access');
   assert.equal(afterStale.status, 'canceled');
+  assert.equal(afterStale.aiColoringPaid, false);
+  const newSub = familySubscription('sub_resubscribed', 'parent_profile', 'cus_parent');
+  subscriptions.set(newSub.id, newSub);
+  await sendEvent(appOrigin, event('evt_resubscribed', 'customer.subscription.created', newSub, 301));
+  assert.equal(billing.isProfilePaidForAiColoring('parent_profile'), true, 'a newly paid subscription can restore access');
 
   const deleteSub = familySubscription('sub_delete', 'delete_profile', 'cus_delete');
   const duplicateDeleteSub = familySubscription('sub_delete_duplicate', 'delete_profile', 'cus_delete');
@@ -356,6 +457,7 @@ try {
   const deletion = await billing.cancelAndDeleteProfile('delete_profile');
   assert.equal(deletion.pending, true, 'failed cancellation is retained for retry');
   assert.equal(billing.isProfileEntitled('delete_profile'), false, 'pending deletion revokes access');
+  assert.equal(billing.isProfilePaidForAiColoring('delete_profile'), false);
 
   await sendEvent(appOrigin, event('evt_delete_race', 'invoice.paid', {
     customer: 'cus_delete', parent: { subscription_details: { subscription: 'sub_delete' } },
@@ -449,6 +551,29 @@ try {
   const grandfathered = await fetch(`${appOrigin}/api/billing/me`, { headers: auth('legacy_profile') }).then(res => res.json());
   assert.equal(grandfathered.active, true, 'renewals at the retired $1.99 rate keep Family access');
   assert.equal(grandfathered.interval, 'monthly');
+  assert.equal(grandfathered.aiColoringPaid, true);
+
+  // Version 2 tracked a generic paid-through value without the invoice
+  // amount or service dates. Re-read the account's own Stripe invoice history.
+  const legacySub = familySubscription('sub_migrate', 'migrate', 'cus_migrate');
+  const previousInvoice = legacySub.latest_invoice;
+  legacySub.latest_invoice = { status: 'paid', amount_paid: 40, lines: { data: [] } };
+  subscriptions.set(legacySub.id, legacySub);
+  laterInvoiceLines.set(previousInvoice.id, previousInvoice.lines.data);
+  const firstPage = { ...previousInvoice, lines: { has_more: true, data: [{ id: 'il_adjustment' }] } };
+  invoiceHistory.set(legacySub.id, [legacySub.latest_invoice, firstPage]);
+  await writeFile(join(legacyDataDir, '.billing.json'), JSON.stringify({ version: 2, records: { migrate: {
+    profileId: 'migrate', subscriptionId: legacySub.id, customerId: legacySub.customer,
+    status: 'active', quantity: 1, familyProductValid: true, priceId: 'price_monthly', currentPeriodEnd: legacySub.current_period_end,
+  } } }));
+  const reload = () => createBilling({ dataDir: legacyDataDir, stripeClient: stripe, startMaintenance: false,
+    aiColoringEnabled: true, verifyAccessToken: async token => ({ profileId: token }), now: () => currentTime });
+  const old = reload();
+  assert.equal(old.isProfileEntitled('migrate'), true);
+  assert.equal(old.isProfilePaidForAiColoring('migrate'), false, 'legacy dates alone cannot buy AI access');
+  await old.runMaintenance();
+  assert.equal(old.isProfilePaidForAiColoring('migrate'), true, 'prior valid Stripe invoice restores a paid legacy account');
+  assert.equal(reload().aiColoringPaidUntil('migrate'), legacySub.current_period_end * 1000);
 
   console.log('billing hardening integration: ok');
 } finally {
@@ -458,5 +583,6 @@ try {
   await rm(dataDir, { recursive: true, force: true });
   await rm(badDataDir, { recursive: true, force: true });
   await rm(badPortalDataDir, { recursive: true, force: true });
+  await rm(legacyDataDir, { recursive: true, force: true });
   process.env = originalEnv;
 }

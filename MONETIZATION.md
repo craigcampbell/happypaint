@@ -87,9 +87,16 @@ Other visitors to a public room keep the ordinary free experience.
 
 ## Custom coloring pages
 
-The owner of a private Family drawing room can describe a scene in **Coloring
-sheets**, preview the generated line art, and download a PNG or apply the page
-for everyone in the room. Creating a preview uses one of five pages per
+The signed-in owner of a private Family drawing room can describe a scene in
+**Coloring sheets**, preview the generated line art, download a PNG and share
+it on the canvas. These controls require a live Stripe payment covering the
+current Family subscription period. Stripe test checkout exercises billing
+without unlocking OpenRouter generation. Free accounts, trials, fully discounted periods and
+past-due grace after paid coverage ends have access to the ordinary sheet library.
+Signed-in invitees can paint on an applied page while the owner's paid coverage
+is current. If coverage lapses, the shared outline is hidden and brushstrokes
+remain. Renewing coverage restores the outline if the room still has it selected.
+Creating a preview uses one of five pages per
 Family owner per UTC calendar month, shared across their rooms. There is also
 a ceiling of twelve generation attempts in that month, including rejected
 or interrupted requests. Downloading or applying an existing page is free.

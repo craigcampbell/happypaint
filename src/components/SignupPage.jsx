@@ -37,6 +37,7 @@ export default function SignupPage({ onNavigate }) {
     return safeSignInReturn(requested);
   })();
   const friendsReturn = returnPath === "/friends";
+  const familyReturn = returnPath === "/family";
   const promptReturn = returnPath.startsWith("/draw?");
   // A rejected token may still look valid to the local PocketBase store.
   // The prompt's explicit reauthentication link opens the form in that case.
@@ -54,7 +55,7 @@ export default function SignupPage({ onNavigate }) {
   const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
   // A guest can't enter a private room (the door asks for an account), so the
   // guest exit goes to the open studio rather than a random private code.
-  const guestPath = friendsReturn ? "/friends" : promptReturn ? "/draw" : returnPath === "/family" ? returnPath : "/join/MAIN";
+  const guestPath = friendsReturn ? "/friends" : promptReturn ? "/draw" : familyReturn ? returnPath : "/join/MAIN";
   // Age screen (COPPA hygiene): accounts are 13+ or parent/guardian-made.
   // "" until answered; signup stays disabled until one option is picked.
   const [ageBand, setAgeBand] = useState("");
@@ -128,9 +129,17 @@ export default function SignupPage({ onNavigate }) {
     <div className="site-page field-guide account-page">
       <SiteNav onNavigate={onNavigate} current="/signup" />
       <main className="site-page-body site-page-narrow">
-        <h1>{showSignedIn ? "You’re signed in" : mode === "signup" ? (friendsReturn ? "Sign up to draw with friends" : promptReturn ? "Sign up for your drawing prompt" : "Keep your gallery across devices") : "Welcome back"}</h1>
+        <h1>{showSignedIn ? "You’re signed in"
+          : familyReturn ? "Your Drawesome Family account"
+          : mode === "login" ? "Welcome back"
+          : friendsReturn ? "Sign up to draw with friends"
+          : promptReturn ? "Sign up for your drawing prompt"
+          : "Keep your gallery across devices"}</h1>
         <p className="site-lead">
-          {friendsReturn ? "Choose a nickname and exchange friend codes to draw and color together." : promptReturn ? "Your selected prompt opens on a private canvas after you sign in. You can also start with a blank canvas as a guest."
+          {familyReturn && showSignedIn ? "Continue to Family to see the plan on this account."
+            : familyReturn ? "Already subscribed? Sign in with the Drawesome account you used at checkout. New to Family? Create a free account, then choose a paid plan through Stripe."
+            : friendsReturn ? "Choose a nickname and exchange friend codes to draw and color together."
+            : promptReturn ? "Your selected prompt opens on a private canvas after you sign in. You can also start with a blank canvas as a guest."
             : <>You never need an account to draw. Make a free one to <strong>save your gallery</strong> and find it on any device.</>}
         </p>
 
@@ -139,7 +148,7 @@ export default function SignupPage({ onNavigate }) {
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
               <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/rooms")}>
-                {friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
+                {familyReturn ? "Continue to Family →" : friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
               </button>
               <button type="button" className="signup-guest" onClick={() => onNavigate(newRoomPath())}>
                 ✨ Start a new private room
@@ -261,7 +270,7 @@ export default function SignupPage({ onNavigate }) {
               ) : null}
 
               <button type="button" className="signup-guest" onClick={() => onNavigate(guestPath)}>
-                {friendsReturn ? "Back to Friends →" : promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
+                {familyReturn ? "Back to the Family plan →" : friendsReturn ? "Back to Friends →" : promptReturn ? "Open a blank canvas as a guest →" : "Keep drawing as a guest →"}
               </button>
             </>
           )}

@@ -76,6 +76,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
 
   const [connected, setConnected] = useState(false);
   const [familyRoom, setFamilyRoom] = useState(false);
+  const [aiColoringPaid, setAiColoringPaid] = useState(false);
   const [adSupported, setAdSupported] = useState(false);
   const [users, setUsers] = useState([]);
   const [self, setSelf] = useState(null);
@@ -103,6 +104,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     // Wait for this connection’s room entitlement before requesting inventory.
     setAdSupported(false);
     setFamilyRoom(false);
+    setAiColoringPaid(false);
 
     let ws;
     try {
@@ -128,6 +130,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
         case "connected":
           setAdSupported(data.adFree === false);
           setFamilyRoom(data.familyRoom === true);
+          setAiColoringPaid(data.aiColoringPaid === true);
           setSelf({ id: data.userId, name: data.userName, color: data.userColor });
           // Artist-studio handshake: paint permission + the room's public
           // profile. Other audiences send canPaint:true / roomProfile:null,
@@ -142,6 +145,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
         case "billing_entitlement":
           setAdSupported(data.adFree === false);
           setFamilyRoom(data.familyRoom === true);
+          setAiColoringPaid(data.aiColoringPaid === true);
           break;
         case "role_changed":
           // Server-authoritative paint access change (approve/revoke/promote/
@@ -247,6 +251,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
       if (wsRef.current !== ws || !shouldReconnectRef.current) return;
       setConnected(false);
       setFamilyRoom(false);
+      setAiColoringPaid(false);
       const delay = Math.min(1000 * 2 ** retryRef.current, 15000);
       retryRef.current += 1;
       reconnectTimerRef.current = window.setTimeout(connect, delay);
@@ -286,6 +291,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
     ws?.close();
     setConnected(false);
     setFamilyRoom(false);
+    setAiColoringPaid(false);
   }, []);
 
   const sendOp = useCallback((op) => send({ type: "op", op }), [send]);
@@ -461,7 +467,7 @@ export function useMultiplayer(roomId, onMessage, token, enabled = true) {
   const sendModRemove = useCallback((opIds) => send({ type: "mod_remove", opIds }), [send]);
 
   return {
-    connected, adSupported, familyRoom, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
+    connected, adSupported, familyRoom, aiColoringPaid, users, self, chat, disconnect, canPaint, roomProfile, paintRequests, paintStatus,
     sendOp, sendCheckpointNack, sendSnapshot, sendThumb, sendCursor, sendClear, sendRestore, sendSheet, sendTracePhoto, sendRename, sendChat, sendChatReact, sendHype,
     sendPaintRequest, sendPaintApprove, sendPaintRevoke,
     sendLock, sendUnlock, sendKick, sendMute, sendRenameRoom, sendPromote, sendDemote,

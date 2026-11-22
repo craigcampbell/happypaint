@@ -84,6 +84,36 @@ function subscriptionIdFromInvoice(invoice) {
   return typeof parent === 'string' ? parent : parent?.id || null;
 }
 
+function receivedSubscriptionPayment(subscription, invoice) {
+  return subscription.livemode === true && invoice?.livemode === true &&
+    invoice.status === 'paid' && !invoice.paid_out_of_band &&
+    invoice.amount_paid > (invoice.amount_paid_off_stripe || 0) &&
+    subscriptionIdFromInvoice(invoice) === subscription.id;
+}
+
+// A paid invoice may be $0, cover an unrelated charge, or arrive after a
+// renewal failed. Use only the service dates of the paid Family line itself.
+function paidFamilyLineEnd(subscription, invoice, at) {
+  if (!receivedSubscriptionPayment(subscription, invoice)) return 0;
+  const item = firstItem(subscription);
+  let end = 0;
+  for (const line of invoice.lines?.data || []) {
+    const source = line.parent?.subscription_item_details;
+    const linePrice = line.pricing?.price_details?.price || line.price;
+    const priceId = typeof linePrice === 'string' ? linePrice : linePrice?.id;
+    const lineSub = typeof line.subscription === 'string' ? line.subscription : line.subscription?.id;
+    if ((!source && line.type !== 'subscription') ||
+        (lineSub && lineSub !== subscription.id) ||
+        (source && source.subscription !== subscription.id) || priceId !== item.price.id) continue;
+    const credits = line.pretax_credit_amounts?.length ? line.pretax_credit_amounts : line.discount_amounts;
+    const discounted = (credits || []).reduce((sum, credit) => sum + credit.amount, 0);
+    if (!((line.subtotal ?? line.amount) > discounted)) continue;
+    if (Number.isSafeInteger(line.period?.start) && line.period.start <= at &&
+        Number.isSafeInteger(line.period.end) && line.period.end > at) end = Math.max(end, line.period.end);
+  }
+  return end;
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -272,10 +302,24 @@ export function createBilling({
   function syncSubscriptionDraft(draft, profileId, subscription, options = {}) {
     if (!profileId || !subscription) return false;
     const previous = draft.records[profileId] || {};
+    // An in-flight Stripe read can finish after cancellation was recorded.
+    // Stripe can only resubscribe this customer under a new subscription ID.
+    if (previous.subscriptionId === subscription.id && previous.status === 'canceled' && subscription.status !== 'canceled') return false;
     const eventCreated = Number(options.eventCreated) || 0;
     if (!options.freshFromStripe && eventCreated && eventCreated < Number(previous.lastEventCreated || 0)) return false;
     const familyProductValid = subscriptionIsFamily(subscription);
     const end = periodEnd(subscription);
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
+    const samePlan = previous.subscriptionId === subscription.id && previous.customerId === customerId &&
+      previous.priceId === priceIdFrom(subscription) && previous.familyProductValid === true;
+    const at = Math.floor(now() / 1000);
+    const liveFamily = familyProductValid && subscription.livemode === true && customerId && subscription.id;
+    const aiColoringPaidThrough = liveFamily
+      ? Math.min(end, Math.max(
+        samePlan ? Number(previous.aiColoringPaidThrough) || 0 : 0,
+        paidFamilyLineEnd(subscription, subscription.latest_invoice, at),
+        paidFamilyLineEnd(subscription, options.paidInvoice, at),
+      )) : 0;
     let paidThrough = Number(previous.paidThrough) || 0;
     if (familyProductValid && (options.invoicePaid || latestInvoicePaid(subscription))) {
       paidThrough = Math.max(paidThrough, end);
@@ -284,7 +328,7 @@ export function createBilling({
     draft.records[profileId] = {
       ...previous,
       profileId,
-      customerId: typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id || previous.customerId || null,
+      customerId: customerId || previous.customerId || null,
       subscriptionId: subscription.id || previous.subscriptionId || null,
       status: familyProductValid ? (subscription.status || 'inactive') : 'invalid_product',
       productId: productIdFrom(subscription),
@@ -294,6 +338,9 @@ export function createBilling({
       familyProductValid,
       currentPeriodEnd: end,
       paidThrough,
+      aiColoringPaidThrough,
+      aiColoringHistoryCheckedThrough: liveFamily ? Math.max(aiColoringPaidThrough,
+        options.paidHistoryChecked ? end : 0, samePlan ? previous.aiColoringHistoryCheckedThrough || 0 : 0) : 0,
       cancelAtPeriodEnd: !!subscription.cancel_at_period_end,
       lastEventCreated: Math.max(eventCreated, Number(previous.lastEventCreated) || 0),
       lastEventId: options.eventId || previous.lastEventId || null,
@@ -303,9 +350,17 @@ export function createBilling({
     return true;
   }
 
+  function aiColoringPaidUntil(profileId) {
+    const record = profileId && state.records[profileId];
+    if (!record?.subscriptionId || !record.customerId || record.familyProductValid !== true || record.quantity !== 1 ||
+        (record.status !== 'active' && record.status !== 'past_due') || state.pendingCancellations[profileId]) return 0;
+    const end = Number(record.aiColoringPaidThrough) * 1000;
+    return Number.isSafeInteger(end) && end > now() ? end : 0;
+  }
+
   function publicStatus(profileId) {
     const record = state.records[profileId];
-    if (!record) return { active: false, status: 'none', interval: null, renewsAt: null, cancelAtPeriodEnd: false, manageable: false };
+    if (!record) return { active: false, aiColoringPaid: false, status: 'none', interval: null, renewsAt: null, cancelAtPeriodEnd: false, manageable: false };
     const at = now();
     const paidThroughMs = (Number(record.paidThrough) || 0) * 1000;
     const active = record.familyProductValid !== false && (
@@ -316,6 +371,7 @@ export function createBilling({
     const interval = record.familyProductValid ? (record.interval || configuredInterval || null) : null;
     return {
       active,
+      aiColoringPaid: Boolean(aiColoringPaidUntil(profileId)),
       status: record.status || 'none',
       interval,
       renewsAt: paidThroughMs || null,
@@ -334,6 +390,7 @@ export function createBilling({
   }
 
   function commitSubscription(profileId, subscription, options = {}) {
+    if (state.pendingCancellations[profileId] || state.deletedProfileHashes[profileHash(profileId)]) return;
     commit((draft) => syncSubscriptionDraft(draft, profileId, subscription, options));
     notifyEntitlementChange(profileId);
   }
@@ -425,10 +482,26 @@ export function createBilling({
     };
   }
 
+  async function includePaidFamilyLine(subscription, invoice) {
+    if (!aiColoringEnabled || !invoice?.lines?.has_more || !receivedSubscriptionPayment(subscription, invoice) ||
+        !subscriptionIsFamily(subscription)) return invoice;
+    const at = Math.floor(now() / 1000);
+    if (paidFamilyLineEnd(subscription, invoice, at)) return invoice;
+    const last = invoice.lines.data.at(-1)?.id;
+    const options = last ? { limit: 100, starting_after: last } : { limit: 100 };
+    for await (const line of stripe.invoices.listLineItems(invoice.id, options)) {
+      const candidate = { ...invoice, lines: { data: [line] } };
+      if (paidFamilyLineEnd(subscription, candidate, at)) return candidate;
+    }
+    return invoice;
+  }
+
   async function retrieveSubscription(subscriptionId) {
-    return stripe.subscriptions.retrieve(subscriptionId, {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
       expand: ['items.data.price.product', 'latest_invoice'],
     });
+    subscription.latest_invoice = await includePaidFamilyLine(subscription, subscription.latest_invoice);
+    return subscription;
   }
 
   function markProcessed(draft, event) {
@@ -461,7 +534,8 @@ export function createBilling({
     try {
       const subscription = await retrieveSubscription(subscriptionId);
       profileId = profileId || findProfileForObject(subscription);
-      return { profileId, subscription, invoicePaid, freshFromStripe: true };
+      const paidInvoice = invoicePaid ? await includePaidFamilyLine(subscription, object) : null;
+      return { profileId, subscription, invoicePaid, paidInvoice, freshFromStripe: true };
     } catch (error) {
       if (event.type === 'customer.subscription.deleted') {
         profileId = profileId || findProfileForObject(object);
@@ -503,6 +577,7 @@ export function createBilling({
               eventCreated: event.created,
               eventId: event.id,
               invoicePaid: resolved.invoicePaid,
+              paidInvoice: resolved.paidInvoice,
               freshFromStripe: resolved.freshFromStripe,
             });
           }
@@ -955,7 +1030,25 @@ export function createBilling({
       if (!record.subscriptionId || state.pendingCancellations[profileId]) continue;
       try {
         const subscription = await retrieveSubscription(record.subscriptionId);
-        commitSubscription(profileId, subscription, { freshFromStripe: true });
+        let paidInvoice;
+        let paidHistoryChecked = false;
+        const at = Math.floor(now() / 1000);
+        // The newest invoice can be an adjustment. Check the subscription's
+        // invoice history once per unverified service period.
+        if (aiColoringEnabled && subscription.livemode === true &&
+            (record.aiColoringHistoryCheckedThrough || 0) < periodEnd(subscription) &&
+            ['active', 'past_due'].includes(subscription.status) && subscriptionIsFamily(subscription) &&
+            !paidFamilyLineEnd(subscription, subscription.latest_invoice, at)) {
+          for await (const invoice of stripe.invoices.list({ subscription: subscription.id, status: 'paid', limit: 100 })) {
+            const complete = await includePaidFamilyLine(subscription, invoice);
+            if (paidFamilyLineEnd(subscription, complete, at)) {
+              paidInvoice = complete;
+              break;
+            }
+          }
+          paidHistoryChecked = true;
+        }
+        commitSubscription(profileId, subscription, { freshFromStripe: true, paidInvoice, paidHistoryChecked });
       } catch (error) {
         console.error('[billing] Subscription reconciliation failed:', profileId, errorCode(error));
       }
@@ -971,6 +1064,8 @@ export function createBilling({
     registerWebhook,
     registerRoutes,
     isProfileEntitled: (profileId) => Boolean(profileId && publicStatus(profileId).active),
+    isProfilePaidForAiColoring: (profileId) => Boolean(aiColoringPaidUntil(profileId)),
+    aiColoringPaidUntil,
     getOperationalStatus,
     cancelAndDeleteProfile,
     runMaintenance,

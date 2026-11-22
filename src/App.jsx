@@ -11181,10 +11181,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     setOrchestraVolume(volume);
   };
 
-  const postcardAvailable = Boolean(session) && mp.connected && mp.familyRoom && mp.canPaint
+  const inPrivateDrawingRoom = Boolean(session) && mp.connected && mp.canPaint
     && roomAudience === "friends" && joinStep >= 3 && !initialLocal;
-  const canGenerateColoring = postcardAvailable && isRoomOwner && !roomAnimation
+  const postcardAvailable = inPrivateDrawingRoom && mp.familyRoom;
+  const canGenerateColoring = inPrivateDrawingRoom && mp.aiColoringPaid && isRoomOwner && !roomAnimation
     && !inkOnly && !roomPhone && !roomGame && !storybook?.enabled && !mpSketchbookPage;
+  useEffect(() => {
+    if (sheetId?.startsWith("ai_") && (!session || !mp.connected)) {
+      setSheetId(null);
+      loadSheetImage(null);
+    }
+  }, [sheetId, session, mp.connected, loadSheetImage]);
   useEffect(() => {
     if (!postcardAvailable) setShowPostcard(false);
   }, [postcardAvailable]);

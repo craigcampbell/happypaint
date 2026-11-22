@@ -333,6 +333,7 @@ app.use((_req, res, next) => {
 });
 const aiColoringEnabled = Boolean(ACCOUNTS_CONFIGURED && process.env.AI_COLORING_ENABLED === 'true' && process.env.OPENROUTER_API_KEY?.trim());
 const aiColoring = createAiColoringStore(DATA_DIR, aiSheetPinned);
+const paidColoringTimers = new Map();
 const billing = createBilling({
   aiColoringEnabled,
   dataDir: DATA_DIR,
@@ -3818,19 +3819,64 @@ function liveColoringMember(room, profileId) {
   return null;
 }
 
+function roomHasPaidColoring(room) {
+  return Boolean(ACCOUNTS_CONFIGURED && room?.audience === 'friends' && billing.isProfilePaidForAiColoring(room.ownerProfileId));
+}
+
 function eligibleColoringOwner(room, user) {
   return Boolean(user?.profileId && user.profileId === room?.ownerProfileId && !user.muted && user.canPaint &&
     !room.gameEnabled && !room.phoneEnabled && !room.storybook?.enabled && !room.animationEnabled &&
-    !room.sketchbook && roomHasFamilyEntitlement(room));
+    !room.sketchbook && roomHasPaidColoring(room));
 }
 
 function mayInstallAiSheet(room, user, sheetId) {
   return eligibleColoringOwner(room, user) && aiColoring.belongs(sheetId, room.code, user.profileId);
 }
 
+// Expiry closes an open owner preview and hides shared outlines even when
+// Stripe sends no new webhook. Annual subscriptions can outlast a Node timer.
+function watchPaidColoringExpiry(profileId) {
+  if (!profileId || !ACCOUNTS_CONFIGURED) return false;
+  const until = billing.aiColoringPaidUntil(profileId);
+  // An HTTP/WS access check can observe expiry before the queued timer gets
+  // its turn. Let that timer notify every other member of the owner's rooms.
+  if (!until) return false;
+  const current = paidColoringTimers.get(profileId);
+  if (current?.until === until) return true;
+  if (current) clearTimeout(current.timer);
+  const timer = setTimeout(() => {
+    paidColoringTimers.delete(profileId);
+    refreshFamilyRoomEntitlement(profileId);
+  }, Math.min(2_147_483_647, Math.max(1, until - Date.now())));
+  timer.unref();
+  paidColoringTimers.set(profileId, { until, timer });
+  return true;
+}
+
+function visibleRoomSheet(room) {
+  if (room.sheetId?.startsWith('ai_') && !roomHasPaidColoring(room)) return null;
+  return room.sheetId;
+}
+
+function refreshSharedColoringAccess(room) {
+  if (room.wipeReq?.sheetId?.startsWith('ai_') && !roomHasPaidColoring(room)) cancelWipeRequest(room, 'blocked');
+  if (!room.sheetId?.startsWith('ai_')) {
+    room.aiSheetSuspended = false;
+    return false;
+  }
+  const suspended = room.audience !== 'friends' || !watchPaidColoringExpiry(room.ownerProfileId);
+  if (suspended === Boolean(room.aiSheetSuspended)) return false;
+  room.aiSheetSuspended = suspended;
+  // Keep the sheet selection for renewal. Neither the rendered join snapshot
+  // nor a pending thumbnail from the prior entitlement can be reused.
+  invalidateRoomSnapshot(room);
+  broadcast(room.code, { type: 'sheet', sheetId: suspended ? null : room.sheetId });
+  return true;
+}
+
 function familyBenefits(room, user) {
   const familyRoom = roomHasFamilyEntitlement(room);
-  return { familyRoom, adFree: familyRoom || billing.isProfileEntitled(user.profileId) };
+  return { familyRoom, adFree: familyRoom || billing.isProfileEntitled(user.profileId), aiColoringPaid: watchPaidColoringExpiry(user.profileId) };
 }
 
 // The host's private room benefit applies to every invitee. A member's own
@@ -3838,6 +3884,7 @@ function familyBenefits(room, user) {
 function refreshFamilyRoomEntitlement(profileId) {
   for (const room of rooms.values()) {
     const ownerChanged = room.audience === 'friends' && room.ownerProfileId === profileId;
+    if (ownerChanged) refreshSharedColoringAccess(room);
     for (const user of room.users.values()) {
       if (ownerChanged || user.profileId === profileId) {
         sendReliable(user.ws, JSON.stringify({ type: 'billing_entitlement', ...familyBenefits(room, user) }));
@@ -4633,7 +4680,7 @@ wss.on('connection', async (ws, req) => {
     void catchup.sendRoomCatchUp(ws, live, 'spectator');
     // Don't point a spectator at a trace-photo id whose in-memory image is gone
     // (e.g. after a restart), same guard as the member join path.
-    if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
+    if (visibleRoomSheet(live) && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
       ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
     }
     // The room's recent banter, the conversation is the draw (Twitch model).
@@ -4738,7 +4785,7 @@ wss.on('connection', async (ws, req) => {
         } else {
           void catchup.sendRoomCatchUp(ws, live, 'full');
         }
-        if (live.sheetId && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
+        if (visibleRoomSheet(live) && (!live.sheetId.startsWith('trace_') || tracePhotos.has(live.sheetId))) {
           ws.send(JSON.stringify({ type: 'sheet', sheetId: live.sheetId }));
         }
         if (live.chat.length) ws.send(JSON.stringify(chatHistoryMsg(live)));
@@ -5041,6 +5088,7 @@ wss.on('connection', async (ws, req) => {
   // or structure change may reach this socket ahead of its baseline or repeat
   // inside the computed tail. The gate queue flushes in order once the
   // catch-up lands (server/catchup.js).
+  refreshSharedColoringAccess(room);
   catchup.beginGate(ws);
   room.users.set(id, user);
   room.lastActivity = Date.now();
@@ -5105,7 +5153,7 @@ wss.on('connection', async (ws, req) => {
     locked: !!room.locked,
     muted: !!user.muted,
     roomTitle: room.title || null,
-    hasSheet: Boolean(room.sheetId),
+    hasSheet: Boolean(visibleRoomSheet(room)),
     friendNickname: Boolean(friendNickname),
     audience: room.audience,
     // Artist studios: view vs paint, plus the public room profile (gallery
@@ -5243,7 +5291,7 @@ wss.on('connection', async (ws, req) => {
   if (room.sheetId && room.sheetId.startsWith('trace_') && !tracePhotos.has(room.sheetId)) {
     room.sheetId = null;
   }
-  if (room.sheetId) {
+  if (visibleRoomSheet(room)) {
     ws.send(JSON.stringify({ type: 'sheet', sheetId: room.sheetId }));
   }
   if (room.chat.length) {
@@ -7971,7 +8019,9 @@ function moderateUndoClear(room, actor) {
   if (room.lastClearedSheet) {
     room.sheetId = room.lastClearedSheet;
     room.lastClearedSheet = null;
-    broadcast(roomId, { type: 'sheet', sheetId: room.sheetId });
+    if (!refreshSharedColoringAccess(room)) {
+      broadcast(roomId, { type: 'sheet', sheetId: visibleRoomSheet(room) });
+    }
   }
   noteMod(room, 'undo_clear', actor);
   persistRoom(roomId);
@@ -10269,6 +10319,8 @@ app.get('/api/me/rooms/:code/thumb', async (req, res) => {
   const code = String(req.params.code || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 16);
   if (!myRoomsFor(pid).some((r) => r.code === code)) return res.status(404).json({ error: 'not_found' });
   try {
+    const room = rooms.get(code) || JSON.parse(readFileSync(roomFile(code), 'utf8'));
+    if (room.sheetId?.startsWith('ai_') && !roomHasPaidColoring(room)) return res.status(404).json({ error: 'no_thumbnail' });
     res.type('image/jpeg').send(readFileSync(thumbFile(code)));
   } catch {
     res.status(404).json({ error: 'no_thumbnail' });
@@ -11770,12 +11822,14 @@ app.post(coloringRoute, async (req, res) => {
     if (reservation.existing) return res.json({ ...aiColoring.page(reservation.existing), ...aiColoring.usage(profile) });
     entry = reservation.entry;
     const { generateColoringPage } = await import('./server/aiColoringProvider.js');
-    const image = await generateColoringPage(recipe, { apiKey: process.env.OPENROUTER_API_KEY, model: process.env.AI_COLORING_MODEL || undefined });
-    if (rooms.get(room.code) !== room || !eligibleColoringOwner(room, liveColoringMember(room, profile))) {
-      return res.status(403).json({ error: 'not_eligible' });
-    }
+    const isEligible = () => rooms.get(room.code) === room && eligibleColoringOwner(room, liveColoringMember(room, profile));
+    const image = await generateColoringPage(recipe, {
+      apiKey: process.env.OPENROUTER_API_KEY, model: process.env.AI_COLORING_MODEL || undefined, isEligible,
+    });
+    if (!isEligible()) return res.status(403).json({ error: 'not_eligible' });
     res.json({ ...aiColoring.finish(entry, image), ...aiColoring.usage(profile) });
   } catch (err) {
+    if (err.code === 'not_eligible') return res.status(403).json({ error: 'not_eligible' });
     if (err.code === 'content_blocked') {
       try { aiColoring.noteBlocked(entry, err.stage); }
       catch { console.warn('[ai-coloring] Could not record an automatic moderation block'); }
@@ -11806,8 +11860,9 @@ app.get('/api/sheets/:id', async (req, res) => {
     try {
       const entry = aiColoring.find(req.params.id);
       const room = entry && rooms.get(entry.room);
-      if (!liveColoringMember(room, identity.profileId) || !aiColoring.belongs(req.params.id, room.code, room.ownerProfileId) ||
-          (room.sheetId !== req.params.id && room.ownerProfileId !== identity.profileId)) {
+      const member = liveColoringMember(room, identity.profileId);
+      if (!member || !roomHasPaidColoring(room) || !aiColoring.belongs(req.params.id, room.code, room.ownerProfileId) ||
+          (room.sheetId !== req.params.id && !eligibleColoringOwner(room, member))) {
         return res.status(404).json({ error: 'not found' });
       }
       const { id, title: name, image } = aiColoring.page(entry);

@@ -350,6 +350,12 @@ token)`), returns `send*` emitters + `disconnect()`.
   raster and converts it to black ink on transparency. The owner can preview
   the page before sharing it through the room's sheet/wipe flow. Site
   moderators can inspect previews and applied sheets at `/admin#ai-coloring`.
+  AI access requires a signed-in owner and a positive Stripe invoice payment
+  covering the current Family period. The ordinary Family grace period only
+  applies to other benefits. Each provider call and delivery rechecks access.
+  A signed-in invitee can paint on the owner's applied page while that paid
+  period lasts. A billing update or expiry hides the outline and preserves
+  strokes. The server resumes the selected outline when paid coverage returns.
   Applied `ai_` sheets load through the authenticated `/api/sheets/:id`
   route. Assets and monthly accounting live under `DATA_DIR/.ai-coloring`
   and are scrubbed on account erasure. See [MONETIZATION.md](MONETIZATION.md#custom-coloring-pages)

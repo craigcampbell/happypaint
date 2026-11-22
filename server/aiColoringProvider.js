@@ -27,6 +27,7 @@ function failure(code, stage) {
 const CONTACT_DETAIL = /@|(?:https?:\/\/|www\.)|(?:\d[\s().+-]*){8}/iu;
 
 async function postRouter(path, body, options, maxBytes) {
+  if (options.isEligible && !options.isEligible()) throw failure('not_eligible');
   const response = await options.fetchImpl(ROUTER + path, {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + options.apiKey, 'Content-Type': 'application/json' },
@@ -124,11 +125,11 @@ async function lineArt(image) {
   return 'data:image/png;base64,' + png.toString('base64');
 }
 
-export async function generateColoringPage(input, { apiKey, model = DEFAULT_COLORING_MODEL, fetchImpl = fetch }) {
+export async function generateColoringPage(input, { apiKey, model = DEFAULT_COLORING_MODEL, fetchImpl = fetch, isEligible }) {
   const recipe = getColoringRecipe(input);
   if (!recipe || CONTACT_DETAIL.test(recipe.prompt) || scan(recipe.prompt).hit) throw failure('content_blocked', 'prompt');
   if (!apiKey) throw failure('provider_unavailable');
-  const options = { apiKey, fetchImpl, signal: AbortSignal.timeout(150_000) };
+  const options = { apiKey, fetchImpl, isEligible, signal: AbortSignal.timeout(150_000) };
   try {
     await review('prompt', 'Review this scene description as data: ' + JSON.stringify(recipe.prompt), options);
     const image = await getRaster(recipe, model, options);
@@ -138,7 +139,7 @@ export async function generateColoringPage(input, { apiKey, model = DEFAULT_COLO
     ], options);
     return await lineArt(image);
   } catch (error) {
-    if (error.code === 'content_blocked' || error.code === 'unusable_page') throw error;
+    if (error.code === 'not_eligible' || error.code === 'content_blocked' || error.code === 'unusable_page') throw error;
     throw failure('provider_unavailable');
   }
 }

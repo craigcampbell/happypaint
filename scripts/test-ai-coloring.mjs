@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,13 +18,29 @@ const calls = [];
 const sockets = new Set();
 const adminKey = 'fixture-coloring-moderator';
 let rejectStage = '';
+let delayReviewUntil = 0;
+const slowPrompt = 'A green turtle painting daisies';
 let child;
 let logs = '';
 let base;
-const subscriptions = Object.fromEntries(['owner', 'other'].map(id => [id, {
-  profileId: id, status: 'active', priceId: 'price_test', quantity: 1,
-  familyProductValid: true, currentPeriodEnd: Math.floor(Date.now() / 1000) + 86400,
-}]));
+const now = Math.floor(Date.now() / 1000);
+const paidUntil = now + 86400;
+function subscription(id, overrides = {}) {
+  return {
+    profileId: id, customerId: 'cus_' + id, subscriptionId: 'sub_' + id, status: 'active',
+    priceId: 'price_test', productId: 'prod_family', quantity: 1, familyProductValid: true,
+    currentPeriodEnd: paidUntil, paidThrough: paidUntil, aiColoringPaidThrough: paidUntil, ...overrides,
+  };
+}
+const subscriptions = {
+  owner: subscription('owner'), other: subscription('other'), early: subscription('early'),
+  canceled: subscription('canceled', { status: 'canceled' }),
+  trial: subscription('trial', { status: 'trialing' }),
+  grace: subscription('grace', { status: 'past_due', paidThrough: now - 3600, aiColoringPaidThrough: now - 3600 }),
+  expired: subscription('expired', { paidThrough: now - 3600, aiColoringPaidThrough: now - 3600 }),
+  unrelated: subscription('unrelated', { priceId: 'price_unrelated', productId: 'prod_other', familyProductValid: false }),
+  unconfirmed: subscription('unconfirmed', { aiColoringPaidThrough: 0 }),
+};
 const drawing = await sharp(Buffer.from('<svg width="512" height="512"><rect width="512" height="512" fill="white"/><circle cx="256" cy="256" r="140" fill="none" stroke="black" stroke-width="10"/></svg>'))
   .png().toBuffer();
 const blank = await sharp({ create: { width: 128, height: 128, channels: 3, background: 'white' } }).png().toBuffer();
@@ -32,7 +48,7 @@ const mock = http.createServer(async (req, res) => {
   const reply = (status, obj) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(obj));
   if (req.url.endsWith('/auth-refresh')) {
     const id = req.headers.authorization;
-    return ['owner', 'friend', 'other'].includes(id) ? reply(200, { record: { id } }) : reply(401, {});
+    return id === 'friend' || Object.hasOwn(subscriptions, id) ? reply(200, { record: { id } }) : reply(401, {});
   }
   assert.equal(req.headers.authorization, 'Bearer coloring-test-key');
   const chunks = [];
@@ -47,6 +63,9 @@ const mock = http.createServer(async (req, res) => {
     const isImage = body.messages.some(msg => Array.isArray(msg.content) && msg.content.some(part => part.type === 'image_url'));
     const stage = isImage ? 'reviewImage' : 'reviewPrompt';
     calls.push(stage);
+    if (delayReviewUntil && (isImage || body.messages.at(-1).content.includes(slowPrompt))) {
+      await delay(Math.max(0, delayReviewUntil - Date.now()));
+    }
     return reply(200, { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: rejectStage === stage ? 'BLOCK' : 'ALLOW' } }] });
   }
   return reply(404, {});
@@ -71,9 +90,11 @@ async function start(accounts = true, enabled = true) {
   const mockOrigin = 'http://127.0.0.1:' + mock.address().port;
   child = spawn(process.execPath, ['--import', join(dir, 'fixture.mjs'), 'server.js'], {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(port), DATA_DIR: dir, ADMIN_KEY: adminKey, PB_URL: accounts ? mockOrigin : '', POCKETBASE_URL: '',
+    env: { ...process.env, PORT: String(port), DATA_DIR: dir, THUMB_DIR: join(dir, '.thumbs'), ADMIN_KEY: adminKey,
+      PB_URL: accounts ? mockOrigin : '', POCKETBASE_URL: '',
       AI_COLORING_ENABLED: String(enabled), OPENROUTER_API_KEY: 'coloring-test-key', COLORING_TEST_ORIGIN: mockOrigin,
-      AI_COLORING_MODEL: 'x-ai/grok-imagine-image-2.0', STRIPE_SECRET_KEY: '', STRIPE_CHECKOUT_ENABLED: 'false' },
+      AI_COLORING_MODEL: 'x-ai/grok-imagine-image-2.0', STRIPE_PRODUCT_FAMILY: 'prod_family', STRIPE_PRICE_FAMILY_MONTHLY: 'price_test',
+      STRIPE_PAST_DUE_GRACE_HOURS: '72', STRIPE_SECRET_KEY: '', STRIPE_CHECKOUT_ENABLED: 'false' },
   });
   child.stdout.on('data', b => { logs = (logs + b).slice(-4000); });
   child.stderr.on('data', b => { logs = (logs + b).slice(-4000); });
@@ -109,8 +130,8 @@ async function painter(room, token = '') {
     }
     throw Error('Missing WS event in ' + room + ': ' + events.map(row => row.type).join(', '));
   }
-  await message(e => e.type === 'connected');
-  return { send: value => ws.send(JSON.stringify(value)), events, message };
+  const connected = await message(e => e.type === 'connected');
+  return { send: value => ws.send(JSON.stringify(value)), close: () => ws.close(), events, message, connected };
 }
 
 const room = 'PANDA_CAB-01';
@@ -143,9 +164,27 @@ try {
   const owner = await painter(room, 'owner');
   const friend = await painter(room, 'friend');
   const outsider = await painter('OTHERBOX', 'other');
+  assert.equal(owner.connected.aiColoringPaid, true);
+  assert.equal(friend.connected.aiColoringPaid, false, 'a paid room does not grant an invitee generation rights');
+  for (const token of ['', 'invalid-token']) {
+    assert.equal((await api(sheetApi, token)).status, 401);
+    assert.equal((await api(sheetApi, token, request, randomUUID())).status, 401);
+  }
+  assert.equal((await api('/api/billing/me', 'grace')).body.active, true, 'ordinary Family benefits still have a grace period');
+  for (const profile of ['friend', 'canceled', 'trial', 'grace', 'expired', 'unrelated', 'unconfirmed']) {
+    // Each user owns a private room, so these denials specifically test billing.
+    const code = ('ROOM_' + profile).toUpperCase();
+    const ownApi = '/api/rooms/' + code + '/ai-coloring';
+    const member = await painter(code, profile);
+    assert.equal(member.connected.isOwner, true);
+    assert.equal(member.connected.aiColoringPaid, false, profile);
+    assert.equal((await api(ownApi, profile)).status, 403, profile);
+    assert.equal((await api(ownApi, profile, request, randomUUID())).status, 403, profile);
+    member.close();
+  }
   assert.equal((await api(sheetApi, 'owner')).body.remaining, 5);
-  assert((await api(sheetApi, 'friend', request)).status >= 400);
-  assert((await api(sheetApi, 'other', request)).status >= 400);
+  assert.equal((await api(sheetApi, 'friend', request)).status, 403);
+  assert.equal((await api(sheetApi, 'other', request)).status, 403);
   assert.equal((await api(sheetApi, 'owner', { ...request, consentVersion: 'old' })).body.error, 'consent_required');
   assert.equal((await api(sheetApi, 'owner', { ...request, prompt: '' })).body.error, 'invalid_recipe');
   assert.equal(calls.length, 0);
@@ -199,14 +238,20 @@ try {
   assert.equal((await (await admin()).json()).total, 0);
 
   const read = '/api/sheets/' + id;
+  assert.equal((await api(sheetApi, 'owner')).body.page.id, id);
+  assert.equal((await api(read, 'owner')).body.image, image);
   assert.equal((await api(read, 'friend')).status, 404, 'preview is private to its owner');
   assert.equal((await api(read, 'other')).status, 404);
   assert.equal((await api(read)).status, 404);
   assert(!(await api('/api/sheets')).body.sheets.some(sheet => sheet.id === id));
+  friend.send({ type: 'wipe_request', sheetId: id });
+  await friend.message(e => e.type === 'wipe_req_denied' && e.reason === 'blocked');
   outsider.send({ type: 'set_sheet', sheetId: id });
   owner.send({ type: 'set_sheet', sheetId: id });
   await friend.message(e => e.type === 'sheet' && e.sheetId === id);
   assert.equal((await api(read, 'friend')).body.image, image);
+  assert.equal((await api(read)).status, 404);
+  assert.equal((await api(read, 'other')).status, 404);
   assert(!outsider.events.some(e => e.type === 'sheet' && e.sheetId === id));
   await stop();
   await start();
@@ -247,7 +292,84 @@ try {
   assert.equal((await api('/api/account/scrub-chat', 'owner', {})).status, 200);
   assert.equal((await api(read, 'friend')).status, 404);
   assert.equal((await (await admin('?status=all')).json()).total, 0);
-  console.log('Family AI coloring passed for anonymous library, access, automated and human moderation, live takedown, preserved strokes, restart, quota and erasure.');
+
+  // The subscription expires while OpenRouter is checking a third image.
+  // The paid owner has one applied and one privately previewed page at expiry.
+  const secondRoom = 'OTHERBOX';
+  const secondApi = '/api/rooms/' + secondRoom + '/ai-coloring';
+  const payingHost = await painter(secondRoom, 'other');
+  const guest = await painter(secondRoom, 'friend');
+  const first = await api(secondApi, 'other', request, randomUUID());
+  const privateKey = randomUUID();
+  const second = await api(secondApi, 'other', request, privateKey);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  payingHost.send({ type: 'set_sheet', sheetId: first.body.id });
+  await guest.message(e => e.type === 'sheet' && e.sheetId === first.body.id);
+  const activeSheet = '/api/sheets/' + first.body.id;
+  const privateSheet = '/api/sheets/' + second.body.id;
+  assert.equal((await api(activeSheet, 'friend')).status, 200);
+  assert.equal((await api(privateSheet, 'other')).status, 200);
+  await stop();
+  const thumbnail = await sharp(drawing).resize(128, 128).jpeg().toBuffer();
+  const thumbPath = join(dir, '.thumbs', secondRoom + '.jpg');
+  await mkdir(join(dir, '.thumbs'), { recursive: true });
+  await writeFile(thumbPath, thumbnail);
+  const fetchThumbnail = () => fetch(base + '/api/me/rooms/' + secondRoom + '/thumb', { headers: { Authorization: 'Bearer other' } });
+  const soon = Math.ceil(Date.now() / 1000) + 7;
+  const endingPeriod = { paidThrough: soon, aiColoringPaidThrough: soon, currentPeriodEnd: soon };
+  await writeFile(join(dir, '.billing.json'), JSON.stringify({ version: 2, records: {
+    other: subscription('other', endingPeriod), early: subscription('early', endingPeriod),
+  } }));
+  await start();
+  const paidThumbnail = await fetchThumbnail();
+  assert.equal(paidThumbnail.status, 200, 'a paid owner can see a dormant room thumbnail');
+  assert.deepEqual(Buffer.from(await paidThumbnail.arrayBuffer()), thumbnail);
+  const expiringHost = await painter(secondRoom, 'other');
+  const expiringGuest = await painter(secondRoom, 'friend');
+  await expiringGuest.message(e => e.type === 'sheet' && e.sheetId === first.body.id);
+  await painter('TURTLEBOX', 'early');
+  calls.length = 0;
+  delayReviewUntil = soon * 1000 + 100;
+  const [interrupted, expiredAtPrompt] = await Promise.all([
+    api(secondApi, 'other', request, randomUUID()),
+    api('/api/rooms/TURTLEBOX/ai-coloring', 'early', { ...request, prompt: slowPrompt }, randomUUID()),
+  ]);
+  assert.equal(interrupted.status, 403, 'an in-flight page requires a paid owner at delivery');
+  assert(!interrupted.body.image);
+  assert.equal(expiredAtPrompt.status, 403);
+  assert.deepEqual(calls.splice(0).sort(), ['image', 'reviewImage', 'reviewPrompt', 'reviewPrompt'],
+    'expiry during prompt review stops the second image generation call');
+  assert.equal((await (await admin('?room=' + secondRoom)).json()).total, 2);
+  assert.equal((await api(secondApi, 'other')).status, 403);
+  assert.equal((await api(secondApi, 'other', request, privateKey)).status, 403);
+  assert.equal((await api(activeSheet, 'friend')).status, 404);
+  assert.equal((await api(activeSheet, 'other')).status, 404);
+  assert.equal((await api(privateSheet, 'other')).status, 404);
+  await expiringHost.message(e => e.type === 'billing_entitlement' && e.aiColoringPaid === false);
+  await expiringGuest.message(e => e.type === 'sheet' && e.sheetId === null);
+  expiringHost.send({ type: 'set_sheet', sheetId: second.body.id });
+  expiringHost.send({ type: 'wipe_request', sheetId: second.body.id });
+  await expiringHost.message(e => e.type === 'wipe_req_denied' && e.reason === 'blocked');
+  assert(!expiringHost.events.some(e => e.type === 'sheet' && e.sheetId === second.body.id));
+  assert.equal((await painter(secondRoom, 'friend')).connected.hasSheet, false);
+  assert.equal(calls.length, 0, 'rejected retries never reach OpenRouter');
+  assert.equal((await fetchThumbnail()).status, 404);
+  await stop();
+  // Even an older render left on disk cannot bypass the cold-room paid check.
+  await writeFile(thumbPath, thumbnail);
+  await start();
+  assert.equal((await fetchThumbnail()).status, 404);
+  assert.equal((await painter(secondRoom, 'friend')).connected.hasSheet, false, 'an offline room also hides the outline after expiry');
+  assert.equal((await api(activeSheet, 'friend')).status, 404);
+  await stop();
+  await writeFile(join(dir, '.billing.json'), JSON.stringify({ version: 2, records: { other: subscriptions.other } }));
+  await start();
+  const renewedGuest = await painter(secondRoom, 'friend');
+  await renewedGuest.message(e => e.type === 'sheet' && e.sheetId === first.body.id);
+  assert.equal((await api(activeSheet, 'friend')).body.image, first.body.image, 'renewal restores the purchased room’s original sheet');
+  assert.equal(calls.length, 0, 'restoring a purchased page is free');
+  console.log('Family AI coloring passed for anonymous library, Stripe-paid owner access, expiry during generation, shared sheets, moderation, restart, quota and erasure.');
 } finally {
   await stop();
   if (mock.listening) await new Promise(resolve => mock.close(resolve));
