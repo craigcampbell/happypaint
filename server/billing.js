@@ -423,7 +423,9 @@ export function createBilling({
         }
         amounts[interval] = price.unit_amount;
       }
-      const portal = await stripe.billingPortal.configurations.retrieve(portalConfigurationId);
+      const portal = await stripe.billingPortal.configurations.retrieve(portalConfigurationId, {
+        expand: ['features.subscription_update.products'],
+      });
       const features = portal.features || {};
       if (
         portal.active !== true ||

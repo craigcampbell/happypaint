@@ -180,7 +180,8 @@ function makeStripe({ badCatalog = false, badPortal = false, monthlyAmount = 299
     },
     billingPortal: {
       configurations: {
-        async retrieve() {
+        async retrieve(id, { expand = [] } = {}) {
+          assert.equal(id, 'bpc_family');
           return {
             active: true,
             features: {
@@ -188,11 +189,11 @@ function makeStripe({ badCatalog = false, badPortal = false, monthlyAmount = 299
               subscription_cancel: { enabled: true, mode: badPortal ? 'immediately' : 'at_period_end' },
               subscription_update: {
                 enabled: true,
-                products: [{
+                products: expand.includes('features.subscription_update.products') ? [{
                   product: 'prod_family',
                   prices: ['price_monthly', 'price_yearly'],
                   adjustable_quantity: { enabled: false },
-                }],
+                }] : undefined,
               },
             },
           };
