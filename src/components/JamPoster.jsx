@@ -24,7 +24,15 @@ const VISITOR_INKS = [
   { name: 'Blue', value: '#3d8bf2' },
   { name: 'Pink', value: '#ff5fa2' },
 ];
-const HOLD_MS = 11000;
+// After the page's own headline, the poster keeps changing: each round the
+// bots get a new line to color and a fresh batch of freestyle doodles.
+const MORE_HEADLINES = [
+  ['Make a mess', 'together.'],
+  ['Doodle with', 'a friend.'],
+  ['Paint one', 'big picture.'],
+  ['Scribble', 'out loud.'],
+];
+const HOLD_MS = 9000;
 const PACE = 1.75; // marker speed, in headline heights per second
 const TRAVEL_BOOST = 2.6;
 
@@ -54,7 +62,7 @@ function rowsFor(lines, narrow) {
   return rows;
 }
 
-function layout(ctx, lines, width) {
+function layout(ctx, lines, width, shrink = 1) {
   const narrow = width < 620;
   const rows = rowsFor(lines, narrow);
   const pad = Math.max(10, width * 0.025);
@@ -65,7 +73,7 @@ function layout(ctx, lines, width) {
   let sizes = 0;
   for (const text of rows) {
     ctx.font = `400 100px ${FONT}`;
-    const size = Math.min(cap, ((width - pad * 2) / Math.max(1, ctx.measureText(text).width)) * 100);
+    const size = Math.min(cap, ((width - pad * 2) / Math.max(1, ctx.measureText(text).width)) * 100) * shrink;
     ctx.font = `400 ${size}px ${FONT}`;
     const capHeight = ctx.measureText('H').actualBoundingBoxAscent || size * 0.73;
     if (!placed.length) y = size * 0.16;
@@ -112,6 +120,42 @@ function scribble(rect, brush, rand) {
   return points;
 }
 
+// Other ways to color a letter in: up-and-down strokes, and slanted stripes
+// that leave paper showing between them.
+function scribbleTall(rect, brush, rand) {
+  return scribble({ x: rect.y, y: rect.x, w: rect.h, h: rect.w }, brush, rand).map(([a, b]) => [b, a]);
+}
+
+function stripes(rect, brush, rand) {
+  const points = [];
+  const gap = brush * (1.7 + rand() * 0.5);
+  let flip = false;
+  for (let c = gap * 0.5; c < rect.w + rect.h; c += gap) {
+    const a = [rect.x + Math.min(c, rect.w), rect.y + Math.max(0, c - rect.w)];
+    const b = [rect.x + Math.max(0, c - rect.h), rect.y + Math.min(c, rect.h)];
+    points.push(...(flip ? [b, a] : [a, b]));
+    flip = !flip;
+  }
+  return points.length > 1 ? points : scribble(rect, brush, rand);
+}
+
+const FILLS = [scribble, scribble, scribble, scribbleTall, scribbleTall, stripes];
+
+// A loose wandering line, different every time.
+function wander(rand) {
+  const points = [];
+  let x = 0.1 + rand() * 0.2;
+  let y = 0.3 + rand() * 0.4;
+  let heading = rand() * Math.PI * 2;
+  for (let i = 0; i < 46; i += 1) {
+    points.push([x, y]);
+    heading += (rand() - 0.5) * 1.5;
+    x = Math.min(0.97, Math.max(0.03, x + Math.cos(heading) * 0.07));
+    y = Math.min(0.97, Math.max(0.03, y + Math.sin(heading) * 0.07));
+  }
+  return [points];
+}
+
 // Small margin drawings, as unit-box strokes.
 const DOODLES = [
   () => [Array.from({ length: 11 }, (_, i) => {
@@ -138,6 +182,27 @@ const DOODLES = [
     [[0.34, 0.36], [0.35, 0.45]], [[0.65, 0.36], [0.66, 0.45]],
     Array.from({ length: 11 }, (_, i) => [0.27 + (i / 10) * 0.46, 0.6 + Math.sin((i / 10) * Math.PI) * 0.17]),
   ],
+  // flower
+  () => [Array.from({ length: 61 }, (_, i) => {
+    const t = (i / 60) * Math.PI * 2;
+    const r = 0.2 + 0.26 * Math.abs(Math.sin(t * 2.5));
+    return [0.5 + Math.cos(t) * r, 0.5 + Math.sin(t) * r];
+  })],
+  // lightning zigzag
+  () => [Array.from({ length: 9 }, (_, i) => [0.06 + (i / 8) * 0.88, i % 2 ? 0.74 : 0.26])],
+  // wave
+  () => [Array.from({ length: 33 }, (_, i) => [0.03 + (i / 32) * 0.94, 0.5 + Math.sin((i / 32) * Math.PI * 4) * 0.24])],
+  // cloud
+  () => [Array.from({ length: 49 }, (_, i) => {
+    const t = (i / 48) * Math.PI * 2;
+    const r = 0.36 + 0.07 * Math.cos(t * 6);
+    return [0.5 + Math.cos(t) * r * 1.25, 0.52 + Math.sin(t) * r * 0.72];
+  })],
+  // squiggly loops
+  () => [Array.from({ length: 49 }, (_, i) => {
+    const t = i / 48;
+    return [0.1 + t * 0.8 + Math.cos(t * 8 * Math.PI) * 0.09, 0.5 + Math.sin(t * 8 * Math.PI) * 0.26];
+  })],
 ];
 
 function plan(view, seed) {
@@ -157,7 +222,8 @@ function plan(view, seed) {
       jobs[bot].push({ layer: 'fill', width: brush, color: BOTS[bot].inks[0], strokes: [scribble({ ...glyph, h: split }, brush, rand)] });
       jobs[other].push({ layer: 'fill', width: brush, color: BOTS[other].inks[1], strokes: [scribble({ ...glyph, y: glyph.y + split, h: glyph.h - split }, brush, rand)] });
     } else {
-      jobs[bot].push({ layer: 'fill', width: brush, color: BOTS[bot].inks[rand() < 0.62 ? 0 : 1], strokes: [scribble(glyph, brush, rand)] });
+      const fillIn = FILLS[Math.floor(rand() * FILLS.length)];
+      jobs[bot].push({ layer: 'fill', width: brush, color: BOTS[bot].inks[rand() < 0.62 ? 0 : 1], strokes: [fillIn(glyph, brush, rand)] });
     }
   }
 
@@ -175,6 +241,22 @@ function plan(view, seed) {
       layer: 'top', width: Math.max(3.5, spot.box * 0.05), color: BOTS[bot].tag,
       strokes: strokes.map(stroke => stroke.map(([x, y]) => [spot.x + x * spot.box, spot.y + y * spot.box])),
     });
+  });
+
+  // Freestyle: every painter also draws whatever, wherever. Kept small and
+  // thin so the headline underneath stays readable.
+  BOTS.forEach((painter, bot) => {
+    const count = 2 + Math.floor(rand() * 2);
+    for (let i = 0; i < count; i += 1) {
+      const box = view.mean * (0.2 + rand() * 0.2);
+      const x = rand() * Math.max(1, view.width - box);
+      const y = rand() * Math.max(1, view.height - box);
+      const strokes = rand() < 0.3 ? wander(rand) : DOODLES[Math.floor(rand() * DOODLES.length)]();
+      jobs[bot].push({
+        layer: 'top', width: Math.max(3, box * 0.055), color: rand() < 0.5 ? painter.tag : painter.inks[0],
+        strokes: strokes.map(stroke => stroke.map(([px, py]) => [x + px * box, y + py * box])),
+      });
+    }
   });
 
   // One hand-drawn double underline beneath the final line.
@@ -232,7 +314,7 @@ export default function JamPoster({ lines, preview = false }) {
     const topCtx = top.getContext('2d');
     if (!fillCtx || !topCtx) return undefined;
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const rows = text.split('\n');
+    const headlines = [text.split('\n'), ...MORE_HEADLINES];
     const state = { view: null, bots: [], seed: 7, elapsed: 0, doneAt: 0, visible: true, raf: 0, last: 0, strokes: [], disposed: false, fading: 0 };
     engine.current = state;
     const instant = () => preview || motion.matches;
@@ -304,8 +386,14 @@ export default function JamPoster({ lines, preview = false }) {
     const start = (fastForward = 0) => {
       const width = host.clientWidth;
       if (!width) return;
-      state.view = layout(topCtx, rows, width);
-      host.style.height = state.view.height + 'px';
+      // The page's own headline sets the poster's height; later lines are
+      // fitted inside it so nothing below the poster ever jumps.
+      const base = layout(topCtx, headlines[0], width);
+      const rows = instant() ? headlines[0] : headlines[(state.seed - 7) % headlines.length];
+      state.view = rows === headlines[0] ? base : layout(topCtx, rows, width);
+      if (state.view.height > base.height) state.view = layout(topCtx, rows, width, base.height / state.view.height);
+      state.view.height = base.height;
+      host.style.height = base.height + 'px';
       paintBase();
       state.bots = plan(state.view, state.seed);
       state.doneAt = 0;
@@ -419,7 +507,7 @@ export default function JamPoster({ lines, preview = false }) {
       <p>
         {joined
           ? <><strong>You’re in.</strong> A real room works just like this, with your friends holding the other markers.</>
-          : <><strong>{BOTS.map(bot => bot.name).join(', ').replace(/, ([^,]*)$/, ' & $1')}</strong> are demo bots coloring the headline. Grab a marker and draw on it.</>}
+          : <><strong>{BOTS.map(bot => bot.name).join(', ').replace(/, ([^,]*)$/, ' & $1')}</strong> are demo bots painting this poster. Grab a marker and draw on it.</>}
       </p>
       {!preview && <div className="jam-poster-tools">
         <div className="jam-inks" role="group" aria-label="Your marker color">
