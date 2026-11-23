@@ -48,6 +48,11 @@ Docker: `docker compose --profile tunnel up -d --build` (full stack). Plain
   together. Stylus handling (adaptive pressure band, eraser end, barrel-button
   pan, time-based palm rejection) lives in `src/utils/penInput.js` + the
   `handleCanvasPointer*` handlers in `App.jsx`.
+- **Pen path tool** (desktop toolbar / `P`): a Bezier guide for mouse and
+  keyboard painters in `src/utils/penPath.js` + the `pen*` handlers in `App.jsx`.
+  The guide never touches a layer or the wire; finishing it replays sampled
+  points through `startStroke` / `continueStroke` / `finishStroke`, so it is an
+  ordinary brush stroke to undo, peers and room rules. Keep it that way.
 - **WS protocol**: to add a realtime action, add a `send*` in
   `useMultiplayer.js`, a `case` in the `server.js` message switch (guard
   host-only actions with `isHost`), and handle the server→client message in

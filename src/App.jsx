@@ -35,6 +35,7 @@ import {
 } from "./utils/layers";
 import { floodFill } from "./utils/fill";
 import { drawShape, drawText } from "./utils/shapes";
+import { constrainAngle, drawPenGuide, samplePenPath } from "./utils/penPath";
 import {
   DEFAULT_FRAME_DURATION,
   MAX_FRAMES,
@@ -369,6 +370,8 @@ const MAX_PALETTE_COLORS = 10;
 // hover), so a hand resting on a Cintiq / iPad can't paint or pinch while the
 // pen is in use, yet fingers work again a moment after the pen is put down.
 const PEN_PRIORITY_MS = 1500;
+// Synthetic pointer id the pen path tool replays its finished path under.
+const PEN_PATH_POINTER_ID = -4711;
 // While a pen is in use, a touch contact wider/taller than this is the resting
 // palm / forearm. Sized for iPad Safari, which reports a touch's width as
 // 2 × UITouch.majorRadius: an ordinary fingertip there is ~40-65px and a
@@ -878,6 +881,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const focusedUserIdRef = useRef(null); // a friend we just jumped the canvas to (pulses)
   const focusTimerRef = useRef(null);
   const brushCursorRef = useRef(null); // the brush-size preview ring (DOM-positioned)
+  // Pen path tool (mouse + keyboard): a Bezier guide built click by click,
+  // inked with the current brush when finished. See utils/penPath.js.
+  const penRef = useRef({ nodes: [], hover: null, drag: null, closed: false, dirty: true });
+  const penModeRef = useRef(false);
+  const penTaperRef = useRef(true);
+  const penCanvasRef = useRef(null);
+  const penActionsRef = useRef({});
   const brushTipCanvasRef = useRef(null); // the ring's inner canvas: one dab of the brush
   const brushTipSigRef = useRef(""); // brush|color|size the tip was last drawn for
   const brushCursorHideRef = useRef(null);
@@ -1078,6 +1088,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // Session-local on purpose, no localStorage.
   const [smudgeMode, setSmudgeMode] = useState("drag");
   const [fillShape, setFillShape] = useState(false);
+  const [penMode, setPenMode] = useState(false);
+  const [penTaper, setPenTaper] = useState(true);
+  const [penNodeCount, setPenNodeCount] = useState(0);
   const [textSize, setTextSize] = useState(64);
   const [galleryItems, setGallery] = useState([]);
   const gallerySessionRef = useRef(null);
@@ -3677,6 +3690,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   );
 
   const getPoint = useCallback((event) => {
+    // A finished pen path replays document-space points it already resolved.
+    if (event.world) {
+      return event.world;
+    }
     const canvas = displayCanvasRef.current;
     const rect = activeCanvasRectRef.current || canvas.getBoundingClientRect();
     const cssX = event.clientX - rect.left;
@@ -4634,7 +4651,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       hideBrushCursor();
       return;
     }
-    if (handToolRef.current || selectedTool === "fill" || selectedTool === "text") {
+    if (handToolRef.current || selectedTool === "fill" || selectedTool === "text" || (penModeRef.current && selectedTool === "brush")) {
       hideBrushCursor();
       return;
     }
@@ -4854,6 +4871,165 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     showToast("✏️ Pen found! Pressure and Pen-only settings are now in Tools ▸ Hand & pen.");
   };
 
+  // ---- Pen path tool ---------------------------------------------------------
+  // Click places a corner, click-and-drag pulls a smooth curve, Shift snaps to
+  // 45 degrees. Enter (or a click on the last point) inks the path with the
+  // current brush; a click on the first point closes the shape and inks it.
+  // The path itself never touches the layer or the wire: finishing it replays
+  // sampled points through startStroke / continueStroke / finishStroke, so it
+  // is an ordinary brush stroke to undo, peers, replay and room rules.
+  const penToolLive = () =>
+    penModeRef.current && canPaintRef.current && (settingsRef.current?.tool || "brush") === "brush";
+
+  const penWorldPoint = (event) => {
+    const rect = displayCanvasRef.current.getBoundingClientRect();
+    return screenToWorld(viewRef.current, event.clientX - rect.left, event.clientY - rect.top);
+  };
+
+  const penTouched = () => {
+    penRef.current.dirty = true;
+    setPenNodeCount(penRef.current.nodes.length);
+  };
+
+  const cancelPenPath = () => {
+    const pen = penRef.current;
+    pen.nodes = [];
+    pen.drag = null;
+    pen.closed = false;
+    penTouched();
+  };
+
+  const removeLastPenNode = () => {
+    const pen = penRef.current;
+    pen.nodes.pop();
+    pen.drag = null;
+    penTouched();
+  };
+
+  const commitPenPath = () => {
+    const pen = penRef.current;
+    if (pen.nodes.length < 2 || activePointerRef.current != null) {
+      return false;
+    }
+    const points = samplePenPath(pen.nodes, { closed: pen.closed, taper: penTaperRef.current });
+    if (points.length < 2) {
+      return false;
+    }
+    const overlay = overlayCanvasRef.current;
+    const target = {
+      getBoundingClientRect: () => overlay.getBoundingClientRect(),
+      setPointerCapture() {},
+      releasePointerCapture() {},
+    };
+    const replayEvent = (batch) => ({
+      pointerId: PEN_PATH_POINTER_ID,
+      pointerType: "mouse",
+      button: 0,
+      buttons: 1,
+      clientX: 0,
+      clientY: 0,
+      timeStamp: performance.now(),
+      currentTarget: target,
+      preventDefault() {},
+      nativeEvent: {
+        pointerType: "mouse",
+        world: batch[batch.length - 1],
+        getCoalescedEvents: () => batch.map((world) => ({ pointerType: "mouse", world })),
+      },
+    });
+    startStroke(replayEvent([points[0]]));
+    if (activePointerRef.current !== PEN_PATH_POINTER_ID) {
+      return false; // refused (locked room or layer): keep the path, the status line says why
+    }
+    for (let i = 1; i < points.length; i += 128) {
+      continueStroke(replayEvent(points.slice(i, i + 128)));
+    }
+    finishStroke(replayEvent([points[points.length - 1]]));
+    cancelPenPath();
+    return true;
+  };
+
+  const penPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const pen = penRef.current;
+    const scale = viewRef.current.scale || 1;
+    const reach = (event.pointerType === "touch" ? 20 : 10) / scale;
+    let point = penWorldPoint(event);
+    const near = (node) => Math.hypot(node.x - point.x, node.y - point.y) <= reach;
+    const last = pen.nodes[pen.nodes.length - 1];
+    if (pen.nodes.length > 2 && near(pen.nodes[0])) {
+      pen.closed = true;
+      if (!commitPenPath()) {
+        pen.closed = false;
+      }
+      return;
+    }
+    if (last && near(last)) {
+      // A second click on the newest point (a double-click) ends the path.
+      if (pen.nodes.length > 1) {
+        commitPenPath();
+      }
+      return;
+    }
+    if (last && event.shiftKey) {
+      point = constrainAngle(last, point);
+    }
+    pen.nodes.push({ x: point.x, y: point.y, ox: 0, oy: 0 });
+    pen.drag = { pointerId: event.pointerId, index: pen.nodes.length - 1 };
+    pen.hover = null;
+    penTouched();
+  };
+
+  const penPointerMove = (event) => {
+    const pen = penRef.current;
+    let point = penWorldPoint(event);
+    if (pen.drag?.pointerId === event.pointerId) {
+      const node = pen.nodes[pen.drag.index];
+      if (!node) {
+        return;
+      }
+      if (event.shiftKey) {
+        point = constrainAngle(node, point);
+      }
+      const pull = Math.hypot(point.x - node.x, point.y - node.y) * (viewRef.current.scale || 1);
+      // A few pixels of slop so a plain click stays a sharp corner.
+      node.ox = pull > 5 ? point.x - node.x : 0;
+      node.oy = pull > 5 ? point.y - node.y : 0;
+      pen.dirty = true;
+      return;
+    }
+    if (pen.nodes.length && event.pointerType !== "touch") {
+      const last = pen.nodes[pen.nodes.length - 1];
+      pen.hover = event.shiftKey ? constrainAngle(last, point) : point;
+      pen.dirty = true;
+    }
+  };
+
+  const togglePenMode = () => {
+    const next = !penModeRef.current;
+    penModeRef.current = next;
+    setPenMode(next);
+    if (next) {
+      handToolRef.current = false;
+      setHandTool(false);
+      setSelectedTool("brush");
+      hideBrushCursor();
+      // Hand the keyboard back to the canvas: a focused toolbar button would
+      // swallow Enter / Space meant for the path.
+      if (document.activeElement?.classList?.contains("zoom-pen")) {
+        document.activeElement.blur();
+      }
+    } else {
+      cancelPenPath();
+    }
+  };
+
+  penTaperRef.current = penTaper;
+  penActionsRef.current = { commit: commitPenPath, cancel: cancelPenPath, removeLast: removeLastPenNode, toggle: togglePenMode };
+
   const handleCanvasPointerDown = (event) => {
     if (isExportingVideoRef.current || historyReplayActiveRef.current) {
       return; // don't start a stroke on a scene that is still being rebuilt
@@ -4975,6 +5151,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       }
     }
 
+    if (penToolLive()) {
+      hideBrushCursor();
+      penPointerDown(event);
+      return;
+    }
+
     updateBrushCursor(event.clientX, event.clientY);
     startStroke(event);
   };
@@ -5069,6 +5251,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       return;
     }
 
+    if (penToolLive()) {
+      hideBrushCursor();
+      sendCursorThrottled(event);
+      penPointerMove(event);
+      return;
+    }
+
     if (event.pointerType !== "touch") {
       brushHoverPointRef.current = { x: event.clientX, y: event.clientY };
     }
@@ -5104,6 +5293,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     // its hover ring (the next move re-positions it).
     if (event.pointerType === "touch") {
       hideBrushCursor();
+    }
+    if (penRef.current.drag?.pointerId === event.pointerId) {
+      penRef.current.drag = null;
+      penRef.current.dirty = true;
+      return;
     }
     finishStroke(event);
   };
@@ -10555,6 +10749,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           break;
         case "Backspace":
           event.preventDefault();
+          if (penRef.current.nodes.length) {
+            penActionsRef.current.removeLast(); // mid-path: step back one point
+            break;
+          }
           if (roomFingerPaintRef.current) break; // toddler room: no eraser
           handToolRef.current = false;
           setHandTool(false);
@@ -10594,6 +10792,27 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           break;
         case "Escape":
           setQuickMenu(null); // the brush / color popover off the bottom bar
+          if (penRef.current.nodes.length) {
+            penActionsRef.current.cancel();
+          }
+          break;
+        case "Delete":
+          if (penRef.current.nodes.length) {
+            event.preventDefault();
+            penActionsRef.current.removeLast();
+          }
+          break;
+        case "Enter":
+          if (penRef.current.nodes.length) {
+            event.preventDefault();
+            penActionsRef.current.commit();
+          }
+          break;
+        case "p":
+        case "P":
+          if (roomFingerPaintRef.current) break; // toddler room: fingers only
+          event.preventDefault();
+          penActionsRef.current.toggle();
           break;
         default:
           break;
@@ -10602,6 +10821,47 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // Pen path guide: drawn in screen space on its own canvas so anchors and
+  // handles stay crisp at any zoom / rotation. Repaints only when the path or
+  // the view changed; the loop runs only while the pen tool is on.
+  useEffect(() => {
+    const canvas = penCanvasRef.current;
+    if (!penMode || !canvas) {
+      return undefined;
+    }
+    const ctx = canvas.getContext("2d");
+    let frame = 0;
+    let lastView = "";
+    const paint = () => {
+      frame = window.requestAnimationFrame(paint);
+      const pen = penRef.current;
+      const v = viewRef.current;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const viewSig = `${v.tx}|${v.ty}|${v.scale}|${v.rot || 0}|${w}|${h}|${dpr}`;
+      if (!pen.dirty && viewSig === lastView) {
+        return;
+      }
+      pen.dirty = false;
+      lastView = viewSig;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      drawPenGuide(ctx, pen, (x, y) => worldToScreen(v, x, y));
+    };
+    penRef.current.dirty = true;
+    frame = window.requestAnimationFrame(paint);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+  }, [penMode]);
 
   useEffect(() => {
     const overlay = overlayCanvasRef.current;
@@ -10917,6 +11177,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         redo();
       } else if (event.key.toLowerCase() === "z") {
         event.preventDefault();
+        if (penRef.current.nodes.length) {
+          penActionsRef.current.removeLast(); // mid-path: undo steps back one point
+          return;
+        }
         undo();
       } else if (event.key.toLowerCase() === "y") {
         event.preventDefault();
@@ -11047,6 +11311,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     setSelectedBrush("eraser");
   };
 
+  const penToolOn = penMode && !handTool && selectedTool === "brush";
   const isPaintActive = !handTool && selectedTool === "brush" && selectedBrush !== "eraser";
   const isEraserActive = !handTool && selectedTool === "brush" && selectedBrush === "eraser";
   // Smudge blends the paint already on the canvas, it carries no pigment, so it
@@ -11684,8 +11949,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
             <canvas
               ref={overlayCanvasRef}
               className={`drawing-canvas overlay-canvas${handTool ? " is-pan" : ""}${
-                !handTool && selectedTool !== "fill" && selectedTool !== "text" ? " ring-active" : ""
-              }`}
+                !handTool && !penToolOn && selectedTool !== "fill" && selectedTool !== "text" ? " ring-active" : ""
+              }${penToolOn ? " is-pen" : ""}`}
               aria-hidden="true"
               onPointerDown={handleCanvasPointerDown}
               onPointerMove={handleCanvasPointerMove}
@@ -11695,6 +11960,41 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
               onLostPointerCapture={handleCanvasLostPointerCapture}
               onContextMenu={handleCanvasContextMenu}
             />
+            <canvas ref={penCanvasRef} className="pen-path-canvas" aria-hidden="true" />
+            {penToolOn ? (
+              <div className="pen-path-bar" role="group" aria-label="Pen path">
+                <p className="pen-path-hint">
+                  {penNodeCount === 0
+                    ? "Click to place points. Drag to bend the line."
+                    : penNodeCount === 1
+                      ? "Add another point. Hold Shift for straight angles."
+                      : "Enter inks it with your brush. Click the first point to close the shape."}
+                </p>
+                <label className="pen-path-taper">
+                  <input type="checkbox" checked={penTaper} onChange={(event) => setPenTaper(event.target.checked)} />
+                  <span>Taper ends</span>
+                </label>
+                {penNodeCount > 0 ? (
+                  <>
+                    <button type="button" onClick={() => penActionsRef.current.removeLast()} title="Remove the last point (Backspace)">
+                      Undo point
+                    </button>
+                    <button type="button" onClick={() => penActionsRef.current.cancel()} title="Throw the path away (Esc)">
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="pen-path-done"
+                      disabled={penNodeCount < 2}
+                      onClick={() => penActionsRef.current.commit()}
+                      title="Ink the path with the current brush (Enter)"
+                    >
+                      Ink it
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
             {/* Brush-size preview ring, sized to brushSize x zoom, tinted with the
                 color, following the pointer (and flashed when size/brush changes). */}
             <div ref={brushCursorRef} className="brush-cursor" aria-hidden="true">
@@ -11830,6 +12130,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
                   aria-label="Eraser"
                 >
                   🧽
+                </button>
+              )}
+              {roomFingerPaint ? null : (
+                <button
+                  type="button"
+                  className={penToolOn ? "zoom-tool zoom-pen is-active" : "zoom-tool zoom-pen"}
+                  onClick={togglePenMode}
+                  aria-pressed={penToolOn}
+                  title="Pen path (P): click points, drag to bend, Enter inks it with your brush"
+                  aria-label="Pen path"
+                >
+                  <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round">
+                    <path d="M12 3 6.5 13.5 9 18h6l2.5-4.5L12 3Z" />
+                    <path d="M12 3v8.5" />
+                    <circle cx="12" cy="13" r="1.4" />
+                    <path d="M8.5 21h7" />
+                  </svg>
                 </button>
               )}
               <button
