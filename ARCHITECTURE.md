@@ -427,7 +427,9 @@ counts behind the admin key);
 
 ## Build & deploy
 
-- **Dev**: `npm run dev` (Vite :5173, proxies `/ws` → :8787) + `node server.js`.
+- **Dev**: `node server.js` runs the local API on port 8787. In a second
+  terminal, `npm run dev` serves the site on port 5175 and proxies `/api`,
+  `/ws`, and `/coloring-sheets/` to the local server.
 - **Prod build**: `npm run build` → `dist/`, served by `server.js`.
 - **Docker**: `Dockerfile` (Node app, multi-stage; bakes `VITE_PB_URL`),
   `pocketbase.Dockerfile` (binary), `docker-compose.yml`. `docker compose

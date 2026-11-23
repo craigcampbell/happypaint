@@ -122,17 +122,74 @@ existing data mounts; never overwrite newer user artwork with an old backup as
 part of an ordinary code rollback. Restore data only as a separately reviewed
 recovery operation.
 
-## Start locally for development
+## Mac development
 
-```powershell
-npm run dev
-# In another terminal, with isolated DATA_DIR and PORT as needed:
+Install Git and Node.js 24.x for macOS. Running `git --version` on a new Mac
+may prompt you to install Apple's Command Line Tools. Check `node --version`
+and `npm --version` in a new Terminal window. The Mac installs its own native
+dependencies from the lockfile. [Node.js downloads](https://nodejs.org/en/download)
+
+Use a GitHub account with access to the repository. If you prefer a graphical
+sign-in, GitHub Desktop can clone it into `~/Projects/drawesome`. Then start
+at the `cd` command below. [GitHub Desktop cloning guide](https://docs.github.com/en/desktop/adding-and-cloning-repositories/cloning-a-repository-from-github-to-github-desktop)
+
+To clone and start the realtime server in Terminal, run:
+
+```bash
+mkdir -p ~/Projects
+git clone https://github.com/craigcampbell/happypaint.git ~/Projects/drawesome
+cd ~/Projects/drawesome
+npm ci
 node server.js
 ```
 
-Vite uses port 5173 and proxies `/ws` to port 8787. Avoid starting another server
-on the production port or pointing tests at production `app_data/`. Empty
-PocketBase and billing variables leave drawing and rooms available anonymously.
+Open a second Terminal tab:
+
+```bash
+cd ~/Projects/drawesome
+npm run dev
+```
+
+Visit **http://127.0.0.1:5175**. Vite reloads frontend edits and forwards API,
+room and coloring-sheet requests to the local server on port 8787. Restart
+`node server.js` after server edits. To check the backend in a browser, visit
+**http://127.0.0.1:8787/healthz**. Press Control-C in each tab to stop.
+
+A fresh checkout supports guest painting, rooms, and the private contact inbox
+without a production environment file or Docker. Local server data goes in
+the ignored `.data/` folder. To try the contact page's email option, start
+the backend with `CONTACT_EMAIL=artist@example.test node server.js`. Use
+sandbox credentials for work on paid features and a local PocketBase for
+account work.
+
+### Coloring sheets on the Mac
+
+The optional coloring library is stored separately on the hosting laptop.
+To use the full collection in your Mac checkout, connect to the same network
+or a private network that can reach the laptop by SSH. Substitute the laptop's
+reachable hostname or LAN IP for `LAPTOP_HOST` below:
+
+```bash
+cd ~/Projects/drawesome
+mkdir -p coloring-library
+rsync -a craig@LAPTOP_HOST:/home/craig/Projects/happypaint/coloring-library/ coloring-library/
+```
+
+Restart the local server after the copy and open
+**http://127.0.0.1:5175/api/coloring-sheets** to check the count. The
+production collection contained 6,294 sheets when this guide was written.
+
+### Continue in Codex
+
+Open `~/Projects/drawesome` as the local project folder in Codex. If you
+use the Codex CLI, run `codex` from that directory. A useful first request
+is “Read ARCHITECTURE.md and AGENTS.md, start the local drawing site, and
+check that two guests can draw in a room.” [Codex quickstart](https://developers.openai.com/codex/quickstart/)
+
+Use GitHub to hand changes between the two development machines. Push
+completed work from the first machine, then run `git pull --ff-only` on a
+clean `main` checkout on the other before starting. Deployment on the
+hosting laptop is a separate operation described above.
 
 Security-relevant defaults (2026-09 audit, `node scripts/security-verify.mjs`):
 

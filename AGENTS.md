@@ -14,7 +14,7 @@ doesn't regress.
 ## Run, build, verify
 ```bash
 npm install
-npm run dev            # Vite :5173 (proxies /ws → :8787)
+npm run dev            # Vite :5175 (proxies /api, /ws and coloring-sheet assets to :8787)
 node server.js         # the realtime server :8787 (serves dist/ in prod)
 npm run build          # → dist/
 npm run lint           # eslint, zero-warnings policy

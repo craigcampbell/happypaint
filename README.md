@@ -6,6 +6,9 @@ The web app is a Vite/React marketing site plus browser studio. The native app l
 
 ## Web
 
+For the MacBook setup, local rooms, and optional coloring library, see
+[Mac development](RUNNING.md#mac-development).
+
 ```sh
 npm install
 npm run dev

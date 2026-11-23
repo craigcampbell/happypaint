@@ -72,7 +72,7 @@ Branch `big-changes`, 11 commits (newest first):
 - **Admin** moderation queues (brush packs + AI assets).
 
 ### Key docs to read on resume
-- `kanban.md`, full feature board + status + what's deferred.
+- `KANBAN.md`, full feature board + status + what's deferred.
 - `performance_audit.md`, the 34-finding audit (all Critical→Low fixed).
 - `HOSTING.md`, beginner DigitalOcean + Supabase setup.
 - `DEPLOY.md`, concise deploy reference + Supabase setup section.
@@ -140,7 +140,7 @@ expect runtime bugs to surface on first real use." Testing is the next phase.
 
 ---
 
-## Deferred / not yet done (tracked in kanban.md)
+## Deferred / not yet done (tracked in KANBAN.md)
 - Sync of economy/events/replay; binary file sync (PNG/replay/GIF) → Storage buckets.
 - Real IAP (App Store / Play Billing) on the mock economy.
 - Server-side AI (sketch cleanup, etc.) behind credits + the moderation queue.
@@ -152,7 +152,7 @@ expect runtime bugs to surface on first real use." Testing is the next phase.
 
 ## Quick resume checklist
 - [ ] `git status` clean, on `big-changes`.
-- [ ] Re-read this file + `kanban.md`.
+- [ ] Re-read this file + `KANBAN.md`.
 - [ ] Start step 1 (Vitest unit tests).
 - [ ] Then Playwright (step 2), then local Supabase (step 3).
 - [ ] Add mobile Jest tests + QA checklist (step 4).
