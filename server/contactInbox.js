@@ -1,5 +1,5 @@
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -9,6 +9,8 @@ const EMAIL = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i;
 const DAY = 86_400_000;
 const RETENTION = 90 * DAY;
 const CAPACITY = 500;
+const CHALLENGE_TTL = 15 * 60_000;
+const CHALLENGE_LIMIT = 2048;
 
 export function createContactInbox(dataDir, now = Date.now) {
   const file = join(dataDir, '.contact-inbox.json');
@@ -20,6 +22,31 @@ export function createContactInbox(dataDir, now = Date.now) {
   }
   let messages = null;
   let timer;
+  const challenges = new Map();
+
+  function issueChallenge(ip) {
+    const time = now();
+    // Entries are ordered by issue time. Never evict an active visitor's
+    // question just to make room for another one.
+    for (const [id, entry] of challenges) {
+      if (entry.expires > time) break;
+      challenges.delete(id);
+    }
+    if (challenges.size >= CHALLENGE_LIMIT) return null;
+    const left = randomInt(2, 16);
+    const right = randomInt(1, 10);
+    const challengeId = randomUUID();
+    challenges.set(challengeId, { answer: String(left + right), ip, expires: time + CHALLENGE_TTL });
+    return { challengeId, question: `What is ${left} plus ${right}?` };
+  }
+
+  function takeChallenge(req, ip) {
+    const { challengeId, answer } = req.body || {};
+    const entry = challenges.get(challengeId);
+    if (!entry || entry.ip !== ip) return false;
+    challenges.delete(challengeId);
+    return entry.expires > now() && typeof answer === 'string' && answer.trim() === entry.answer;
+  }
 
   // Commit to disk before acknowledging a submission. A full or unreadable
   // inbox must never turn into silent success or overwrite pending messages.
@@ -88,17 +115,35 @@ export function createContactInbox(dataDir, now = Date.now) {
     return messages.filter(m => m.status === 'open' && m.createdAt > cutoff).length;
   }
 
-  function registerRoutes(app, { adminGuard, clientIp, rateOk }) {
+  function registerRoutes(app, { adminGuard, clientIp, rateOk, contactEmail = '' }) {
+    const address = typeof contactEmail === 'string' ? contactEmail.trim() : '';
+    const emailAvailable = address.length <= 254 && EMAIL.test(address);
     const paths = ['/api/contact', '/api/admin/contact'];
     const json = express.json({ limit: '16kb' });
     app.use(paths, (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
     app.use('/api/admin/contact', (req, res, next) => { if (adminGuard(req, res)) next(); });
 
-    app.post('/api/contact', (req, res, next) => {
+    app.get('/api/contact/challenge', (req, res) => {
+      const ip = clientIp(req);
+      if (!rateOk('contact-challenge:' + ip, 30, 10 * 60_000)) return res.status(429).json({ error: 'rate_limited' });
+      const challenge = issueChallenge(ip);
+      if (!challenge) return res.status(429).json({ error: 'rate_limited' });
+      return res.json({ ...challenge, emailAvailable });
+    });
+
+    function checkAttempt(req, res, next) {
       if (!rateOk('contact-attempt:' + clientIp(req), 30, 10 * 60_000)) return res.status(429).json({ error: 'rate_limited' });
       if (!req.is('application/json')) return res.status(415).json({ error: 'json_required' });
       next();
-    }, json, (req, res) => {
+    }
+
+    app.post('/api/contact/email', checkAttempt, json, (req, res) => {
+      if (!emailAvailable) return res.status(404).json({ error: 'email_unavailable' });
+      if (!takeChallenge(req, clientIp(req))) return res.status(400).json({ error: 'invalid_challenge' });
+      return res.json({ email: address });
+    });
+
+    app.post('/api/contact', checkAttempt, json, (req, res) => {
       const { topic, message, email = '', website, requestId = '' } = req.body || {};
       if (website) return res.status(201).json({ ok: true });
       if (!TOPICS.has(topic)) return res.status(400).json({ error: 'invalid_topic' });
@@ -114,7 +159,9 @@ export function createContactInbox(dataDir, now = Date.now) {
       if (previous) {
         if (previous.topic !== topic || previous.message !== clean || previous.email !== reply) return res.status(409).json({ error: 'request_conflict' });
       } else {
-        if (!rateOk('contact-submit:' + clientIp(req), 5, 10 * 60_000)) return res.status(429).json({ error: 'rate_limited' });
+        const ip = clientIp(req);
+        if (!takeChallenge(req, ip)) return res.status(400).json({ error: 'invalid_challenge' });
+        if (!rateOk('contact-submit:' + ip, 5, 10 * 60_000)) return res.status(429).json({ error: 'rate_limited' });
         if (rows.length >= CAPACITY) return res.status(503).json({ error: 'inbox_unavailable' });
         save([{ id: randomUUID(), requestId, topic, message: clean, email: reply, createdAt: now(), status: 'open' }, ...rows]);
       }

@@ -10,7 +10,7 @@ import { createContactInbox } from '../server/contactInbox.js';
 
 const day = 86_400_000;
 
-async function fixture(t, { directory, seed, clock } = {}) {
+async function fixture(t, { directory, seed, clock, rateOk = () => true, contactEmail = 'owner@example.test' } = {}) {
   const dir = directory || mkdtempSync(join(tmpdir(), 'drawesome-contact-'));
   if (!directory) t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, '.contact-inbox.json');
@@ -23,27 +23,37 @@ async function fixture(t, { directory, seed, clock } = {}) {
       res.status(401).json({ error: 'unauthorized' });
       return false;
     },
-    clientIp: () => 'test', rateOk: () => true,
+    clientIp: req => req.get('x-fixture-ip') || 'test', rateOk, contactEmail,
   });
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => { server.close(); server.closeAllConnections(); });
-  async function request(path, { method = 'GET', body, admin = false } = {}) {
+  async function request(path, { method = 'GET', body, admin = false, ip = 'test' } = {}) {
     return fetch('http://127.0.0.1:' + server.address().port + '/api/' + path, {
       method,
-      headers: { ...(admin ? { 'x-admin-key': 'test-key' } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
+      headers: { 'x-fixture-ip': ip, ...(admin ? { 'x-admin-key': 'test-key' } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   }
   const list = async () => (await (await request('admin/contact', { admin: true })).json()).messages;
-  const submit = body => request('contact', { method: 'POST', body });
-  return { dir, file, inbox, request, list, submit };
+  async function solve() {
+    const response = await request('contact/challenge');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const challenge = await response.json();
+    assert.deepEqual(Object.keys(challenge).sort(), ['challengeId', 'emailAvailable', 'question']);
+    const [, a, b] = /^What is (\d+) plus (\d+)\?$/.exec(challenge.question);
+    return { challengeId: challenge.challengeId, answer: String(Number(a) + Number(b)) };
+  }
+  const submit = async body => request('contact', { method: 'POST', body: { ...body, ...await solve() } });
+  return { dir, file, inbox, request, list, solve, submit };
 }
 
 test('contact inbox persists one receipt per request; only admins can read, resolve or delete', async t => {
   const f = await fixture(t);
   const draft = { topic: 'bug', email: 'reply+paint@example.org', message: 'The brushes move aside on my tablet.', requestId: randomUUID() };
-  const replay = await Promise.all([f.submit(draft), f.submit(draft)]);
+  const body = { ...draft, ...await f.solve() };
+  const replay = await Promise.all([1, 2].map(() => f.request('contact', { method: 'POST', body })));
   assert.deepEqual(replay.map(r => r.status), [201, 201]);
   assert.deepEqual(await replay[0].json(), { ok: true });
   assert.equal((await f.submit({ ...draft, topic: 'safety' })).status, 409);
@@ -64,6 +74,69 @@ test('contact inbox persists one receipt per request; only admins can read, reso
   assert.equal((await restart.list())[0].status, 'resolved');
   assert.equal((await restart.request(path, { method: 'DELETE', admin: true })).status, 200);
   assert.deepEqual(await restart.list(), []);
+});
+
+test('both contact actions need a live, single-use human check from the issuing visitor', async t => {
+  let time = Date.now();
+  const f = await fixture(t, { clock: () => time });
+  const draft = { topic: 'general', message: 'A private note from a visitor.' };
+  const post = (path, body, ip = 'test') => f.request(path, { method: 'POST', body, ip });
+  async function assertRejected(response) {
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await response.json(), { error: 'invalid_challenge' });
+  }
+  await assertRejected(await post('contact', draft));
+  await assertRejected(await post('contact/email', {}));
+  assert.deepEqual(await f.list(), []);
+
+  const check = await f.solve();
+  await assertRejected(await post('contact/email', check, 'different'));
+  const revealed = await post('contact/email', check);
+  assert.equal(revealed.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await revealed.json(), { email: 'owner@example.test' });
+  await assertRejected(await post('contact', { ...draft, ...check }));
+
+  const wrong = await f.solve();
+  await assertRejected(await post('contact/email', { ...wrong, answer: '999' }));
+  await assertRejected(await post('contact/email', wrong));
+  const expired = await f.solve();
+  time += 15 * 60_000;
+  await assertRejected(await post('contact', { ...draft, ...expired }));
+  assert.deepEqual(await f.list(), []);
+  const valid = await f.solve();
+  assert.equal((await post('contact', { ...draft, ...valid })).status, 201);
+  await assertRejected(await post('contact/email', valid));
+  assert.equal((await f.list()).length, 1);
+});
+
+test('an unset or invalid contact address leaves the guest inbox available', async t => {
+  for (const contactEmail of ['', 'first@example.test,second@example.test']) {
+    const f = await fixture(t, { contactEmail });
+    assert.equal((await (await f.request('contact/challenge')).json()).emailAvailable, false);
+    const check = await f.solve();
+    const response = await f.request('contact/email', { method: 'POST', body: check });
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: 'email_unavailable' });
+    const post = await f.request('contact', { method: 'POST', body: { topic: 'bug', message: 'Please help with my drawing.', ...check } });
+    assert.equal(post.status, 201);
+    assert.equal((await f.list()).length, 1);
+  }
+});
+
+test('challenge issuance and both verification paths are rate limited before disclosing data', async t => {
+  const keys = [];
+  const f = await fixture(t, { rateOk(key) { keys.push(key); return false; } });
+  const responses = [
+    await f.request('contact/challenge'),
+    await f.request('contact/email', { method: 'POST', body: {} }),
+    await f.request('contact', { method: 'POST', body: {} }),
+  ];
+  assert.deepEqual(keys, ['contact-challenge:test', 'contact-attempt:test', 'contact-attempt:test']);
+  for (const response of responses) {
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: 'rate_limited' });
+  }
 });
 
 test('public form limits and retention; erasure matches the verified reply address only', async t => {

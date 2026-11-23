@@ -16,9 +16,17 @@ standalone-Node operating instructions.
 
 ## Contact messages and incoming email
 
-Website visitors can use `/contact`. Open `/admin#contact` to read a message,
-resolve it, or delete it. A reply address is optional. The form delivers
-directly to the app’s private inbox, including when domain mail is unavailable.
+Website visitors can reach the team at `/contact` in two ways. A visitor who
+chooses email answers a short human check, then opens an addressed draft in
+their own email app or copies the address into webmail. They send the draft
+from their own account. This works independently of the domain's MX records.
+Set `CONTACT_EMAIL` in the production Compose `.env` and recreate the app
+service to change the destination. Leaving it empty turns off direct email.
+
+Visitors can also send a private note directly to the site. The server checks
+the answer before saving a new message. Open `/admin#contact` to read, resolve,
+or delete these notes. A reply address is optional. The contact page works
+without a Drawesome account, a CAPTCHA provider key, or an outbound mail relay.
 
 Incoming addresses such as `mail@drawesome.art` and `admin@drawesome.art`
 depend on the domain’s MX provider and its alias rules. For a switch to

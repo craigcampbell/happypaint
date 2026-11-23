@@ -46,6 +46,8 @@ services:
     environment:
       - PORT=8787
       - DATA_DIR=/data
+      # Returned only after the visitor completes the contact page's human check.
+      - CONTACT_EMAIL=${CONTACT_EMAIL:-}
       # Bounded analytics stores. The 1000-user default silently dropped the
       # oldest users on every trim, so the split-brain recovery (1217 distinct
       # users) would be discarded on the first persist after the merge.

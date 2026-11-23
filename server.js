@@ -7461,7 +7461,7 @@ curator.registerRoutes(app, adminGuard);
 featuredRooms = createFeaturedRooms({ dataDir: DATA_DIR, getRoomEligibility: featuredSource });
 featuredRooms.registerRoutes(app, adminGuard);
 const contactInbox = createContactInbox(DATA_DIR);
-contactInbox.registerRoutes(app, { adminGuard, clientIp, rateOk });
+contactInbox.registerRoutes(app, { adminGuard, clientIp, rateOk, contactEmail: process.env.CONTACT_EMAIL });
 app.use(express.json({ limit: '16mb' }));
 billing.registerRoutes(app);
 economy.registerRoutes(app);

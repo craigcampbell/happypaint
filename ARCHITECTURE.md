@@ -390,7 +390,10 @@ everything:
 - `.admin-key`, `.reports.json`, `.metrics.json`, `.analytics.json`.
 - `.contact-inbox.json` holds messages from the public `/contact` form for up to
   90 days. Only the authenticated `/admin#contact` inbox can read, resolve, or
-  delete them. Submission is independent of PocketBase and email delivery.
+  delete them. A short-lived, server-verified human check protects submissions
+  and the direct email address reveal on the same page. Direct email opens
+  the visitor's email app. The private inbox works independently of mail
+  delivery and PocketBase.
 - `.admin-totp.json` (2FA secret + hashed recovery codes + replay counter, see
   `server/adminAuth.js` and RUNNING.md) and `.admin-sessions.json` (hashed
   admin session tokens with expiry). Once the first exists, `x-admin-key` must
