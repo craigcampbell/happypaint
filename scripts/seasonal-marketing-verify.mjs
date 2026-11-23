@@ -98,7 +98,7 @@ spawnProc([process.execPath, "server.js"], {
   env: { ...process.env, PORT: String(API_PORT), DATA_DIR: SCRATCH, ADMIN_KEY: "seasonal-test-admin" },
 }, "srv");
 spawnProc([process.execPath, path.join(ROOT, "node_modules/vite/bin/vite.js"), "--port", String(UI_PORT), "--strictPort", "--host", "127.0.0.1"], {
-  // VITE_PB_URL is set so the nav auth CTA (Sign in / My account) is exercised;
+  // VITE_PB_URL is set so the nav auth CTA (Sign in / My studio) is exercised;
   // the dummy origin is never called, guests have no stored PocketBase record
   // and the signed-in check seeds a local-only synthetic auth record.
   env: { ...process.env, VITE_PB_URL: `http://127.0.0.1:${API_PORT}` },
@@ -479,7 +479,7 @@ const run = async () => {
   check("guest: Sign in visible immediately beside Draw now on a 375px phone",
     !!sb && !!pb && Math.abs(sb.y - pb.y) < 10 && Math.abs(sb.x + sb.width - pb.x) < 26,
     sb && pb ? `signin@(${Math.round(sb.x)},${Math.round(sb.y)},w${Math.round(sb.width)}) paint@(${Math.round(pb.x)},${Math.round(pb.y)})` : "missing box");
-  check("guest: no My account button while signed out", (await page.locator(".site-nav-account-cta").count()) === 0);
+  check("guest: no My studio button while signed out", (await page.locator(".site-nav-account-cta").count()) === 0);
   // The wordmark yields to the auth CTA on the homepage at phone widths.
   const wordmarkDisplay = await page.locator(".home-page .site-brand .brand-name").evaluate((el) => getComputedStyle(el).display);
   check("mobile polish: homepage wordmark hidden at 375px so the CTA row fits", wordmarkDisplay === "none", wordmarkDisplay);
@@ -504,12 +504,12 @@ const run = async () => {
   const acctBox = await myAccount.boundingBox();
   const paintBox2 = await authPage.locator(".site-nav-actions .site-nav-paint").boundingBox();
   const acctText = (await myAccount.innerText()).trim();
-  check("signed-in: My account shown beside Draw now on mobile (SYNTHETIC session)",
-    /my account/i.test(acctText) && !!acctBox && !!paintBox2 && Math.abs(acctBox.y - paintBox2.y) < 10, acctText);
+  check("signed-in: My studio shown beside Draw now on mobile (SYNTHETIC session)",
+    /my studio/i.test(acctText) && !!acctBox && !!paintBox2 && Math.abs(acctBox.y - paintBox2.y) < 10, acctText);
   check("signed-in: no duplicate/misleading Sign in button", (await authPage.locator(".site-nav-signin").count()) === 0);
   await myAccount.click();
-  await authPage.waitForURL("**/rooms**", { timeout: 10000 });
-  check("signed-in: My account routes to your rooms", authPage.url().includes("/rooms"), authPage.url());
+  await authPage.waitForURL("**/me", { timeout: 10000 });
+  check("signed-in: My studio routes to the account page", authPage.url().endsWith("/me"), authPage.url());
   await authCtx.close();
 
   const failed = results.filter((r) => !r.ok);

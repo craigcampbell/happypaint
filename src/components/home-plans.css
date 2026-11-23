@@ -1,0 +1,55 @@
+/* Homepage poster voice + the Free / Jam Pass sheet. Loaded last by HomePage. */
+.site-page.discovery-page.artwall-home { --poster-font: 'Anton', 'Bricolage Grotesque', Impact, sans-serif; }
+.site-page.discovery-page.artwall-home .artwall-main :is(h2, h3) { letter-spacing: .012em; font-weight: 400; }
+.site-page.discovery-page.artwall-home .artwall-main h2 { text-transform: uppercase; line-height: 1.02; }
+
+.artwall-home .artwall-main > .home-plans { margin-top: clamp(64px, 8vw, 110px); }
+.artwall-home .artwall-main .home-plans > h2 {
+  margin: 0 0 clamp(18px, 2.4vw, 30px); font-size: clamp(2.5rem, 6.4vw, 5.4rem); line-height: .98;
+}
+.home-plans > h2 em { font-style: normal; color: #e7472d; }
+.plans-sheet {
+  position: relative; display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  border: 2px solid #181916; background: #fffdf4; box-shadow: 8px 8px 0 #181916;
+}
+.plan { position: relative; padding: clamp(20px, 3vw, 38px); min-width: 0; }
+.plan-pass { background: #181916; color: #fffdf0; padding-right: clamp(20px, 27%, 330px); }
+.plan-free { border-right: 2px dashed #181916; }
+.plan .plan-name {
+  display: inline-block; margin: 0; padding: 3px 9px 2px; background: #181916; color: #fffdf0; transform: rotate(-2deg);
+  font: 400 1.05rem/1.2 'Anton', sans-serif; letter-spacing: .08em; text-transform: uppercase;
+}
+.plan-pass .plan-name { background: #edf15a; color: #181916; }
+.plan .plan-price { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 10px; margin: 14px 0 4px; }
+.plan .plan-price strong { font: 400 clamp(3rem, 6vw, 4.6rem)/1 'Anton', sans-serif; letter-spacing: .01em; }
+.plan-pass .plan-price strong { color: #edf15a; }
+.plan .plan-price span { font: 650 1rem/1.3 var(--body-font); }
+.plan ul { list-style: none; margin: 14px 0 20px; padding: 0; display: grid; gap: 9px; font: 560 1rem/1.35 var(--body-font); }
+.plan li { position: relative; padding-left: 26px; }
+.plan li::before {
+  content: ''; position: absolute; left: 2px; top: .28em; width: 13px; height: 7px;
+  border-left: 3px solid currentColor; border-bottom: 3px solid currentColor; transform: rotate(-48deg);
+}
+.plan li.plan-catch { color: #6a5a2c; }
+.plan li.plan-catch::before { width: 12px; height: 0; top: .62em; border-left: 0; transform: none; }
+.artwall-home .artwall-main .plan > a {
+  display: inline-flex; align-items: center; gap: 12px; min-height: 48px; font: 800 1rem/1.2 var(--body-font);
+}
+.artwall-home .artwall-main .plan > a.plan-cta {
+  padding: 10px 18px; border: 2px solid #fffdf0; background: #e7472d; color: #fffdf0; text-decoration: none; box-shadow: 5px 5px 0 #edf15a;
+  font: 400 1.35rem/1.1 'Anton', sans-serif; letter-spacing: .04em; text-transform: uppercase; transition: transform .15s, box-shadow .15s;
+}
+.artwall-home .artwall-main .plan > a.plan-cta:hover { transform: translate(2px, 2px); box-shadow: 3px 3px 0 #edf15a; }
+.artwall-home .artwall-main .plan > a.plan-cta:focus-visible { outline-color: #edf15a; }
+.plan .plan-small { margin: 14px 0 0; font: 520 .86rem/1.4 var(--body-font); color: #d8d6c4; }
+.plans-sheet > img {
+  position: absolute; right: -2.5%; top: 50%; width: min(31%, 380px); height: auto;
+  transform: translateY(-50%) rotate(4deg); border: 2px solid #181916; box-shadow: 5px 6px 0 #e7472d;
+}
+@media (max-width: 860px) {
+  .plans-sheet { grid-template-columns: 1fr; box-shadow: 5px 5px 0 #181916; }
+  .plan-free { border-right: 0; border-bottom: 2px dashed #181916; }
+  .plan-pass { padding-right: clamp(20px, 3vw, 38px); }
+  .plans-sheet > img { position: static; width: 100%; transform: none; border: 0; border-top: 2px solid #181916; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) { .artwall-home .artwall-main .plan > a.plan-cta { transition: none; } }

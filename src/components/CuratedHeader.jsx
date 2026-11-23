@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { NavInkMark } from './NavDoodles';
 import { QUICK_JOIN_PATH } from '../data/curatorContent';
-import PaintingReplay from './PaintingReplay';
+import JamPoster from './JamPoster';
 import './discovery.css';
 import './artwall-home.css';
 import './curator.css';
@@ -36,6 +36,29 @@ function InkFlourishes() {
 }
 
 function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
+  const invitation = <div className="print-invitation">
+    {content.description && <p className="print-deck">{content.description}</p>}
+    <div className="print-actions">
+      <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
+      <HeaderLink ink href="/friends" className="print-browse" preview={preview} onNavigate={onNavigate}>Start an Art Jam with friends<NavInkMark kind="underline" /></HeaderLink>
+    </div>
+    {content.note && <p className="print-note">{content.note}</p>}
+  </div>;
+  // The default masthead: the headline is the artwork, coloured in live.
+  if (content.art === 'ink') return <header className="curated-header print-masthead jam-masthead" data-palette={content.palette} data-art="ink" aria-labelledby={id}>
+    <div className="jam-layout">
+      {content.kicker && <p className="jam-kicker">{content.kicker}</p>}
+      <h1 id={id} className="jam-title-text">{content.title.split('\n').join(' ')}</h1>
+      <JamPoster lines={content.title.split('\n')} preview={preview} />
+      <svg className="jam-sticker" viewBox="0 0 200 200" role="img" aria-label="Free to draw. No sign-up needed.">
+        <path d="M100 4 117 27 143 14 149 42 178 41 172 69 197 82 180 105 197 128 170 136 172 165 144 160 133 187 110 170 86 189 77 161 49 166 52 137 24 130 41 106 22 82 49 73 42 44 71 46 79 17Z" fill="#181916" />
+        <text x="100" y="84" textAnchor="middle">FREE</text>
+        <text x="100" y="116" textAnchor="middle" className="jam-sticker-small">TO DRAW</text>
+        <text x="100" y="141" textAnchor="middle" className="jam-sticker-small">NO SIGN-UP</text>
+      </svg>
+      {invitation}
+    </div>
+  </header>;
   return <header className="curated-header print-masthead" data-palette={content.palette} data-art={content.art}
     data-default-title={content.title === 'Come draw\nwith us.'} aria-labelledby={id}>
     <div className="print-layout">
@@ -44,16 +67,8 @@ function HomeMasthead({ content, onNavigate, preview, heading, id, orbit }) {
         {content.kicker && <p className="print-kicker">{content.kicker}</p>}
         <div className="print-headline">{heading}</div>
       </div>
-      {content.art === 'ink' && <PaintingReplay preview={preview} />}
       {content.art === 'orbit' && <div className="print-sheet"><div className="print-picture">{orbit}</div></div>}
-      <div className="print-invitation">
-        {content.description && <p className="print-deck">{content.description}</p>}
-        <div className="print-actions">
-          <HeaderLink ink preview={preview} href={content.ctaHref} onNavigate={onNavigate} className="artwall-draw">{content.ctaLabel}<span aria-hidden="true">↗</span><NavInkMark kind="rays" /></HeaderLink>
-          <HeaderLink ink href="/friends" className="print-browse" preview={preview} onNavigate={onNavigate}>Start an Art Jam with friends<NavInkMark kind="underline" /></HeaderLink>
-        </div>
-        {content.note && <p className="print-note">{content.note}</p>}
-      </div>
+      {invitation}
     </div>
   </header>;
 }

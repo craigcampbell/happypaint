@@ -9,6 +9,7 @@ import { ArtworkCards, BookCards, DiscoveryLink, EventInvitations } from "./Disc
 import "./discovery.css";
 import "./artwall-home.css";
 import "./print-wall.css";
+import "./home-plans.css";
 
 const roomPicks = [
   { code: 'OCEAN', name: 'Under the Sea', image: 'ocean', idea: 'Draw a fish. Let the next painter invent its reef.' },
@@ -34,6 +35,15 @@ export default function HomePage({ onNavigate }) {
   const [attempt, setAttempt] = useState(0);
   const [idea, setIdea] = useState(0);
   const [code, setCode] = useState("");
+  const [plans, setPlans] = useState(null);
+
+  // Real Jam Pass prices, straight from the server's verified Stripe catalog.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/billing/config", { cache: "no-store" }).then(response => (response.ok ? response.json() : null))
+      .then(config => { if (active && config?.configured) setPlans(config); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -112,14 +122,36 @@ export default function HomePage({ onNavigate }) {
         <div className="home-ink-slot" data-home-ink-tools="" />
       </section>
 
-      <section className="home-postcards" aria-labelledby="home-postcard-title">
-        <div className="postcard-intro">
-          <p className="postcard-plan">Drawesome Jam Pass</p>
-          <h2 id="home-postcard-title">Send a little art.</h2>
-          <p>Turn a drawing from your Art Jam into a postcard. Add a note in the margin and send it to someone who’d love to find it in their inbox.</p>
-          <DiscoveryLink href="/jam-pass" onNavigate={onNavigate}>Explore Jam Pass <span aria-hidden="true">↗</span></DiscoveryLink>
+      <section className="home-plans" aria-labelledby="home-plans-title">
+        <h2 id="home-plans-title">Free to draw. <em>Better with a pass.</em></h2>
+        <div className="plans-sheet">
+          <div className="plan plan-free">
+            <p className="plan-name">Free</p>
+            <p className="plan-price"><strong>$0</strong></p>
+            <ul>
+              <li>Public rooms and private rooms by code</li>
+              <li>6,000+ coloring sheets</li>
+              <li>Save your drawings</li>
+              <li className="plan-catch">Rooms show one small ad</li>
+            </ul>
+            <DiscoveryLink href="/rooms" onNavigate={onNavigate}>Pick a room <span aria-hidden="true">↗</span></DiscoveryLink>
+          </div>
+          <div className="plan plan-pass">
+            <p className="plan-name">Jam Pass</p>
+            <p className="plan-price">{plans?.display?.monthly
+              ? <><strong>{plans.display.monthly.split('/')[0]}</strong><span>/month{plans.display.yearly ? ` or ${plans.display.yearly}` : ''}</span></>
+              : <strong>For hosts</strong>}</p>
+            <ul>
+              <li>No ads for you, in any room</li>
+              <li>No ads for everyone you invite to your room</li>
+              <li>Turn a shared drawing into an art postcard</li>
+              {plans?.aiColoringEnabled && <li>Make your own coloring pages from a description</li>}
+            </ul>
+            <DiscoveryLink href="/jam-pass" onNavigate={onNavigate} className="plan-cta">{plans?.display?.monthly ? 'Get Jam Pass' : 'See Jam Pass'} <span aria-hidden="true">↗</span></DiscoveryLink>
+            <p className="plan-small">A grown-up buys it. Cancel any time.</p>
+          </div>
+          <img src="/media/family-postcard.webp" alt="A finished art postcard with a whale drawing and a personal note for Nana." width="900" height="600" loading="lazy" />
         </div>
-        <img src="/media/family-postcard.webp" alt="A finished art postcard with a whale drawing and a personal note for Nana." width="900" height="600" loading="lazy" />
       </section>
 
       <section className="artwall-idea" aria-labelledby="home-idea-title">

@@ -51,8 +51,10 @@ nothing breaks when unconfigured. This is the single most important invariant.
 - **Route loading.** `src/Router.jsx` owns the `pathname` router and lazy-loads
   the studio and supporting pages. `src/main.jsx` loads shared styles once.
   SPA routing uses `pushState` + `popstate`; switching rooms remounts the studio.
-  The homepage plays a local 30-second painting replay while visible and
-  honors reduced motion. Its random-room CTA goes through
+  The homepage masthead (`JamPoster.jsx`) draws the headline as a coloring
+  page on a canvas: four labelled demo bots color it in, and a visitor can
+  draw on it. It pauses off screen, has a pause button, and renders the
+  finished poster for reduced motion and the Curator preview. Its random-room CTA goes through
   `/api/rooms/quick-join`, which prefers occupied, joinable public canvases.
 - **Canvas** lives in `src/utils/layers.js` (CANVAS_WIDTH 4000 × HEIGHT 2500,
   `MAX_LAYERS` 6). The viewport (`viewRef {scale,tx,ty}`) maps world→CSS px;
@@ -303,6 +305,13 @@ token)`), returns `send*` emitters + `disconnect()`.
   picture only for a room in that list. UI: `MyRooms.jsx` on `/rooms` (where a
   log-in lands) and in the studio's Rooms modal. Derived from existing stores
   (analytics, `.chatlog`, room files), nothing new to wipe on deletion.
+- **My studio** (`/me`, `MyStudioPage.jsx`, where a log-in lands and where the
+  nav's signed-in link goes): the person's plan (Jam Pass status, Stripe portal),
+  My boards (`MyRooms`), saved artwork (`/api/artworks`, download and delete)
+  and friends and invites (`/api/friends`). An invite link is
+  `/friends?add=<friend code>`; it survives sign-up through `safeSignInReturn`
+  and pre-fills the request. Signed out or unconfigured, the page shows this
+  device's rooms and device-saved art. It reads existing stores only.
 - **Room ownership**: the first signed-in user to enter an unowned room becomes
   `ownerProfileId` (persisted). Owner + `coHosts` = hosts. Host-only WS actions
   (lock/clear/kick/mute/rename/promote) are enforced **server-side** behind

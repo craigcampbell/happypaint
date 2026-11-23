@@ -1,6 +1,10 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
+  ADSENSE_CLIENT,
+  ADSENSE_SLOT_ROOM,
+  ADSENSE_SLOT_SITE,
   applyChildSafeSettings,
+  ensureAdsense,
   BREAK_AD_UNIT,
   BREAK_MINUTES,
   breakSignals,
@@ -13,7 +17,61 @@ import {
 const sessionStartedAt = Date.now();
 const sessionShownAt = [];
 
+// One AdSense unit, tagged for child treatment. `onFilled` reports Google's
+// own data-ad-status so an unfilled slot can stay collapsed.
+function AdSenseUnit({ slot, fixed, onFilled }) {
+  const unit = useRef(null);
+  useEffect(() => {
+    const node = unit.current;
+    const queue = ensureAdsense();
+    if (!node || !queue) return undefined;
+    const report = () => onFilled?.(node.dataset.adStatus === "filled");
+    const observer = new MutationObserver(report);
+    observer.observe(node, { attributes: true, attributeFilter: ["data-ad-status"] });
+    // A unit may be requested once; a remount in development must not re-push.
+    if (!node.dataset.adsbygoogleStatus && !node.dataset.requested) {
+      node.dataset.requested = "1";
+      try { queue.push({}); } catch { /* blocked or already filled */ }
+    }
+    report();
+    return () => observer.disconnect();
+  }, [onFilled]);
+  return <ins ref={unit} className="adsbygoogle" data-ad-client={ADSENSE_CLIENT} data-ad-slot={slot} data-tag-for-age-treatment="1"
+    style={fixed ? { display: "inline-block", width: fixed[0], height: fixed[1] } : { display: "block" }}
+    {...(fixed ? {} : { "data-ad-format": "auto", "data-full-width-responsive": "true" })} />;
+}
+
+const passLink = <a href="/jam-pass" target="_blank" rel="noopener">Paint ad-free with Jam Pass</a>;
+
+function AdSenseRoomSlot() {
+  const [filled, setFilled] = useState(false);
+  return (
+    <aside className={`room-sponsor${filled ? " is-filled" : ""}`} aria-label="Advertisement">
+      <span className="room-sponsor-label">Advertisement · {passLink}</span>
+      <AdSenseUnit slot={ADSENSE_SLOT_ROOM} fixed={[320, 50]} onFilled={setFilled} />
+    </aside>
+  );
+}
+
+// The free-plan placement on account pages. Renders nothing until AdSense is
+// configured, and stays collapsed when Google has no ad to show.
+export function SiteSponsorSlot() {
+  const [filled, setFilled] = useState(false);
+  if (!ADSENSE_SLOT_SITE) return null;
+  return (
+    <aside className={`site-sponsor${filled ? " is-filled" : ""}`} aria-label="Advertisement">
+      <span className="site-sponsor-label">Advertisement · {passLink}</span>
+      <AdSenseUnit slot={ADSENSE_SLOT_SITE} onFilled={setFilled} />
+    </aside>
+  );
+}
+
 export function RoomSponsorSlot() {
+  if (!ROOM_AD_UNIT && ADSENSE_SLOT_ROOM) return <AdSenseRoomSlot />;
+  return <GptRoomSlot />;
+}
+
+function GptRoomSlot() {
   const id = `drawesome-room-ad-${useId().replace(/[^a-z0-9_-]/gi, "")}`;
   const [filled, setFilled] = useState(false);
 
@@ -48,7 +106,7 @@ export function RoomSponsorSlot() {
   if (!ROOM_AD_UNIT) return null;
   return (
     <aside className={`room-sponsor${filled ? " is-filled" : ""}`} aria-label="Advertisement">
-      <span className="room-sponsor-label">Advertisement</span>
+      <span className="room-sponsor-label">Advertisement · {passLink}</span>
       <div id={id} />
     </aside>
   );

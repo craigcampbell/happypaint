@@ -191,12 +191,12 @@ export default function SiteNav({ onNavigate, current }) {
 
         <div className="site-nav-actions">
           {/* Auth entry right beside the Draw now CTA, visible on mobile too.
-              Signed in → "My account" (your rooms); signed out → one clear
+              Signed in → "My studio" (plan, boards, saved art, invites); signed out → one clear
               "Sign in" (never both, and hidden entirely when cloud accounts
               aren't configured, the app stays anonymous-first). */}
           {session ? (
-            <a href="/rooms" data-nav-ink className="site-nav-account-cta" onClick={(event) => follow(event, "/rooms")}>
-              My account
+            <a href="/me" data-nav-ink aria-current={current === "/me" ? "page" : undefined} className="site-nav-account-cta" onClick={(event) => follow(event, "/me")}>
+              My studio
               <NavInkMark kind="oval" />
             </a>
           ) : isCloudConfigured ? (

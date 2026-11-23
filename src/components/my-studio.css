@@ -1,0 +1,99 @@
+/* My studio (/me): plan, boards, saved artwork, friends and invites. */
+@font-face {
+  font-family: 'Anton';
+  src: url('/fonts/anton-latin.woff2') format('woff2');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+.site-page.my-studio { display: block; min-height: 100vh; background: #f3efdf; color: #181916; font-family: var(--body-font); }
+.site-page.my-studio::before, .site-page.my-studio::after { display: none; }
+.studio-main { width: min(100% - 32px, 1120px); margin-inline: auto; padding: clamp(26px, 4vw, 54px) 0 72px; }
+.my-studio .studio-main :is(h1, h2, h3) { margin: 0; color: #181916; font-family: 'Anton', var(--display-font); font-weight: 400; letter-spacing: .012em; text-transform: uppercase; text-shadow: none; }
+.studio-top h1 { font-size: clamp(3.4rem, 10vw, 7rem); line-height: .95; }
+.studio-top p { max-width: 56ch; margin: 12px 0 0; font: 520 1.05rem/1.5 var(--body-font); }
+.studio-top .studio-button { margin-top: 16px; }
+.my-studio .studio-main :is(a, button):focus-visible { outline: 3px solid #235f85; outline-offset: 4px; }
+
+.my-studio .studio-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 9px 18px;
+  border: 2px solid #181916; border-radius: 0; background: #fffdf4; color: #181916; box-shadow: 4px 4px 0 #181916;
+  font: 400 1.1rem/1.15 'Anton', var(--body-font); letter-spacing: .05em; text-transform: uppercase; text-decoration: none; cursor: pointer;
+  transition: transform .12s, box-shadow .12s;
+}
+.my-studio .studio-button:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #181916; }
+.my-studio .studio-button.is-loud { background: #e7472d; color: #fffdf0; }
+.my-studio .studio-button:disabled { opacity: .6; cursor: default; }
+.my-studio .studio-link {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0; border: 0; background: none; box-shadow: none;
+  color: #181916; font: 780 .95rem/1.2 var(--body-font); text-decoration: underline; text-underline-offset: 4px; cursor: pointer;
+}
+.my-studio .studio-link.is-quiet { color: #6b4a3c; font-weight: 620; }
+.studio-label { margin: 0 0 6px; font: 800 .74rem/1.4 var(--body-font); letter-spacing: .1em; text-transform: uppercase; }
+
+.studio-plan {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px 32px;
+  margin-top: clamp(24px, 4vw, 40px); padding: clamp(18px, 3vw, 30px);
+  border: 2px solid #181916; background: #edf15a; box-shadow: 7px 7px 0 #181916;
+}
+.studio-plan.has-pass { background: #181916; color: #fffdf0; box-shadow: 7px 7px 0 #e7472d; }
+.my-studio .studio-main .studio-plan h2 { font-size: clamp(2.6rem, 7vw, 4.4rem); line-height: 1; }
+.my-studio .studio-main .studio-plan.has-pass h2 { color: #edf15a; }
+.studio-plan p:not(.studio-label) { max-width: 52ch; margin: 8px 0 0; font: 540 1rem/1.45 var(--body-font); }
+.studio-plan-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
+.studio-plan.has-pass .studio-link { color: #fffdf0; }
+.studio-plan.has-pass .studio-button { box-shadow: 4px 4px 0 #edf15a; }
+
+.site-sponsor { height: 0; overflow: hidden; margin: 0; }
+.site-sponsor.is-filled { height: auto; margin-top: 26px; padding: 8px 0 10px; border-block: 1px solid #b8b5a5; text-align: center; }
+.site-sponsor-label { display: block; margin-bottom: 6px; font: 600 .72rem/1.4 var(--body-font); color: #545449; }
+.site-sponsor-label a { color: inherit; font-weight: 800; }
+.site-sponsor .adsbygoogle[data-ad-status="unfilled"] { display: none !important; }
+
+.studio-section { margin-top: clamp(44px, 6vw, 72px); }
+.studio-heading {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px;
+  margin-bottom: 20px; padding-top: 14px; border-top: 2px solid #181916;
+}
+.my-studio .studio-main .studio-heading h2 { font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1; }
+.studio-heading p { margin: 0; font: 650 .9rem/1.3 var(--body-font); color: #545449; }
+.studio-empty, .studio-note { max-width: 60ch; margin: 0 0 16px; font: 520 1rem/1.5 var(--body-font); }
+
+/* Boards reuse MyRooms; give its cards the print treatment here. */
+.my-studio .myrooms-grid { gap: 18px; }
+.my-studio .myroom { border: 2px solid #181916; border-radius: 0; background: #fffdf4; box-shadow: 4px 4px 0 #cfc9b2; }
+.my-studio .myroom.is-live { border-color: #181916; box-shadow: 4px 4px 0 #22b07a; }
+.my-studio .myroom-thumb { border-radius: 0; border: 1px solid #181916; }
+.my-studio .myroom-go { min-height: 44px; border: 2px solid #181916; border-radius: 0; background: #181916; color: #fffdf0; }
+.my-studio .account-note { margin: 0; font: 520 1rem/1.5 var(--body-font); color: #181916; }
+
+.studio-art { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 22px 18px; }
+.studio-art li { display: grid; gap: 3px; min-width: 0; }
+.studio-art li:nth-child(odd) .studio-art-picture { transform: rotate(-1.2deg); }
+.studio-art li:nth-child(even) .studio-art-picture { transform: rotate(1deg); }
+.studio-art-picture {
+  display: grid; place-items: center; aspect-ratio: 8 / 5; margin-bottom: 8px; overflow: hidden;
+  border: 2px solid #181916; background: #fffdf4; box-shadow: 4px 4px 0 #181916; font-size: 2rem;
+}
+.studio-art-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.studio-art strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 800 1rem/1.3 var(--body-font); }
+.studio-art li > span { font: 520 .84rem/1.3 var(--body-font); color: #545449; }
+.studio-art-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0 16px; font: 600 .9rem/1.3 var(--body-font); }
+
+.studio-code {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px 30px;
+  padding: clamp(16px, 3vw, 26px); border: 2px dashed #181916; background: #fffdf4;
+}
+.studio-code strong { display: block; font: 400 clamp(1.9rem, 6.4vw, 3.2rem)/1.05 'Anton', ui-monospace, monospace; letter-spacing: .12em; overflow-wrap: anywhere; }
+.studio-code p:not(.studio-label) { max-width: 46ch; margin: 8px 0 0; font: 520 .96rem/1.45 var(--body-font); }
+.studio-code-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 14px; }
+.studio-code-actions [role="status"] { flex-basis: 100%; font: 650 .9rem/1.3 var(--body-font); overflow-wrap: anywhere; }
+.studio-people { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 22px 28px; margin-top: 26px; }
+.my-studio .studio-main .studio-people h3 { display: flex; align-items: baseline; gap: 10px; font-size: 1.35rem; padding-bottom: 6px; border-bottom: 1px solid #181916; }
+.studio-people h3 span { font-size: 1rem; color: #e7472d; }
+.studio-people p { margin: 10px 0 0; font: 520 .95rem/1.45 var(--body-font); color: #545449; }
+.studio-people ul { list-style: none; margin: 0; padding: 0; }
+.studio-people li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 14px; border-bottom: 1px dotted #9d9a88; }
+.studio-people li b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 750 1rem/1.3 var(--body-font); }
+.studio-row-actions { display: flex; gap: 14px; }
+@media (prefers-reduced-motion: reduce) { .my-studio .studio-button { transition: none; } }

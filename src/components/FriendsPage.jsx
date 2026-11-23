@@ -7,8 +7,15 @@ import { createInviteCode, createInviteLink, normalizeInviteCode } from "../util
 import { friendsApi } from "../utils/friendsApi";
 import "./friends-page.css";
 
-const signupPath = "/signup?return=%2Ffriends";
-const loginPath = "/signup?mode=login&return=%2Ffriends";
+// An invite link (/friends?add=CODE) carries the inviter's friend code through
+// sign-up and pre-fills the request, so "use my code" is one tap.
+const invitedBy = () => {
+  const code = (new URLSearchParams(window.location.search).get("add") || "").toUpperCase();
+  return /^[A-HJ-NP-Z2-9]{12}$/.test(code) ? code : "";
+};
+const returnTo = () => encodeURIComponent("/friends" + (invitedBy() ? "?add=" + invitedBy() : ""));
+const signupPath = () => "/signup?return=" + returnTo();
+const loginPath = () => "/signup?mode=login&return=" + returnTo();
 
 function CopyValue({ value, label, description }) {
   const [status, setStatus] = useState("");
@@ -69,11 +76,11 @@ function RoomTools({ onNavigate, local }) {
 
 function AccountInvitation({ onNavigate, expired = false }) {
   return <section className="friends-account-invite" aria-labelledby="friends-account-title">
-    <h2 id="friends-account-title">{expired ? "Sign in again" : "Start a friends list"}</h2>
-    <p>{expired ? "Sign in to reconnect with your friends and see their requests." : "Choose a nickname, swap friend codes with someone you know, and meet in a drawing room."}</p>
+    <h2 id="friends-account-title">{expired ? "Sign in again" : invitedBy() ? "A friend invited you to draw" : "Start a friends list"}</h2>
+    <p>{expired ? "Sign in to reconnect with your friends and see their requests." : invitedBy() ? "Create a free account or sign in, and their friend code will be waiting for you to send the request." : "Choose a nickname, swap friend codes with someone you know, and meet in a drawing room."}</p>
     <div className="friends-actions">
-      {!expired && <DiscoveryLink className="friends-primary" href={signupPath} onNavigate={onNavigate}>Create an account</DiscoveryLink>}
-      <DiscoveryLink className={expired ? "friends-primary" : "friends-secondary"} href={loginPath + (expired ? "&reauth=1" : "")} onNavigate={onNavigate}>Sign in</DiscoveryLink>
+      {!expired && <DiscoveryLink className="friends-primary" href={signupPath()} onNavigate={onNavigate}>Create an account</DiscoveryLink>}
+      <DiscoveryLink className={expired ? "friends-primary" : "friends-secondary"} href={loginPath() + (expired ? "&reauth=1" : "")} onNavigate={onNavigate}>Sign in</DiscoveryLink>
     </div>
   </section>;
 }
@@ -92,7 +99,7 @@ function FriendList({ token, onNavigate }) {
   const [expired, setExpired] = useState(false);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(invitedBy);
   const [removeCode, setRemoveCode] = useState("");
   const currentRead = useRef(null);
   const writing = useRef(false);
@@ -190,7 +197,7 @@ function FriendList({ token, onNavigate }) {
       <section className="friends-paper-section" aria-labelledby="friends-request-title">
         <h2 id="friends-request-title">Add a friend</h2>
         <form onSubmit={event => { event.preventDefault(); if (code.trim().length === 12) change('/request', 'POST', { code: code.trim().toUpperCase() }, "Friend request sent."); }}>
-          <label htmlFor="friends-person-code">Their 12-character friend code</label>
+          <label htmlFor="friends-person-code">{code && code === invitedBy() ? "Your friend’s code is filled in. Send the request to connect." : "Their 12-character friend code"}</label>
           <div className="friends-input-action"><input id="friends-person-code" value={code} onChange={event => setCode(event.target.value.toUpperCase())} minLength={12} maxLength={12} autoComplete="off" spellCheck={false} autoCapitalize="characters" placeholder="Enter friend code" required />
             <button type="submit" className="friends-primary" disabled={busy || code.trim().length !== 12}>Send request</button>
           </div>

@@ -9047,6 +9047,8 @@ select {
   font-size: 10px;
   line-height: 14px;
 }
+.room-sponsor-label a { color: inherit; font-weight: 700; }
+.room-sponsor .adsbygoogle[data-ad-status="unfilled"] { display: none !important; }
 
 /* On compact screens the room navigation floats at the top. Keep a filled
    banner below that row and fully outside the paint surface. */

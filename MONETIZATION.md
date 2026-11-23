@@ -148,6 +148,18 @@ Drawesome has one responsive Google Ad Manager display placement above the free-
 3. Put the full ad unit path from the generated Google Publisher Tag in the production `.env` as `VITE_GAM_AD_UNIT_CHAT`. Its shape is `/NETWORK_CODE/free_room_banner`; copy Google's exact path if it includes parent units. Put the separate seller ID from Google's ads.txt entry in `GAM_ADS_TXT_PUBLISHER_ID`. It starts with `pub-` and has 16 digits. The publisher ID can be deployed first if Google requests ads.txt for verification. [Google's ads.txt guide](https://support.google.com/admanager/answer/9422161)
 4. Rebuild and recreate the app to pick up the unit path. Check `https://drawesome.art/ads.txt` for the authorized Google seller line, then check an eligible free room with Google's publisher console. The banner stays collapsed when there is no fill. Jam Pass participants and rooms covered by their host's pass receive no room ad. [Publisher Console](https://developers.google.com/publisher-tag/guides/publisher-console)
 
+### AdSense instead of Ad Manager
+
+A plain AdSense account works too, and is the shorter path for a new site. After AdSense approves `drawesome.art`:
+
+1. Create two display ad units under **Ads → By ad unit**: a fixed 320×50 unit for the free-room banner and a responsive unit for the free plan's **My studio** page.
+2. Put the publisher id in `VITE_ADSENSE_CLIENT` (`ca-pub-` plus 16 digits) and the two numeric unit ids in `VITE_ADSENSE_SLOT_ROOM` and `VITE_ADSENSE_SLOT_SITE`. Put the same publisher id without the `ca-` prefix in `GAM_ADS_TXT_PUBLISHER_ID` so `/ads.txt` serves Google's seller line.
+3. Rebuild the app. An Ad Manager room unit takes precedence if both are configured.
+
+Every AdSense unit carries `data-tag-for-age-treatment="1"` (Google's child treatment tag) and the page requests non-personalized ads. Unfilled units stay collapsed. Jam Pass holders and their guests get no unit at all. [Age treatment tag](https://support.google.com/adsense/answer/3248194) · [Non-personalized ad code](https://support.google.com/adsense/answer/9042142) · [ads.txt guide](https://support.google.com/adsense/answer/12171612)
+
+Both the room banner and the My studio unit carry a "Paint ad-free with Jam Pass" link, which is the upgrade path from the free plan.
+
 The historic `CHAT` setting controls the canvas banner. Finger-paint rooms, sketchbooks, and local drawing skip the banner. Child-directed, under-age-of-consent, non-personalized and restricted-data-processing flags are applied before GPT requests ads. With both unit paths empty, the app does not load GPT. The optional `VITE_GAM_AD_UNIT_INTERSTITIAL` can stay empty for a banner-only launch; it requires Google's limited-access H5 game manual interstitial format.
 
 Interstitials are prefetched but can display only at natural breaks after at

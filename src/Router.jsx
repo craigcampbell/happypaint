@@ -14,6 +14,7 @@ const AboutPage = lazy(() => import("./components/AboutPage"));
 const PrivacyPage = lazy(() => import("./components/PrivacyPage"));
 const ContactPage = lazy(() => import("./components/ContactPage"));
 const SignupPage = lazy(() => import("./components/SignupPage"));
+const MyStudioPage = lazy(() => import("./components/MyStudioPage"));
 const FriendsPage = lazy(() => import("./components/FriendsPage"));
 const RoomFinderPage = lazy(() => import("./components/RoomFinderPage"));
 const SafetyPage = lazy(() => import("./components/SafetyPage"));
@@ -85,7 +86,7 @@ export default function Router() {
     // Dynamic artwork pages keep their server-provided share metadata on a
     // direct load. On SPA navigation they still get their own canonical URL.
     if (!meta) {
-      const privatePath = /^\/(?:admin|watch|join|sketchbook)(?:\/|$)/.test(path);
+      const privatePath = /^\/(?:admin|watch|join|sketchbook|me)(?:\/|$)/.test(path);
       const canonical = document.querySelector('[data-seo="canonical"]');
       canonical?.setAttribute("href", `https://drawesome.art${privatePath ? "/" : path}`);
       return;
@@ -103,7 +104,7 @@ export default function Router() {
 
   let page;
   const drawing = path === "/draw" || (path.startsWith("/studio") && !path.startsWith("/studios")) || path.startsWith("/join");
-  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar", "/coloring-book", "/contact"].some(prefix => path.startsWith(prefix));
+  const pageInk = !drawing && !["/admin", "/watch", "/live", "/planet", "/paintjar", "/coloring-book", "/contact", "/me"].some(prefix => path.startsWith(prefix));
   if (path === "/draw") {
     const params = new URLSearchParams(window.location.search);
     const event = getCommunityEvent(params.get("event"));
@@ -167,6 +168,8 @@ export default function Router() {
     page = <ContactPage onNavigate={navigate} />;
   } else if (path.startsWith("/signup")) {
     page = <SignupPage onNavigate={navigate} />;
+  } else if (path === "/me") {
+    page = <MyStudioPage onNavigate={navigate} />;
   } else if (path === "/friends") {
     page = <FriendsPage onNavigate={navigate} />;
   } else if (path.startsWith("/rooms")) {

@@ -33,6 +33,10 @@ services:
         VITE_GAM_AD_UNIT_CHAT: ${VITE_GAM_AD_UNIT_CHAT:-}
         VITE_GAM_AD_UNIT_INTERSTITIAL: ${VITE_GAM_AD_UNIT_INTERSTITIAL:-}
         VITE_AD_BREAK_MINUTES: ${VITE_AD_BREAK_MINUTES:-10}
+        # Google AdSense alternative (publisher client + ad slot ids). Empty = off.
+        VITE_ADSENSE_CLIENT: ${VITE_ADSENSE_CLIENT:-}
+        VITE_ADSENSE_SLOT_ROOM: ${VITE_ADSENSE_SLOT_ROOM:-}
+        VITE_ADSENSE_SLOT_SITE: ${VITE_ADSENSE_SLOT_SITE:-}
     restart: unless-stopped
     # Probe /healthz so a hung (not just exited) app is visible as "unhealthy".
     healthcheck:

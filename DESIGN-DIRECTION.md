@@ -313,7 +313,9 @@ Evaluate whether visitors discover art, start drawing, understand privacy, and v
 
 | Concern | Main files |
 |---|---|
-| Homepage composition and prompt interaction | `src/components/HomePage.jsx`, `src/components/artwall-home.css` |
+| Homepage composition and prompt interaction | `src/components/HomePage.jsx`, `src/components/artwall-home.css`, `src/components/home-plans.css` |
+| Homepage masthead (headline colored in live, Anton poster type) | `src/components/JamPoster.jsx`, `src/components/jam-poster.css` |
+| Account page (plan, boards, saved art, invites) | `src/components/MyStudioPage.jsx`, `src/components/my-studio.css` |
 | Shared discovery layout | `src/components/DiscoveryPage.jsx`, `src/components/discovery.css` |
 | Event detail and sensitive treatment | `src/components/CommunityEventPage.jsx`, `src/data/communityEvents.js` |
 | Header component and presets | `src/components/CuratedHeader.jsx`, `src/components/curator.css` |

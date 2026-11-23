@@ -36,7 +36,7 @@ export default function SignupPage({ onNavigate }) {
     const requested = new URLSearchParams(window.location.search).get("return") || "";
     return safeSignInReturn(requested);
   })();
-  const friendsReturn = returnPath === "/friends";
+  const friendsReturn = returnPath.startsWith("/friends");
   const passReturn = returnPath === "/jam-pass" || returnPath === "/family";
   const bookReturn = returnPath === "/coloring-book";
   const promptReturn = returnPath.startsWith("/draw?");
@@ -53,7 +53,7 @@ export default function SignupPage({ onNavigate }) {
   // A NEW account starts in its own fresh room ("keep your art forever");
   // someone logging BACK in lands on their rooms to pick up where they left off
   //, never a random empty room, which is what made logging in feel like a loop.
-  const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/rooms");
+  const afterAuthPath = (authMode) => returnPath || (authMode === "signup" ? newRoomPath() : "/me");
   // A guest can't enter a private room (the door asks for an account), so the
   // guest exit goes to the open studio rather than a random private code.
   const guestPath = friendsReturn ? "/friends" : promptReturn ? "/draw" : (passReturn || bookReturn) ? "/jam-pass" : "/join/MAIN";
@@ -150,8 +150,8 @@ export default function SignupPage({ onNavigate }) {
           {showSignedIn ? (
             <>
               <p className="signup-signedin">✅ Signed in as <strong>{sessionLabel(session)}</strong>.</p>
-              <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/rooms")}>
-                {bookReturn ? "Open My Coloring Book →" : passReturn ? "Continue to Jam Pass →" : friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : "🎨 Continue to my rooms →"}
+              <button type="button" className="primary-action" onClick={() => onNavigate(returnPath || "/me")}>
+                {bookReturn ? "Open My Coloring Book →" : passReturn ? "Continue to Jam Pass →" : friendsReturn ? "Open Friends →" : promptReturn ? "Open my drawing prompt →" : returnPath.startsWith("/join/") ? "🎨 Back to your room →" : returnPath === "/rooms" ? "🎨 Continue to my rooms →" : "🎨 Continue to my studio →"}
               </button>
               <button type="button" className="signup-guest" onClick={() => onNavigate(newRoomPath())}>
                 ✨ Start a private Art Jam

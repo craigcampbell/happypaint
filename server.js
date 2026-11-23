@@ -12869,7 +12869,7 @@ app.get('/sitemap.xml', (_req, res) => {
 app.use((req, res, next) => {
   const path = req.path.replace(/\/+$/, '') || '/';
   const invalidEvent = path.startsWith('/events/') && !getDiscoverySeo(path);
-  if (invalidEvent || path === '/coloring-book' || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
+  if (invalidEvent || path === '/coloring-book' || path === '/me' || /^\/(?:admin|watch)(?:\/|$)/.test(path) || /^\/sketchbook\/invite(?:\/|$)/.test(path)) {
     res.set('X-Robots-Tag', 'noindex, nofollow');
     if (invalidEvent) res.status(404);
   }
