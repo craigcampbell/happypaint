@@ -36,6 +36,7 @@ import {
 import { floodFill } from "./utils/fill";
 import { drawShape, drawText } from "./utils/shapes";
 import { constrainAngle, drawPenGuide, samplePenPath } from "./utils/penPath";
+import { drawSymmetryGuide } from "./utils/viewGuides";
 import {
   DEFAULT_FRAME_DURATION,
   MAX_FRAMES,
@@ -780,10 +781,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const redoRef = useRef([]);
   const lastPointRef = useRef(null);
   const shapeStartRef = useRef(null);
-  // Bounding box of the last shape/line preview drawn onto the overlay, so each
-  // pointermove only clears that region (plus a margin) instead of the whole
-  // 1600x1200 overlay (W11).
-  const shapePreviewRectRef = useRef(null);
+  // Where the pointer last was during a shape / line drag (client px), so the
+  // preview can be redrawn when the view moves under a held pointer.
+  const shapeClientRef = useRef(null);
   const activePointerRef = useRef(null);
   const activeCanvasRectRef = useRef(null);
   // Pen prioritization / palm rejection (W14). While a pen is active, or was
@@ -2095,10 +2095,65 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     context.stroke();
   }, []);
 
+  // Wipe the shape-preview overlay (device px, whatever its transform was).
+  const clearShapePreview = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    const ctx = overlayContextRef.current;
+    if (!canvas || !ctx) {
+      return;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  // Draw the rectangle / ellipse / line being dragged. The overlay's backing
+  // store matches its CSS box, and the preview goes through the SAME transform
+  // blitToDisplay uses, so it sits exactly under the pointer at any pan, zoom
+  // or rotation and looks like what pen-up will commit. (It used to be drawn
+  // in raw document coordinates on a document-sized canvas that CSS stretched
+  // over the stage, which only lined up when the page exactly filled it.)
+  const paintShapePreview = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    const ctx = overlayContextRef.current;
+    const start = shapeStartRef.current;
+    const client = shapeClientRef.current;
+    const settings = settingsRef.current;
+    if (!canvas || !ctx || !start || !client || !settings) {
+      return;
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    if (settings.tool !== "rect" && settings.tool !== "ellipse" && settings.tool !== "line") {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const v = viewRef.current;
+    const end = screenToWorld(v, client.x - rect.left, client.y - rect.top);
+    const cos = Math.cos(v.rot || 0);
+    const sin = Math.sin(v.rot || 0);
+    const k = v.scale * dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.setTransform(k * cos, k * sin, -k * sin, k * cos, v.tx * dpr, v.ty * dpr);
+    drawShape(ctx, settings.tool, start, end, {
+      color: settings.color,
+      size: settings.size,
+      opacity: settings.opacity,
+      fillShape: settings.fillShape,
+    });
+  }, []);
+
   const applyView = () => {
     clampView(viewRef.current);
     syncZoomLabel();
     blitToDisplay();
+    // A shape being dragged follows the page when the view moves under it.
+    paintShapePreview();
   };
 
   // Coalesce gesture-driven repaints (mirrors scheduleStrokeFrame): two moving
@@ -2446,9 +2501,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   }, [renderDisplay]);
 
   // Size the visible display canvas backing store to its CSS box * devicePixel-
-  // Ratio so the 1600x1200 document blits in crisp on Retina/tablet screens
-  // (W6). The overlay (pointer + shape preview) stays in 1600x1200 doc space so
-  // getPoint's rect-normalized mapping is unaffected. Re-blits after resizing.
+  // Ratio so the document blits in crisp on Retina/tablet screens (W6). The
+  // overlay sizes itself the same way when a shape preview is drawn (see
+  // paintShapePreview); pointer mapping never depends on either backing store.
+  // Re-blits after resizing.
   const resizeDisplayCanvas = useCallback(() => {
     const display = displayCanvasRef.current;
     if (!display) {
@@ -4256,6 +4312,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
       if (tool === "rect" || tool === "ellipse" || tool === "line") {
         shapeStartRef.current = getPoint(event.nativeEvent);
+        shapeClientRef.current = { x: event.clientX, y: event.clientY };
         return;
       }
 
@@ -4439,37 +4496,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       const tool = settingsRef.current?.tool || "brush";
 
       if (tool === "rect" || tool === "ellipse" || tool === "line") {
-        // Preview shape on the overlay so the active layer stays clean. Clear
-        // only the previous preview's bounding box (plus a margin to cover the
-        // stroke width / round caps), not the entire 1600x1200 overlay (W11).
-        const overlay = overlayContextRef.current;
-        const start = shapeStartRef.current;
-        if (overlay && start) {
-          const prev = shapePreviewRectRef.current;
-          if (prev) {
-            overlay.clearRect(prev.x, prev.y, prev.w, prev.h);
-          }
-          const end = getPoint(event.nativeEvent);
-          drawShape(overlay, tool, start, end, {
-            color: settingsRef.current.color,
-            size: settingsRef.current.size,
-            opacity: settingsRef.current.opacity,
-            fillShape: settingsRef.current.fillShape,
-          });
-          // Record this preview's bbox (with a margin) for the next clear.
-          const margin = Math.max(2, settingsRef.current.size || 1) + 4;
-          const x = Math.min(start.x, end.x) - margin;
-          const y = Math.min(start.y, end.y) - margin;
-          const w = Math.abs(end.x - start.x) + margin * 2;
-          const h = Math.abs(end.y - start.y) + margin * 2;
-          shapePreviewRectRef.current = { x, y, w, h };
+        // Preview the shape on the overlay so the active layer stays clean.
+        if (shapeStartRef.current) {
+          shapeClientRef.current = { x: event.clientX, y: event.clientY };
+          paintShapePreview();
         }
         return;
       }
 
       drawBrushFromEvent(event);
     },
-    [drawBrushFromEvent, getPoint, sendCursorThrottled],
+    [drawBrushFromEvent, paintShapePreview, sendCursorThrottled],
   );
 
   // Pen-up after an eraser-end stroke: hand the rail back the tool it showed
@@ -4500,7 +4537,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       const tool = settingsRef.current?.tool || "brush";
 
       if (tool === "rect" || tool === "ellipse" || tool === "line") {
-        const overlay = overlayContextRef.current;
         const start = shapeStartRef.current;
         const active = getActiveLayer();
         if (start && active) {
@@ -4530,11 +4566,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
           renderDisplay();
           markChanged("Shape added");
         }
-        if (overlay) {
-          overlay.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        }
         shapeStartRef.current = null;
-        shapePreviewRectRef.current = null;
+        shapeClientRef.current = null;
+        clearShapePreview();
       } else {
         // Brush/eraser: push the tail of the stroke (+ the end marker peers
         // commit on) to the room, land the buffered stroke on its layer ONCE
@@ -4549,6 +4583,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         markChanged("Stroke saved");
       }
 
+      // The tool can change under a held pointer (a keyboard shortcut mid-drag):
+      // never leave a half-dragged shape or its preview behind.
+      if (shapeStartRef.current) {
+        shapeStartRef.current = null;
+        shapeClientRef.current = null;
+        clearShapePreview();
+      }
       activePointerRef.current = null;
       activePointerTypeRef.current = null;
       activeCanvasRectRef.current = null;
@@ -4565,7 +4606,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       // Drawing streak: the first real stroke of the day ticks it (day-guarded).
       bumpStreakRef.current?.();
     },
-    [commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, invalidateMixPrefetch, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, restorePenEraserOverride, updateHistoryCounts],
+    [clearShapePreview, commitLocalStroke, flushStrokeFrame, flushStrokeNet, getActiveLayer, getPoint, invalidateCompositeCache, invalidateMixPrefetch, markChanged, pushHistory, recordReplay, refreshActiveThumbnail, renderDisplay, restorePenEraserOverride, updateHistoryCounts],
   );
 
   // ---- Pointer routing: draw vs. pan/zoom ----------------------------------
@@ -4589,6 +4630,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       flushStrokeNet(true);
       strokeNetRef.current = null;
       commitLocalStroke();
+      // A shape / line that was mid-drag is dropped with its preview: pen-up
+      // for this pointer is ignored from here on, so it could never commit.
+      if (shapeStartRef.current) {
+        shapeStartRef.current = null;
+        shapeClientRef.current = null;
+        clearShapePreview();
+      }
       activePointerRef.current = null;
       activePointerTypeRef.current = null;
       lastPointRef.current = null;
@@ -4597,7 +4645,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       renderDisplay();
       restorePenEraserOverride();
     }
-  }, [commitLocalStroke, flushStrokeFrame, flushStrokeNet, invalidateCompositeCache, renderDisplay, restorePenEraserOverride]);
+  }, [clearShapePreview, commitLocalStroke, flushStrokeFrame, flushStrokeNet, invalidateCompositeCache, renderDisplay, restorePenEraserOverride]);
 
   // ---- Brush-size preview ring --------------------------------------------
   // A hollow circle sized to the brush (brushSize x current zoom) + tinted with
@@ -10822,12 +10870,16 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Pen path guide: drawn in screen space on its own canvas so anchors and
-  // handles stay crisp at any zoom / rotation. Repaints only when the path or
-  // the view changed; the loop runs only while the pen tool is on.
+  // Guide canvas: the pen path guide and the symmetry axes, drawn in screen
+  // space through the current view so they stay glued to the page (and crisp)
+  // at any pan, zoom or rotation. Repaints only when the path or the view
+  // changed; the loop runs only while a guide is showing.
+  const symmetryMode = roomSymmetry.mode;
+  const symmetryCopies = roomSymmetry.copies;
   useEffect(() => {
     const canvas = penCanvasRef.current;
-    if (!penMode || !canvas) {
+    const showAxes = symmetryCopies > 1;
+    if ((!penMode && !showAxes) || !canvas) {
       return undefined;
     }
     const ctx = canvas.getContext("2d");
@@ -10852,7 +10904,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      drawPenGuide(ctx, pen, (x, y) => worldToScreen(v, x, y));
+      const toScreen = (x, y) => worldToScreen(v, x, y);
+      if (showAxes) {
+        drawSymmetryGuide(ctx, { mode: symmetryMode, copies: symmetryCopies }, CANVAS_WIDTH, CANVAS_HEIGHT, toScreen);
+      }
+      if (penMode) {
+        drawPenGuide(ctx, pen, toScreen);
+      }
     };
     penRef.current.dirty = true;
     frame = window.requestAnimationFrame(paint);
@@ -10861,12 +10919,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [penMode]);
+  }, [penMode, symmetryMode, symmetryCopies]);
 
   useEffect(() => {
+    // The overlay only ever shows the shape / line being dragged, and sizes its
+    // own backing store when one is drawn (paintShapePreview).
     const overlay = overlayCanvasRef.current;
-    overlay.width = CANVAS_WIDTH;
-    overlay.height = CANVAS_HEIGHT;
     overlayContextRef.current = overlay.getContext("2d", { alpha: true });
 
     // Murals and animation share the same persisted world coordinates.
@@ -11944,7 +12002,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
 
         {showRoomBanner && <RoomSponsorSlot />}
         <div className="canvas-stage">
-          <div className={`canvas-paper${roomSymmetry.copies > 1 ? " is-symmetry" : ""}`}>
+          <div className="canvas-paper">
             <canvas ref={displayCanvasRef} className="drawing-canvas display-canvas" aria-label="Drawing canvas" />
             <canvas
               ref={overlayCanvasRef}
