@@ -119,7 +119,11 @@ export function createEconomy({
   const secretKey = process.env.STRIPE_SECRET_KEY || '';
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
   const publicOrigin = String(process.env.PUBLIC_ORIGIN || process.env.APP_ORIGIN || '').replace(/\/+$/, '');
-  const purchasesEnabled = /^(1|true|yes)$/i.test(process.env.STRIPE_CHECKOUT_ENABLED || '');
+  // Selling Drops for real money has its own switch, off by default. Jam Pass
+  // checkout also uses STRIPE_CHECKOUT_ENABLED, and turning the subscription on
+  // must never silently open Drop purchases (AGENTS.md: play money only).
+  const purchasesEnabled = /^(1|true|yes)$/i.test(process.env.STRIPE_CHECKOUT_ENABLED || '')
+    && /^(1|true|yes)$/i.test(process.env.ECONOMY_DROP_PURCHASES_ENABLED || '');
   // Money OUT. Deliberately separate from purchases so buying Drops can be live
   // while payouts stay shut (docs/paint-economy.md §Phase 1).
   const payoutsEnabled = /^(1|true|yes)$/i.test(process.env.ECONOMY_PAYOUTS_ENABLED || '');

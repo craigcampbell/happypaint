@@ -71,7 +71,8 @@ for a cent.
 1. `STRIPE_SECRET_KEY=sk_live_…`
 2. `STRIPE_WEBHOOK_SECRET=whsec_…`
 3. `PUBLIC_ORIGIN=https://drawesome.art`
-4. `STRIPE_CHECKOUT_ENABLED=1`
+4. `STRIPE_CHECKOUT_ENABLED=1` and `ECONOMY_DROP_PURCHASES_ENABLED=1`. Both are needed: Jam Pass
+   checkout shares the first switch, so Drop purchases have their own, off by default.
 5. Stripe webhook → `https://drawesome.art/api/economy/webhook`, events
    `checkout.session.completed`, `charge.refunded`
 6. Redeploy. `GET /api/economy/config` → `purchasesEnabled: true`.
