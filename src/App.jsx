@@ -784,6 +784,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   // Where the pointer last was during a shape / line drag (client px), so the
   // preview can be redrawn when the view moves under a held pointer.
   const shapeClientRef = useRef(null);
+  // The tool a shape drag started with. The drag finishes as that shape even if
+  // a shortcut key changes the selected tool while the pointer is held.
+  const shapeToolRef = useRef("line");
+  // The current render's updateBrushCursor. View changes can come from listeners
+  // installed once (the wheel handler), which must not restyle the size ring
+  // with the brush size and colour of the render they were created in.
+  const brushRingRefreshRef = useRef(null);
   const activePointerRef = useRef(null);
   const activeCanvasRectRef = useRef(null);
   // Pen prioritization / palm rejection (W14). While a pen is active, or was
@@ -2032,7 +2039,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       ty: (h - CANVAS_HEIGHT * fit) / 2,
       rot: 0,
     };
-    syncZoomLabel();
+    // Repaint through the new view at once. Without this the picture stayed
+    // where it was while the pointer already mapped through the fitted view,
+    // so the next stroke or shape landed away from what was on screen.
+    applyView();
   };
 
   // The first view people see: zoomed in past "fit" and centered, so there's a
@@ -2128,9 +2138,6 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       canvas.width = width;
       canvas.height = height;
     }
-    if (settings.tool !== "rect" && settings.tool !== "ellipse" && settings.tool !== "line") {
-      return;
-    }
     const rect = canvas.getBoundingClientRect();
     const v = viewRef.current;
     const end = screenToWorld(v, client.x - rect.left, client.y - rect.top);
@@ -2140,20 +2147,33 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
     ctx.setTransform(k * cos, k * sin, -k * sin, k * cos, v.tx * dpr, v.ty * dpr);
-    drawShape(ctx, settings.tool, start, end, {
+    // Only the part on the page will be committed, so only that part is shown.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.clip();
+    drawShape(ctx, shapeToolRef.current, start, end, {
       color: settings.color,
       size: settings.size,
       opacity: settings.opacity,
       fillShape: settings.fillShape,
     });
+    ctx.restore();
   }, []);
 
   const applyView = () => {
     clampView(viewRef.current);
     syncZoomLabel();
     blitToDisplay();
-    // A shape being dragged follows the page when the view moves under it.
+    // A shape being dragged follows the page when the view moves under it,
+    // and the brush-size ring under a resting pointer follows the zoom.
     paintShapePreview();
+    // Only a ring that is already showing: a button-pan or a pinch hides it,
+    // and a view change must not bring it back at a stale position.
+    const hover = brushHoverPointRef.current;
+    if (hover && brushCursorRef.current?.classList.contains("is-visible")) {
+      brushRingRefreshRef.current?.(hover.x, hover.y);
+    }
   };
 
   // Coalesce gesture-driven repaints (mirrors scheduleStrokeFrame): two moving
@@ -2524,6 +2544,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       displayContextRef.current = context;
     }
     displayDprRef.current = dpr;
+    // The canvas box moved or changed size (tool rail toggled, the top bar
+    // wrapped because someone joined, the window resized). A stroke or shape
+    // in progress keeps mapping the pointer through the box as it is NOW, not
+    // as it was at pointer-down.
+    if (activeCanvasRectRef.current) {
+      activeCanvasRectRef.current = rect;
+    }
     if (!viewInitRef.current) {
       viewInitRef.current = true;
       startView();
@@ -2532,8 +2559,9 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       syncZoomLabel();
     }
     blitToDisplay();
+    paintShapePreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blitToDisplay]);
+  }, [blitToDisplay, paintShapePreview]);
 
   // ---- Undo in a shared room -----------------------------------------------
   // Since layers became shared state, a friend's op paints into the SAME stack
@@ -4313,6 +4341,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       if (tool === "rect" || tool === "ellipse" || tool === "line") {
         shapeStartRef.current = getPoint(event.nativeEvent);
         shapeClientRef.current = { x: event.clientX, y: event.clientY };
+        shapeToolRef.current = tool;
         return;
       }
 
@@ -4493,15 +4522,17 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       }
 
       event.preventDefault();
-      const tool = settingsRef.current?.tool || "brush";
 
-      if (tool === "rect" || tool === "ellipse" || tool === "line") {
-        // Preview the shape on the overlay so the active layer stays clean.
-        if (shapeStartRef.current) {
-          shapeClientRef.current = { x: event.clientX, y: event.clientY };
-          paintShapePreview();
-        }
+      // A shape drag owns its moves until it ends, whatever tool a shortcut
+      // key selects meanwhile. Preview on the overlay so the layer stays clean.
+      if (shapeStartRef.current) {
+        shapeClientRef.current = { x: event.clientX, y: event.clientY };
+        paintShapePreview();
         return;
+      }
+      const tool = settingsRef.current?.tool || "brush";
+      if (tool === "rect" || tool === "ellipse" || tool === "line") {
+        return; // a shape tool picked in the middle of a brush stroke: nothing to draw
       }
 
       drawBrushFromEvent(event);
@@ -4534,9 +4565,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
         /* pointer already inactive (interrupted pen sequence), never strand the stroke */
       }
 
-      const tool = settingsRef.current?.tool || "brush";
-
-      if (tool === "rect" || tool === "ellipse" || tool === "line") {
+      if (shapeStartRef.current) {
+        const tool = shapeToolRef.current;
         const start = shapeStartRef.current;
         const active = getActiveLayer();
         if (start && active) {
@@ -4730,6 +4760,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     }
   };
 
+  brushRingRefreshRef.current = updateBrushCursor;
+
   // Flash the ring at the canvas center for a moment, the "before you paint"
   // size preview that works even on touch (no hover). Re-armed on size changes.
   // If a mouse/pen is hovering the canvas, the ring is resized under the
@@ -4858,6 +4890,18 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     } catch {
       /* already released */
     }
+    if (shapeStartRef.current) {
+      // The finger was dragging a shape. Nothing is on the layer or in the
+      // undo stack yet (shapes commit at lift), so drop the drag and its
+      // preview and leave the undo history alone.
+      shapeStartRef.current = null;
+      shapeClientRef.current = null;
+      clearShapePreview();
+      activePointerRef.current = null;
+      activePointerTypeRef.current = null;
+      activeCanvasRectRef.current = null;
+      return true;
+    }
     flushStrokeFrame();
     if (strokeNetRef.current?.sentSettings) {
       flushStrokeNet(true);
@@ -4944,6 +4988,8 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     pen.nodes = [];
     pen.drag = null;
     pen.closed = false;
+    pen.hover = null;
+    pen.hoverClient = null;
     penTouched();
   };
 
@@ -4957,6 +5003,12 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
   const commitPenPath = () => {
     const pen = penRef.current;
     if (pen.nodes.length < 2 || activePointerRef.current != null) {
+      return false;
+    }
+    // A pen path is only ever inked as a brush stroke. (The replay below goes
+    // through startStroke, which would otherwise treat it as a fill, a text
+    // prompt or a shape if another tool were selected.)
+    if ((settingsRef.current?.tool || "brush") !== "brush") {
       return false;
     }
     const points = samplePenPath(pen.nodes, { closed: pen.closed, taper: penTaperRef.current });
@@ -5028,6 +5080,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     pen.nodes.push({ x: point.x, y: point.y, ox: 0, oy: 0 });
     pen.drag = { pointerId: event.pointerId, index: pen.nodes.length - 1 };
     pen.hover = null;
+    pen.hoverClient = null;
     penTouched();
   };
 
@@ -5050,8 +5103,10 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       return;
     }
     if (pen.nodes.length && event.pointerType !== "touch") {
-      const last = pen.nodes[pen.nodes.length - 1];
-      pen.hover = event.shiftKey ? constrainAngle(last, point) : point;
+      // Kept in screen space: the guide loop maps it through the view each
+      // time it paints, so the rubber band stays on the pointer when the page
+      // is scrolled or zoomed under it.
+      pen.hoverClient = { x: event.clientX, y: event.clientY, shift: event.shiftKey };
       pen.dirty = true;
     }
   };
@@ -5144,6 +5199,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       panPointerRef.current == null &&
       pointersRef.current.size > 0 &&
       !penOnlyTouch() &&
+      !penRef.current.drag && // a finger placing a pen point is live, not stale
       (event.timeStamp || performance.now()) - lastPenAtRef.current >= PEN_PRIORITY_MS
     ) {
       pointersRef.current.clear();
@@ -5157,6 +5213,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     if (pointersRef.current.size >= 2 && event.pointerType === "touch") {
       cancelHeldTouch(); // a held first finger becomes a pinch finger, cleanly
       abortActiveStroke();
+      if (penRef.current.drag) {
+        // The first finger of this pinch had just placed a pen point: take it
+        // back, the person is moving the page, not drawing.
+        penRef.current.nodes.splice(penRef.current.drag.index, 1);
+        penRef.current.drag = null;
+        penTouched();
+      }
       hideBrushCursor();
       const m = gestureMetrics([...pointersRef.current.values()]);
       gestureRef.current = { lastMid: { x: m.cx, y: m.cy }, lastDist: m.dist, lastAngle: m.angle, count: m.n };
@@ -5422,6 +5485,13 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       pointersRef.current.clear();
       gestureRef.current = null;
       panPointerRef.current = null;
+      if (shapeStartRef.current) {
+        // A shape that was mid-drag can never be committed now: drop it with
+        // its preview instead of leaving a ghost that follows every pan.
+        shapeStartRef.current = null;
+        shapeClientRef.current = null;
+        clearShapePreview();
+      }
       if (activePointerRef.current != null) {
         // Termination path: the pointerup will never arrive, so end the
         // stroke properly, tell peers to commit (end marker) and land the
@@ -5469,7 +5539,7 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       window.removeEventListener("pointercancel", onWindowPointerEnd);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [cancelPrebuild, commitLocalStroke, flushStrokeNet, renderDisplay, schedulePrebuild]);
+  }, [cancelPrebuild, clearShapePreview, commitLocalStroke, flushStrokeNet, renderDisplay, schedulePrebuild]);
 
   // ---- Layer actions (mutate refs, snapshot before, then sync state) ----
 
@@ -10870,6 +10940,23 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Pen paths are brush strokes. Choosing any other tool puts the pen away and
+  // drops an unfinished path, so Enter can never ink it as something else and
+  // no orphaned guide is left on screen.
+  useEffect(() => {
+    if (selectedTool !== "brush" && penModeRef.current) {
+      penModeRef.current = false;
+      setPenMode(false);
+      penActionsRef.current.cancel?.();
+    }
+  }, [selectedTool]);
+
+  // A size, colour or fill change during a shape drag shows in the preview at
+  // once instead of at the next pointer move. (No-op when nothing is dragged.)
+  useEffect(() => {
+    paintShapePreview();
+  }, [brushSize, selectedColor, brushOpacity, fillShape, paintShapePreview]);
+
   // Guide canvas: the pen path guide and the symmetry axes, drawn in screen
   // space through the current view so they stay glued to the page (and crisp)
   // at any pan, zoom or rotation. Repaints only when the path or the view
@@ -10905,6 +10992,11 @@ export default function StudioApp({ initialJoinCode = "", initialPrompt = "", in
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       const toScreen = (x, y) => worldToScreen(v, x, y);
+      if (pen.hoverClient && pen.nodes.length) {
+        const box = canvas.getBoundingClientRect();
+        const under = screenToWorld(v, pen.hoverClient.x - box.left, pen.hoverClient.y - box.top);
+        pen.hover = pen.hoverClient.shift ? constrainAngle(pen.nodes[pen.nodes.length - 1], under) : under;
+      }
       if (showAxes) {
         drawSymmetryGuide(ctx, { mode: symmetryMode, copies: symmetryCopies }, CANVAS_WIDTH, CANVAS_HEIGHT, toScreen);
       }
