@@ -8,16 +8,11 @@
 // reduced-motion visitors and the Curator preview get the finished poster.
 
 import { useEffect, useRef, useState } from 'react';
+import { BOTS } from '../data/bots';
 import './jam-poster.css';
 
 const FONT = 'Anton, Impact, "Haettenschweiler", "Arial Narrow Bold", sans-serif';
 const INK = '#181916';
-const BOTS = [
-  { name: 'Pip', tag: '#d93a22', inks: ['#e7472d', '#ff9f1c'] },
-  { name: 'Fern', tag: '#16865a', inks: ['#22b07a', '#a4dd3c'] },
-  { name: 'Momo', tag: '#2a62d6', inks: ['#3d8bf2', '#4fd4e6'] },
-  { name: 'Zed', tag: '#a02fc4', inks: ['#ff5fa2', '#8f5bf0'] },
-];
 const VISITOR_INKS = [
   { name: 'Black', value: '#181916' },
   { name: 'Red', value: '#e7472d' },
